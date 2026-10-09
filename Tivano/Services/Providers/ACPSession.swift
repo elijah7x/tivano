@@ -66,6 +66,7 @@ final class ACPSession: ProviderSession {
     init(configuration: SessionConfiguration) {
         self.configuration = configuration
         runtimeMode = configuration.runtimeMode
+        models = configuration.modelCatalog
     }
 
     var isRunning: Bool {
@@ -311,9 +312,10 @@ final class ACPSession: ProviderSession {
     /// list: each model without a scale yet is made current in turn and its scale
     /// read off the reply, and the model the session started on is put back. Models
     /// that arrived with a scale (Grok lists them in `_meta.reasoningEfforts`) are
-    /// skipped by the `where` filter.
+    /// skipped by the `where` filter. A provider that names its variants (Devin) has its
+    /// scale in the names and no effort option to read, so it is not walked at all.
     private func probeModelEfforts() async {
-        guard let modelConfigID else { return }
+        guard let modelConfigID, !configuration.provider.namesModelVariants else { return }
         let original = currentModel
         for model in models where model.efforts.isEmpty {
             await setConfigOption(modelConfigID, value: model.id)
@@ -342,14 +344,14 @@ final class ACPSession: ProviderSession {
                 id: id,
                 name: entry["name"]?.string ?? id,
                 detail: entry["description"]?.string,
-                efforts: Self.orderedEfforts(efforts.compactMap { $0["value"]?.string }),
+                efforts: ModelOption.orderedEfforts(efforts.compactMap { $0["value"]?.string }),
                 defaultEffort: efforts.first { $0["default"]?.bool == true }?["value"]?.string,
                 isDefault: id == current
             )
         }
         guard !list.isEmpty else { return }
-        models = list
-        onEvent?(.models(list, current: currentModel))
+        models = configuration.provider.namesModelVariants ? ModelFamilies.collapsed(list) : list
+        onEvent?(.models(models, current: currentModel))
     }
 
     private func applyConfigOptions(_ options: [JSONValue]) {
@@ -387,7 +389,7 @@ final class ACPSession: ProviderSession {
                     option.fastTier = known?.fastTier
                     return option
                 }
-                if !list.isEmpty { models = list }
+                if !list.isEmpty { models = configuration.provider.namesModelVariants ? ModelFamilies.collapsed(list) : list }
             case "mode":
                 modeConfigID = id
                 currentMode = current ?? currentMode
@@ -399,7 +401,7 @@ final class ACPSession: ProviderSession {
                 guard Self.isEffortScale(scale) else { break }
                 effortConfigID = id
                 currentEffort = current
-                efforts = Self.orderedEfforts(scale)
+                efforts = ModelOption.orderedEfforts(scale)
             case "model_config":
                 if id == "fast" {
                     fastConfigID = id
@@ -417,7 +419,8 @@ final class ACPSession: ProviderSession {
                 model.efforts = efforts
                 model.defaultEffort = currentEffort ?? model.defaultEffort
             }
-            if isCurrent {
+            // A row of variants takes Fast from its variants, not from an option.
+            if isCurrent, model.variants.isEmpty {
                 model.fastTier = hasFast ? "true" : nil
             }
             return model
@@ -438,29 +441,23 @@ final class ACPSession: ProviderSession {
         return values.contains { known.contains($0.lowercased()) }
     }
 
-    /// The scale low to high, whatever order the agent lists it in: Grok's ACP advertises
-    /// its levels from extra high down to low, and the slider (see `EffortSlider`) reads
-    /// the list left to right as low to high, so its knob sat at Low for the highest. A
-    /// level the ranks do not know keeps its place among its neighbours.
-    static func orderedEfforts(_ values: [String]) -> [String] {
-        let ranks: [String: Int] = [
-            "none": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4,
-            "xhigh": 5, "extra-high": 5, "extra_high": 5, "extra high": 5, "max": 6, "ultra": 6,
-        ]
-        let ranked = values.enumerated().map { (offset: $0.offset, value: $0.element, rank: ranks[$0.element.lowercased()]) }
-        guard ranked.count(where: { $0.rank != nil }) > 1 else { return values }
-        return ranked.sorted { lhs, rhs in
-            switch (lhs.rank, rhs.rank) {
-            case (let l?, let r?) where l != r: return l < r
-            default: return lhs.offset < rhs.offset
-            }
-        }.map(\.value)
-    }
-
     /// Cursor's parameterized IDs are `model[effort=high,…]`; the picker stores the base name.
     private static func baseModelID(_ id: String) -> String {
         guard let bracket = id.firstIndex(of: "[") else { return id }
         return String(id[..<bracket])
+    }
+
+    /// The id the agent takes for a model at an effort and speed. A row of variants
+    /// (see `ModelFamilies`) resolves to the variant that matches; an id a thread kept
+    /// from before its provider's variants were merged runs as it was until the effort
+    /// or Fast is changed, and then moves within its family.
+    private func providerID(for model: String, effort: String?, fastMode: Bool) -> String {
+        if let family = models.first(where: { $0.id == model }) {
+            return family.providerID(effort: effort, fastMode: fastMode)
+        }
+        guard let family = models.first(where: { $0.variant(model) != nil }), let variant = family.variant(model) else { return model }
+        if effort == nil, !fastMode { return model }
+        return family.providerID(effort: effort ?? variant.effort, fastMode: fastMode)
     }
 
     private static func sameModel(_ lhs: String?, _ rhs: String?) -> Bool {
@@ -471,7 +468,7 @@ final class ACPSession: ProviderSession {
     private func applySelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async {
         guard let connection, let sessionID else { return }
         if let model, !model.isEmpty {
-            let wireID = usesParameterizedModels ? Self.baseModelID(model) : model
+            let wireID = usesParameterizedModels ? Self.baseModelID(model) : providerID(for: model, effort: effort, fastMode: fastMode)
             if !Self.sameModel(wireID, currentModel) {
                 if let modelConfigID {
                     await setConfigOption(modelConfigID, value: wireID)

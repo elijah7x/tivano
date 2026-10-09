@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 /// One Keychain implementation for every native provider's API key. The accounts
-/// live in the shared Tivano service, one item per provider, in both editions.
+/// live in an edition-specific service, one item per provider.
 enum APIKeychain {
     /// The stored key for a provider, or `fallback` when nothing is stored.
     /// A capture run reads nothing, so recorded sessions keep working without
@@ -69,13 +69,6 @@ enum APIKeychain {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound, service == AppInfo.libraryName {
-            for former in ["Droppy Code", "Tivano Dev"] {
-                if let key = read(account, service: former), set(key, account: account, service: service) {
-                    return key
-                }
-            }
-        }
         guard status == errSecSuccess,
               let data = item as? Data,
               let key = String(data: data, encoding: .utf8),
@@ -91,8 +84,5 @@ enum APIKeychain {
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
-        if service == AppInfo.libraryName {
-            for former in ["Droppy Code", "Tivano Dev"] { delete(account, service: former) }
-        }
     }
 }

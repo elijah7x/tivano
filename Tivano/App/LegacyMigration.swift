@@ -1,58 +1,29 @@
 import Foundation
 
-/// The first edition opened carries the real library forward. Both editions share
-/// files, while preferences remain in their own bundle domains. Old paths stay valid.
+/// Editions never import one another's data or upstream preferences/credentials.
+/// Existing shared installations must be separated offline before either edition opens.
 enum LegacyMigration {
-    private static let marker = "tivanoSharedLibrary_v1"
-
     static func run(
-        defaults: UserDefaults = .standard,
         support: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0],
-        home: URL = FileManager.default.homeDirectoryForCurrentUser,
-        formerDomains: [String]? = nil
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) throws {
-        guard !CaptureRun.isEnabled, !defaults.bool(forKey: marker) else { return }
+        guard !CaptureRun.isEnabled else { return }
         let manager = FileManager.default
-        try manager.createDirectory(at: support, withIntermediateDirectories: true)
         let current = support.appendingPathComponent(AppInfo.libraryName, isDirectory: true)
-        if !manager.fileExists(atPath: current.path) {
-            for name in ["Droppy Code", "Cody", "Tivano Dev"] {
-                let former = support.appendingPathComponent(name, isDirectory: true)
-                guard manager.fileExists(atPath: former.path) else { continue }
-                // Snapshot before the rename, never overwrite an existing library or
-                // merge two sets of thread JSON. Keep absolute attachment paths valid.
-                let backup = support.appendingPathComponent("Tivano Backups/migration-\(UUID().uuidString)", isDirectory: true)
-                try manager.createDirectory(at: backup, withIntermediateDirectories: true)
-                try manager.copyItem(at: former, to: backup.appendingPathComponent(name))
-                try manager.moveItem(at: former, to: current)
-                do {
-                    try manager.createSymbolicLink(at: former, withDestinationURL: current)
-                } catch {
-                    try manager.moveItem(at: current, to: former)
-                    throw error
-                }
-                break
-            }
-        }
-
-        // Registered git worktrees contain absolute paths. An alias, rather than a
-        // move, carries the old state forward without breaking git's registrations.
         let state = home.appendingPathComponent(AppInfo.stateDirectoryName, isDirectory: true)
-        let formerState = home.appendingPathComponent(".droppy-code", isDirectory: true)
-        if !manager.fileExists(atPath: state.path), manager.fileExists(atPath: formerState.path) {
-            try manager.createSymbolicLink(at: state, withDestinationURL: formerState)
+        let upstream = support.appendingPathComponent("Droppy Code", isDirectory: true)
+        let linkedUpstream = (try? manager.destinationOfSymbolicLink(atPath: upstream.path)) != nil
+            && upstream.resolvingSymlinksInPath() == current.resolvingSymlinksInPath()
+        guard (try? manager.destinationOfSymbolicLink(atPath: current.path)) == nil,
+              (try? manager.destinationOfSymbolicLink(atPath: state.path)) == nil,
+              !linkedUpstream,
+              !manager.fileExists(atPath: support.appendingPathComponent(".tivano-separation-in-progress.json").path) else {
+            throw NSError(
+                domain: "TivanoLibrary", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: AppText.localized("Quit all Tivano and Droppy Code apps, then run scripts/separate_data.py from the Tivano source checkout to separate the old shared library. Your data will be backed up before any changes.")]
+            )
         }
-
-        var domains = formerDomains ?? ["iordv.droppycode", "iordv.cody"]
-        if formerDomains == nil, AppInfo.isDevelopment { domains.insert("dev.tivano.Tivano", at: 0) }
-        for domain in domains {
-            if let former = defaults.persistentDomain(forName: domain) {
-                // Never carry an upstream update download into this fork's updater.
-                for (key, value) in former where !key.hasPrefix("updateChecker_") && defaults.object(forKey: key) == nil {
-                    defaults.set(value, forKey: key)
-                }
-            }
-        }
-        defaults.set(true, forKey: marker)
+        try manager.createDirectory(at: current, withIntermediateDirectories: true)
+        try manager.createDirectory(at: state, withIntermediateDirectories: true)
     }
 }

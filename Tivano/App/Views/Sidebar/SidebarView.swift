@@ -96,7 +96,7 @@ struct SidebarView: View {
                         onMove: { moveSearchSelection(by: $0, helpers: helpers) }
                     )
                 } else {
-                    ChromeIconButton(symbol: "square.and.pencil", prominent: true, help: Chrome.localized("New thread") + ShortcutStore.hint(for: .newThread)) {
+                    ChromeIconButton(symbol: "plus.bubble", prominent: true, help: Chrome.localized("New thread") + ShortcutStore.hint(for: .newThread)) {
                         model.newThread()
                     }
                     ChromeIconButton(symbol: "magnifyingglass", prominent: true, help: "Search threads") {
@@ -1213,7 +1213,7 @@ private struct ProjectRow: View {
     private static func contextMenuActions(project: Project, isActive: Bool, hasOverride: Bool, model: AppModel) -> [RowAction] {
         let projectID = project.id
         var items = [
-            RowAction(title: "New thread", symbol: "square.and.pencil") { [weak model, project] in
+            RowAction(title: "New thread", symbol: "plus.bubble") { [weak model, project] in
                 guard let model else { return }
                 model.newThread(in: project)
             },
@@ -1249,7 +1249,7 @@ private struct ProjectRow: View {
 
     private func actions(isActive: Bool) -> [RowAction] {
         var items = [
-            RowAction(title: "New thread", symbol: "square.and.pencil") { model.newThread(in: project) },
+            RowAction(title: "New thread", symbol: "plus.bubble") { model.newThread(in: project) },
             RowAction(title: "New thread in worktree", symbol: "square.stack.3d.up") {
                 model.newThread(in: project, workspace: .worktree)
             },

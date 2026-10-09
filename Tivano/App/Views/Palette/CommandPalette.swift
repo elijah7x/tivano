@@ -151,7 +151,7 @@ struct CommandPalette: View {
         // Chords come from the shortcut store, so the column never shows a key the user
         // has remapped away, and shows nothing at all once a chord is cleared.
         var actions = [
-            Item(id: "new-thread", title: Chrome.localized("New thread"), symbol: "square.and.pencil", shortcut: ShortcutStore.label(for: .newThread)) {
+            Item(id: "new-thread", title: Chrome.localized("New thread"), symbol: "plus.bubble", shortcut: ShortcutStore.label(for: .newThread)) {
                 model.newThread()
             },
             Item(id: "new-worktree", title: Chrome.localized("New thread in worktree"), symbol: "arrow.triangle.branch", shortcut: ShortcutStore.label(for: .newWorktreeThread)) {

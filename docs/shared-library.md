@@ -1,69 +1,63 @@
-# Shared real library
+# Independent edition libraries
 
-Tivano and Tivano Dev use the same library, thread JSON, attachments, MCP store,
-wallpaper, worktrees and patches:
+Release owns production data. Dev is a separate test environment, not a viewer or
+mirror of production. Droppy Code is independent of both editions.
 
-- `~/Library/Application Support/Tivano`
-- `~/.tivano`
-- Keychain service `Tivano` (provider API keys and MCP secrets)
+| Storage | Release | Dev |
+| --- | --- | --- |
+| Application Support | `~/Library/Application Support/Tivano` | `~/Library/Application Support/Tivano Dev` |
+| Worktrees and patches | `~/.tivano` | `~/.tivano-dev` |
+| Keychain service | `Tivano` | `Tivano Dev` |
+| Bundle ID / preferences | `dev.tivano.Tivano` | `dev.tivano.Tivano.dev` |
 
-Bundle IDs, app names, preferences and macOS privacy grants remain distinct.
-The first Dev launch can seed missing preferences from Release/the upstream
-bundle domain; later preference changes are independent. CLI logins remain in
-those providers' own locations.
+Neither edition imports upstream or other-edition preferences or credentials.
+Deleting a credential affects only its own service. Existing Release keys remain
+in `Tivano`; configure Dev keys explicitly. Older credential services are not
+silently imported or deleted. Existing Dev-only Keychain items are not erased by
+separation; review them manually if they were previously used for production.
 
-This is an intentionally shared live store, **not a mirror**. There is no data-sync
-helper; the old `rsync --delete` behavior and `TIVANO_DEV_SYNC` have been retired.
-Changing or deleting a session or credential in one edition affects the other.
+Provider CLI logins/configuration (such as Claude/Codex), external MCP integration
+files and user project checkouts remain user/provider-owned. This separation does
+not create separate OS accounts or provider sandboxes. Use separate test projects
+and provider accounts when testing destructive behavior.
 
+## Separating an existing shared installation
 
-## Concurrent editions
+Do not run older shared-library builds after separation. Update both editions to
+this code before running them concurrently; a new edition's bootstrap lock can
+exclude an already-running old build but cannot stop an old shared build launched
+later. Bundle IDs, Release updater configuration and production verification stay
+unchanged. Public publishing remains a separate, explicitly authorized operation.
 
-Compatible Tivano and Tivano Dev builds can run together. Both hold a shared
-startup lease at `~/Library/Application Support/.tivano-library.lock`; an older
-build that requires an exclusive lease still blocks them. Update both editions
-before using this feature.
+1. Quit **all** Tivano, Tivano Dev, Droppy Code and Cody instances. Never move a
+   live library. Packaging does not authorize quitting Release.
+2. Preview: `python3 scripts/separate_data.py`.
+3. Apply: `python3 scripts/separate_data.py --apply`.
+4. Install updated editions through the requested packaging/release workflow.
+   Do not relaunch automatically. Verify production history/attachments/worktrees
+   in Release and an empty library in Dev when launching is authorized.
 
-Both editions have the same conversation read/write behavior. There are no
-conversation editing leases, read-only access modes or editing-transfer controls.
-The owner controls concurrent use manually and avoids editing the same conversation
-in both editions. Dev is typically used to inspect styles and production data;
-this is a usage convention, not a restriction in code.
+The tool takes the existing lock files exclusively, creates a private backup and
+manifest in `~/Library/Application Support/Tivano Backups/separation-<id>/`, stages
+and validates JSON before changing the live library, and leaves production data
+at `Tivano`. It archives the former Dev library/state/preferences and resets them.
+It removes the old Droppy library alias and restores a separate Droppy snapshot,
+rewriting structured absolute attachment paths to each app's own library.
 
-Library and MCP metadata use short locked read/merge/write transactions.
-Independent edits are merged, unknown fields retained, and conflicting edits
-are refused rather than overwriting another edition's data. Thread heads and
-turn files are read and written under a separate short document lock. MCP
-provider launch configs and token accounting caches are isolated by process or
-edition. Automatic orphan-attachment and abandoned-Hydra-copy cleanup is paused
-because another edition may still use those files.
+The former `~/.tivano -> ~/.droppy-code` alias is removed; the state directory
+moves to `~/.tivano`, and Git worktree registrations are repaired. Stored production
+state paths are updated. Droppy starts with an empty state directory: those active
+worktrees now belong to Tivano, not to both apps. Their original files are backed
+up, but a filesystem copy is not an independently registered Git worktree.
 
-Normal OS process exit releases leases. Never delete lock files to bypass them.
-Capture runs retain their isolated store. Startup still refuses while an older
-Droppy/Cody app is running. Packaging never quits an app.
+The tool does not launch apps, export credentials, delete production conversations,
+or overwrite another independent upstream library. An unexpected alias or invalid
+JSON stops it. A completed marker makes repeat runs no-ops. An interrupted apply
+leaves `.tivano-separation-in-progress.json` pointing to the backup and refuses
+blind retries: recover using the manifest, repair Git registrations if needed, and
+only remove the pending marker after inspecting the recovered state. Backups
+contain private data; do not commit or publish them.
 
-## First-launch migration
-
-Both editions run the same migration under a separate exclusive migration lease. If no Tivano
-store exists, the real upstream `Droppy Code` store is preferred over Cody or an
-old isolated `Tivano Dev` store:
-
-1. Copy a backup into `~/Library/Application Support/Tivano Backups/migration-<id>/`.
-2. Move the store to `Tivano`.
-3. Leave the former store path as an alias to the new store, preserving saved
-   absolute attachment paths. If alias creation fails, move the store back.
-4. Alias `~/.tivano` to the former `~/.droppy-code` when it exists: moving registered
-   git worktrees would break their absolute-path registrations.
-5. Seed missing per-edition preferences but omit upstream cached update downloads.
-   Only mark success after all steps complete, so errors can be retried.
-
-If a Tivano store already exists, it is never overwritten or merged automatically.
-Any other isolated legacy store remains untouched for owner review. Credentials
-can be carried into the shared service on access without exporting them to files;
-macOS may ask for authorization once. Forgetting a shared credential also removes
-its matching legacy copies, preventing silent re-import.
-
-The library file format still belongs to the running app version. JSON transactions
-protect metadata saves; they do not prevent concurrent conversation edits or make incompatible schemas interchangeable. Take an offline backup
-before such tests. Don't launch the old Droppy app after migration: it can still
-write through its compatibility alias without honoring the new lock.
+Fresh installs simply create their edition's empty directories. There is no
+implicit Droppy import. Capture runs remain isolated. Edition lifetime leases and
+short JSON/document transactions remain enabled; they are not a data-sync service.

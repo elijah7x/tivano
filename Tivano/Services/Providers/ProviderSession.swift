@@ -48,6 +48,10 @@ struct SessionConfiguration: Sendable {
     var codexHistoryArchived = false
     var codexHistoryDirectory: String? = nil
     var antiSlopEnabled = true
+    /// The provider's catalogue as the app holds it, for a provider that names its
+    /// variants: its rows map the model the thread chose to an id the agent takes before
+    /// the agent's own list arrives (Devin sends it only after the session opens).
+    var modelCatalog: [ModelOption] = []
 }
 
 /// One exchange of a conversation, for replaying it into a session that starts over.

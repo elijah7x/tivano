@@ -44,7 +44,7 @@ This quits Dev if it is running, packages and verifies the new app, then
 installs/relaunches `/Applications/Tivano Dev.app`. It is only for an explicitly
 requested run/relaunch. Packaging alone uses `scripts/package_local.sh` and
 never launches or quits apps. Keep stable install paths and bundle IDs;
-both editions use the same [real session store](shared-library.md).
+the editions use [independent production and test stores](shared-library.md).
 
 Keychain recognizes updated code by its designated requirement rather than
 its changing content hash. Switching from the old local identity to Developer

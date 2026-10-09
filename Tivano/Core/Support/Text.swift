@@ -3,8 +3,8 @@ import Foundation
 enum AppInfo {
     static let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Tivano"
     static let isDevelopment = Bundle.main.bundleIdentifier == "dev.tivano.Tivano.dev"
-    static let libraryName = "Tivano"
-    static let stateDirectoryName = ".tivano"
+    static let libraryName = isDevelopment ? "Tivano Dev" : "Tivano"
+    static let stateDirectoryName = isDevelopment ? ".tivano-dev" : ".tivano"
     static let numericVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.1"
     static let version = (isDevelopment ? "dev-" : "") + numericVersion
     static let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"

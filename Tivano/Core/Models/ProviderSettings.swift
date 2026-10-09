@@ -9,4 +9,7 @@ protocol ProviderSettings: AnyObject {
     func binaryPath(for provider: ProviderKind) -> String
     func lastModel(for provider: ProviderKind) -> String?
     func apiKey(for provider: ProviderKind) -> String
+    /// Moves chosen models and their preferences from a variant's id to the row its
+    /// variants were merged into (see `ModelFamilies.collapsed`), keeping its effort and speed.
+    func adoptModelFamilies(_ families: [ModelOption], for provider: ProviderKind)
 }

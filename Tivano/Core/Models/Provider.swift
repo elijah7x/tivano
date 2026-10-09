@@ -189,7 +189,7 @@ enum RuntimeMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .supervised: "hand.raised"
         case .autoAcceptEdits: "pencil.line"
         case .auto: "wand.and.sparkles"
-        case .fullAccess: "lock.open"
+        case .fullAccess: "key"
         }
     }
 }
@@ -222,6 +222,10 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
     var isDefault: Bool
     /// The service tier that makes this model fast, when its provider offers one.
     var fastTier: String?
+    /// The provider's own ids behind this one row, when the provider lists every effort
+    /// and Fast variant as a model of its own (Devin, Grok's Fast). Empty for a row that
+    /// is the provider's model as is. See `ModelFamilies`.
+    var variants: [ModelVariant]
 
     init(
         id: String,
@@ -230,7 +234,8 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         efforts: [String] = [],
         defaultEffort: String? = nil,
         isDefault: Bool = false,
-        fastTier: String? = nil
+        fastTier: String? = nil,
+        variants: [ModelVariant] = []
     ) {
         self.id = id
         self.name = name
@@ -239,6 +244,7 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         self.defaultEffort = defaultEffort
         self.isDefault = isDefault
         self.fastTier = fastTier
+        self.variants = variants
     }
 
     init(from decoder: Decoder) throws {
@@ -250,9 +256,32 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         defaultEffort = try container.decodeIfPresent(String.self, forKey: .defaultEffort)
         isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
         fastTier = try container.decodeIfPresent(String.self, forKey: .fastTier)
+        variants = try container.decodeIfPresent([ModelVariant].self, forKey: .variants) ?? []
     }
 
     var supportsFast: Bool { fastTier != nil }
+
+    /// The id the provider takes for this row run at an effort and speed: the row's own
+    /// id, or for a row of variants the one that matches. A missing combination (no Fast
+    /// for that effort, say) falls back to the nearest effort at the speed asked for, then
+    /// to the other speed, so the provider is never sent an id it did not list.
+    func providerID(effort: String?, fastMode: Bool) -> String {
+        guard !variants.isEmpty else { return id }
+        let sameSpeed = variants.filter { $0.isFast == fastMode }
+        let pool = sameSpeed.isEmpty ? variants : sameSpeed
+        guard let wanted = effort ?? defaultEffort else { return pool[0].id }
+        if let exact = pool.first(where: { $0.effort == wanted }) { return exact.id }
+        guard let rank = Self.effortRank(wanted) else { return pool[0].id }
+        let nearest = pool.min { lhs, rhs in
+            abs((lhs.effort.flatMap(Self.effortRank) ?? rank) - rank) < abs((rhs.effort.flatMap(Self.effortRank) ?? rank) - rank)
+        }
+        return (nearest ?? pool[0]).id
+    }
+
+    /// The variant behind a provider id this row stands for, when it is one of its variants.
+    func variant(_ providerID: String) -> ModelVariant? {
+        variants.first { $0.id == providerID }
+    }
 
     /// The name as the picker shows it, such as "5.6 Terra" for "GPT-5.6-Terra".
     var shortName: String {
@@ -281,6 +310,29 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         return cleaned.isEmpty ? shortName : cleaned
     }
 
+    /// Where an effort sits on the scale, low to high; nil for a level the scale does not know.
+    static func effortRank(_ effort: String) -> Int? {
+        [
+            "none": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4,
+            "xhigh": 5, "extra-high": 5, "extra_high": 5, "extra high": 5, "max": 6, "ultra": 6,
+        ][effort.lowercased()]
+    }
+
+    /// The scale low to high, whatever order the agent lists it in: Grok's ACP advertises
+    /// its levels from extra high down to low, and the slider (see `EffortSlider`) reads
+    /// the list left to right as low to high, so its knob sat at Low for the highest. A
+    /// level the ranks do not know keeps its place among its neighbours.
+    static func orderedEfforts(_ values: [String]) -> [String] {
+        let ranked = values.enumerated().map { (offset: $0.offset, value: $0.element, rank: effortRank($0.element)) }
+        guard ranked.count(where: { $0.rank != nil }) > 1 else { return values }
+        return ranked.sorted { lhs, rhs in
+            switch (lhs.rank, rhs.rank) {
+            case (let l?, let r?) where l != r: return l < r
+            default: return lhs.offset < rhs.offset
+            }
+        }.map(\.value)
+    }
+
     static func effortTitle(_ effort: String) -> String {
         switch effort {
         case "xhigh", "extra-high": "Extra High"
@@ -288,6 +340,14 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         default: effort.prefix(1).uppercased() + effort.dropFirst()
         }
     }
+}
+
+/// One of the provider's own ids behind a row of variants: the effort and speed it runs at.
+struct ModelVariant: Codable, Hashable, Sendable {
+    var id: String
+    /// Nil when the variants differ in speed alone and the effort is a setting of its own (Grok).
+    var effort: String?
+    var isFast: Bool
 }
 
 struct SlashCommand: Hashable, Identifiable, Sendable {
