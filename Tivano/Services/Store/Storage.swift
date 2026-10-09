@@ -4,6 +4,16 @@ import Synchronization
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Just enough of a stored thread to read the files a forwarded continuation points at:
+/// the sweep runs over whole files as text, so only this key is ever decoded.
+private struct StoredContinuation: Decodable {
+    struct Continuation: Decodable {
+        var attachments: [Attachment]?
+    }
+
+    var continuation: Continuation?
+}
+
 struct StoredTurn: Codable, Sendable {
     var turn: TurnRecord
     var items: [TimelineItem]
@@ -75,10 +85,6 @@ enum Storage {
         turnsURL(threadID).appendingPathComponent("\(turnID.uuidString).json")
     }
 
-    nonisolated static func documentLockURL(_ id: UUID) -> URL {
-        root.appendingPathComponent("document-locks/\(id.uuidString).lock")
-    }
-
     nonisolated static func readDocument(_ id: UUID) -> (document: ThreadDocument, cost: Int)? {
         readDocument(id, recentOnly: false)
     }
@@ -89,8 +95,6 @@ enum Storage {
 
     private nonisolated static func readDocument(_ id: UUID, recentOnly: Bool) -> (document: ThreadDocument, cost: Int)? {
         DiskWriter.shared.readSynchronously {
-            guard let lease = try? SharedLibraryLease(at: documentLockURL(id), mode: .shared, wait: true) else { return nil }
-            defer { withExtendedLifetime(lease) {} }
             guard let data = try? Data(contentsOf: threadURL(id)),
                   var document = try? JSONDecoder.storage.decode(ThreadDocument.self, from: data) else { return nil }
             var cost = data.count
@@ -110,10 +114,7 @@ enum Storage {
     }
 
     nonisolated static func readTurns(_ id: UUID, references: [ThreadTurnReference]) -> (document: ThreadDocument, cost: Int)? {
-        DiskWriter.shared.readSynchronously {
-            guard let lease = try? SharedLibraryLease(at: documentLockURL(id), mode: .shared, wait: true) else { return nil }
-            return withExtendedLifetime(lease) { readTurnsUnlocked(id, references: references) }
-        }
+        DiskWriter.shared.readSynchronously { readTurnsUnlocked(id, references: references) }
     }
 
     /// Puts a thread's files that would not read somewhere a save can never reach: moved
@@ -122,8 +123,6 @@ enum Storage {
     /// Returns the folder, or nil when there was nothing to keep or it could not be made.
     nonisolated static func setAside(_ id: UUID, moving: Bool) -> URL? {
         DiskWriter.shared.readSynchronously {
-            guard let lease = try? SharedLibraryLease(at: documentLockURL(id), wait: true) else { return nil }
-            defer { withExtendedLifetime(lease) {} }
             let manager = FileManager.default
             let sources = [threadURL(id), turnsURL(id)].filter { manager.fileExists(atPath: $0.path) }
             guard !sources.isEmpty else { return nil }
@@ -194,6 +193,46 @@ enum Storage {
         let destination = attachmentsDirectory.appendingPathComponent("\(id.uuidString).\(fileExtension)")
         try data.write(to: destination, options: .atomic)
         return Attachment(id: id, name: name, path: destination.path, mimeType: MimeType.of(fileExtension))
+    }
+
+    /// Removes attachment files no thread refers to any more: the photos of a deleted
+    /// thread, a draft's that was never sent, a follow-up's that was dropped. A file is
+    /// only an orphan once it is a day old, so a draft still open when the app relaunches
+    /// keeps its files, and only files named the way `importAttachment` names them go.
+    /// Runs off the main actor; the thread files are scanned as text, never decoded.
+    nonisolated static func sweepOrphanedAttachments() async {
+        let attachments = attachmentsDirectory
+        let threads = threadsDirectory
+        await Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            guard let names = try? fileManager.contentsOfDirectory(atPath: attachments.path), !names.isEmpty,
+                  let documents = fileManager.enumerator(at: threads, includingPropertiesForKeys: nil)?.allObjects as? [URL] else { return }
+            var referenced = Set<String>()
+            for document in documents where document.pathExtension == "json" {
+                guard let data = try? Data(contentsOf: document) else { continue }
+                let text = String(decoding: data, as: UTF8.self)
+                // The encoder writes the path's slashes as `\/`.
+                for match in text.matches(of: #/attachments\\?\/([0-9A-Fa-f-]{36}\.[A-Za-z0-9]+)/#) {
+                    referenced.insert(String(match.output.1))
+                }
+                // A forwarded continuation keeps its own copy of the metadata, and the
+                // files it names stay referenced while the thread holding it is on disk.
+                if text.contains("\"continuation\""),
+                   let stored = try? JSONDecoder.storage.decode(StoredContinuation.self, from: data) {
+                    for attachment in stored.continuation?.attachments ?? [] {
+                        referenced.insert(attachment.url.lastPathComponent)
+                    }
+                }
+            }
+            let cutoff = Date.now.addingTimeInterval(-24 * 60 * 60)
+            for name in names where !referenced.contains(name) {
+                guard name.wholeMatch(of: #/[0-9A-Fa-f-]{36}\.[A-Za-z0-9]+/#) != nil else { continue }
+                let url = attachments.appendingPathComponent(name)
+                guard let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+                      modified < cutoff else { continue }
+                try? fileManager.removeItem(at: url)
+            }
+        }.value
     }
 
     /// How many files a message carries.
@@ -462,8 +501,6 @@ final class DiskWriter: Sendable {
         let head = snapshot.head
         let url = Storage.threadURL(head.threadID)
         do {
-            let lease = try SharedLibraryLease(at: Storage.documentLockURL(head.threadID), wait: true)
-            defer { withExtendedLifetime(lease) {} }
             let directory = Storage.turnsURL(head.threadID)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let index = head.turnIndex ?? []
@@ -505,6 +542,38 @@ final class DiskWriter: Sendable {
         }
     }
 
+    func writeSynchronously<Value: Encodable & Sendable>(_ value: Value, to url: URL) {
+        let completions = pending.withLock { $0.removeValue(forKey: url)?.completions ?? [] }
+        queue.sync {
+            let size = write(value, to: url)
+            if let size { sizes.withLock { $0[url] = size } }
+            for completion in completions { completion(size != nil) }
+        }
+    }
+
+    /// A provider-history action must not proceed if its recovery state cannot save.
+    /// Awaited rather than run with `queue.sync`: the caller is the main actor, and a
+    /// whole-library write queued behind other documents would hold the app still.
+    func writeOrThrow<Value: Encodable & Sendable>(_ value: Value, to url: URL) async throws {
+        let completions = pending.withLock { $0.removeValue(forKey: url)?.completions ?? [] }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async { [self] in
+                do {
+                    let data = try JSONEncoder.storage.encode(value)
+                    try data.write(to: url, options: .atomic)
+                    sizes.withLock { $0[url] = data.count }
+                    errors.withLock { $0[url] = nil }
+                    for completion in completions { completion(true) }
+                    continuation.resume()
+                } catch {
+                    errors.withLock { $0[url] = error.localizedDescription }
+                    for completion in completions { completion(false) }
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     func removeSynchronously(_ url: URL) {
         removeSynchronously([url])
     }
@@ -517,12 +586,7 @@ final class DiskWriter: Sendable {
             urls.flatMap { pending.removeValue(forKey: $0)?.completions ?? [] }
         }
         queue.sync {
-            for url in urls {
-                if let id = Self.threadID(for: url) {
-                    guard let lease = try? SharedLibraryLease(at: Storage.documentLockURL(id), wait: true) else { continue }
-                    withExtendedLifetime(lease) { try? FileManager.default.removeItem(at: url) }
-                } else { try? FileManager.default.removeItem(at: url) }
-            }
+            for url in urls { try? FileManager.default.removeItem(at: url) }
             for completion in threadCompletions { completion(false) }
             for completion in completions { completion(false) }
         }
@@ -538,11 +602,6 @@ final class DiskWriter: Sendable {
     }
 
     @discardableResult
-    private static func threadID(for url: URL) -> UUID? {
-        guard url.deletingLastPathComponent() == Storage.threadsDirectory else { return nil }
-        return UUID(uuidString: url.deletingPathExtension().lastPathComponent)
-    }
-
     private func write(_ value: any Encodable, to url: URL) -> Int? {
         do {
             let data = try JSONEncoder.storage.encode(value)

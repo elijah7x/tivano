@@ -55,13 +55,12 @@ Before building, use the approved Dev code revision; copying a version number
 alone does not promote code. The release display name and unbadged icon remain
 Release's even when the numeric version catches up.
 
-## Shared real data
+## Edition data
 
-See [shared library](shared-library.md). Both editions have the same conversation read/write behavior;
-the owner controls concurrent use manually. The owner accepts the risk of Dev modifying the real store, including
-schema changes that an older Release may not understand. Keep backups before
-risky experiments; short file transactions do not prevent concurrent conversation edits or
-make arbitrary schema downgrades safe.
+See [independent edition libraries](shared-library.md). Release and Dev each own
+their library and never read the other's, so Dev experiments cannot modify
+production conversations. Project folders and provider CLI configuration remain
+shared; keep backups before risky experiments on them.
 
 Source: [Apple CFBundleShortVersionString](https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleshortversionstring)
 requires three period-separated integers, so `dev-` is intentionally not stored

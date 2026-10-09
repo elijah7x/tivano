@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import SwiftUI
 
@@ -218,3 +219,4 @@ enum ProductCaptures {
         after()
     }
 }
+#endif

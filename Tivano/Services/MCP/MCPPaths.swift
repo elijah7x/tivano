@@ -4,7 +4,7 @@ import Foundation
 /// server in that provider's own format; a missing or empty file means no servers.
 enum MCPPaths {
     static let directory: URL = {
-        let url = Storage.root.appendingPathComponent("mcp-runtime/\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)", isDirectory: true)
+        let url = Storage.root.appendingPathComponent("mcp", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()

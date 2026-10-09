@@ -18,11 +18,6 @@ final class MCPStore {
     private(set) var customs: [MCPCustomServer] = []
 
     @ObservationIgnored private var probes: [String: Task<Void, Never>] = [:]
-    @ObservationIgnored private let connectionsFile = SharedJSONFile(MCPPaths.connectionsURL)
-    @ObservationIgnored private let customsFile = SharedJSONFile(MCPPaths.customsURL)
-    @ObservationIgnored private var connectionsStamp: SharedFileStamp?
-    @ObservationIgnored private var customsStamp: SharedFileStamp?
-    private(set) var sharedWriteError: String?
 
     init() {
         load()
@@ -246,50 +241,32 @@ final class MCPStore {
            let list = try? JSONDecoder().decode([MCPCustomServer].self, from: data) {
             customs = list
         }
-        if let data = try? Data(contentsOf: MCPPaths.connectionsURL),
-           let list = try? JSONDecoder.storage.decode([MCPConnection].self, from: data) {
-            connections = Dictionary(list.map { ($0.catalogID, $0) }, uniquingKeysWith: { _, last in last })
-            states = [:]
-            for connection in list where connection.connectedAt != nil {
+        guard let data = try? Data(contentsOf: MCPPaths.connectionsURL) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let list = try? decoder.decode([MCPConnection].self, from: data) else { return }
+        for connection in list {
+            connections[connection.catalogID] = connection
+            if connection.connectedAt != nil {
                 states[connection.catalogID] = .connected(toolCount: connection.tools.count)
             }
         }
-        for id in Array(probes.keys) where connections[id] == nil {
-            probes.removeValue(forKey: id)?.cancel()
-        }
-        connectionsFile.remember((try? JSONEncoder.storage.encode(connections.values.sorted { $0.catalogID < $1.catalogID })) ?? Data(), existed: FileManager.default.fileExists(atPath: MCPPaths.connectionsURL.path))
-        customsFile.remember((try? JSONEncoder.storage.encode(customs)) ?? Data(), existed: FileManager.default.fileExists(atPath: MCPPaths.customsURL.path))
-        connectionsStamp = SharedFileStamp(MCPPaths.connectionsURL)
-        customsStamp = SharedFileStamp(MCPPaths.customsURL)
     }
 
     private func save() {
-        do {
-            let local = try JSONEncoder.storage.encode(connections.values.sorted { $0.catalogID < $1.catalogID })
-            let merged = try connectionsFile.save(local)
-            let list = try JSONDecoder.storage.decode([MCPConnection].self, from: merged)
-            connections = Dictionary(list.map { ($0.catalogID, $0) }, uniquingKeysWith: { _, last in last })
-            connectionsFile.remember(try JSONEncoder.storage.encode(list), existed: true)
-            connectionsStamp = nil
-            sharedWriteError = nil
-        } catch { sharedWriteError = error.localizedDescription; load() }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let list = connections.values.sorted { $0.catalogID < $1.catalogID }
+        guard let data = try? encoder.encode(list) else { return }
+        try? data.write(to: MCPPaths.connectionsURL, options: .atomic)
     }
 
     private func saveCustoms() {
-        do {
-            let merged = try customsFile.save(JSONEncoder.storage.encode(customs))
-            customs = try JSONDecoder.storage.decode([MCPCustomServer].self, from: merged)
-            customsFile.remember(try JSONEncoder.storage.encode(customs), existed: true)
-            customsStamp = nil
-            sharedWriteError = nil
-        } catch { sharedWriteError = error.localizedDescription; load() }
-    }
-
-    func refreshSharedData() {
-        if SharedFileStamp(MCPPaths.connectionsURL) != connectionsStamp || SharedFileStamp(MCPPaths.customsURL) != customsStamp {
-            load()
-            exportAll()
-        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(customs) else { return }
+        try? data.write(to: MCPPaths.customsURL, options: .atomic)
     }
 
     /// Rewrites every provider's config from `enabledServers` and runs the one-time external-CLI cleanup.

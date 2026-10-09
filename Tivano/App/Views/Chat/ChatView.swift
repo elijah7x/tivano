@@ -142,9 +142,7 @@ struct ChatView: View {
                     }
                     .modifier(ReserveSlide(reserve: scene.reserve, slides: scene.isMeasured && !liveResize.isActive && !holds && !switching, animatesWidth: true))
             }
-            .overlay(alignment: .top) {
-                PaneTopVeil(model: scrollChrome)
-            }
+            .chromeEdgeFade(scrollChrome)
             .overlay(alignment: .top) {
                 ChatChromeRow(
                     runtime: runtime,
@@ -408,6 +406,7 @@ struct ChatView: View {
         let liveResize: WindowLiveResize
 
         func body(content: Content) -> some View {
+            #if DEBUG
             if CaptureRun.isEnabled {
                 content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                     guard !liveResize.isActive else { return }
@@ -416,6 +415,9 @@ struct ChatView: View {
             } else {
                 content
             }
+            #else
+            content
+            #endif
         }
     }
 
@@ -1307,9 +1309,11 @@ private struct ThreadsButton: View {
                 .presentedChrome()
         }
         // The capture run hangs the list's still from the button, where the app shows it.
+        #if DEBUG
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             if CaptureRun.isEnabled { WebsiteCaptures.threadsButtonFrame = frame }
         }
+        #endif
     }
 }
 

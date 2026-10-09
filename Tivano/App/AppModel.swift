@@ -129,11 +129,6 @@ final class AppModel {
     @ObservationIgnored private var libraryLoad: Task<Library, Never>?
     @ObservationIgnored private var restoreSelectionAfterLoad = false
     @ObservationIgnored private var persistenceEnabled = true
-    @ObservationIgnored private let libraryFile = SharedJSONFile(Storage.libraryURL)
-    @ObservationIgnored private var sharedRefreshTask: Task<Void, Never>?
-    @ObservationIgnored private var libraryStamp: SharedFileStamp?
-    @ObservationIgnored private var synchronizingLibrary = false
-    @ObservationIgnored private var lastSharedMCPError: String?
     @ObservationIgnored private var didRequestNotifications = false
 
     init() {
@@ -246,8 +241,6 @@ final class AppModel {
         libraryLoad = load
         var library = await load.value
         let originalThreads = library.threads
-        libraryFile.remember((try? JSONEncoder.storage.encode(library)) ?? Data(), existed: FileManager.default.fileExists(atPath: Storage.libraryURL.path))
-        libraryStamp = nil
         for index in library.threads.indices where !CaptureRun.isEnabled && (library.threads[index].lastStatus == .running || library.threads[index].hydra?.status == .running) {
             if library.threads[index].lastStatus == .running {
                 library.threads[index].lastStatus = .interrupted
@@ -268,15 +261,6 @@ final class AppModel {
         if threads != originalThreads || projects != library.projects { scheduleSave() }
         // Capture seeds retain their staged statuses and never start account or merge services.
         if CaptureRun.isEnabled { return }
-        if !CaptureRun.isEnabled {
-            sharedRefreshTask = Task { [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(1))
-                    guard !Task.isCancelled, let self else { return }
-                    self.refreshSharedLibrary()
-                }
-            }
-        }
         if let lastID = settings.lastProjectID, project(lastID) == nil {
             settings.lastProjectID = nil
         }
@@ -290,7 +274,7 @@ final class AppModel {
         // Needs the login PATH for gh and gives every later process the account's token.
         GitHubConnection.shared.start()
         // After the login environment, so git runs with the user's PATH.
-        // Shared checkouts may still be used by the other edition.
+        sweepHydraCopies()
         // A merge the last run did not finish (the app was quit under it) goes out now.
         await resumeHydraMerges()
         // The launch sweep alone is not enough: a merge can also be missed while the app
@@ -325,44 +309,9 @@ final class AppModel {
                 await providers.updateCLIIfDue(provider)
             }
         }
-        // Another edition can hold an attachment in an unsaved draft. Automatic
-        // orphan reclamation is paused rather than deleting that process's data.
-    }
-
-    // MARK: - Shared library refresh
-
-    private func readSharedLibrary() {
-        let stamp = SharedFileStamp(Storage.libraryURL)
-        guard let data = try? Data(contentsOf: Storage.libraryURL),
-              let library = try? JSONDecoder.storage.decode(Library.self, from: data) else {
-            alert = AppAlert(title: "Shared library could not be refreshed", message: "The file is missing or unreadable. The current conversations remain in memory; restore the library before retrying.")
-            return
-        }
-        libraryFile.remember((try? JSONEncoder.storage.encode(library)) ?? Data(), existed: FileManager.default.fileExists(atPath: Storage.libraryURL.path))
-        projects = library.projects
-        threads = library.threads
-        libraryStamp = stamp
-        for id in Array(runtimes.keys) where thread(id) == nil {
-            runtimes[id]?.cancelPersistence()
-            runtimes[id]?.stopSession()
-            runtimes[id] = nil
-        }
-        if let id = selectedThreadID, thread(id) == nil { selectedThreadID = nil }
-        updateDockBadge()
-    }
-
-    private func refreshSharedLibrary() {
-        guard isLibraryLoaded, persistenceEnabled, !synchronizingLibrary else { return }
-        synchronizingLibrary = true
-        defer { synchronizingLibrary = false }
-        // Don't replace a local dirty index; its existing four-second debounce will
-        // commit it first, then the next refresh reads the merged global snapshot.
-        if saveTask == nil, SharedFileStamp(Storage.libraryURL) != libraryStamp { readSharedLibrary() }
-        mcp.refreshSharedData()
-        if let error = mcp.sharedWriteError, error != lastSharedMCPError {
-            alert = AppAlert(title: "Shared MCP write blocked", message: error)
-        }
-        lastSharedMCPError = mcp.sharedWriteError
+        // Last, once nothing the first click needs is waiting on the disk: the attachment
+        // files no thread refers to any more go, a day after they were written.
+        await Storage.sweepOrphanedAttachments()
     }
 
     // MARK: - Lookup
@@ -612,8 +561,9 @@ final class AppModel {
               !children(of: id).contains(where: {
                   $0.hydra?.status == .running || existingRuntime(for: $0.id)?.isRunning == true
               }) else { return false }
-        // Persist unsaved changes before dropping the runtime.
-        if let snapshot = runtime.unsavedSnapshot(), !DiskWriter.shared.writeThreadSynchronously(snapshot) { return false }
+        // The save is queued before the runtime goes; a read that follows waits for it
+        // (see `Storage.readDocument`), so the thread can never come back older than it left.
+        runtime.saveNow()
         runtime.cancelPersistence()
         runtimes[id] = nil
         runtimeLastAccess[id] = nil
@@ -672,11 +622,11 @@ final class AppModel {
     }
 
     func removeProject(_ project: Project) {
-        let removed = threads.filter { $0.projectID == project.id }
+        for thread in threads where thread.projectID == project.id {
+            discardThreadState(thread)
+        }
         threads.removeAll { $0.projectID == project.id }
         projects.removeAll { $0.id == project.id }
-        guard saveLibrary() else { return }
-        for thread in removed { discardThreadState(thread) }
         if settings.lastProjectID == project.id { settings.lastProjectID = nil }
         if selectedThread == nil { selectedThreadID = nil }
         scheduleSave()
@@ -719,7 +669,7 @@ final class AppModel {
         updateProject(project.id) { $0.isExpanded = true }
         rememberLastProject(project.id)
         selectedThreadID = thread.id
-        guard saveLibrary() else { return nil }
+        scheduleSave()
         if (workspace ?? settings.defaultWorkspaceMode) == .worktree {
             Task { await createWorktree(for: thread.id) }
         }
@@ -745,7 +695,6 @@ final class AppModel {
         threads.append(thread)
         updateProject(project.id) { $0.isExpanded = true }
         rememberLastProject(project.id)
-        guard saveLibrary() else { return nil }
         let newRuntime = runtime(for: thread.id)
         guard await newRuntime.installContinuation(continuation), self.thread(thread.id) != nil else { return nil }
         selectedThreadID = thread.id
@@ -1070,9 +1019,8 @@ final class AppModel {
         if thread.isHydraHead, thread.hydra?.isFinished == false {
             finishHydraHead(id, status: .interrupted, summary: nil)
         }
-        threads.removeAll { $0.id == id }
-        guard saveLibrary() else { return }
         discardThreadState(thread)
+        threads.removeAll { $0.id == id }
         if let project = project(thread.projectID) {
             let git = Git(project.path)
             // A head's copy of the checkout was Tivano's to make, so it always goes.
@@ -1097,9 +1045,6 @@ final class AppModel {
             guard let parent = helper.parentThreadID else { return false }
             return archivedIDs.contains(parent) && !archivedIDs.contains(helper.id)
         }
-        let removedIDs = Set(removed.map(\.id))
-        threads.removeAll { removedIDs.contains($0.id) }
-        guard saveLibrary() else { return }
         if let selectedThreadID, removed.contains(where: { $0.id == selectedThreadID }) {
             self.selectedThreadID = nil
         }
@@ -1119,7 +1064,10 @@ final class AppModel {
                 if let copy = item.copy { try? await git.removeWorktree(at: copy) }
             }
         }
+        let removedIDs = Set(removed.map(\.id))
+        threads.removeAll { removedIDs.contains($0.id) }
         updateDockBadge()
+        scheduleSave()
     }
 
     // MARK: - Subagents
@@ -1434,37 +1382,14 @@ final class AppModel {
         }
     }
 
-    @discardableResult
-    private func saveLibrary() -> Bool {
-        guard isLibraryLoaded, persistenceEnabled else { return false }
-        saveTask?.cancel()
-        saveTask = nil
+    private func saveLibrary() {
+        guard isLibraryLoaded, persistenceEnabled else { return }
         lastLibrarySave = .now
         var library = Library()
         library.projects = projects
         library.threads = threads
-        do {
-            let data = try JSONEncoder.storage.encode(library)
-            let merged = try libraryFile.save(data) { data in
-                let result = try JSONDecoder.storage.decode(Library.self, from: data)
-                let projects = Set(result.projects.map(\.id))
-                guard result.threads.allSatisfy({ projects.contains($0.projectID) }) else {
-                    throw SharedJSONConflict(path: "project removed while conversations were added")
-                }
-            }
-            let current = try JSONDecoder.storage.decode(Library.self, from: merged)
-            projects = current.projects
-            threads = current.threads
-            libraryFile.remember(try JSONEncoder.storage.encode(current), existed: true)
-            // Another process can commit after this transaction returns. Force a
-            // later read rather than labeling our returned snapshot with its stamp.
-            libraryStamp = nil
-            return true
-        } catch {
-            alert = AppAlert(title: "Shared library write blocked", message: error.localizedDescription)
-            readSharedLibrary()
-            return false
-        }
+        let url = Storage.libraryURL
+        DiskWriter.shared.encodeAndWrite(library, to: url)
     }
 
     /// Flush recovery metadata before an opt-in provider archive. A capture or a disk
@@ -1473,19 +1398,23 @@ final class AppModel {
         guard isLibraryLoaded, persistenceEnabled, !CaptureRun.isEnabled else {
             throw ProviderError.failed(Chrome.localized("Provider history changes require a persistent library."))
         }
-        guard saveLibrary() else {
-            throw ProviderError.failed(Chrome.localized("Shared library write blocked"))
-        }
+        var library = Library()
+        library.projects = projects
+        library.threads = threads
+        try await DiskWriter.shared.writeOrThrow(library, to: Storage.libraryURL)
+        lastLibrarySave = .now
     }
 
     /// Writes everything synchronously, for use while the app terminates.
     func saveBeforeQuit() {
         guard isLibraryLoaded, persistenceEnabled else { return }
-        sharedRefreshTask?.cancel()
-        saveLibrary()
         persistenceEnabled = false
         saveTask?.cancel()
         saveTask = nil
+        var library = Library()
+        library.projects = projects
+        library.threads = threads
+        DiskWriter.shared.writeSynchronously(library, to: Storage.libraryURL)
         for runtime in runtimes.values {
             runtime.cancelPersistence()
             runtime.stopSession()

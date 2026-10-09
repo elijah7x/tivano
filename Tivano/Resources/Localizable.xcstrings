@@ -45,6 +45,34 @@
         }
       }
     },
+    "Not started": {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "尚未开始" } } }
+    },
+    "In progress": {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "进行中" } } }
+    },
+    "Turn completed": {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "本轮完成" } } }
+    },
+    "Awaiting approval": {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "待批准" } } }
+    },
+    "Awaiting your answer": {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "待回答" } } }
+    },
+    "Turn failed": {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "本轮出错" } } }
+    },
+    "Stopped or interrupted": {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "已停止或中断" } } }
+    },
     "Free and preview models": {
       "extractionState": "manual",
       "localizations": {
@@ -239,72 +267,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "仅在光标移入右上角功能区时显示其中的控件"
-          }
-        }
-      }
-    },
-    "Shared library could not be refreshed": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法刷新共享资料库"
-          }
-        }
-      }
-    },
-    "The file is missing or unreadable. The current conversations remain in memory; restore the library before retrying.": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "资料库文件缺失或无法读取。当前会话仍保留在内存中；请恢复资料库后重试。"
-          }
-        }
-      }
-    },
-    "Shared MCP write blocked": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "共享 MCP 写入受阻"
-          }
-        }
-      }
-    },
-    "Shared library write blocked": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "共享资料库写入受阻"
-          }
-        }
-      }
-    },
-    "Another edition changed the same data (%@). Your write was not applied. Refresh and try again.": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "另一个版本修改了相同的数据（%@）。本次写入未执行，请刷新后重试。"
-          }
-        }
-      }
-    },
-    "The shared library could not be opened. A running older Tivano build may still require exclusive access; update both editions before running them together. Otherwise check permissions and available disk space.\n\n%@": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法打开共享资料库。正在运行的旧版 Tivano 可能仍要求独占访问；请更新两个版本后再同时运行。若仍有问题，请检查权限和可用磁盘空间。\n\n%@"
           }
         }
       }
@@ -695,28 +657,6 @@
         }
       }
     },
-    "Shared Tivano library" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tivano 共享资料库"
-          }
-        }
-      }
-    },
-    "Quit the older app before opening Tivano or Tivano Dev. Both editions use your real library; the older app cannot participate in its writer lock." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开 Tivano 或 Tivano Dev 前，请先退出旧版应用。两版共用你的真实资料库，旧版应用不支持资料库写入锁。"
-          }
-        }
-      }
-    },
 
     " and " : {
       "extractionState" : "manual",
@@ -934,17 +874,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 已停止"
-          }
-        }
-      }
-    },
-    "%@ themes, from Catppuccin to Kanagawa, in real Liquid Glass. Built in Swift, so it scrolls at 120 frames a second and starts in a blink." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 款主题，从 Catppuccin 到 Kanagawa，均为真正的 Liquid Glass 效果。使用 Swift 构建，滚动可达每秒 120 帧，启动只在眨眼之间。"
           }
         }
       }
@@ -1873,17 +1802,6 @@
         }
       }
     },
-    "A column beside the chat; the list button in the toolbar shows and hides it" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "对话旁的分栏；可用工具栏中的列表按钮显示或隐藏"
-          }
-        }
-      }
-    },
     "A finished head hands its report to the lead, which checks the work and answers you. Cleared heads move from the panel to the sidebar." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2170,17 +2088,6 @@
         }
       }
     },
-    "Activity list" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "活动列表"
-          }
-        }
-      }
-    },
     "Activity view" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2368,17 +2275,6 @@
         }
       }
     },
-    "Advanced" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "高级"
-          }
-        }
-      }
-    },
     "All changes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2408,17 +2304,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本次会话允许"
-          }
-        }
-      }
-    },
-    "Allow for this thread" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "本对话允许"
           }
         }
       }
@@ -3358,17 +3243,6 @@
         }
       }
     },
-    "Changes, the terminal and the team's panel dock to any corner and can pop out on their own. The conversation makes room, and everything stays in one window." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "改动、终端和团队面板可以停靠在任意角落，也能单独弹出。对话会自动让出空间，一切仍在同一个窗口中。"
-          }
-        }
-      }
-    },
     "Change…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4249,17 +4123,6 @@
         }
       }
     },
-    "Could not send out %@: %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法派出 %@：%@"
-          }
-        }
-      }
-    },
     "Could not switch branch" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5008,17 +4871,6 @@
         }
       }
     },
-    "Drag from low to max on any model. In a pair the track blends the lead's colour into the heads', fast mode streaks toward the knob, and the title opens the model picker." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "任意模型都可从“低”拖到“最高”。使用组合时，滑轨从主导模型的颜色渐变到子智能体的颜色，快速模式会有光效划向滑块，点击标题可打开模型选择器。"
-          }
-        }
-      }
-    },
     "Drag to move" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5411,17 +5263,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "推理强度"
-          }
-        }
-      }
-    },
-    "Effort, on a slider" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "推理强度，一拖即调"
           }
         }
       }
@@ -6405,17 +6246,6 @@
         }
       }
     },
-    "Hide the sidebar and the chat has the whole window. The Threads button brings the list back as a floating panel: the same search, the same rows, and it goes away as soon as you pick one." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "隐藏侧边栏后，对话独占整个窗口。“对话”按钮会把列表以浮动面板的形式带回来：同样的搜索、同样的条目，选中后便自动消失。"
-          }
-        }
-      }
-    },
     "Hide these steps" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6588,17 +6418,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hydra 已开启。大任务会交给子智能体团队，本对话负责主导，而不是事事亲力亲为。"
-          }
-        }
-      }
-    },
-    "Hydra's cookbook holds ready-made pairs: a lead, its heads and the effort each side gets, from the providers you have signed in. Pick one in Settings and every new chat starts on it." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hydra 食谱收录了现成的组合：主导模型、子智能体，以及两侧各自的推理强度，均取自你已登录的服务商。在设置中选择一个，之后每个新对话都会以它启动。"
           }
         }
       }
@@ -7175,17 +6994,6 @@
         }
       }
     },
-    "Make it yours" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打造专属外观"
-          }
-        }
-      }
-    },
     "Marinating" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7648,17 +7456,6 @@
         }
       }
     },
-    "No column and no toolbar button; the floating panel is the sidebar" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有分栏，也没有工具栏按钮；浮动面板就是侧边栏"
-          }
-        }
-      }
-    },
     "No downloads yet. Anything you download appears here." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7842,17 +7639,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暂未列出工具。"
-          }
-        }
-      }
-    },
-    "No tour pages" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有导览页面"
           }
         }
       }
@@ -8077,17 +7863,6 @@
         }
       }
     },
-    "One chat, many heads. The lead writes the briefs, sends helper agents out in parallel, each in a copy of your project, and their work lands back in your checkout." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "一个对话，多个子智能体。主导模型撰写任务简报，并行派出子智能体，各自在你项目的副本中工作，完成后的成果会合并回你的检出目录。"
-          }
-        }
-      }
-    },
     "One file was left out: a message holds %d attachments" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8128,17 +7903,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "同一个模型，两种强度：Astra 深入思考计划与审查，Astra 子智能体以常规强度构建。"
-          }
-        }
-      }
-    },
-    "One native macOS window for every coding agent you use. Claude, Codex, Gemini, Copilot and more, each in its own thread, on the same Liquid Glass." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "一个原生 macOS 窗口，容纳你使用的所有编程智能体。Claude、Codex、Gemini、Copilot 等，各自在独立对话中运行，同样采用 Liquid Glass 设计。"
           }
         }
       }
@@ -8539,28 +8303,6 @@
         }
       }
     },
-    "Page %lld of %lld" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "第 %lld 页，共 %lld 页"
-          }
-        }
-      }
-    },
-    "Pair a strong lead with quick heads" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "强力主导，搭配敏捷子智能体"
-          }
-        }
-      }
-    },
     "Pairs" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8590,28 +8332,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "组合位于模型选择器顶部：点按即可让对话使用该组合。在侧边栏右键点击项目，可让它的每个新对话都使用某个组合。"
-          }
-        }
-      }
-    },
-    "Panel only" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仅面板"
-          }
-        }
-      }
-    },
-    "Panels that float" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "可浮动的面板"
           }
         }
       }
@@ -8770,17 +8490,6 @@
         }
       }
     },
-    "Ported from TourKit by Ram Patra, MIT License." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移植自 Ram Patra 的 TourKit，MIT 许可证。"
-          }
-        }
-      }
-    },
     "Ported from Zeron by Wing, MIT License." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8843,17 +8552,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "项目图标"
-          }
-        }
-      }
-    },
-    "Project mark" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "项目标记"
           }
         }
       }
@@ -9008,17 +8706,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将 %@ 放回团队面板"
-          }
-        }
-      }
-    },
-    "Put a Claude lead over Gemini or OpenCode heads. Pick the pair from the model picker, cap how many heads run at once, and give each side its own effort." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "让 Claude 主导，由 Gemini 或 OpenCode 的子智能体执行。在模型选择器中挑选组合，限制同时运行的子智能体数量，并为两侧分别设置推理强度。"
           }
         }
       }
@@ -9239,17 +8926,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最近下载"
-          }
-        }
-      }
-    },
-    "Recipes for a team" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "团队食谱"
           }
         }
       }
@@ -9635,17 +9311,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重置字号"
-          }
-        }
-      }
-    },
-    "Reset to defaults" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重置为默认设置"
           }
         }
       }
@@ -11971,17 +11636,6 @@
         }
       }
     },
-    "The slideshow from the first launch: Hydra, the effort slider, panels and themes." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "首次启动时的幻灯片：Hydra、推理强度滑块、面板和主题。"
-          }
-        }
-      }
-    },
     "The team's changes go out as a merge request and are merged." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12132,17 +11786,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "对话"
-          }
-        }
-      }
-    },
-    "Threads, when you want them" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "对话列表，按需出现"
           }
         }
       }
@@ -12796,28 +12439,6 @@
         }
       }
     },
-    "Welcome to Tivano" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "欢迎使用 Tivano"
-          }
-        }
-      }
-    },
-    "Welcome tour" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "欢迎导览"
-          }
-        }
-      }
-    },
     "What should we build in %@?" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12924,17 +12545,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "窗口透明度"
-          }
-        }
-      }
-    },
-    "With the column collapsed, the thread list floats as a panel over the chat and stays where you leave it" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "分栏收起后，对话列表会以面板形式浮在对话上方，并停留在你放置的位置"
           }
         }
       }

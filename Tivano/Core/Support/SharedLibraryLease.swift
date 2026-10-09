@@ -2,16 +2,14 @@ import Foundation
 import Darwin
 
 /// OS-owned advisory lease. Never unlink lock files: that would create a second inode.
-/// Shared lifetime leases exclude older exclusive-only editions; file transactions use exclusive leases.
 final class SharedLibraryLease: Sendable {
-    enum Mode { case shared, exclusive }
     private let descriptor: Int32
 
-    init(at url: URL, mode: Mode = .exclusive, wait: Bool = false) throws {
+    init(at url: URL, wait: Bool = false) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let fd = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, mode_t(0o600))
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        let operation = (mode == .shared ? LOCK_SH : LOCK_EX) | LOCK_NB
+        let operation = LOCK_EX | LOCK_NB
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while flock(fd, operation) != 0 {
             let code = errno

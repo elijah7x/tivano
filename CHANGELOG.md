@@ -6,6 +6,29 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-10-09
+
+### New features
+
+- Show a muted, persistent status mark beside each conversation in the sidebar.
+
+### Bug fixes
+
+- Restart the Hydra watchdog at launch, so a stalled head is stopped again and a quiet one shows how long it has been thinking.
+- Automatic Hydra merges in Release and Dev serialize on the same repository lock again.
+
+### Refinements
+
+- Content scrolling under the title bar dissolves into the window instead of being covered by a tinted band.
+- With each edition owning its library, saves go straight to disk in the background again: no per-second polling, no cross-process merge on the main thread, and no full reload after every save.
+- Clear leftover head copies and day-old unreferenced attachments at launch, and remove the lock files and per-launch MCP folders the shared-library builds left behind.
+- Release builds no longer include the screenshot capture tooling.
+- Bring Release up to the current Dev features at version 0.2.9.
+
+### Thanks
+
+- No outside contributors since the start of this repository's retained history.
+
 ## [0.2.7] - 2026-10-09
 
 ### New features

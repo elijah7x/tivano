@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import ScreenCaptureKit
 import SwiftUI
@@ -410,22 +411,6 @@ final class Stage {
         return panel.union(chip)
     }
 
-    /// Whether the app window is out of the way (see `setWindowHidden`); `ensureActive`
-    /// leaves it there.
-    private var isWindowHidden = false
-
-    /// The app window out of the way, for a shot of another window over the backdrop alone.
-    func setWindowHidden(_ hidden: Bool) {
-        guard let window else { return }
-        isWindowHidden = hidden
-        if hidden {
-            window.orderOut(nil)
-        } else {
-            window.makeKeyAndOrderFront(nil)
-            backdrop?.order(.below, relativeTo: window.windowNumber)
-        }
-    }
-
     /// A 16:10 rect around `frame` with at least the wallpaper margin on every side.
     static func productRect(around frame: NSRect) -> NSRect {
         var rect = frame.insetBy(dx: -WebsiteCaptures.margin, dy: -WebsiteCaptures.margin)
@@ -478,15 +463,6 @@ final class Stage {
     /// to a few seconds.
     func ensureActive() async {
         guard let window else { return }
-        // With the app window out of the way, the app only needs to be active: another
-        // window of its own is key then, and ordering this one front would undo the shot.
-        if isWindowHidden {
-            for _ in 0..<24 where !NSApp.isActive {
-                NSApp.activate(ignoringOtherApps: true)
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-            return
-        }
         var activated = false
         for _ in 0..<24 {
             if NSApp.isActive, window.isKeyWindow { break }
@@ -692,3 +668,4 @@ final class Recorder {
         return configuration
     }
 }
+#endif

@@ -16,6 +16,7 @@ enum LibraryAccess {
             try withExtendedLifetime(migration) { try LegacyMigration.run() }
             lease = try SharedLibraryLease(at: support.appendingPathComponent(AppInfo.isDevelopment ? ".tivano-dev-library.lock" : ".tivano-release-library.lock"))
             legacyLease = nil
+            LegacyMigration.removeSharedLibraryLeftovers()
         } catch {
             stop(String(format: Chrome.localized("The Tivano library could not be opened. Quit older Tivano builds and check permissions and available disk space.\n\n%@"), error.localizedDescription))
         }

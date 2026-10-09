@@ -1333,7 +1333,6 @@ private enum ThreadRowMetrics {
     /// Where the fold button sits on a thread with helpers: past the ellipsis and the check
     /// (or the archive button) at the trailing end.
     static let foldInset: CGFloat = 46
-    static let settledTitleInset: CGFloat = 22
     /// The connector's column: the dotted line runs down it, under the parent's badge.
     static let connectorWidth: CGFloat = 28
     static let connectorLineX: CGFloat = 18
@@ -1403,6 +1402,7 @@ private struct SidebarHelperRow: View, Equatable {
                     if let head = thread.hydra {
                         HydraGlyph(persona: head.persona, size: ThreadRowMetrics.headGlyphSize, status: head.status)
                     }
+                    ThreadBadge(thread: thread)
                     Text(verbatim: thread.title)
                         .font(.ui(.callout, weight: isSelected || thread.hasUnread ? .medium : .regular))
                         .foregroundStyle(Chrome.primaryText.opacity(isSelected ? 0.96 : 0.8))
@@ -1426,8 +1426,6 @@ private struct SidebarHelperRow: View, Equatable {
                 Group {
                     if showsActions {
                         RowActionsButton(actions: makeActions(), isPresented: $isMenuPresented)
-                    } else {
-                        ActivityStatus(thread: thread)
                     }
                 }
                 .padding(.trailing, 6)
@@ -1828,16 +1826,7 @@ private struct SidebarThreadRow: View, Equatable {
                         }
                         RowActionsButton(actions: makeActions(), isPresented: $isMenuPresented)
                     }
-                } else if isDetailed || isSettled {
-                    ActivityStatus(thread: thread)
-                } else if projectIcon != nil {
-                    // The project's mark holds the badge's place at the front in the compact
-                    // layout, so the thread's own state reads at the back, beside the time.
-                    HStack(spacing: 6) {
-                        ActivityStatus(thread: thread)
-                        RelativeTimeLabel(date: thread.updatedAt)
-                    }
-                } else {
+                } else if !isDetailed && !isSettled {
                     RelativeTimeLabel(date: thread.updatedAt)
                 }
             }
@@ -2057,12 +2046,8 @@ private struct ThreadRowFace<Badge: View>: View {
         let isDetailed = projectName != nil && !isSettled
         HStack(spacing: 8) {
             Group {
-                if !isDetailed, !isSettled {
-                    if let projectIcon {
-                        ProjectIconMark(icon: projectIcon, size: 12)
-                    } else {
-                        badge
-                    }
+                if !isSettled {
+                    badge
                 } else {
                     Color.clear
                 }
@@ -2070,11 +2055,21 @@ private struct ThreadRowFace<Badge: View>: View {
             .frame(width: Chrome.iconSize)
             .transition(.opacity)
             VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: thread.title)
-                    .font(.ui(size: isSettled ? 12 : 13, weight: !isSettled && (isSelected || thread.hasUnread) ? .medium : .regular))
-                    .foregroundStyle(Chrome.primaryText.opacity(Self.titleOpacity(isSettled: isSettled, isSelected: isSelected)))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: 6) {
+                    if isSettled { badge }
+                    if let projectIcon, !isDetailed, !isSettled {
+                        ProjectIconMark(icon: projectIcon, size: 12)
+                    }
+                    Text(verbatim: thread.title)
+                        .font(.ui(size: isSettled ? 12 : 13, weight: thread.hasUnread || (!isSettled && isSelected) ? .medium : .regular))
+                        .foregroundStyle(Chrome.primaryText.opacity(Self.titleOpacity(isSettled: isSettled, isSelected: isSelected)))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if thread.isPinned {
+                        SidebarSymbol("pin.fill", scale: 0.9)
+                            .foregroundStyle(Chrome.secondaryText)
+                    }
+                }
                 if let projectName, !isSettled {
                     HStack(spacing: 4) {
                         Image(systemName: thread.worktreePath == nil ? "folder" : "arrow.triangle.branch")
@@ -2107,29 +2102,15 @@ private struct ThreadRowFace<Badge: View>: View {
 /// runtime, with the spinner held still because a ghost is an image and cannot animate.
 private struct ThreadGhostBadge: View {
     let thread: ChatThread
-    let needsInput: Bool
-    let isRunning: Bool
+    let status: ThreadActivityStatus
 
     init(thread: ChatThread, runtime: ThreadRuntime?) {
         self.thread = thread
-        needsInput = !(runtime?.approvals.isEmpty ?? true) || !(runtime?.questions.isEmpty ?? true)
-        isRunning = runtime?.isRunning == true || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true || !(runtime?.backgroundTasks.isEmpty ?? true)
+        status = threadActivityStatus(thread, runtime: runtime)
     }
 
     var body: some View {
-        SidebarIconBadge {
-            if needsInput {
-                SidebarSymbol("hand.raised.fill")
-                    .foregroundStyle(Chrome.orange)
-            } else if isRunning {
-                MiniSpinner(cellSize: 2.4, isStill: true)
-            } else if thread.isPinned {
-                SidebarSymbol("pin.fill", scale: 0.9)
-                    .foregroundStyle(Chrome.danger.opacity(0.85))
-            } else {
-                Color.clear
-            }
-        }
+        ThreadStatusMark(status: status, isStill: true)
     }
 }
 
@@ -2171,32 +2152,10 @@ private struct ThreadBadge: View {
 
     var body: some View {
         let runtime = model.existingRuntime(for: thread.id)
-        let needsInput = !(runtime?.approvals.isEmpty ?? true) || !(runtime?.questions.isEmpty ?? true)
         let mergeStage = SidebarThreadRow.mergeStage(of: runtime)
         let backgroundCount = runtime?.backgroundTasks.count ?? 0
-        let isRunning = runtime?.isRunning == true || mergeStage != nil || runtime?.hasWorkingHelpers == true || backgroundCount > 0
-        SidebarIconBadge {
-            if needsInput {
-                SidebarSymbol("hand.raised.fill")
-                    .foregroundStyle(Chrome.orange)
-            } else if isRunning {
-                MiniSpinner(cellSize: 2.4)
-                    .help(mergeStage ?? (runtime?.isRunning != true && backgroundCount > 0 ? (backgroundCount == 1 ? Chrome.localized("Waiting on a background task") : String(format: Chrome.localized("Waiting on %lld background tasks"), backgroundCount)) : ""))
-            } else if thread.isPinned {
-                SidebarSymbol("pin.fill", scale: 0.9)
-                    .foregroundStyle(Chrome.danger.opacity(0.85))
-            } else {
-                Color.clear
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if thread.hasUnread, !needsInput, !isRunning {
-                Circle()
-                    .fill(thread.lastStatus == .failed ? Chrome.danger : Chrome.accent)
-                    .frame(width: 7, height: 7)
-                    .offset(x: 2.5, y: -2.5)
-            }
-        }
+        let runningHelp = mergeStage ?? (runtime?.isRunning != true && backgroundCount > 0 ? (backgroundCount == 1 ? Chrome.localized("Waiting on a background task") : String(format: Chrome.localized("Waiting on %lld background tasks"), backgroundCount)) : nil)
+        ThreadStatusMark(status: threadActivityStatus(thread, runtime: runtime), runningHelp: runningHelp)
     }
 }
 
@@ -2415,29 +2374,14 @@ private struct SettledHeader: View {
     }
 }
 
-private struct ActivityStatus: View {
-    @Environment(AppModel.self) private var model
-    let thread: ChatThread
-
-    var body: some View {
-        let runtime = model.existingRuntime(for: thread.id)
-        if !(runtime?.approvals.isEmpty ?? true) || !(runtime?.questions.isEmpty ?? true) {
-            Image(systemName: "hand.raised.fill")
-                .font(.ui(.subheadline))
-                .foregroundStyle(Chrome.warning)
-        } else if runtime?.isRunning == true || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true {
-            MiniSpinner(cellSize: 2.4)
-                .help(SidebarThreadRow.mergeStage(of: runtime) ?? "")
-        } else if let count = runtime?.backgroundTasks.count, count > 0 {
-            MiniSpinner(cellSize: 2.4)
-                .help(Text(verbatim: count == 1 ? Chrome.localized("Waiting on a background task") : String(format: Chrome.localized("Waiting on %lld background tasks"), count)))
-        } else if thread.hasUnread {
-            Circle()
-                .fill(thread.lastStatus == .failed ? Chrome.danger : Chrome.accent)
-                .frame(width: 7, height: 7)
-                .padding(.trailing, 4)
-        }
-    }
+@MainActor
+private func threadActivityStatus(_ thread: ChatThread, runtime: ThreadRuntime?) -> ThreadActivityStatus {
+    ThreadActivityStatus.resolve(
+        lastStatus: thread.lastStatus,
+        needsApproval: !(runtime?.approvals.isEmpty ?? true),
+        needsAnswer: !(runtime?.questions.isEmpty ?? true),
+        isWorking: runtime?.isRunning == true || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true || !(runtime?.backgroundTasks.isEmpty ?? true)
+    )
 }
 
 /// A row's latest frame, kept out of SwiftUI's observation: scrolling updates it on every frame,

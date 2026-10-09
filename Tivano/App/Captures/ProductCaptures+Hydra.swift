@@ -1,3 +1,4 @@
+#if DEBUG
 
 
 import AppKit
@@ -214,3 +215,4 @@ extension ProductCaptures {
         runtime.isHydraPanelHidden = true
     }
 }
+#endif

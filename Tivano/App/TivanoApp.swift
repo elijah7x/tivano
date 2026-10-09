@@ -11,7 +11,9 @@ struct TivanoApp: App {
         // Provider processes can exit while we write to them; report EPIPE instead of crashing.
         signal(SIGPIPE, SIG_IGN)
         // Before anything reads settings or the library.
+        #if DEBUG
         WebsiteCaptures.prepare()
+        #endif
         LibraryAccess.prepare()
         // A frozen main thread gets its stacks written to ~/Library/Logs/Tivano.
         HangWatchdog.start()

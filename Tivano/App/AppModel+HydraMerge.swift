@@ -241,7 +241,7 @@ extension AppModel {
         // Linked worktrees share refs. Serialize automatic merges across editions
         // using the common git directory, not a per-process queue or checkout path.
         guard let common = try? await git.output(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
-              let repoLease = try? SharedLibraryLease(at: SharedResourceLock.url(in: Storage.root, resource: URL(fileURLWithPath: common.trimmed).resolvingSymlinksInPath().path)) else {
+              let repoLease = try? SharedLibraryLease(at: SharedResourceLock.url(resource: URL(fileURLWithPath: common.trimmed).resolvingSymlinksInPath().path)) else {
             scheduleHydraMergeRetry(of: leadID)
             return .deferred
         }

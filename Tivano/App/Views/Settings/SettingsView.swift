@@ -238,9 +238,7 @@ struct SettingsView: View {
             // caught by the movement above instead.
             if phase == .interacting { scrollTracker.note() } else { scrollTracker.coast() }
         }
-        .overlay(alignment: .top) {
-            PaneTopVeil(model: scrollChrome)
-        }
+        .chromeEdgeFade(scrollChrome)
         .overlay(alignment: .top) {
             HStack(spacing: 10) {
                 ChromeCompactTitle(title: page.title, model: scrollChrome)

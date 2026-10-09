@@ -436,9 +436,7 @@ private struct HydraHeadTranscript: View {
                     }
             }
         }
-        .overlay(alignment: .top) {
-            PaneTopVeil(model: scrollChrome)
-        }
+        .chromeEdgeFade(scrollChrome)
     }
 }
 

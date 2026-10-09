@@ -123,6 +123,7 @@ struct ModelEffortButton: View {
             ModelEffortPanel(threadID: thread.id, hasHistory: hasHistory)
                 .presentedChrome()
         }
+        #if DEBUG
         .background {
             // The website captures hang the slider and the switcher from the real chip: the
             // composer's, never a panel's icon-only one, which would leave the popover with
@@ -136,6 +137,7 @@ struct ModelEffortButton: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             if CaptureRun.isEnabled, !compact { WebsiteCaptures.modelChipFrames[thread.id] = frame }
         }
+        #endif
         .task(id: thread.provider) { await registry.loadCatalog(thread.provider) }
     }
 

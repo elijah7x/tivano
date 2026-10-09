@@ -1079,6 +1079,61 @@ extension AppModel {
         HydraWatchdog.labelled.formIntersection(toolCounts.keys)
     }
 
+    /// Heads whose copies are gone from disk (deleted by hand, say) work in the checkout
+    /// from now on, instead of failing every tool call. And the other way round: a copy
+    /// on disk that no chat names any more (the app quit with a head half-way made, or
+    /// removing it failed) is swept away.
+    func sweepHydraCopies() {
+        // Copies deleted from disk still hold their names in the registry until pruned:
+        // only the projects that ever had a copy, one git process at a time.
+        let projects = self.projects
+        let projectsWithCopies = Set(threads.filter { $0.hydra?.hasOwnCopy == true }.map(\.projectID))
+        Task {
+            for project in projects where projectsWithCopies.contains(project.id) { await Git(project.path).pruneWorktrees() }
+            await sweepOrphanHydraCopies(of: projects)
+        }
+        for head in threads where head.hydra?.hasOwnCopy == true {
+            guard let copy = head.worktreePath, !FileManager.default.fileExists(atPath: copy) else { continue }
+            updateThread(head.id) {
+                $0.worktreePath = nil
+                $0.branch = nil
+            }
+            updateHydraHead(head.id) { $0.baseTree = nil }
+        }
+        startHydraWatchdog()
+    }
+
+    /// Removes the folders in the worktrees root that were made for heads of `projects`
+    /// and that no thread names. Only a head's copy goes: its folder is named for its
+    /// project, its persona and its thread ("tivano-gus-daa2ebed", see
+    /// `makeHydraCopy`), and nothing else in that root matches. A chat's own worktree
+    /// (kept on purpose when the chat was deleted) and folders other tools made there are
+    /// never touched, nor is a folder a thread names, nor one young enough to be a copy
+    /// still being made.
+    private func sweepOrphanHydraCopies(of projects: [Project]) async {
+        let root = Storage.worktreesDirectory
+        guard let folders = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles]) else { return }
+        let named = Set(threads.compactMap { $0.worktreePath.map { URL(fileURLWithPath: $0).lastPathComponent } })
+        let slugs = projects.map { (project: $0, slug: $0.name.replacingOccurrences(of: " ", with: "-").lowercased()) }
+        let personas = Set(HydraRoster.personas.map { $0.name.replacingOccurrences(of: " ", with: "-").lowercased() })
+        for folder in folders where !named.contains(folder.lastPathComponent) {
+            let name = folder.lastPathComponent
+            // The longest project slug that opens the name is its project.
+            guard let owner = slugs.filter({ name.hasPrefix($0.slug + "-") }).max(by: { $0.slug.count < $1.slug.count }) else { continue }
+            // What follows the slug is "<persona>-<8 hex>", or "<persona>-<round>-<8 hex>".
+            var parts = name.dropFirst(owner.slug.count + 1).split(separator: "-").map(String.init)
+            guard parts.count >= 2, let suffix = parts.popLast(), suffix.count == 8, suffix.allSatisfy(\.isHexDigit) else { continue }
+            if parts.count == 2, Int(parts[1]) != nil { parts.removeLast() }
+            guard parts.count == 1, personas.contains(parts[0]) else { continue }
+            if let born = try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate, Date.now.timeIntervalSince(born) < 600 { continue }
+            // Git takes it out of its registry along with the folder; a folder git does
+            // not know (the app quit between making it and registering it) goes by hand.
+            if (try? await Git(owner.project.path).removeWorktree(at: folder.path)) == nil {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
+    }
+
     /// What a head sent out from the queue is told about the main chat: the user's last
     /// request, the lead's latest reply and the files it has touched this turn. Read from
     /// the timeline, so it costs no model call.

@@ -93,9 +93,11 @@ struct HydraButton: View {
         .preference(key: ChromePresentationPreference.self, value: isExplaining || isHydraSwitchShown || isIntroShown)
         .onAppear { if !model.settings.hasSeenHydraIntro, isOn { isIntroShown = true } }
         // The capture run hangs the intro's still from the mark, where the app shows it.
+        #if DEBUG
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             if CaptureRun.isEnabled { WebsiteCaptures.hydraMarkFrame = frame }
         }
+        #endif
         .help(Text(verbatim: help(isOn: isOn, running: running, hasHeads: !heads.isEmpty)))
         .accessibilityLabel(Text(verbatim: panelHelp(running: running, hasHeads: !heads.isEmpty)))
         .accessibilityValue(Text(verbatim: isOn ? Chrome.localized("On") : Chrome.localized("Off")))

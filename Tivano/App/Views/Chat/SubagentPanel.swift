@@ -296,9 +296,7 @@ struct SubagentPanel: View {
                     JumpToLatestButton(scrollState: scrollState)
                 }
         }
-        .overlay(alignment: .top) {
-            PaneTopVeil(model: scrollChrome)
-        }
+        .chromeEdgeFade(scrollChrome)
         .overlay(alignment: .top) {
             HStack(alignment: .top, spacing: 8) {
                 // The handle. Invisible, like a window's title bar with no title; the

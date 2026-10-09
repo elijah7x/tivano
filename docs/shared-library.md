@@ -59,5 +59,8 @@ only remove the pending marker after inspecting the recovered state. Backups
 contain private data; do not commit or publish them.
 
 Fresh installs simply create their edition's empty directories. There is no
-implicit Droppy import. Capture runs remain isolated. Edition lifetime leases and
-short JSON/document transactions remain enabled; they are not a data-sync service.
+implicit Droppy import. Capture runs remain isolated. Each edition holds an exclusive
+lifetime lease on its own library, so it is the only writer and saves directly; the
+first launch after an update removes the lock files and per-launch MCP folders the
+shared-library builds left behind. Automatic Hydra merges still take a lock beside
+both libraries, because the editions can work on the same repository.

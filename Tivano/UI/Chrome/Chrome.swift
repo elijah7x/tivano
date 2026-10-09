@@ -475,39 +475,6 @@ struct ChromeCircleButton: View {
     }
 }
 
-/// A round glass button that opens a popover menu, such as the permissions picker.
-struct ChromeCircleMenu<Content: View>: View {
-    let symbol: String
-    let help: String
-    @ViewBuilder var content: Content
-
-    @State private var isHovering = false
-    @State private var isPresented = false
-
-    var body: some View {
-        Button {
-            isPresented.toggle()
-        } label: {
-            Image(systemName: symbol)
-                .font(Chrome.iconFont)
-                .foregroundStyle(Chrome.primaryText.opacity(isHovering || isPresented ? 1 : 0.92))
-                .frame(width: Chrome.capsuleHeight, height: Chrome.capsuleHeight)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .chromeGlassCircle()
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
-        .help(Text(verbatim: Chrome.localized(help)))
-        .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            PopoverMenu { content }
-        }
-        .background { NoWindowDragArea() }
-    }
-}
-
 /// A text button shaped like a chrome capsule that opens a popover, such as the branch picker.
 struct ChromeTextMenu<Content: View>: View {
     let symbol: String
@@ -601,7 +568,7 @@ struct ChromeTextButton: View {
 
 // MARK: - Scroll morph
 
-/// Scroll progress for the sticky chrome. Only the veil and the compact title observe it,
+/// Scroll progress for the sticky chrome. Only the edge fade and the compact title observe it,
 /// so scrolling never re-renders the page underneath.
 @MainActor
 @Observable
@@ -616,47 +583,44 @@ final class ChromeScrollModel {
     }
 }
 
-/// The veil that settles over the top of a pane as its content scrolls under the chrome: a
-/// scrim and the theme's tint, fading out downward.
-struct PaneTopVeil: View {
+/// Content scrolling under the chrome dissolves into the backdrop instead of being
+/// covered: the top of the pane is masked away, so the window's own glass and picture
+/// stay visible behind the title and capsules, with nothing painted over them. This was
+/// a white or black scrim plus the theme's tint, which kept the title legible but turned
+/// the top of a transparent window into an opaque band once the chat scrolled.
+extension View {
+    func chromeEdgeFade(_ model: ChromeScrollModel) -> some View {
+        mask { ChromeEdgeFadeMask(model: model) }
+    }
+}
+
+/// The mask alone observes the scroll progress, so scrolling never re-renders the page
+/// it masks. At rest it is solid and costs nothing visible; it eases in with the title.
+private struct ChromeEdgeFadeMask: View {
     let model: ChromeScrollModel
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let progress = Double(model.progress)
-        let isDark = colorScheme == .dark
-        // Keep text scrolling behind the title subdued across the whole chrome row.
-        // The theme tint softens the stronger base so it still belongs to the window.
-        let scrim = isDark ? 0.60 + 0.24 * progress : 0.64 + 0.28 * progress
-        let base = isDark ? Color.black : Color.white
-        let tint = Chrome.glassTint.opacity(isDark ? 0.30 : 0.18)
-        ZStack {
-            // Only once content has scrolled under the chrome; at rest there is nothing to cover.
-            if progress > 0 {
-                // Two gradient fills and nothing else: the scrim settles the content sliding
-                // under the chrome toward the scheme's base and the theme's tint colours it.
-                // This was liquid glass under a gradient mask, which cost a backdrop sample
-                // and an offscreen mask pass on every scrolled frame of every chat (a
-                // bottom-anchored conversation keeps the veil fully on); the chrome's own
-                // capsules still refract what passes under them.
-                Self.fade(base.opacity(scrim))
-                Self.fade(tint)
+        VStack(spacing: 0) {
+            ZStack {
+                Self.fade
+                Color.black.opacity(1 - progress)
             }
+            .frame(height: Chrome.veilHeight)
+            Color.black
         }
-        .opacity(0.08 + 0.92 * progress)
-        .frame(height: Chrome.veilHeight)
-        .allowsHitTesting(false)
     }
 
-    /// Hold the colour through the chrome row, then ease it out below the controls.
-    private static func fade(_ color: Color) -> LinearGradient {
-        let chromeBottom = (Chrome.chromeTopPadding + Chrome.capsuleHeight) / Chrome.veilHeight
+    /// Gone by the middle of the chrome row, so nothing reads behind the title, then
+    /// eased back to full by the line the page's content rests on.
+    private static var fade: LinearGradient {
+        let chromeMiddle = (Chrome.chromeTopPadding + Chrome.capsuleHeight / 2) / Chrome.veilHeight
         return LinearGradient(
             stops: [
-                .init(color: color, location: 0),
-                .init(color: color, location: chromeBottom),
-                .init(color: color.opacity(0.40), location: 0.82),
-                .init(color: color.opacity(0), location: 1),
+                .init(color: .clear, location: 0),
+                .init(color: .clear, location: chromeMiddle),
+                .init(color: .black.opacity(0.45), location: 0.74),
+                .init(color: .black, location: 1),
             ],
             startPoint: .top,
             endPoint: .bottom

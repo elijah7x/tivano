@@ -5,8 +5,7 @@ import Foundation
 /// this only takes back what an earlier build put there.
 enum MCPExternalSync {
     static func sync(_ servers: [MCPResolvedServer]) {
-        guard !CaptureRun.isEnabled, let lease = try? SharedLibraryLease(at: managedURL.appendingPathExtension("lock")) else { return }
-        defer { withExtendedLifetime(lease) {} }
+        guard !CaptureRun.isEnabled else { return }
         let manager = FileManager.default
         guard manager.fileExists(atPath: managedURL.path) else { return }
         let managed = readManaged()
@@ -51,7 +50,7 @@ enum MCPExternalSync {
         try? out.write(to: url, options: .atomic)
     }
 
-    private static let managedURL = StoragePaths.directory("mcp").appendingPathComponent("managed.json")
+    private static let managedURL = MCPPaths.directory.appendingPathComponent("managed.json")
 
     private static func readManaged() -> [String: [String]] {
         guard let data = try? Data(contentsOf: managedURL),
