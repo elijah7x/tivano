@@ -315,22 +315,38 @@ private struct ProviderModelsSection: View {
     /// rebuilds this section — doesn't reset it. Absent there means expanded.
     @Binding var isExpanded: Bool
 
+    /// The lines showing their earlier versions, and whether the free and preview models show.
+    @State private var openLineages: Set<String> = []
+    @State private var showsTrials = false
+    @State private var lineages = LineageCache()
+
+    /// A catalogue longer than this folds each line to its newest version and sets the
+    /// free and preview models aside; a shorter one reads at a glance as it is.
+    private static let foldingThreshold = 12
+
+    private enum Row: Identifiable {
+        /// A model; `earlier` counts the versions folded under it, `lineage` names its line.
+        case model(ModelOption, earlier: Int = 0, lineage: String? = nil)
+        case trials(count: Int)
+
+        var id: String {
+            switch self {
+            case .model(let option, _, _): "model/" + option.id
+            case .trials: "trials"
+            }
+        }
+    }
+
     var body: some View {
         let settings = model.settings
         let registry = model.providers
         let catalogue = registry.models(for: provider)
         let isFull = settings.modelList.count >= AppSettings.modelListLimit
         let isFiltering = !query.isEmpty
-        // Search shows only matches; otherwise expanded shows everything and collapsed
-        // shows just the chosen models, all in catalogue order.
         let pinned = Set(settings.modelList)
-        let visibleOptions = catalogue.filter { option in
-            isFiltering
-                ? ModelsSettingsPage.matches(option, id: option.id, provider: provider, query: query)
-                : isExpanded || pinned.contains(ModelPin(provider: provider, modelID: option.id))
-        }
+        let rows = rows(catalogue, pinned: pinned, isFiltering: isFiltering)
         // Collapsed with nothing chosen closes the card outright.
-        let cardVisible = isExpanded || isFiltering || !visibleOptions.isEmpty
+        let cardVisible = isExpanded || isFiltering || !rows.isEmpty
         VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
             CollapsibleProviderHeader(provider: provider, isExpanded: $isExpanded, subject: "model list")
             // Lazy, so only the rows on screen are built. Same fill and shape as ChromeCard.
@@ -354,43 +370,18 @@ private struct ProviderModelsSection: View {
                     // Only visible rows are built: catalogues run to hundreds of models, and
                     // mounting every hidden one (each with its own tooltip tracking area)
                     // made the page re-measure them all on every hover, keystroke and resize.
-                    ForEach(visibleOptions, id: \.id) { option in
-                        let pin = ModelPin(provider: provider, modelID: option.id)
-                        let isAdded = pinned.contains(pin)
-                        if option.id != visibleOptions.first?.id {
+                    ForEach(rows) { row in
+                        if row.id != rows.first?.id {
                             ChromeRowDivider()
                         }
-                        ChromeRow(title: option.shortName, detail: option.detail) {
-                            HStack(spacing: 10) {
-                                if option.supportsFast {
-                                    Image(systemName: "bolt")
-                                        .font(.ui(size: 11))
-                                        .foregroundStyle(Chrome.secondaryText)
-                                        .help("Supports fast mode")
+                        switch row {
+                        case .model(let option, let earlier, let lineage):
+                            modelRow(option, earlier: earlier, lineage: lineage, pinned: pinned, isFull: isFull, isFiltering: isFiltering)
+                        case .trials(let count):
+                            ChromeRow(title: "Free and preview models", detail: String(format: Chrome.localized("%lld models"), count)) {
+                                disclosure(isOpen: showsTrials, label: nil, show: "Show free and preview models", hide: "Hide free and preview models") {
+                                    showsTrials.toggle()
                                 }
-                                Button {
-                                    // Re-filtering mid-search is instant, like the
-                                    // rest of the page; otherwise rows slide.
-                                    if isFiltering {
-                                        if isAdded { settings.removeFromModelList(pin) } else { settings.addToModelList(pin) }
-                                    } else {
-                                        withAnimation(Chrome.panelSlide) {
-                                            if isAdded { settings.removeFromModelList(pin) } else { settings.addToModelList(pin) }
-                                        }
-                                    }
-                                } label: {
-                                    Image(systemName: isAdded ? "checkmark.circle.fill" : "plus.circle")
-                                        .font(.ui(size: 17))
-                                        .foregroundStyle(isAdded ? Chrome.accent : Chrome.secondaryText)
-                                        .contentTransition(.symbolEffect(.replace))
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(!isAdded && isFull)
-                                // A plain button does not dim itself; the same 0.35 as
-                                // every other disabled control on this page.
-                                .opacity(!isAdded && isFull ? 0.35 : 1)
-                                .help(Text(verbatim: isAdded ? Chrome.localized("Remove from the picker") : (isFull ? String(format: Chrome.localized("The picker holds up to %lld models"), AppSettings.modelListLimit) : Chrome.localized("Add to the picker"))))
-                                .accessibilityLabel(Text(verbatim: String(format: Chrome.localized(isAdded ? "Remove %@ from the picker" : "Add %@ to the picker"), option.shortName)))
                             }
                         }
                     }
@@ -410,6 +401,119 @@ private struct ProviderModelsSection: View {
             .accessibilityHidden(!cardVisible)
         }
         .task { await registry.loadCatalog(provider) }
+    }
+
+    /// Search shows only matches and collapsed only the chosen models, all in catalogue
+    /// order. Expanded shows everything; a long catalogue (see `foldingThreshold`) shows
+    /// each line's newest version with the earlier ones folded under it, and the free
+    /// and preview models as one row. A chosen model always shows.
+    private func rows(_ catalogue: [ModelOption], pinned: Set<ModelPin>, isFiltering: Bool) -> [Row] {
+        let isPinned = { (option: ModelOption) in pinned.contains(ModelPin(provider: provider, modelID: option.id)) }
+        if isFiltering {
+            return catalogue.filter { ModelsSettingsPage.matches($0, id: $0.id, provider: provider, query: query) }.map { .model($0) }
+        }
+        guard isExpanded else { return catalogue.filter(isPinned).map { .model($0) } }
+        guard catalogue.count > Self.foldingThreshold else { return catalogue.map { .model($0) } }
+        let layout = lineages.layout(of: catalogue)
+        var rows: [Row] = []
+        for lineage in layout.lineages {
+            rows.append(.model(lineage.newest, earlier: lineage.earlier.count, lineage: lineage.key))
+            let isOpen = openLineages.contains(lineage.key)
+            rows += lineage.earlier.filter { isOpen || isPinned($0) }.map { .model($0) }
+        }
+        if !layout.trials.isEmpty {
+            rows.append(.trials(count: layout.trials.count))
+            rows += layout.trials.filter { showsTrials || isPinned($0) }.map { .model($0) }
+        }
+        return rows
+    }
+
+    private func modelRow(_ option: ModelOption, earlier: Int, lineage: String?, pinned: Set<ModelPin>, isFull: Bool, isFiltering: Bool) -> some View {
+        let settings = model.settings
+        let pin = ModelPin(provider: provider, modelID: option.id)
+        let isAdded = pinned.contains(pin)
+        return ChromeRow(title: option.shortName, detail: option.detail) {
+            HStack(spacing: 10) {
+                if let lineage, earlier > 0 {
+                    disclosure(
+                        isOpen: openLineages.contains(lineage),
+                        label: String(format: Chrome.localized("Earlier versions (%lld)"), earlier),
+                        show: "Show earlier versions",
+                        hide: "Hide earlier versions"
+                    ) {
+                        if openLineages.contains(lineage) { openLineages.remove(lineage) } else { openLineages.insert(lineage) }
+                    }
+                }
+                if option.supportsFast {
+                    Image(systemName: "bolt")
+                        .font(.ui(size: 11))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .help("Supports fast mode")
+                }
+                Button {
+                    // Re-filtering mid-search is instant, like the
+                    // rest of the page; otherwise rows slide.
+                    if isFiltering {
+                        if isAdded { settings.removeFromModelList(pin) } else { settings.addToModelList(pin) }
+                    } else {
+                        withAnimation(Chrome.panelSlide) {
+                            if isAdded { settings.removeFromModelList(pin) } else { settings.addToModelList(pin) }
+                        }
+                    }
+                } label: {
+                    Image(systemName: isAdded ? "checkmark.circle.fill" : "plus.circle")
+                        .font(.ui(size: 17))
+                        .foregroundStyle(isAdded ? Chrome.accent : Chrome.secondaryText)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .disabled(!isAdded && isFull)
+                // A plain button does not dim itself; the same 0.35 as
+                // every other disabled control on this page.
+                .opacity(!isAdded && isFull ? 0.35 : 1)
+                .help(Text(verbatim: isAdded ? Chrome.localized("Remove from the picker") : (isFull ? String(format: Chrome.localized("The picker holds up to %lld models"), AppSettings.modelListLimit) : Chrome.localized("Add to the picker"))))
+                .accessibilityLabel(Text(verbatim: String(format: Chrome.localized(isAdded ? "Remove %@ from the picker" : "Add %@ to the picker"), option.shortName)))
+            }
+        }
+    }
+
+    /// The quiet chevron that opens what a row folds, like the provider header's.
+    private func disclosure(isOpen: Bool, label: String?, show: String, hide: String, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(Chrome.panelSlide) { action() }
+        } label: {
+            HStack(spacing: 6) {
+                if let label {
+                    Text(verbatim: label)
+                        .font(.ui(size: 11))
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.ui(size: 11, weight: .semibold))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(ChromeQuietButtonStyle())
+        .help(Text(verbatim: Chrome.localized(isOpen ? hide : show)))
+        .accessibilityLabel(Text(verbatim: Chrome.localized(isOpen ? hide : show)))
+    }
+}
+
+/// The last catalogue folded into lines and its folding, so a page redrawn on every
+/// hover and keystroke reads the names once per catalogue rather than once per draw.
+@MainActor
+private final class LineageCache {
+    private var catalogue: [ModelOption] = []
+    private var cached = ModelFamilies.Layout(lineages: [], trials: [])
+
+    func layout(of catalogue: [ModelOption]) -> ModelFamilies.Layout {
+        if catalogue != self.catalogue {
+            self.catalogue = catalogue
+            cached = ModelFamilies.lineages(catalogue)
+        }
+        return cached
     }
 }
 

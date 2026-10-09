@@ -1,6 +1,127 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "The login shell environment could not be loaded. Check your shell startup files, then refresh Providers or set the CLI path explicitly." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载登录 shell 环境。请检查 shell 启动文件，然后刷新服务商，或手动设置 CLI 路径。"
+          }
+        }
+      }
+    },
+    "Tivano library" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tivano 资料库"
+          }
+        }
+      }
+    },
+    "The Tivano library could not be opened. Quit older Tivano builds and check permissions and available disk space.\n\n%@" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法打开 Tivano 资料库。请退出旧版 Tivano，并检查权限和可用磁盘空间。\n\n%@"
+          }
+        }
+      }
+    },
+    "Quit all Tivano and Droppy Code apps, then run scripts/separate_data.py from the Tivano source checkout to separate the old shared library. Your data will be backed up before any changes." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请退出所有 Tivano 和 Droppy Code 应用，然后在 Tivano 源码目录运行 scripts/separate_data.py，分离旧的共享资料库。修改前会先备份你的数据。"
+          }
+        }
+      }
+    },
+    "Free and preview models": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "免费与预览模型"
+          }
+        }
+      }
+    },
+    "%lld models": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 个模型"
+          }
+        }
+      }
+    },
+    "Earlier versions (%lld)": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更早版本（%lld）"
+          }
+        }
+      }
+    },
+    "Show earlier versions": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示更早版本"
+          }
+        }
+      }
+    },
+    "Hide earlier versions": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隐藏更早版本"
+          }
+        }
+      }
+    },
+    "Show free and preview models": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示免费与预览模型"
+          }
+        }
+      }
+    },
+    "Hide free and preview models": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隐藏免费与预览模型"
+          }
+        }
+      }
+    },
     "Active": {
       "extractionState": "manual",
       "localizations": {

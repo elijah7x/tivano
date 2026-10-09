@@ -183,7 +183,6 @@ final class AppSettings {
         static let usagePanelDock = "usagePanelDock"
         static let usagePanelHeight = "usagePanelHeight"
         static let hydraPairs = "hydraPairs"
-        static let hasSeenTour = "hasSeenTour"
         static let hasSeenHydraIntro = "hasSeenHydraIntro"
     }
 
@@ -254,8 +253,7 @@ final class AppSettings {
         didSet { defaults.set(timelineHapticStyle.rawValue, forKey: Key.timelineHapticStyle) }
     }
 
-    /// Base sizes in points, shown in Settings as px. Each one shifts its category
-    /// off the stock size; the stock values are today's type.
+    /// Base sizes in points. Each shifts its category off the original rendering baseline.
     var uiFontSize: Int {
         didSet {
             let clamped = TypeScale.clamp(uiFontSize, to: TypeScale.uiRange)
@@ -283,16 +281,16 @@ final class AppSettings {
         }
     }
 
-    /// True when Interface, Content and Code are all on their stock sizes.
+    /// True when Interface, Content and Code are all on their default sizes.
     var isDefault: Bool {
         uiFontSize == TypeScale.stockUI
-            && contentFontSize == TypeScale.stockContent
+            && contentFontSize == TypeScale.defaultContent
             && codeFontSize == TypeScale.stockCode
     }
 
     func resetFontSizes() {
         uiFontSize = TypeScale.stockUI
-        contentFontSize = TypeScale.stockContent
+        contentFontSize = TypeScale.defaultContent
         codeFontSize = TypeScale.stockCode
     }
 
@@ -610,10 +608,6 @@ final class AppSettings {
         didSet { defaults.set(hydraDefaultEnabled, forKey: Key.hydraDefaultEnabled) }
     }
 
-    var hasSeenTour: Bool {
-        didSet { defaults.set(hasSeenTour, forKey: Key.hasSeenTour) }
-    }
-
     /// The first chat's Hydra intro was read (see `HydraIntroPopover`).
     var hasSeenHydraIntro: Bool {
         didSet { defaults.set(hasSeenHydraIntro, forKey: Key.hasSeenHydraIntro) }
@@ -770,7 +764,7 @@ final class AppSettings {
         showsWorkingCard = defaults.object(forKey: Key.showsWorkingCard) as? Bool ?? true
         timelineHapticStyle = TimelineHapticStyle(rawValue: defaults.string(forKey: Key.timelineHapticStyle) ?? "") ?? .soft
         uiFontSize = Self.clampedFontSize(defaults, key: Key.uiFontSize, stock: TypeScale.stockUI, range: TypeScale.uiRange)
-        contentFontSize = Self.clampedFontSize(defaults, key: Key.contentFontSize, stock: TypeScale.stockContent, range: TypeScale.contentRange)
+        contentFontSize = Self.clampedFontSize(defaults, key: Key.contentFontSize, stock: TypeScale.defaultContent, range: TypeScale.contentRange)
         codeFontSize = Self.clampedFontSize(defaults, key: Key.codeFontSize, stock: TypeScale.stockCode, range: TypeScale.codeRange)
         sidebarActivityView = defaults.bool(forKey: Key.sidebarActivityView)
         settledCollapsed = defaults.object(forKey: Key.settledCollapsed) as? Bool ?? true
@@ -809,7 +803,6 @@ final class AppSettings {
         modelPreferences = Self.load([String: ModelPreference].self, forKey: Key.modelPreferences) ?? [:]
         hydraEnabled = defaults.object(forKey: Key.hydraEnabled) as? Bool ?? true
         hydraDefaultEnabled = defaults.object(forKey: Key.hydraDefaultEnabled) as? Bool ?? true
-        hasSeenTour = defaults.object(forKey: Key.hasSeenTour) as? Bool ?? false
         hasSeenHydraIntro = defaults.object(forKey: Key.hasSeenHydraIntro) as? Bool ?? false
         if let stored = defaults.array(forKey: Key.panelSize) as? [Double], stored.count == 2 {
             panelSize = CGSize(width: stored[0], height: stored[1])
@@ -922,6 +915,39 @@ final class AppSettings {
     func setPreference(_ preference: ModelPreference, for provider: ProviderKind, model: String) {
         let key = ModelPin(provider: provider, modelID: model).id
         modelPreferences[key] = preference == ModelPreference() ? nil : preference
+    }
+
+    func adoptModelFamilies(_ families: [ModelOption], for provider: ProviderKind) {
+        var owners: [String: (family: ModelOption, variant: ModelVariant)] = [:]
+        for family in families {
+            for variant in family.variants where variant.id != family.id { owners[variant.id] = (family, variant) }
+        }
+        guard !owners.isEmpty else { return }
+        var list: [ModelPin] = []
+        var preferences = modelPreferences
+        for pin in modelList {
+            guard pin.provider == provider, let owner = owners[pin.modelID] else {
+                if !list.contains(pin) { list.append(pin) }
+                continue
+            }
+            let adopted = ModelPin(provider: provider, modelID: owner.family.id)
+            if !list.contains(adopted) { list.append(adopted) }
+            // The variant's own effort and speed become the row's preference, unless the
+            // row already has one; a preference set on the variant wins over its name.
+            let old = preferences.removeValue(forKey: pin.id)
+            if preferences[adopted.id] == nil {
+                var preference = old ?? ModelPreference()
+                if preference.effort == nil { preference.effort = owner.variant.effort }
+                preference.fastMode = preference.fastMode || owner.variant.isFast
+                preferences[adopted.id] = preference == ModelPreference() ? nil : preference
+            }
+        }
+        if list != modelList { modelList = list }
+        if preferences != modelPreferences { modelPreferences = preferences }
+        if let last = lastModels[provider.rawValue], let owner = owners[last] {
+            lastModels[provider.rawValue] = owner.family.id
+            if lastEfforts[provider.rawValue] == nil { lastEfforts[provider.rawValue] = owner.variant.effort }
+        }
     }
 
     private func store<Value: Encodable>(_ value: Value, forKey key: String) {

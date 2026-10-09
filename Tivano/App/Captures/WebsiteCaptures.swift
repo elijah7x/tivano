@@ -2,8 +2,8 @@ import AppKit
 import ScreenCaptureKit
 import SwiftUI
 
-/// Shared mock data and window capture support for the onboarding tour.
-/// `scripts/tour_captures.py` runs the app with `--tour-captures <folder>`.
+/// Shared mock data and window capture support for the development screenshots.
+/// `scripts/product_captures.py` runs the app with `--website-captures <folder>`.
 /// Captures use independent storage/defaults, no Keychain, and a generated backdrop.
 /// ScreenCaptureKit includes only this process's windows; no personal desktop is read.
 @MainActor
@@ -20,7 +20,7 @@ enum WebsiteCaptures {
     /// Where the toolbar's Threads button is (the hidden sidebar's list hangs from it).
     static var threadsButtonFrame: CGRect?
     /// Where each lead's docked Hydra panel sits in the window (SwiftUI's global space),
-    /// so the tour's Hydra page can zoom on the team's panel.
+    /// so the Hydra screenshot can zoom on the team's panel.
     static var hydraPanelFrames: [UUID: CGRect] = [:]
 
     /// Wallpaper around the window in every capture, in points.
@@ -89,7 +89,7 @@ enum WebsiteCaptures {
         if let data = try? JSONEncoder().encode(pins) { defaults.set(data, forKey: "modelList") }
         defaults.synchronize()
 
-        if CaptureRun.isTourRun {
+        if CaptureRun.isEnabled {
             defaults.set(true, forKey: "hydraEnabled")
             // With Hydra on, a queued follow-up would go out as a real head (see
             // `ThreadRuntime.enqueueFollowUp`): the queue scene must queue, nothing more.
@@ -122,8 +122,8 @@ enum WebsiteCaptures {
             thread(ID.liveActivity, ID.ios, "Live Activity for Pomodoro", .claude, "opus", "high", age: 3 * day, status: .completed, now),
             thread(ID.widgets, ID.ios, "Widget snapshots", .antigravity, "gemini-3.8-flash", "high", age: 6 * day, status: .completed, now),
         ]
-        if CaptureRun.isTourRun {
-            TourCaptures.addHydraMocks(to: &library, storageRoot: root, repos: repos, now: now)
+        if CaptureRun.isEnabled {
+            ProductCaptures.addHydraMocks(to: &library, storageRoot: root, repos: repos, now: now)
         }
         write(library, to: root.appendingPathComponent("library.json"))
 
@@ -282,7 +282,7 @@ enum WebsiteCaptures {
     // MARK: - Run
 
     static func run(model: AppModel) async {
-        await TourCaptures.run(model: model)
+        await ProductCaptures.run(model: model)
     }
 
     /// The composer thread mid-turn: reasoning, a read, an edit, the to-dos, a build running
@@ -374,22 +374,22 @@ final class Stage {
         (window?.frame ?? .zero).insetBy(dx: -WebsiteCaptures.margin, dy: -WebsiteCaptures.margin)
     }
 
-    /// The app window with the tour's 72-point surround, widened or heightened
+    /// The app window with the capture's 72-point surround, widened or heightened
     /// symmetrically around the window's centre until exactly 16:10.
-    var tourCaptureRect: NSRect {
-        Self.tourRect(around: window?.frame ?? .zero)
+    var productCaptureRect: NSRect {
+        Self.productRect(around: window?.frame ?? .zero)
     }
 
-    /// The tour rect around the window plus an open popover, so a slider or model
+    /// The capture rect around the window plus an open popover, so a slider or model
     /// switcher hanging past the window edge stays centered and uncropped at 16:10.
     /// Falls back to the window-only rect when the popover is closed or headless.
-    func tourCaptureRect(including popover: NSPopover?) -> NSRect {
+    func productCaptureRect(including popover: NSPopover?) -> NSRect {
         guard let frame = window?.frame,
               let popover,
               popover.isShown,
               let panel = popover.contentViewController?.view.window?.frame
-        else { return tourCaptureRect }
-        return Self.tourRect(around: frame.union(panel))
+        else { return productCaptureRect }
+        return Self.productRect(around: frame.union(panel))
     }
 
     /// A SwiftUI global-space frame (the hosting view's flipped coordinates) as a screen
@@ -401,7 +401,7 @@ final class Stage {
     }
 
     /// What a popover scene is about, in screen coordinates: the popover's panel and the
-    /// chip it hangs from, so the tour page can zoom on both. Nil when the popover is not
+    /// chip it hangs from, so the screenshot can zoom on both. Nil when the popover is not
     /// showing.
     func popoverFocus(_ popover: NSPopover?) -> NSRect? {
         guard let popover, popover.isShown, let panel = popover.contentViewController?.view.window?.frame else { return nil }
@@ -427,7 +427,7 @@ final class Stage {
     }
 
     /// A 16:10 rect around `frame` with at least the wallpaper margin on every side.
-    static func tourRect(around frame: NSRect) -> NSRect {
+    static func productRect(around frame: NSRect) -> NSRect {
         var rect = frame.insetBy(dx: -WebsiteCaptures.margin, dy: -WebsiteCaptures.margin)
         let target: CGFloat = 1.6
         let ratio = rect.width / max(rect.height, 1)
@@ -625,7 +625,7 @@ final class Recorder {
     }
 
     /// Photographs `rect` as <name>.png. `focus`, in screen coordinates, names the part of
-    /// the scene the tour page should zoom on; it goes into the sidecar.
+    /// the scene the screenshot should zoom on; it goes into the sidecar.
     func still(_ name: String, _ rect: NSRect, focus: NSRect? = nil) async {
         guard let screen = NSScreen.main else { return }
         // Expanded popover framing can reach beyond the display or into the menu bar.
@@ -651,12 +651,12 @@ final class Recorder {
     /// Where the app window sits inside a still, beside it as <name>.json: the still's
     /// rect and the window's frame, both in screen points, top-left origin; the script
     /// takes the pixel scale from the PNG's width over the rect's. A still framed around
-    /// an open popover is wider than the window, and the tour script cuts the window's
+    /// an open popover is wider than the window, and the capture script cuts the window's
     /// inside out of it; guessing that box from the window's size alone cut the
     /// sidebar's edge off the welcome page.
     ///
     /// `focus`, when given, is written the same way as `window`: the part of the still the
-    /// tour page zooms on, top-left origin, points.
+    /// screenshot zooms on, top-left origin, points.
     private func writeSidecar(for name: String, rect: NSRect, focus: NSRect?) {
         guard let window = stage?.windowFrame else { return }
         var sidecar: [String: [Double]] = [

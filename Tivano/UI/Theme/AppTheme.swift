@@ -116,11 +116,9 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// The avocado of the v1.2 app icon, once for the three Breeze themes: the icon's own
-    /// mid-gradient green on dark grounds (about 5:1 on 1E1E20), a deeper one on light
-    /// grounds so link text and fills keep 4.5:1 on white.
-    private static let breezeDarkAccent = "6B987E"
-    private static let breezeLightAccent = "4A7C60"
+    /// Muted sage for Breeze; the deeper light variant keeps text legible on white.
+    private static let breezeDarkAccent = "8BA596"
+    private static let breezeLightAccent = "5E7968"
 
     /// scheme: nil follows the system. accent/success/warning/danger: nil
     /// keeps the system hue; surface always tints the glass.

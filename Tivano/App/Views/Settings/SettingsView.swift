@@ -7,8 +7,8 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     case hydra
     case appearance
     case providers
-    case mcp
     case models
+    case mcp
     case sourceControl
     case shortcuts
     case archive
@@ -482,65 +482,40 @@ private struct FontSizeSection: View {
         ) {
             ChromeCard {
                 ChromeRow(title: "Interface font size", detail: "Adjust Tivano's base font size") {
-                    FontSizeField(value: $settings.uiFontSize, range: TypeScale.uiRange)
+                    FontSizeButtons(value: $settings.uiFontSize, range: TypeScale.uiRange)
                 }
                 ChromeRowDivider()
                 ChromeRow(title: "Content font size", detail: "Adjust the base font size of conversations") {
-                    FontSizeField(value: $settings.contentFontSize, range: TypeScale.contentRange)
+                    FontSizeButtons(value: $settings.contentFontSize, range: TypeScale.contentRange)
                 }
                 ChromeRowDivider()
                 ChromeRow(title: "Code font size", detail: "Adjust the base font size of code in chat and diff views") {
-                    FontSizeField(value: $settings.codeFontSize, range: TypeScale.codeRange)
+                    FontSizeButtons(value: $settings.codeFontSize, range: TypeScale.codeRange)
                 }
             }
         }
     }
 }
 
-/// Commits a point size on Return or when focus leaves. Anything that is not an integer
-/// snaps back; an integer outside the range clamps into it.
-private struct FontSizeField: View {
+private struct FontSizeButtons: View {
     @Binding var value: Int
     let range: ClosedRange<Int>
-    @State private var draft: String
-    @FocusState private var isFocused: Bool
-
-    init(value: Binding<Int>, range: ClosedRange<Int>) {
-        _value = value
-        self.range = range
-        _draft = State(initialValue: String(value.wrappedValue))
-    }
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("", text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .font(Font.ui(size: 12, design: .monospaced).monospacedDigit())
-                .multilineTextAlignment(.center)
+            ChromeIconButton(symbol: "minus", isEnabled: value > range.lowerBound, help: "Decrease Font Size") {
+                value = TypeScale.clamp(value - 1, to: range)
+            }
+
+            Text(verbatim: "\(value) pt")
+                .font(Font.ui(size: 12).monospacedDigit())
                 .frame(width: 56)
-                .focused($isFocused)
-                .onSubmit(commit)
-                .onChange(of: isFocused) { _, focused in
-                    if !focused { commit() }
-                }
                 .help(Text(verbatim: "\(range.lowerBound)–\(range.upperBound)"))
-            Text("px")
-                .font(Font.ui(size: 12))
-                .foregroundStyle(Chrome.secondaryText)
-        }
-        .onChange(of: value) { _, newValue in
-            let typed = Int(draft.trimmingCharacters(in: .whitespacesAndNewlines)).map { TypeScale.clamp($0, to: range) }
-            if !isFocused || typed != newValue {
-                draft = String(newValue)
+
+            ChromeIconButton(symbol: "plus", isEnabled: value < range.upperBound, help: "Increase Font Size") {
+                value = TypeScale.clamp(value + 1, to: range)
             }
         }
-    }
-
-    private func commit() {
-        if let parsed = Int(draft.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            value = TypeScale.clamp(parsed, to: range)
-        }
-        draft = String(value)
     }
 }
 
@@ -763,7 +738,7 @@ private struct ProviderSettingsSection: View {
                         }
                         if !status.isInstalled {
                             ChromeRowDivider()
-                            ChromeRow(title: "Install", detail: String(format: Chrome.localized("%@ was not found on your PATH."), provider.displayName)) {
+                            ChromeRow(title: "Install", detail: LoginEnvironment.diagnostic ?? String(format: Chrome.localized("%@ was not found on your PATH."), provider.displayName)) {
                                 Link(destination: provider.installURL) {
                                     Text(verbatim: String(format: Chrome.localized("Get %@"), provider.displayName))
                                         .frame(height: Chrome.rowButtonLabelHeight)
@@ -963,7 +938,6 @@ private struct ArchiveSettingsPage: View {
 }
 
 private struct AboutSettingsPage: View {
-    @Environment(AppModel.self) private var model
     private static let upstreamURL = URL(string: "https://getdroppycode.app")!
 
     var body: some View {
@@ -980,10 +954,6 @@ private struct AboutSettingsPage: View {
                     ChromeRowDivider()
                     ChromeRow(title: "Terminal", detail: "SwiftTerm by Miguel de Icaza, MIT License.") {
                         CreditLink(title: "SwiftTerm", url: URL(string: "https://github.com/migueldeicaza/SwiftTerm")!)
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(title: "Welcome tour", detail: "Ported from TourKit by Ram Patra, MIT License.") {
-                        CreditLink(title: "rampatra/TourKit", url: URL(string: "https://github.com/rampatra/TourKit")!)
                     }
                     ChromeRowDivider()
                     LicensesRow()
@@ -1008,10 +978,6 @@ private struct AboutSettingsPage: View {
                 Spacer()
             }
             .padding(16)
-            ChromeRowDivider()
-            ChromeRow(title: "Welcome tour", detail: "The slideshow from the first launch: Hydra, the effort slider, panels and themes.") {
-                Button("Show") { Tour.present(model: model) }.buttonStyle(.glass).controlSize(.small)
-            }
             ChromeRowDivider()
             AboutUpdateCheckRow()
             ChromeRowDivider()

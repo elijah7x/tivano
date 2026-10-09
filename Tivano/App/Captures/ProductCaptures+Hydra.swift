@@ -4,7 +4,7 @@ import AppKit
 import Foundation
 import SwiftUI
 
-extension TourCaptures {
+extension ProductCaptures {
     private enum HydraID {
         static let lead = UUID(uuidString: "C0000000-0000-4000-8000-000000000001")!
         static let head0 = UUID(uuidString: "C0000000-0000-4000-8000-000000000011")!
@@ -13,8 +13,8 @@ extension TourCaptures {
     }
 
     private static let tasks = [
-        "Tour window and slideshow",
-        "Tour pages and Help menu",
+        "Settings layout",
+        "Settings sections and navigation",
         "Screenshots for every page",
     ]
 
@@ -23,7 +23,7 @@ extension TourCaptures {
         let leadID = HydraID.lead
         var lead = ChatThread(projectID: project.id, provider: .claude, model: "claude-fable-5-1[1m]", effort: "high", runtimeMode: .supervised)
         lead.id = leadID
-        lead.title = "Welcome tour for the app"
+        lead.title = "Settings overview for the app"
         lead.hasCustomTitle = true
         lead.createdAt = now.addingTimeInterval(-120 - 1_800)
         lead.updatedAt = now.addingTimeInterval(-120)
@@ -34,14 +34,14 @@ extension TourCaptures {
 
         let headIDs = [HydraID.head0, HydraID.head1, HydraID.head2]
         let briefs = [
-            "Build the tour window and its slideshow. Keep the pages swipeable and the window compact.",
-            "Write the tour pages and wire the Help menu. Every page reads cleanly and the menu opens the tour again.",
+            "Build the settings overview and its layout. Keep the pages swipeable and the window compact.",
+            "Write the settings sections and wire the settings navigation. Every section reads cleanly and navigation opens it again.",
             "Take screenshots for every page. Cover each page at the capture size with nothing cropped.",
         ]
         let replies = [
-            "The tour window is built with its slideshow paging cleanly. The frame stays compact and every page lands centered.",
-            "The tour pages are written and the Help menu opens the tour again. Each page reads cleanly from first launch onward.",
-            "The screenshots for every page are nearly done. I am editing TourCaptures.swift to finish the last",
+            "The settings overview is built with its layout paging cleanly. The frame stays compact and every page lands centered.",
+            "The settings sections are written and the settings navigation opens each section. Each page reads cleanly from first launch onward.",
+            "The screenshots for every page are nearly done. I am editing ProductCaptures.swift to finish the last",
         ]
         for index in 0..<3 {
             var head = ChatThread(projectID: project.id, provider: .opencode, model: nil, effort: nil, runtimeMode: .supervised)
@@ -61,11 +61,11 @@ extension TourCaptures {
             } else if index == 1 {
                 info.status = .running
                 info.startedAt = now.addingTimeInterval(-71 - 120)
-                info.activity = "Wiring the Help menu"
+                info.activity = "Wiring settings navigation"
             } else {
                 info.status = .running
                 info.startedAt = now.addingTimeInterval(-40)
-                info.activity = "Editing TourCaptures.swift"
+                info.activity = "Editing ProductCaptures.swift"
             }
             head.hydra = info
             head.createdAt = info.startedAt
@@ -98,20 +98,20 @@ extension TourCaptures {
         turn.completedAt = now.addingTimeInterval(-120)
         turn.status = .completed
         let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
-            text: "Add a welcome tour: a slideshow window on first launch with a page for Hydra, one for the effort slider, and a Help menu item to open it again.")))
+            text: "Add a settings overview: a settings overview with a page for Hydra, one for the effort slider, and a Help menu item to open it again.")))
         turn.userItemID = user.id
         let bq = "\u{60}\u{60}\u{60}"
         let fenceOpen = bq + "hydra"
-        let assistantText = "Three heads are out: one builds the tour window, one writes the pages and wires the Help menu, one photographs every page. I keep the design and the integration.\n\n"
+        let assistantText = "Three heads are out: one builds the settings overview, one writes the pages and wires the settings navigation, one photographs every page. I keep the design and the integration.\n\n"
             + fenceOpen + "\n"
-            + "[{\"task\": \"" + tasks[0] + "\", \"prompt\": \"Build the tour window and its slideshow.\"}, "
-            + "{\"task\": \"" + tasks[1] + "\", \"prompt\": \"Write the tour pages and wire the Help menu.\"}, "
+            + "[{\"task\": \"" + tasks[0] + "\", \"prompt\": \"Build the settings overview and its layout.\"}, "
+            + "{\"task\": \"" + tasks[1] + "\", \"prompt\": \"Write the settings sections and wire the settings navigation.\"}, "
             + "{\"task\": \"" + tasks[2] + "\", \"prompt\": \"Take screenshots for every page.\"}]\n"
             + bq
         let answer = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(10), content: .assistant(AssistantMessage(text: assistantText)))
         let checklist = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(11), content: .todos([
-            TodoStep(text: "Port the slideshow to the app's glass", status: .done),
-            TodoStep(text: "Write the six pages and wire the Help menu", status: .done),
+            TodoStep(text: "Port the layout to the app's glass", status: .done),
+            TodoStep(text: "Write the six pages and wire the settings navigation", status: .done),
             TodoStep(text: "Photograph every page over its backdrop", status: .active),
         ]))
         let names = ["Hank", "Walter", "Ada"]
@@ -126,7 +126,7 @@ extension TourCaptures {
         let end = TimelineItem(turnID: turn.id, date: turn.completedAt!, content: .turnEnd(TurnSummary(
             turnID: turn.id, status: .completed, duration: 180, filesChanged: 0, additions: 0, deletions: 0)))
         let report = TimelineItem(turnID: nil, date: now.addingTimeInterval(-100), content: .user(UserMessage(
-            text: "## Hank: Tour window and slideshow\nThe window pages cleanly and stays compact.\nThe slideshow lands every page centered.",
+            text: "## Hank: Settings layout\nThe window pages cleanly and stays compact.\nThe layout lands every page centered.",
             hydraHeads: [0])))
         document.turns = [turn]
         document.items = [user, answer, checklist] + tools + [end, report]
@@ -141,7 +141,7 @@ extension TourCaptures {
 
     static func hydraScene(_ model: AppModel, _ stage: Stage, _ recorder: Recorder) async {
         WebsiteCaptures.log("scene hydraScene")
-        stage.setBackdrop(TourCaptures.backdropView(.hydra))
+        stage.setBackdrop(ProductCaptures.backdropView(.hydra))
         // 16:10 stage, sidebar hidden so the lead's conversation and the team's
         // panel fill the frame with the running heads centered and uncropped.
         stage.resize(to: NSSize(width: 960, height: 600))
@@ -157,13 +157,13 @@ extension TourCaptures {
         model.updateHydraHead(HydraID.head1) {
             $0.status = .running
             $0.finishedAt = nil
-            $0.activity = "Wiring the Help menu"
+            $0.activity = "Wiring settings navigation"
         }
         model.updateThread(HydraID.head1) { $0.lastStatus = .running }
         model.updateHydraHead(HydraID.head2) {
             $0.status = .running
             $0.finishedAt = nil
-            $0.activity = "Editing TourCaptures.swift"
+            $0.activity = "Editing ProductCaptures.swift"
         }
         model.updateThread(HydraID.head2) { $0.lastStatus = .running }
         runtime.isHydraPanelHidden = false
@@ -174,14 +174,14 @@ extension TourCaptures {
         // The whole window: the heads going out on the left and the team's panel on the
         // right are the picture together, and a crop on the panel alone lost the left.
         // The stage is narrow instead (see above), so everything draws large.
-        await recorder.still("tour-hydra", stage.tourCaptureRect)
+        await recorder.still("capture-hydra", stage.productCaptureRect)
         runtime.isHydraPanelHidden = true
     }
 
     /// The team panel and a detached head beside the lead conversation.
     static func panelsScene(_ model: AppModel, _ stage: Stage, _ recorder: Recorder) async {
         WebsiteCaptures.log("scene panelsScene")
-        stage.setBackdrop(TourCaptures.backdropView(.panels))
+        stage.setBackdrop(ProductCaptures.backdropView(.panels))
         // 16:10 stage, tall enough that the first message sits clear of the chrome
         // row's title and both floating panels stay centered and uncropped.
         stage.resize(to: NSSize(width: 1280, height: 800))
@@ -193,13 +193,13 @@ extension TourCaptures {
         model.updateHydraHead(HydraID.head1) {
             $0.status = .running
             $0.finishedAt = nil
-            $0.activity = "Wiring the Help menu"
+            $0.activity = "Wiring settings navigation"
         }
         model.updateThread(HydraID.head1) { $0.lastStatus = .running }
         model.updateHydraHead(HydraID.head2) {
             $0.status = .running
             $0.finishedAt = nil
-            $0.activity = "Editing TourCaptures.swift"
+            $0.activity = "Editing ProductCaptures.swift"
         }
         model.updateThread(HydraID.head2) { $0.lastStatus = .running }
         runtime.isHydraPanelHidden = false
@@ -209,7 +209,7 @@ extension TourCaptures {
         runtime.hydraPoppedPanelDock = .bottomLeading
         await stage.ensureActive()
         try? await Task.sleep(for: .seconds(2))
-        await recorder.still("tour-panels", stage.tourCaptureRect)
+        await recorder.still("capture-panels", stage.productCaptureRect)
         runtime.hydraPoppedHeadID = nil
         runtime.isHydraPanelHidden = true
     }

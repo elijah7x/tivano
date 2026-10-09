@@ -108,9 +108,5 @@ struct AppCommands: Commands {
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .settleThread))
                 .disabled(model.selectedThread.map { $0.isHelper } ?? true)
         }
-
-        CommandGroup(replacing: .help) {
-            Button("Welcome tour") { Tour.present(model: model) }
-        }
     }
 }

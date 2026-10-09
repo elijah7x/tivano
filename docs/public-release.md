@@ -48,20 +48,32 @@ The release build also requires Xcode and XcodeGen.
 - Keep the maintainer's Team ID consistent in `config/release.xcconfig`,
   `scripts/release.sh`, and `AppUpdater`'s signature requirement. Keep the Developer ID,
   hardened-runtime, timestamp, bundle-ID, Team-ID, and Gatekeeper checks.
+- Publish only the reviewed local `main` revision. Dev and task worktrees are
+  not release sources. Sync the approved main branch with origin only after
+  explicit push authorization; an uploaded tag does not update the main branch.
 - Choose the Release version and increment its build number before packaging.
   If promoting approved Dev features, use `scripts/set_version.py release
   catch-up-dev`. Do not advance Dev merely to publish Release.
 - Add a dated `## [x.y.z]` changelog section with release notes and `### Thanks`.
   Run `python3 scripts/release_credits.py`; without a reachable prior `v*` tag,
   the credits script checks the repository's complete retained history.
-- Resolve the push-policy mismatch: `publish_release.sh` pushes a version tag,
-  while the local pre-push hook permits only main. At an explicitly authorized
+- Review the local push policy: `publish_release.sh` pushes a version tag,
+  while the pre-push hook permits main and explicitly reviewed release tags. At an explicitly authorized
   release, permit only the reviewed release tag and preserve the restrictions
   on Dev and pre-migration ancestry. Do not disable the hook or use `--no-verify`.
 - Review the DMG appearance and run a first-install and update smoke check on
   a machine that has not trusted the local development certificate. Confirm
-  launch, provider login, permissions, localization, and onboarding. Changes
+  launch, provider login, permissions, and localization. Changes
   from local to Developer ID signing can require new privacy grants.
+
+## Public repository presentation
+
+Before changing visibility, update the GitHub description to describe Tivano
+rather than a private working copy. Set a homepage only after verifying the
+public product site. Repository metadata changes require explicit authorization.
+Keep upstream attribution and trademark contacts intact. Issue and pull-request
+templates in `.github/` help collect reproducible reports without credentials
+or private conversation content.
 
 ## Build, notarize, and publish
 
@@ -81,6 +93,14 @@ scripts/release.sh
 Packaging is separate from a GitHub publication and repository visibility change.
 After the owner authorizes publication, `scripts/publish_release.sh` checks
 notes and credits, verifies the stapled DMG, tags the agreed revision, and
-uploads the DMG and release notes. Review the exact code revision, version,
+uploads the DMG and release notes. An existing empty, stable draft for the same
+tag is adopted: the DMG is uploaded first, then the draft is published with the
+reviewed notes. Published releases, prereleases, and drafts with assets are
+refused; assets are never overwritten. If upload succeeds but publication
+fails, review the populated draft manually before retrying. API errors stop the
+script rather than being treated as a missing release.
+
+The checkout must be clean and match local main, and an existing version tag
+must point to that exact revision. Review the exact code revision, version,
 notes, and DMG before executing it. Do not treat a local development ZIP as
 an official release artifact.

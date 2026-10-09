@@ -325,13 +325,20 @@ private final class OutputCollector: Sendable {
 }
 
 /// The user's login shell environment. Apps launched from Finder inherit a
-/// minimal PATH that cannot find provider CLIs, so this is captured once at launch.
+/// minimal PATH that cannot find provider CLIs. Failed probes can be retried.
 enum LoginEnvironment {
     private static let cached = Mutex<[String: String]?>(nil)
     private static let overlay = Mutex<[String: String]>([:])
-    /// The one read of the login shell. Launch starts it; anything that resolves a CLI before
-    /// it lands waits on the same task, so a codex under nvm is never reported missing.
-    private static let loading = Mutex<Task<Void, Never>?>(nil)
+    /// Concurrent callers share one probe. Failure leaves the fallback in use and
+    /// permits a later retry; an explicit provider refresh also rereads successful loads.
+    private struct LoadState {
+        var task: Task<Void, Never>?
+        var retryAfter = Date.distantPast
+        var diagnostic: String?
+    }
+    private static let loading = Mutex(LoadState())
+
+    static var diagnostic: String? { loading.withLock { $0.diagnostic } }
 
     private static let excludedKeys: Set<String> = [
         "_", "SHLVL", "PWD", "OLDPWD", "TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
@@ -361,14 +368,15 @@ enum LoginEnvironment {
         FileManager.default.homeDirectoryForCurrentUser.path
     }
 
-    static func load() async {
-        let task = loading.withLock { current -> Task<Void, Never> in
-            if let current { return current }
-            let started = Task { await read() }
-            current = started
-            return started
+    static func load(force: Bool = false) async {
+        let task = loading.withLock { state -> Task<Void, Never>? in
+            if let task = state.task { return task }
+            guard force || ((!isLoaded || state.diagnostic != nil) && Date.now >= state.retryAfter) else { return nil }
+            let task = Task { await read() }
+            state.task = task
+            return task
         }
-        await task.value
+        await task?.value
     }
 
     @concurrent
@@ -377,24 +385,36 @@ enum LoginEnvironment {
         let script = "printf '\(marker)'; /usr/bin/env -0; printf '\(marker)'"
         var environment = fallbackEnvironment
         let shell = URL(fileURLWithPath: userShell())
-        if let result = try? await Shell.run(shell, ["-l", "-i", "-c", script], environment: environment, timeout: 8) {
+        var captured = false
+        if let result = try? await Shell.run(shell, ["-l", "-i", "-c", script], environment: environment, timeout: 15),
+           result.succeeded {
             let text = result.output
             if let start = text.range(of: marker),
                let end = text.range(of: marker, options: .backwards),
                start.upperBound < end.lowerBound {
+                var hasPath = false
                 for entry in text[start.upperBound..<end.lowerBound].split(separator: "\0") {
                     guard let equals = entry.firstIndex(of: "=") else { continue }
                     let key = String(entry[..<equals])
                     guard !key.isEmpty, !excludedKeys.contains(key) else { continue }
                     environment[key] = String(entry[entry.index(after: equals)...])
+                    if key == "PATH" { hasPath = true }
                 }
+                captured = hasPath && environment["PATH"]?.isEmpty == false
             }
         }
-        environment["PATH"] = augmentedPath(environment["PATH"])
-        let resolved = environment
-        cached.withLock { $0 = resolved }
-        let git = await developerGit(environment: resolved)
-        resolvedGit.withLock { $0 = git }
+        if captured {
+            environment["PATH"] = augmentedPath(environment["PATH"])
+            let resolved = environment
+            cached.withLock { $0 = resolved }
+            let git = await developerGit(environment: resolved)
+            resolvedGit.withLock { $0 = git }
+        }
+        loading.withLock { state in
+            state.diagnostic = captured ? nil : Bundle.main.localizedString(forKey: "The login shell environment could not be loaded. Check your shell startup files, then refresh Providers or set the CLI path explicitly.", value: nil, table: "Localizable")
+            state.retryAfter = captured ? .distantPast : Date.now.addingTimeInterval(30)
+            state.task = nil
+        }
     }
 
     /// The git binary every Git call runs, found once. PATH usually gives `/usr/bin/git`,

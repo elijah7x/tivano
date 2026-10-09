@@ -668,7 +668,7 @@ private struct PermissionMenu: View {
     let thread: ChatThread
 
     var body: some View {
-        ChromeMenuButton(symbol: thread.runtimeMode.symbol, help: "\(Chrome.localized(thread.runtimeMode.title)) · \(Chrome.localized(thread.runtimeMode.summary))") {
+        ChromeMenuButton(symbol: thread.runtimeMode.symbol, secondary: true, help: "\(Chrome.localized(thread.runtimeMode.title)) · \(Chrome.localized(thread.runtimeMode.summary))") {
             PopoverSectionHeader("Permissions")
             ForEach(RuntimeMode.allCases) { mode in
                 PopoverItem(mode.title, symbol: mode.symbol, isChecked: thread.runtimeMode == mode) {

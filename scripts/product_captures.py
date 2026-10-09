@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
-"""Renders the onboarding tour's captures from the real app, then imports them as assets.
+"""Render development product screenshots from an isolated Debug app.
 
-The app runs once in its tour capture mode (see Tivano/App/Captures/TourCaptures.swift):
-it opens the real window with mock data over a curated gradient backdrop, photographs
-each tour scene as a 16:10 still into build.noindex/tour-captures, and quits. This
-script then resizes every still to exactly 1320x824 and writes it into the tour
-imagesets (themes come from a seamless 2x2 collage).
+Run only when explicitly authorized to launch a capture instance. Mock conversations,
+independent storage/defaults and a generated backdrop keep production data separate.
+Raw stills, JSON framing sidecars and resized PNGs stay in build.noindex/product-captures;
+nothing is imported into the application's asset catalog.
 
-A still's sidecar may name a `focus`, the part of the scene the page is about (the
-open popover with its chip, the team's panel); the page is then cut around that focus
-instead of the whole window, so the slider, recipes and Hydra pages zoom on their subject.
-
-Needs Pillow (pip), or run with `uv run --with Pillow scripts/tour_captures.py`.
-
-    scripts/tour_captures.py                 # build, capture, import into the asset catalog
+Needs Pillow: uv run --with Pillow scripts/product_captures.py
 """
 
 import json
@@ -24,34 +17,33 @@ import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CAPTURES = ROOT / "build.noindex" / "tour-captures"
-DERIVED = ROOT / "build.noindex" / "tour"
+CAPTURES = ROOT / "build.noindex" / "product-captures"
+DERIVED = ROOT / "build.noindex" / "product-captures-build"
 APP = DERIVED / "Build/Products/Debug/Tivano Dev.app"
-ASSETS = ROOT / "Tivano" / "Resources" / "Assets.xcassets"
+PROCESSED = CAPTURES / "processed"
 
 WIDTH = 1320
 HEIGHT = 824
-CONTENTS = {"info": {"author": "xcode", "version": 1}}
 
 # App window size in points for each still, matching the stage sizes in
-# Tivano/App/Captures/TourCaptures.swift (and TourCaptures+Hydra.swift). Every
+# Tivano/App/Captures/ProductCaptures.swift (and ProductCaptures+Hydra.swift). Every
 # still is a 16:10 rect around the window: the frame grown by 72 pt on every
-# side, then widened/heightened to 1.6. The popover scenes (tour-pairs,
-# tour-slider, tour-recipes) photograph the window unioned with the open popover
-# (see Stage.tourCaptureRect(including:)), so their PNGs are larger than the
+# side, then widened/heightened to 1.6. The popover scenes (capture-pairs,
+# capture-slider, capture-recipes) photograph the window unioned with the open popover
+# (see Stage.productCaptureRect(including:)), so their PNGs are larger than the
 # window-only rect below.
 WINDOW_SIZES = {
-    "tour-welcome": (1280, 800),
-    "tour-hydra": (960, 600),
-    "tour-pairs": (960, 600),
-    "tour-slider": (960, 600),
-    "tour-threads": (960, 600),
-    "tour-recipes": (960, 600),
-    "tour-panels": (1280, 800),
-    "tour-theme-tokyoNight": (960, 600),
-    "tour-theme-gruvbox": (960, 600),
-    "tour-theme-catppuccinLatte": (960, 600),
-    "tour-theme-rosePine": (960, 600),
+    "capture-welcome": (1280, 800),
+    "capture-hydra": (960, 600),
+    "capture-pairs": (960, 600),
+    "capture-slider": (960, 600),
+    "capture-threads": (960, 600),
+    "capture-recipes": (960, 600),
+    "capture-panels": (1280, 800),
+    "capture-theme-tokyoNight": (960, 600),
+    "capture-theme-gruvbox": (960, 600),
+    "capture-theme-catppuccinLatte": (960, 600),
+    "capture-theme-rosePine": (960, 600),
 }
 THEME_ORDER = ["tokyoNight", "gruvbox", "catppuccinLatte", "rosePine"]
 
@@ -90,14 +82,14 @@ def build():
 
 
 def capture():
-    step("Capturing the tour scenes")
+    step("Capturing the product scenes")
     shutil.rmtree(CAPTURES, ignore_errors=True)
     CAPTURES.mkdir(parents=True)
     # Through LaunchServices, not the binary: an app launched from a shell is refused
     # activation, and the captures need the key window of the active app. Not waited on:
     # the run is force-killed at its budget, so a stall can never leave it running.
-    marker = "tour-captures " + str(CAPTURES)
-    subprocess.run(["open", "-n", str(APP), "--args", "-AppleLanguages", "(en)", "--tour-captures", str(CAPTURES)], check=True)
+    marker = "website-captures " + str(CAPTURES)
+    subprocess.run(["open", "-n", str(APP), "--args", "-AppleLanguages", "(en)", "--website-captures", str(CAPTURES)], check=True)
     deadline = time.time() + 630
     while time.time() < deadline:
         time.sleep(2)
@@ -129,20 +121,15 @@ def fit(image, width, height):
     return image.resize((width, height), Image.LANCZOS)
 
 
-def write_imageset(name, image):
-    folder = ASSETS / f"{name}.imageset"
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"{name}@2x.png"
+def write_image(name, image):
+    PROCESSED.mkdir(parents=True, exist_ok=True)
+    path = PROCESSED / f"{name}.png"
     image.save(path, "PNG")
-    (folder / "Contents.json").write_text(json.dumps({
-        "images": [{"filename": f"{name}@2x.png", "idiom": "universal", "scale": "2x"}],
-        **CONTENTS,
-    }, indent=2) + "\n")
     print(f"  {path.relative_to(ROOT)}")
 
 
 def interior(name, inset=8):
-    """The window's inside, `inset` points in from its edges: the tour card rounds its own
+    """The window's inside, `inset` points in from its edges: the screenshot card rounds its own
     corners, so a picture that still showed the window's corners would draw a second,
     tighter corner inside them.
 
@@ -196,7 +183,7 @@ def focus_box(inner, focus, aspect=WIDTH / HEIGHT, min_share=0.55):
 
 
 def frame(name, inset=8):
-    """The tour page's picture: the window's inside, zoomed on the still's focus when the
+    """The product screenshot: the window's inside, zoomed on the still's focus when the
     sidecar names one (see `focus_box`); `interior` otherwise."""
     from PIL import Image
     sidecar = CAPTURES / f"{name}.json"
@@ -209,7 +196,7 @@ def frame(name, inset=8):
     scale = image.width / rect_w
     inner = (x + inset, y + inset, x + w - inset, y + h - inset)
     focus = frames.get("focus")
-    min_share = 0.45 if name == "tour-slider" else 0.55
+    min_share = 0.45 if name == "capture-slider" else 0.55
     box = focus_box(inner, focus, min_share=min_share)
     if focus and box == inner:
         # A focus the window cannot hold (the cookbook's popover is taller than the
@@ -221,9 +208,9 @@ def frame(name, inset=8):
 
 
 def theme_mosaic():
-    """The four theme windows' insides, two by two with a thin dark seam, for the tour."""
+    """The four theme windows' insides, two by two with a thin dark seam, for the screenshots."""
     from PIL import Image
-    tiles = [interior(f"tour-theme-{theme}", inset=8) for theme in THEME_ORDER]
+    tiles = [interior(f"capture-theme-{theme}", inset=8) for theme in THEME_ORDER]
     gap = 6
     tile_w = (WIDTH - gap) // 2
     tile_h = (HEIGHT - gap) // 2
@@ -235,23 +222,23 @@ def theme_mosaic():
 
 def encode():
     from PIL import Image
-    step("Importing")
+    step("Resizing screenshots")
     # The welcome page is its own scene: the whole window with the sidebar open, no
     # popover, so the first page is the overview and not the hero's close-up.
-    for name, source in [("tour-welcome", "tour-welcome"), ("tour-hydra", "tour-hydra"), ("tour-pairs", "tour-pairs"),
-                         ("tour-slider", "tour-slider"), ("tour-threads", "tour-threads"), ("tour-recipes", "tour-recipes"), ("tour-panels", "tour-panels")]:
+    for name, source in [("capture-welcome", "capture-welcome"), ("capture-hydra", "capture-hydra"), ("capture-pairs", "capture-pairs"),
+                         ("capture-slider", "capture-slider"), ("capture-threads", "capture-threads"), ("capture-recipes", "capture-recipes"), ("capture-panels", "capture-panels")]:
         if not (CAPTURES / f"{source}.png").exists():
             sys.exit(f"The capture run wrote no {source}.png; see {CAPTURES / 'run.log'}")
-        write_imageset(name, fit(frame(source), WIDTH, HEIGHT))
-    write_imageset("tour-themes", fit(theme_mosaic(), WIDTH, HEIGHT))
+        write_image(name, fit(frame(source), WIDTH, HEIGHT))
+    write_image("capture-themes", fit(theme_mosaic(), WIDTH, HEIGHT))
 
 
 if __name__ == "__main__":
     try:
         import PIL
     except ImportError:
-        sys.exit("Pillow is required: uv run --with Pillow scripts/tour_captures.py")
+        sys.exit("Pillow is required: uv run --with Pillow scripts/product_captures.py")
     build()
     capture()
     encode()
-    print(f"\nReady: {ASSETS}")
+    print(f"\nReady: {PROCESSED}")

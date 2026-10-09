@@ -177,11 +177,13 @@ final class ProviderRegistry {
                 guard let provider = ProviderKind(rawValue: key) else { continue }
                 // A list cached before the scales were ordered may still run high to low
                 // (Grok's did); the slider reads them low to high, so they are put right here.
-                catalogs[provider] = Self.openCodeModels(list, for: provider).map { option in
+                let ordered = Self.openCodeModels(list, for: provider).map { option in
                     var option = option
-                    option.efforts = ACPSession.orderedEfforts(option.efforts)
+                    option.efforts = ModelOption.orderedEfforts(option.efforts)
                     return option
                 }
+                // A list cached before variants were merged is merged on the way in.
+                catalogs[provider] = provider.namesModelVariants ? ModelFamilies.collapsed(ordered) : ordered
             }
         }
         if !CaptureRun.isEnabled,
@@ -201,6 +203,9 @@ final class ProviderRegistry {
         if catalogs[.copilot]?.isEmpty ?? true { catalogs[.copilot] = [Self.copilotAuto] }
         if catalogs[.commandcode]?.isEmpty ?? true { catalogs[.commandcode] = Self.commandcodeSeed }
         if catalogs[.pi]?.isEmpty ?? true { catalogs[.pi] = Self.piSeed }
+        for provider in ProviderKind.allCases where provider.namesModelVariants {
+            if let list = catalogs[provider] { settings.adoptModelFamilies(list, for: provider) }
+        }
     }
 
     var availableProviders: [ProviderKind] {
@@ -300,7 +305,10 @@ final class ProviderRegistry {
         signingIn = provider
         defer { signingIn = nil }
         await LoginEnvironment.load()
-        guard let executable = executable(for: provider) else { return "\(provider.displayName) was not found." }
+        guard let executable = executable(for: provider) else {
+            let missing = "\(provider.displayName) was not found."
+            return LoginEnvironment.diagnostic.map { missing + " " + $0 } ?? missing
+        }
         // The login command starts with the executable's own name; the rest are its arguments.
         let arguments = provider.loginCommand.split(whereSeparator: \.isWhitespace).dropFirst().map(String.init)
         let result = try? await Shell.run(executable, arguments, environment: environment(for: provider), timeout: 300)
@@ -324,6 +332,7 @@ final class ProviderRegistry {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
+        await LoginEnvironment.load(force: true)
         await refreshAll()
         // Credits were already re-read when the key proved itself in `refreshAPIProvider`.
         for provider in ProviderKind.allCases where status(provider).auth != .signedOut {
@@ -450,6 +459,9 @@ final class ProviderRegistry {
 
     private static func match(_ id: String, in list: [ModelOption]) -> ModelOption? {
         if let exact = list.first(where: { $0.id == id }) { return exact }
+        // A pin or thread from before a provider's variants were merged names one of
+        // them; the row they were merged into answers for it.
+        if let family = list.first(where: { $0.variant(id) != nil }) { return family }
         // Cursor used to advertise parameterized ids (`model[effort=…]`); the catalog now
         // stores the base name once the parameterized picker is declared.
         guard id.contains("["), let bracket = id.firstIndex(of: "[") else { return nil }
@@ -803,11 +815,13 @@ final class ProviderRegistry {
         // list keeps the scales the probe walked, see `mergedACPCatalog`.
         let list = switch provider {
         case .claude: Self.mergedClaudeCatalog(list)
+        case _ where provider.namesModelVariants: Self.mergedACPCatalog(ModelFamilies.collapsed(list), over: catalogs[provider] ?? [])
         case _ where provider.usesACP: Self.mergedACPCatalog(list, over: catalogs[provider] ?? [])
         default: list
         }
         guard !list.isEmpty, list != catalogs[provider] else { return }
         catalogs[provider] = list
+        if provider.namesModelVariants { settings.adoptModelFamilies(list, for: provider) }
         guard !CaptureRun.isEnabled else { return }
         let encoded = Dictionary(uniqueKeysWithValues: catalogs.map { ($0.key.rawValue, $0.value) })
         if let data = try? JSONEncoder().encode(encoded) {

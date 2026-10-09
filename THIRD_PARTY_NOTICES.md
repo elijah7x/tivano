@@ -187,9 +187,9 @@ SOFTWARE.
 
 ## TourKit
 
-The welcome tour (`Tivano/App/Views/Tour/`) is a port of TourKit by Ram Patra,
-https://github.com/rampatra/TourKit: the slideshow card, its page indicator, its top controls
-and its floating window controller, carried over to the app's glass and asset catalog.
+Earlier Tivano versions included a welcome tour ported from TourKit by Ram Patra,
+https://github.com/rampatra/TourKit. The tour has been removed. Its original notice
+is retained here for historical attribution.
 
 MIT License
 

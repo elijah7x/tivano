@@ -1,16 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// The onboarding tour's captures: eight scenes (plus four theme variants) photographed
+/// The development product screenshots: eight scenes (plus four theme variants) photographed
 /// over a fixed generated gradient as 16:10 images:
 ///
-///     open -n -W "Tivano.app" --args --tour-captures <folder>
+///     open -n -W "Tivano.app" --args --website-captures <folder>
 ///
 /// Same isolation contract as WebsiteCaptures: own storage folder, own defaults suite,
 /// quits when the last file is written. The Hydra scene itself lives in
-/// `TourCaptures+Hydra.swift`.
+/// `ProductCaptures+Hydra.swift`.
 @MainActor
-enum TourCaptures {
+enum ProductCaptures {
     enum Backdrop: CaseIterable {
         case welcome, hydra, pairs, slider, panels, themes
     }
@@ -69,10 +69,10 @@ enum TourCaptures {
         let recorder = Recorder(output: output, stage: stage)
         try? await Task.sleep(for: .milliseconds(1_400))
 
-        // 1. tour-welcome: the whole window in one overview — large 16:10 stage,
+        // 1. capture-welcome: the whole window in one overview — large 16:10 stage,
         // sidebar hidden (the chat alone on the glass; the list has a scene of its own),
         // settled after the scene lands so nothing important is cropped.
-        await capture(model, stage, recorder, name: "tour-welcome", backdrop: .welcome, size: NSSize(width: 1280, height: 800)) {
+        await capture(model, stage, recorder, name: "capture-welcome", backdrop: .welcome, size: NSSize(width: 1280, height: 800)) {
             if model.sidebar.isVisible { model.sidebar.toggle() }
             model.settings.theme = .dark
             model.selectedThreadID = WebsiteCaptures.composerThreadID
@@ -80,11 +80,11 @@ enum TourCaptures {
             try? await Task.sleep(for: .milliseconds(900))
             return nil
         }
-        // 2. tour-hydra.
-        await TourCaptures.hydraScene(model, stage, recorder)
-        // 3. tour-pairs: zoomed on the model switcher hanging from the composer's
+        // 2. capture-hydra.
+        await ProductCaptures.hydraScene(model, stage, recorder)
+        // 3. capture-pairs: zoomed on the model switcher hanging from the composer's
         // chip. Narrow 16:10 stage, sidebar hidden, chip settled before hanging.
-        await capture(model, stage, recorder, name: "tour-pairs", backdrop: .pairs, size: NSSize(width: 960, height: 600)) {
+        await capture(model, stage, recorder, name: "capture-pairs", backdrop: .pairs, size: NSSize(width: 960, height: 600)) {
             if model.sidebar.isVisible { model.sidebar.toggle() }
             model.selectedThreadID = WebsiteCaptures.freshThreadID
             // The chip reports where it sits once the thread has laid out; the popover
@@ -102,8 +102,8 @@ enum TourCaptures {
             WebsiteCaptures.log("pairs popover shown=\(popover.isShown) size=\(popover.contentSize)")
             return popover
         }
-        // 4. tour-slider: zoomed on the effort card hanging from the composer's chip.
-        await capture(model, stage, recorder, name: "tour-slider", backdrop: .slider, size: NSSize(width: 960, height: 600)) {
+        // 4. capture-slider: zoomed on the effort card hanging from the composer's chip.
+        await capture(model, stage, recorder, name: "capture-slider", backdrop: .slider, size: NSSize(width: 960, height: 600)) {
             if let pair = model.settings.hydraPairs.first {
                 model.enterHydraPair(pair, for: WebsiteCaptures.freshThreadID)
             }
@@ -127,9 +127,9 @@ enum TourCaptures {
             await stage.holdPopover(popover, seconds: 2.0)
             return popover
         }
-        // 4a. tour-threads: the hidden sidebar's list floating from the toolbar's Threads
+        // 4a. capture-threads: the hidden sidebar's list floating from the toolbar's Threads
         // button, at the sidebar's own width.
-        await capture(model, stage, recorder, name: "tour-threads", backdrop: .panels, size: NSSize(width: 960, height: 600)) {
+        await capture(model, stage, recorder, name: "capture-threads", backdrop: .panels, size: NSSize(width: 960, height: 600)) {
             if model.sidebar.isVisible { model.sidebar.toggle() }
             model.selectedThreadID = WebsiteCaptures.composerThreadID
             try? await Task.sleep(for: .milliseconds(900))
@@ -139,8 +139,8 @@ enum TourCaptures {
             await stage.holdPopover(popover, seconds: 2.0)
             return popover
         }
-        // 4b. tour-recipes: Hydra's cookbook hanging from the composer's chip.
-        await capture(model, stage, recorder, name: "tour-recipes", backdrop: .hydra, size: NSSize(width: 960, height: 600)) {
+        // 4b. capture-recipes: Hydra's cookbook hanging from the composer's chip.
+        await capture(model, stage, recorder, name: "capture-recipes", backdrop: .hydra, size: NSSize(width: 960, height: 600)) {
             if model.sidebar.isVisible { model.sidebar.toggle() }
             model.selectedThreadID = WebsiteCaptures.freshThreadID
             model.settings.hydraEnabled = true
@@ -151,14 +151,14 @@ enum TourCaptures {
             await stage.holdPopover(popover, seconds: 2.0)
             return popover
         }
-        // 5. tour-panels: the team's panel and a popped-out head over the lead's chat.
-        await TourCaptures.panelsScene(model, stage, recorder)
-        // 6. tour-theme-<rawValue>: four themes far apart, one of them light. Each shows
+        // 5. capture-panels: the team's panel and a popped-out head over the lead's chat.
+        await ProductCaptures.panelsScene(model, stage, recorder)
+        // 6. capture-theme-<rawValue>: four themes far apart, one of them light. Each shows
         // one quarter of a double-size gradient, so the four tile into one seamless image.
         let quadrantThemes = [AppTheme.tokyoNight, .gruvbox, .catppuccinLatte, .rosePine]
         for (index, theme) in quadrantThemes.enumerated() {
             let quadrant = (x: index % 2, y: index / 2)
-            WebsiteCaptures.log("scene tour-theme-\(theme.rawValue)")
+            WebsiteCaptures.log("scene capture-theme-\(theme.rawValue)")
             stage.setBackdrop(backdropView(.themes, quadrant: quadrant))
             stage.resize(to: NSSize(width: 960, height: 600))
             await stage.ensureActive()
@@ -167,11 +167,11 @@ enum TourCaptures {
             model.selectedThreadID = WebsiteCaptures.composerThreadID
             model.settings.theme = theme
             try? await Task.sleep(for: .milliseconds(900))
-            await recorder.still("tour-theme-\(theme.rawValue)", stage.tourCaptureRect)
+            await recorder.still("capture-theme-\(theme.rawValue)", stage.productCaptureRect)
         }
         model.settings.theme = .dark
 
-        WebsiteCaptures.log("tour done")
+        WebsiteCaptures.log("captures done")
         exit(0)
     }
 
@@ -213,7 +213,7 @@ enum TourCaptures {
         // The still is framed around the window and the popover together; the recorder
         // writes the window's place in it beside the PNG, and the import cuts from that.
         // The popover and its chip are the focus, so the page zooms on them.
-        await recorder.still(name, stage.tourCaptureRect(including: popover), focus: stage.popoverFocus(popover))
+        await recorder.still(name, stage.productCaptureRect(including: popover), focus: stage.popoverFocus(popover))
         popover?.close()
         after()
     }

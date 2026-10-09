@@ -1677,7 +1677,8 @@ final class ThreadRuntime {
                     && (resumeID == nil || thread.hydra?.ownedCodexSessionID == resumeID),
                 codexHistoryArchived: thread.hydra?.ownedCodexSessionID == resumeID && thread.hydra?.codexHistoryArchived == true,
                 codexHistoryDirectory: thread.hydra?.ownedCodexWorkingDirectory,
-                antiSlopEnabled: signature.antiSlopEnabled
+                antiSlopEnabled: signature.antiSlopEnabled,
+                modelCatalog: thread.provider.namesModelVariants ? app.providers.models(for: thread.provider) : []
             )
             let created: any ProviderSession = switch thread.provider {
             case .codex: CodexSession(configuration: configuration)

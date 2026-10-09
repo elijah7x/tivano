@@ -6,6 +6,28 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-10-09
+
+### New features
+
+- Group long model lists by family and series to make model selection easier.
+
+### Bug fixes
+
+- Keep Release and Dev libraries, preferences, captures, and Keychain credentials separate from each other and Droppy Code.
+
+### Refinements
+
+- Remove the welcome tour and its settings and menu entries.
+- Use plus and minus buttons for font-size settings, with content defaulting to 14 pt.
+- Refresh the new-conversation and full-access icons, and match the permission icon to the attachment control.
+- Place Models before MCP in settings and soften the Breeze accent.
+- Bring Release up to the current Dev features at version 0.2.7.
+
+### Thanks
+
+- No outside contributors since the start of this repository's retained history.
+
 ## [0.2.0] - 2026-10-09
 
 ### New features

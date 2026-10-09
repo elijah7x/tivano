@@ -44,7 +44,7 @@ This quits Dev if it is running, packages and verifies the new app, then
 installs/relaunches `/Applications/Tivano Dev.app`. It is only for an explicitly
 requested run/relaunch. Packaging alone uses `scripts/package_local.sh` and
 never launches or quits apps. Keep stable install paths and bundle IDs;
-both editions use the same [real session store](shared-library.md).
+the editions use [independent production and test stores](shared-library.md).
 
 Keychain recognizes updated code by its designated requirement rather than
 its changing content hash. Switching from the old local identity to Developer
@@ -78,9 +78,22 @@ identities must be supplied outside source control, either with repeated local
 comma-separated `TIVANO_MAINTAINER_EMAILS` environment variable. Other contributors
 using GitHub noreply addresses remain eligible for credit.
 
-## Onboarding screenshots
+## Development product screenshots
 
-Run `python3 scripts/tour_captures.py` explicitly to build and launch an isolated
+Only with explicit launch authorization, run
+`uv run --with Pillow scripts/product_captures.py` to build and launch an isolated
 Debug capture instance. It uses mock conversations, independent storage/defaults
 and a generated backdrop from existing theme colors. It does not read the desktop
-wallpaper or Keychain. Capture flags are disabled in Release builds.
+wallpaper or Keychain. The `--website-captures` flag is disabled in Release builds.
+Raw stills, framing sidecars and resized PNGs remain in
+`build.noindex/product-captures/`; the tool does not add application assets.
+
+## CLI discovery
+
+Tivano reads the login shell environment with a 15-second budget. If shell startup
+fails, it uses the standard fallback PATH without caching the failed probe as a
+successful load. Subsequent CLI operations may retry after 30 seconds. The
+Providers refresh button also requests a new probe immediately, including after a
+CLI installation or a shell configuration change. If discovery still fails, check
+shell startup files or set the provider's executable path explicitly. Tivano does
+not guess which nvm/fnm Node version a project should use.

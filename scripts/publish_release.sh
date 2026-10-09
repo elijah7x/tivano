@@ -18,6 +18,7 @@ VERSION=$(scripts/version.sh release)
 TAG="v$VERSION"
 DMG="${1:-build.noindex/Tivano-$VERSION.dmg}"
 NOTES="$(mktemp -t tivano-notes)"
+trap 'rm -f "$NOTES"' EXIT
 python3 scripts/build_changelog.py --section "$VERSION" > "$NOTES" || { echo "No ## [$VERSION] section in CHANGELOG.md. Add one before publishing."; exit 1; }
 
 step() { printf '\n==> %s\n' "$1"; }
@@ -38,20 +39,48 @@ fi
 step "Checking the disk image is notarized"
 xcrun stapler validate "$DMG" > /dev/null
 
+step "Checking the reviewed main revision"
+REVISION=$(git rev-parse "${RELEASE_REF:-HEAD}^{commit}")
+MAIN_REVISION=$(git rev-parse "refs/heads/main^{commit}")
+[ "$REVISION" = "$MAIN_REVISION" ] && [ "$(git rev-parse HEAD)" = "$REVISION" ] || {
+  echo "Publish from the reviewed local main revision, not Dev or a task revision." >&2
+  exit 1
+}
+[ -z "$(git status --porcelain)" ] || { echo "Commit or remove pending changes before publishing." >&2; exit 1; }
+if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
+  [ "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$REVISION" ] || {
+    echo "$TAG does not point to the reviewed main revision. No tag was changed." >&2
+    exit 1
+  }
+fi
+
+step "Checking the existing release"
+# A failed API call is not treated as a missing release. Read all pages so a
+# draft can never be overlooked because newer releases filled the first page.
+EXISTING=$(gh api --paginate "repos/$PROJECT/releases" \
+  --jq ".[] | select(.tag_name == \"$TAG\") | [.draft, .prerelease, (.assets | length)] | @tsv")
+if [ -n "$EXISTING" ] && [ "$EXISTING" != "$(printf 'true\tfalse\t0')" ]; then
+  echo "Release $TAG is already published, is a prerelease, or has assets. Review it manually; nothing was overwritten." >&2
+  exit 1
+fi
+
 step "Tagging $TAG"
 if ! git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
-  git tag -a "$TAG" "${RELEASE_REF:-HEAD}" -m "Tivano $VERSION"
+  git tag -a "$TAG" "$REVISION" -m "Tivano $VERSION"
 fi
 git push origin "$TAG"
 
-step "Creating the release"
-if gh release view "$TAG" -R "$PROJECT" > /dev/null 2>&1; then
-  echo "Release $TAG already exists on GitHub."
-  exit 1
+if [ -n "$EXISTING" ]; then
+  step "Uploading to the empty draft"
+  gh release upload "$TAG" "$DMG#Tivano $VERSION (Apple silicon)" -R "$PROJECT"
+  # Only publish after upload succeeds. Never delete a draft or clobber an asset.
+  gh release edit "$TAG" -R "$PROJECT" --draft=false --prerelease=false \
+    --verify-tag --title "Tivano $VERSION" --notes-file "$NOTES"
+else
+  step "Creating the release"
+  gh release create "$TAG" "$DMG#Tivano $VERSION (Apple silicon)" \
+    -R "$PROJECT" --verify-tag --target "$REVISION" \
+    --name "Tivano $VERSION" --notes-file "$NOTES"
 fi
-gh release create "$TAG" "$DMG#Tivano $VERSION (Apple silicon)" \
-  -R "$PROJECT" \
-  --name "Tivano $VERSION" \
-  --notes-file "$NOTES"
 
 printf '\nPublished: https://github.com/%s/releases/tag/%s\n' "$PROJECT" "$TAG"

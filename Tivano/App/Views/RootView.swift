@@ -435,7 +435,7 @@ struct NoThreadView: View {
             Button {
                 model.newThread()
             } label: {
-                Label("New thread", systemImage: "square.and.pencil")
+                Label("New thread", systemImage: "plus.bubble")
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)
