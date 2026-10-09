@@ -183,7 +183,6 @@ final class AppSettings {
         static let usagePanelDock = "usagePanelDock"
         static let usagePanelHeight = "usagePanelHeight"
         static let hydraPairs = "hydraPairs"
-        static let hasSeenTour = "hasSeenTour"
         static let hasSeenHydraIntro = "hasSeenHydraIntro"
     }
 
@@ -609,10 +608,6 @@ final class AppSettings {
         didSet { defaults.set(hydraDefaultEnabled, forKey: Key.hydraDefaultEnabled) }
     }
 
-    var hasSeenTour: Bool {
-        didSet { defaults.set(hasSeenTour, forKey: Key.hasSeenTour) }
-    }
-
     /// The first chat's Hydra intro was read (see `HydraIntroPopover`).
     var hasSeenHydraIntro: Bool {
         didSet { defaults.set(hasSeenHydraIntro, forKey: Key.hasSeenHydraIntro) }
@@ -808,7 +803,6 @@ final class AppSettings {
         modelPreferences = Self.load([String: ModelPreference].self, forKey: Key.modelPreferences) ?? [:]
         hydraEnabled = defaults.object(forKey: Key.hydraEnabled) as? Bool ?? true
         hydraDefaultEnabled = defaults.object(forKey: Key.hydraDefaultEnabled) as? Bool ?? true
-        hasSeenTour = defaults.object(forKey: Key.hasSeenTour) as? Bool ?? false
         hasSeenHydraIntro = defaults.object(forKey: Key.hasSeenHydraIntro) as? Bool ?? false
         if let stored = defaults.array(forKey: Key.panelSize) as? [Double], stored.count == 2 {
             panelSize = CGSize(width: stored[0], height: stored[1])

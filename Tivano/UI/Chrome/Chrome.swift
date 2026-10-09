@@ -357,11 +357,12 @@ struct ChromeIconLabel: View {
     var isActive = false
     var isHovering = false
     var prominent = false
+    var secondary = false
 
     var body: some View {
         Image(systemName: symbol)
             .font(prominent ? .ui(.title3, weight: .semibold) : Chrome.iconFont)
-            .foregroundStyle(foreground)
+            .foregroundStyle(secondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(foreground))
             .frame(width: prominent ? Chrome.capsuleHeight : Chrome.capsuleContentHeight, height: prominent ? Chrome.capsuleHeight : Chrome.capsuleContentHeight)
             .background {
                 if isActive || (prominent && isHovering) {
@@ -420,6 +421,7 @@ struct ChromePresentationPreference: PreferenceKey {
 
 struct ChromeMenuButton<Content: View>: View {
     let symbol: String
+    var secondary = false
     let help: String
     @ViewBuilder var content: Content
 
@@ -430,7 +432,7 @@ struct ChromeMenuButton<Content: View>: View {
         Button {
             isPresented.toggle()
         } label: {
-            ChromeIconLabel(symbol: symbol, isActive: isPresented, isHovering: isHovering)
+            ChromeIconLabel(symbol: symbol, isActive: isPresented, isHovering: isHovering, secondary: secondary)
         }
         .buttonStyle(.plain)
         .onHover { hovering in

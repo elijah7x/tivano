@@ -938,7 +938,6 @@ private struct ArchiveSettingsPage: View {
 }
 
 private struct AboutSettingsPage: View {
-    @Environment(AppModel.self) private var model
     private static let upstreamURL = URL(string: "https://getdroppycode.app")!
 
     var body: some View {
@@ -983,10 +982,6 @@ private struct AboutSettingsPage: View {
                 Spacer()
             }
             .padding(16)
-            ChromeRowDivider()
-            ChromeRow(title: "Welcome tour", detail: "The slideshow from the first launch: Hydra, the effort slider, panels and themes.") {
-                Button("Show") { Tour.present(model: model) }.buttonStyle(.glass).controlSize(.small)
-            }
             ChromeRowDivider()
             AboutUpdateCheckRow()
             ChromeRowDivider()
