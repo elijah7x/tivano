@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.0.3",
-      "name": "Tivano 1.0.3",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.0.3/Tivano-1.0.3.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Check public static update feeds before the GitHub Releases API, so normal updates no longer depend on GitHub sign-in or a shared IP's anonymous API quota. Keep the original release endpoint and DMG naming for 1.0.2 and earlier clients.\n- Verify the static feed's installer checksum before mounting, alongside the existing Developer ID, bundle-ID, version and Gatekeeper checks.\n\n## Refinements\n\n- Publish update metadata after the notarized DMG is available, with Pages and raw-content fallback sources; reuse local GitHub credentials only for the final API fallback and explain rate-limit failures.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-10T05:26:49Z",
+      "tag_name": "v1.0.6",
+      "name": "Tivano 1.0.6",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.0.6/Tivano-1.0.6.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Let composer text use the full width above a separate bottom control row, so narrow layouts wrap naturally without leaving an empty right-hand column. Keep the send button at the bottom right and collapse the model chip when space is tight.\n- Keep replies following the conversation's end as text streams and the layout changes. Restore following when scrolling back to the bottom, while preserving the reading position when browsing earlier messages.\n- Compare mirror and GitHub update feeds concurrently within a bounded response window, so a stale mirror cannot mask a newer responding source; preserve known versions and checksums and reject conflicting release metadata.\n- Cancel update downloads when their caller is cancelled, settle callbacks once and remove temporary files; never bypass verification when retrying a failed transport.\n\n## Refinements\n\n- Prefer the earliest responding feed for the same version and retry the other trusted installer origin on transport failure, in either direction. Report what the update check found without claiming unreachable sources are current.\n- Sync verified installers and update metadata to the restricted domestic mirror after publishing each release.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-10T10:37:57Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.0.3.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.0.3/Tivano-1.0.3.dmg",
-          "size": 6348243,
-          "sha256": "cdab001beb764b972d99e4db4df9e73c639d118d56eaef194462da829b793749"
+          "name": "Tivano-1.0.6.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.0.6/Tivano-1.0.6.dmg",
+          "size": 6358635,
+          "sha256": "e5a1b296cb0ee2b63c0f6fd8744ca8451dc6b1180877aa99255bcbef5f67007d"
         }
       ]
     }
