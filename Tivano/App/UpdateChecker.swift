@@ -43,6 +43,8 @@ struct AvailableUpdate: Codable, Equatable, Sendable {
     var tag: String
     var downloadURL: URL
     var size: Int64?
+    /// Present for static feeds; old cached/API results remain decodable without it.
+    var sha256: String? = nil
     /// The release description, Markdown as written on GitHub.
     var notes: String
     var releasedAt: Date?
@@ -52,7 +54,8 @@ struct AvailableUpdate: Codable, Equatable, Sendable {
 
 /// Checks the app's GitHub releases for a newer version and remembers what it found.
 ///
-/// A check reads the public releases API, keeps the newest stable version that ships a disk
+/// A check reads a public static feed, with raw GitHub content and the releases API as
+/// fallbacks, and keeps the newest stable version that ships a disk
 /// image, and compares it with the running build. The result is persisted, so the About page
 /// shows a known update the moment it opens, and `updateAvailable` is recomputed from the
 /// running version, so an update that was installed stops being one. Checks run on launch,
@@ -66,6 +69,10 @@ final class UpdateChecker {
     /// The fork's repository on GitHub.
     static let projectURL = URL(string: "https://github.com/elijah7x/tivano")!
     private static let apiURL = URL(string: "https://api.github.com/repos/elijah7x/tivano/releases?per_page=20")!
+    private static let feedURLs = [
+        URL(string: "https://elijah7x.github.io/tivano/updates.json")!,
+        URL(string: "https://raw.githubusercontent.com/elijah7x/tivano/gh-pages/updates.json")!,
+    ]
 
     /// How often the background check runs, and how stale a check may be before the app
     /// coming to the front runs another.
@@ -160,11 +167,7 @@ final class UpdateChecker {
         isChecking = true
         defer { isChecking = false }
         do {
-            let releases = try await fetchReleases()
-            guard let newest = Self.newestRelease(in: releases) else {
-                throw UpdateError.noRelease
-            }
-            var found = newest
+            var found = try await fetchUpdate()
             if let previewVersion {
                 found.version = previewVersion
             }
@@ -186,10 +189,65 @@ final class UpdateChecker {
         return updateAvailable
     }
 
+    private func fetchUpdate() async throws -> AvailableUpdate {
+        for url in Self.feedURLs {
+            do {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 8
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { continue }
+                let found = try Self.updateFromFeed(data)
+                // A stale CDN must not replace a newer result already seen on this machine.
+                if let saved = update, let savedVersion = AppVersion(saved.version),
+                   let foundVersion = AppVersion(found.version), savedVersion > foundVersion { continue }
+                return found
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Missing, blocked or malformed static sources fall through to the next source.
+                continue
+            }
+        }
+        let releases = try await fetchReleases()
+        guard let found = Self.newestRelease(in: releases) else { throw UpdateError.noRelease }
+        return found
+    }
+
+    static func updateFromFeed(_ data: Data) throws -> AvailableUpdate {
+        guard data.count <= 1_048_576 else { throw UpdateError.invalidFeed }
+        let feed = try JSONDecoder().decode(StaticUpdateFeed.self, from: data)
+        guard feed.schemaVersion == 1, let found = newestRelease(in: feed.releases),
+              let digest = found.sha256, digest.count == 64,
+              digest.allSatisfy({ "0123456789abcdef".contains($0) }),
+              let size = found.size, size > 0 else { throw UpdateError.invalidFeed }
+        let expected = "https://github.com/elijah7x/tivano/releases/download/\(found.tag)/Tivano-\(found.version).dmg"
+        guard found.downloadURL.absoluteString == expected else { throw UpdateError.invalidFeed }
+        return found
+    }
+
     private func fetchReleases() async throws -> [GitHubRelease] {
-        let (data, response) = try await session.data(from: Self.apiURL)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw UpdateError.badResponse((response as? HTTPURLResponse)?.statusCode ?? -1)
+        var token = GitHubCredentials.storedToken()
+        if token == nil, !UserDefaults.standard.bool(forKey: "GitHubCLIDeclined") {
+            await LoginEnvironment.load()
+            token = await GitHubCredentials.cliToken()
+        }
+        do {
+            return try await fetchReleases(token: token)
+        } catch UpdateError.unauthorized where token != nil {
+            // An expired login must not prevent checking this public repository.
+            return try await fetchReleases(token: nil)
+        }
+    }
+
+    private func fetchReleases(token: String?) async throws -> [GitHubRelease] {
+        var request = URLRequest(url: Self.apiURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await session.data(for: request, delegate: GitHubUpdateRequestDelegate())
+        guard let http = response as? HTTPURLResponse else { throw UpdateError.badResponse(-1) }
+        guard (200...299).contains(http.statusCode) else {
+            throw UpdateError.httpFailure(data: data, response: http, authenticated: token != nil)
         }
         return try JSONDecoder().decode([GitHubRelease].self, from: data)
     }
@@ -208,6 +266,7 @@ final class UpdateChecker {
                 tag: release.tagName,
                 downloadURL: downloadURL,
                 size: asset.size,
+                sha256: asset.sha256,
                 notes: release.body ?? "",
                 releasedAt: release.releasedAt,
                 pageURL: projectURL.appending(path: "releases/tag/\(release.tagName)")
@@ -262,14 +321,75 @@ final class UpdateChecker {
     }
 }
 
+/// Release metadata stays on the API host; a redirect must not carry a token to a download host.
+private final class GitHubUpdateRequestDelegate: NSObject, URLSessionTaskDelegate {
+    nonisolated func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        guard request.url?.scheme == "https", request.url?.host == "api.github.com",
+              request.url?.port == nil || request.url?.port == 443 else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+}
+
+private struct StaticUpdateFeed: Decodable {
+    var schemaVersion: Int
+    var releases: [GitHubRelease]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case releases
+    }
+}
+
 enum UpdateError: LocalizedError {
+    case invalidFeed
     case noRelease
     case badResponse(Int)
+    case unauthorized
+    case rateLimited(until: Date?, authenticated: Bool)
+
+    static func httpFailure(data: Data, response: HTTPURLResponse, authenticated: Bool) -> UpdateError {
+        if response.statusCode == 401 { return .unauthorized }
+        if response.statusCode == 403 || response.statusCode == 429 {
+            let message = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["message"] as? String
+            let remaining = response.value(forHTTPHeaderField: "X-RateLimit-Remaining")
+            let retryAfter = response.value(forHTTPHeaderField: "Retry-After")
+            if response.statusCode == 429 || remaining == "0" || retryAfter != nil
+                || message?.localizedCaseInsensitiveContains("rate limit") == true {
+                var until: Date?
+                if let seconds = retryAfter.flatMap(TimeInterval.init) {
+                    until = .now.addingTimeInterval(max(0, seconds))
+                } else if remaining == "0",
+                          let reset = response.value(forHTTPHeaderField: "X-RateLimit-Reset").flatMap(TimeInterval.init) {
+                    until = Date(timeIntervalSince1970: reset)
+                }
+                return .rateLimited(until: until, authenticated: authenticated)
+            }
+        }
+        return .badResponse(response.statusCode)
+    }
 
     var errorDescription: String? {
         switch self {
-        case .noRelease: Chrome.localized("No release with a disk image was found.")
-        case .badResponse(let status): String(format: Chrome.localized("GitHub answered with HTTP %lld."), status)
+        case .invalidFeed: return Chrome.localized("The update information could not be read.")
+        case .noRelease: return Chrome.localized("No release with a disk image was found.")
+        case .badResponse(let status): return String(format: Chrome.localized("GitHub answered with HTTP %lld."), status)
+        case .unauthorized: return Chrome.localized("Your GitHub sign-in expired. Connect again.")
+        case .rateLimited(let until, let authenticated):
+            if let until {
+                let key = authenticated
+                    ? "GitHub's request limit was reached. Try again after %@."
+                    : "GitHub's anonymous request limit was reached. Try again after %@ or download Tivano from its releases page."
+                return String(format: Chrome.localized(key), until.formatted(date: .omitted, time: .shortened))
+            }
+            return Chrome.localized(authenticated
+                ? "GitHub's request limit was reached. Try again later."
+                : "GitHub's anonymous request limit was reached. Try again later or download Tivano from its releases page.")
         }
     }
 }
@@ -280,13 +400,14 @@ struct GitHubRelease: Decodable, Sendable {
         var name: String
         var browserDownloadURL: String
         var size: Int64?
+        var sha256: String? = nil
 
         var isDiskImage: Bool {
             name.lowercased().hasSuffix(".dmg") || browserDownloadURL.lowercased().hasSuffix(".dmg")
         }
 
         private enum CodingKeys: String, CodingKey {
-            case name, size
+            case name, size, sha256
             case browserDownloadURL = "browser_download_url"
         }
     }

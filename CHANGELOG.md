@@ -6,6 +6,21 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-10
+
+### Bug fixes
+
+- Check public static update feeds before the GitHub Releases API, so normal updates no longer depend on GitHub sign-in or a shared IP's anonymous API quota. Keep the original release endpoint and DMG naming for 1.0.2 and earlier clients.
+- Verify the static feed's installer checksum before mounting, alongside the existing Developer ID, bundle-ID, version and Gatekeeper checks.
+
+### Refinements
+
+- Publish update metadata after the notarized DMG is available, with Pages and raw-content fallback sources; reuse local GitHub credentials only for the final API fallback and explain rate-limit failures.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.0.2] - 2026-10-10
 
 ### Refinements

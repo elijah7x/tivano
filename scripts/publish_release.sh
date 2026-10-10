@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # Publishes a release on GitHub: tags the version, uploads the notarized disk
-# image and posts the notes from CHANGELOG.md. This is what the app's About
-# page update check reads (api.github.com/repos/elijah7x/tivano/releases).
+# image and posts the notes from CHANGELOG.md, then updates the static feed.
+# Keep the Releases API intact for 1.0.2 and older updaters.
 #
 #   scripts/publish_release.sh [path/to/Tivano-1.2.3.dmg]
 #
@@ -53,6 +53,9 @@ path.write_text(
     f"[Download Tivano (.dmg, Apple silicon)]({url})\n\n"
     "Open the DMG and drag Tivano to Applications. "
     "The Source code archives below are for developers, not app installers.\n\n"
+    "If Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, "
+    "install this DMG manually once. Later checks use public static feeds "
+    "and do not require a GitHub login.\n\n"
     + body
 )
 PYNOTES
@@ -105,3 +108,5 @@ else
 fi
 
 printf '\nPublished: https://github.com/%s/releases/tag/%s\n' "$PROJECT" "$TAG"
+step "Publishing the static update feed"
+python3 scripts/publish_update_feed.py --tag "$TAG" --dmg "$DMG"

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Security
 import Synchronization
@@ -266,6 +267,16 @@ final class AppUpdater {
             do {
                 let image = try await download(update.downloadURL)
                 progress.beginVerification()
+                if let expected = update.sha256 {
+                    do {
+                        guard try await Self.checksum(of: image) == expected else {
+                            throw UpdateInstallError(Chrome.localized("The update download failed its checksum check."))
+                        }
+                    } catch {
+                        try? FileManager.default.removeItem(at: image)
+                        throw error
+                    }
+                }
                 let staged = try await stage(image: image, expectedVersion: update.version)
                 progress.beginStaging()
                 try handOff(staged: staged, version: update.version)
@@ -295,6 +306,17 @@ final class AppUpdater {
     }
 
     // MARK: - Verify and stage
+
+    @concurrent
+    private static func checksum(of image: URL) async throws -> String {
+        let stream = try FileHandle(forReadingFrom: image)
+        defer { try? stream.close() }
+        var hash = SHA256()
+        while let chunk = try stream.read(upToCount: 1_048_576), !chunk.isEmpty {
+            hash.update(data: chunk)
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
 
     private func stage(image: URL, expectedVersion: String) async throws -> URL {
         let staging = FileManager.default.temporaryDirectory

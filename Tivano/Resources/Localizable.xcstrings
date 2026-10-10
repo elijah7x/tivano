@@ -1,6 +1,30 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "The update information could not be read." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "无法读取更新信息。" } } }
+    },
+    "The update download failed its checksum check." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "更新安装包未通过校验，请重新下载。" } } }
+    },
+    "GitHub's request limit was reached. Try again after %@." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "GitHub 请求次数已达上限，请在 %@ 后重试。" } } }
+    },
+    "GitHub's anonymous request limit was reached. Try again after %@ or download Tivano from its releases page." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "GitHub 匿名请求次数已达上限。请在 %@ 后重试，或从发布页面下载 Tivano。" } } }
+    },
+    "GitHub's request limit was reached. Try again later." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "GitHub 请求次数已达上限，请稍后重试。" } } }
+    },
+    "GitHub's anonymous request limit was reached. Try again later or download Tivano from its releases page." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "GitHub 匿名请求次数已达上限。请稍后重试，或从发布页面下载 Tivano。" } } }
+    },
     "The login shell environment could not be loaded. Check your shell startup files, then refresh Providers or set the CLI path explicitly." : {
       "extractionState": "manual",
       "localizations": {

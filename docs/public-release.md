@@ -19,6 +19,65 @@ hidden through the release-asset API. Keep the tag and leave these archives
 alone; the notes explain that they are source snapshots, not app installers.
 See [GitHub's release documentation](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases).
 
+## Static update feeds and the 1.0.2 transition
+
+Update metadata is separate from the future brand website. Ordinary users do
+not need a GitHub account or token. The new updater tries these sources in order:
+
+1. `https://elijah7x.github.io/tivano/updates.json` (GitHub Pages).
+2. `https://raw.githubusercontent.com/elijah7x/tivano/gh-pages/updates.json`.
+3. The existing GitHub Releases API. This last fallback may reuse the edition's
+   Keychain token or the local GitHub CLI login, including login-shell environment
+   credentials; it respects the user's CLI opt-out and never sends tokens to the
+   static feeds or installer hosts.
+
+Pages and raw content have different hosts but share GitHub infrastructure; they
+are not vendor-independent mirrors. Neither the Aliyun server nor `elijah.ac.cn`
+is configured by this change. Later, mirror the same JSON at a verified HTTPS
+URL on the brand domain and add it to `UpdateChecker.feedURLs`; do not change the
+Pages address or remove the old sources. Installer mirroring needs a separate
+URL/schema change and the same checksum/signature verification.
+
+The versioned JSON schema is `{ "schema_version": 1, "releases": [...] }`.
+Release fields match the Releases API, with a `sha256` field on the DMG asset.
+The client rejects malformed/unknown feeds, missing digests, unexpected installer
+URLs, drafts/prereleases and future releases, then tries the next source. It
+checks SHA-256 before mounting, then retains the Developer ID team, bundle-ID,
+version and Gatekeeper checks. A stale static feed does not replace a newer
+locally cached release. The checksum is not an independent signature: the signed
+app/Gatekeeper checks remain the authenticity boundary.
+
+`gh-pages` contains published metadata only, independently of app source. The
+publisher uses GitHub's Git Database API, refuses version rollback/concurrent
+writes, never force-updates refs, and does not alter main/dev or disable the
+local pre-push hook. GitHub Pages must remain on `gh-pages` at `/`, without a
+custom domain; a different existing configuration stops publication for review.
+
+After uploading and publishing the notarized DMG, `publish_release.sh` runs:
+
+```bash
+python3 scripts/publish_update_feed.py --tag vX.Y.Z --dmg path/to/Tivano-X.Y.Z.dmg
+```
+
+It checks the published stable release, asset name/size and GitHub's SHA-256
+digest against the local DMG before advancing the feed. Pages deploys
+asynchronously. If feed publication fails after the release goes live, rerun
+this command alone: do not re-upload the DMG or recreate its release/tag.
+Verify both public JSON URLs after the Pages build completes. Initial Pages
+setup uses `--enable-pages`; `--output path/to/updates.json` generates a local
+manifest without publishing or enabling Pages.
+
+**1.0.2 and earlier have hard-coded API checks.** A new static feed cannot
+remotely change their executable. Keep the repository public, the Releases API,
+`v*` tags and `Tivano-<version>.dmg` assets available. They can install the first
+version containing the new updater through their original path; all subsequent
+checks use the static feeds. An old client already returning API 403 must wait
+for its IP quota to reset, use another network, or manually install that
+transition version from the public Releases page. Signing into GitHub does not
+change old updater code. The static-feed bootstrap describes the existing 1.0.2
+installer; it does not itself ship the new updater. Shipping requires the normal
+explicitly authorized release process.
+
 ## Apple account and local setup
 
 Wait for Apple Developer Program membership to become active. A purchase
