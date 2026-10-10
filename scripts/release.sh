@@ -32,16 +32,34 @@ DMG="$ROOT/build.noindex/Tivano-$VERSION.dmg"
 step() { printf '\n==> %s\n' "$1"; }
 
 notarize() {
-  local file="$1" result status id
-  result=$(xcrun notarytool submit "$file" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)
-  status=$(printf '%s' "$result" | plutil -extract status raw - 2>/dev/null || true)
-  if [ "$status" != "Accepted" ]; then
-    printf '%s\n' "$result"
-    id=$(printf '%s' "$result" | plutil -extract id raw - 2>/dev/null || true)
-    [ -n "$id" ] && xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE"
-    exit 1
-  fi
-  echo "Notarization accepted for $(basename "$file")"
+  local file="$1" result status id attempt receipt
+  receipt="$BUILD/$(basename "$file").notary-submit.json"
+  # submit and info are separate operations (notarytool --help and Apple's TN3147).
+  result=$(xcrun notarytool submit "$file" --keychain-profile "$NOTARY_PROFILE" --output-format json)
+  printf '%s\n' "$result" > "$receipt"
+  id=$(printf '%s' "$result" | plutil -extract id raw - 2>/dev/null || true)
+  [ -n "$id" ] || { echo "No submission ID returned; inspect $receipt before retrying." >&2; exit 1; }
+  echo "Notarization submitted: $id; receipt saved at $receipt"
+  for ((attempt=0; attempt<2880; attempt++)); do
+    if result=$(xcrun notarytool info "$id" --keychain-profile "$NOTARY_PROFILE" --output-format json); then
+      status=$(printf '%s' "$result" | plutil -extract status raw - 2>/dev/null || true)
+      case "$status" in
+        Accepted) echo "Notarization accepted for $(basename "$file")"; return ;;
+        "In Progress") ;;
+        Invalid)
+          printf '%s\n' "$result"
+          xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" || true
+          exit 1
+          ;;
+        *) echo "Unexpected status response for $id; retrying." >&2 ;;
+      esac
+    else
+      echo "Status check failed for $id; retrying without resubmitting." >&2
+    fi
+    sleep 30
+  done
+  echo "Notarization still unresolved for $id. Receipt preserved at $receipt; do not resubmit blindly." >&2
+  exit 1
 }
 
 # Validate saved credentials without submitting an app; fail before archiving.

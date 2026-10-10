@@ -6,6 +6,29 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-10
+
+### New features
+
+- The first stable Tivano release, with provider selection, grouped model lists, sidebar conversation search, and separate Release and Dev libraries.
+
+### Bug fixes
+
+- Restore the Hydra watchdog and serialize automatic merges across editions using the repository lock.
+- Apply content font-size settings to sent messages and retry provider CLI discovery after startup.
+- Preserve notarization submission IDs and retry temporary status-check failures instead of losing the release workflow after a network timeout.
+
+### Refinements
+
+- Use the Breeze theme, updated conversation and permission icons, and adjustable Interface, Content, and Code font sizes.
+- Dissolve scrolling content beneath the title bar and show muted conversation status marks in the sidebar.
+- Remove the welcome tour, obsolete shared-library polling, and capture tooling from Release builds.
+- Set Release and Dev to version 1.0.0, with isolated data and Developer ID signing.
+
+### Thanks
+
+- No outside contributors since the start of this repository's retained history.
+
 ## [0.2.9] - 2026-10-09
 
 ### New features
