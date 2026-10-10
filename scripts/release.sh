@@ -1,6 +1,7 @@
 #!/bin/bash
-# Builds, signs, notarizes and packages Tivano, then updates /Applications.
-# Never quits or launches the app.
+# Builds, signs, notarizes and packages Tivano into a DMG. Never installs, quits or
+# launches the app: Release is updated through its own updater (scripts/install_app.sh
+# installs a build by hand when explicitly asked).
 #
 #   scripts/release.sh
 #   scripts/release.sh --preflight  # checks setup without building or installing
@@ -177,11 +178,8 @@ spctl --assess --type execute --ignore-cache --no-cache --verbose "$APP"
 spctl --assess --type open --context context:primary-signature --ignore-cache --no-cache --verbose "$DMG"
 xcrun stapler validate "$DMG"
 
-step "Updating the installed Release (without launching)"
-"$ROOT/scripts/install_app.sh" "$APP" release
-
 step "Cleaning up"
 # Only the disk image stays, so Spotlight and Launchpad never list a second copy of the app.
 rm -rf "$ARCHIVE" "$EXPORT" "$BUILD/Tivano.zip" "$BUILD/DerivedData"
 
-printf '\nReady: %s\nPublish it with scripts/publish_release.sh once CHANGELOG.md has a ## [%s] section.\n' "$DMG" "$VERSION"
+printf '\nReady: %s\nscripts/ship.sh publishes it; by hand, scripts/publish_release.sh once CHANGELOG.md has a ## [%s] section.\n' "$DMG" "$VERSION"

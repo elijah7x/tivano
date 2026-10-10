@@ -6,6 +6,16 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-10
+
+### Refinements
+
+- Fill the update progress bar with the current theme's accent instead of a fixed blue.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.0.1] - 2026-10-10
 
 ### Bug fixes

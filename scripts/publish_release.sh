@@ -16,7 +16,13 @@ cd "$(dirname "$0")/.."
 PROJECT="elijah7x/tivano"
 VERSION=$(scripts/version.sh release)
 TAG="v$VERSION"
-DMG="${1:-build.noindex/Tivano-$VERSION.dmg}"
+DMG_NAME="Tivano-$VERSION.dmg"
+DMG="${1:-build.noindex/$DMG_NAME}"
+ASSET_LABEL="$DMG_NAME (Apple silicon, notarized)"
+[ "$(basename "$DMG")" = "$DMG_NAME" ] || {
+  echo "Publish only $DMG_NAME; App ZIP files stay local." >&2
+  exit 1
+}
 NOTES="$(mktemp -t tivano-notes)"
 trap 'rm -f "$NOTES"' EXIT
 python3 scripts/build_changelog.py --section "$VERSION" > "$NOTES" || { echo "No ## [$VERSION] section in CHANGELOG.md. Add one before publishing."; exit 1; }
@@ -35,6 +41,21 @@ if ! python3 scripts/release_credits.py --check "$NOTES"; then
   echo "Add a ### Thanks section to the ## [$VERSION] entry in CHANGELOG.md naming them (python3 scripts/release_credits.py prints it), then publish again."
   exit 1
 fi
+
+python3 - "$NOTES" "$PROJECT" "$TAG" "$DMG_NAME" <<'PYNOTES'
+import sys
+from pathlib import Path
+notes, project, tag, filename = sys.argv[1:]
+path = Path(notes)
+body = path.read_text()
+url = f"https://github.com/{project}/releases/download/{tag}/{filename}"
+path.write_text(
+    f"[Download Tivano (.dmg, Apple silicon)]({url})\n\n"
+    "Open the DMG and drag Tivano to Applications. "
+    "The Source code archives below are for developers, not app installers.\n\n"
+    + body
+)
+PYNOTES
 
 step "Checking the disk image is notarized"
 xcrun stapler validate "$DMG" > /dev/null
@@ -72,15 +93,15 @@ git push origin "$TAG"
 
 if [ -n "$EXISTING" ]; then
   step "Uploading to the empty draft"
-  gh release upload "$TAG" "$DMG#Tivano $VERSION (Apple silicon)" -R "$PROJECT"
+  gh release upload "$TAG" "$DMG#$ASSET_LABEL" -R "$PROJECT"
   # Only publish after upload succeeds. Never delete a draft or clobber an asset.
   gh release edit "$TAG" -R "$PROJECT" --draft=false --prerelease=false \
     --verify-tag --title "Tivano $VERSION" --notes-file "$NOTES"
 else
   step "Creating the release"
-  gh release create "$TAG" "$DMG#Tivano $VERSION (Apple silicon)" \
+  gh release create "$TAG" "$DMG#$ASSET_LABEL" \
     -R "$PROJECT" --verify-tag --target "$REVISION" \
-    --name "Tivano $VERSION" --notes-file "$NOTES"
+    --title "Tivano $VERSION" --notes-file "$NOTES"
 fi
 
 printf '\nPublished: https://github.com/%s/releases/tag/%s\n' "$PROJECT" "$TAG"

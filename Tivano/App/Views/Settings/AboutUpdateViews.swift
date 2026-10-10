@@ -377,7 +377,7 @@ struct SmoothedUpdateProgressSlider: View {
     }
 }
 
-/// A pill track filling with the app icon's blues behind a soft white head, sparkles
+/// A pill track filling with the theme accent behind a soft white head, sparkles
 /// twinkling in the filled part. Renders whatever fraction it is given.
 struct UpdateProgressSlider: View {
     let fraction: Double
@@ -387,11 +387,11 @@ struct UpdateProgressSlider: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
-    private static let fill: [Color] = [
-        Color(red: 0x67 / 255, green: 0xB9 / 255, blue: 0xEE / 255),
-        Color(red: 0x1A / 255, green: 0x77 / 255, blue: 0xB4 / 255),
-        Color(red: 0x12 / 255, green: 0x6C / 255, blue: 0xAF / 255),
-    ]
+    /// The theme accent, lifted toward white at the leading end and deepened at the head.
+    private static var fill: [Color] {
+        let accent = Chrome.accent
+        return [accent.mix(with: .white, by: 0.35), accent, accent.mix(with: .black, by: 0.12)]
+    }
     private static let sparkles = SparkleParticle.field(count: 14, seed: 0x5EED_D80B)
 
     var body: some View {
@@ -438,7 +438,7 @@ struct UpdateProgressSlider: View {
     }
 }
 
-/// The blue fill and its sparkles in one canvas, revealed by a leading clip. The gradient is
+/// The accent fill and its sparkles in one canvas, revealed by a leading clip. The gradient is
 /// anchored to the whole track and the sparkles sit still, so only the reveal grows.
 private struct FillCanvas: View {
     let fraction: Double
