@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "tag_name": "v1.0.2",
+      "name": "Tivano 1.0.2",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.0.2/Tivano-1.0.2.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\n## Refinements\n\n- Fill the update progress bar with the current theme's accent instead of a fixed blue.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-10T04:01:29Z",
+      "draft": false,
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "Tivano-1.0.2.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.0.2/Tivano-1.0.2.dmg",
+          "size": 6359403,
+          "sha256": "f4cdf8391d8da8701510a01d717a6f67bdce48a3d890bc6d3a516d0322a6a97e"
+        }
+      ]
+    }
+  ]
+}
