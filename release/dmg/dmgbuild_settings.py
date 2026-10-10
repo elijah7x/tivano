@@ -3,8 +3,9 @@
 # Not used at release time — see release/dmg/README.md for when and how to run it.
 #
 # Geometry must stay in lockstep with generate_installer_background.swift:
-#   window content: 660x370 (WindowBounds adds ~28pt of titlebar)
-#   Tivano.app at (165, 208), Applications at (495, 208), icon size 128
+#   designed content: 660x400; WindowBounds 660x480 leaves room for macOS 27's
+#   titlebar, tab bar and an optional path bar
+#   Tivano.app at (165, 200), Applications at (495, 200), icon size 128
 import os.path
 
 # dmgbuild exec()s this file without __file__; pass -D here=<this directory>.
@@ -22,7 +23,7 @@ symlinks = {"Applications": "/Applications"}
 # points there; scripts/package_dmg.sh must keep staging it at that path.
 background = os.path.join(HERE, "installer-background.tiff")
 
-window_rect = ((420, 240), (660, 398))
+window_rect = ((420, 200), (660, 480))
 
 default_view = "icon-view"
 show_status_bar = False
@@ -37,6 +38,6 @@ show_icon_preview = False
 arrange_by = None
 
 icon_locations = {
-    "Tivano.app": (165, 208),
-    "Applications": (495, 208),
+    "Tivano.app": (165, 200),
+    "Applications": (495, 200),
 }

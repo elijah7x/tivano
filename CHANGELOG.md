@@ -6,6 +6,21 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-10
+
+### Bug fixes
+
+- Clear a conversation's completed, failed or interrupted mark once its result has been read, so read history no longer shows a dot; approvals and questions stay marked until they are answered.
+- Hold the result mark while a queued message, background task, merge or usage-limit wait is still working, and mark work cut off by a restart as interrupted.
+
+### Refinements
+
+- Redesign the installer window in the brand's light paper and sage, with a hand-drawn arrow toward Applications, and size it so macOS 27 Finder shows it without a scrollbar.
+
+### Thanks
+
+- No outside contributors since the start of this repository's retained history.
+
 ## [1.0.0] - 2026-10-10
 
 ### New features

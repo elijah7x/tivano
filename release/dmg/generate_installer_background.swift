@@ -7,29 +7,35 @@
 // The geometry here is the single source of truth shared with the pre-baked
 // .DS_Store (see release/dmg/README.md). If any of these constants change, the
 // .DS_Store must be re-baked so Finder's icon positions match the artwork:
-//   window content size: 660x370
-//   Tivano.app icon center: (165, 208)   Applications icon center: (495, 208)
+//   designed content size: 660x400 (WindowBounds 660x480, see README)
+//   Tivano.app icon center: (165, 200)   Applications icon center: (495, 200)
 //   icon size: 128
 import AppKit
 
 // Canvas + layout (points, top-left origin)
 let canvasW: CGFloat = 660
-let canvasH: CGFloat = 370
-// The exported image carries extra flat-color bleed below the composition so
-// that no interpretation of Finder's WindowBounds (with or without titlebar
-// chrome) can ever expose an unpainted strip, which would render white in
-// light mode. Finder anchors backgrounds top-left, so the bleed only shows if
-// the content area is taller than the designed 370pt, and then it is just
-// more of the same flat color.
-let exportBleed: CGFloat = 60
-let appIconCenter = CGPoint(x: 165, y: 208)
-let applicationsIconCenter = CGPoint(x: 495, y: 208)
+let canvasH: CGFloat = 400
+// The exported image carries extra bleed below the composition. Finder on
+// macOS 27 always shows a tab bar and honors the user's global path bar, so
+// the visible content height varies with their settings (about 384pt to
+// 412pt for the 480pt WindowBounds); the bleed continues the same paper so no
+// variant can expose an unpainted strip. Finder anchors backgrounds top-left.
+let exportBleed: CGFloat = 80
+let appIconCenter = CGPoint(x: 165, y: 200)
+let applicationsIconCenter = CGPoint(x: 495, y: 200)
 let iconSize: CGFloat = 128
 
-// Brand tokens (website styles).
-let backgroundColor = NSColor(srgbRed: 0x0b / 255.0, green: 0x0e / 255.0, blue: 0x14 / 255.0, alpha: 1)
-let textPrimary = NSColor(srgbRed: 0xe8 / 255.0, green: 0xea / 255.0, blue: 0xed / 255.0, alpha: 1)
-let accent = NSColor(srgbRed: 0x4f / 255.0, green: 0x9c / 255.0, blue: 0xff / 255.0, alpha: 1)
+// Brand tokens: the warm paper and sage of the icon and launch artwork.
+func srgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
+    NSColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255, green: CGFloat((hex >> 8) & 0xff) / 255,
+            blue: CGFloat(hex & 0xff) / 255, alpha: alpha)
+}
+let paperTop = srgb(0xFAF8F3)
+let paperBottom = srgb(0xEFEBE1)
+let sage = srgb(0x6E9A80)
+let sageInk = srgb(0x5E7968)
+let wordmarkInk = srgb(0x3E5C4A)
+let textPrimary = srgb(0x2B3A31)
 let wordmark = "Tivano"
 let outputStem = "installer-background"
 
@@ -40,79 +46,146 @@ guard CommandLine.arguments.count >= 2 else {
 let outputDir = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
-func notchPath(centerX: CGFloat, width: CGFloat, height: CGFloat, cornerRadius: CGFloat, filletRadius: CGFloat) -> CGPath {
-    let path = CGMutablePath()
-    let left = centerX - width / 2
-    let right = centerX + width / 2
-    path.move(to: CGPoint(x: left - filletRadius, y: 0))
-    path.addQuadCurve(to: CGPoint(x: left, y: filletRadius), control: CGPoint(x: left, y: 0))
-    path.addLine(to: CGPoint(x: left, y: height - cornerRadius))
-    path.addArc(tangent1End: CGPoint(x: left, y: height), tangent2End: CGPoint(x: left + cornerRadius, y: height), radius: cornerRadius)
-    path.addLine(to: CGPoint(x: right - cornerRadius, y: height))
-    path.addArc(tangent1End: CGPoint(x: right, y: height), tangent2End: CGPoint(x: right, y: height - cornerRadius), radius: cornerRadius)
-    path.addLine(to: CGPoint(x: right, y: filletRadius))
-    path.addQuadCurve(to: CGPoint(x: right + filletRadius, y: 0), control: CGPoint(x: right, y: 0))
-    path.closeSubpath()
-    return path
-}
-
-func drawText(_ string: String, font: NSFont, color: NSColor, center: CGPoint) {
-    let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+func drawText(_ string: String, font: NSFont, color: NSColor, center: CGPoint, kern: CGFloat = 0) {
+    let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .kern: kern]
     let attributed = NSAttributedString(string: string, attributes: attributes)
     let size = attributed.size()
     attributed.draw(at: CGPoint(x: center.x - size.width / 2, y: center.y - size.height / 2))
 }
 
-func drawBackground(into context: CGContext) {
-    // Flat base, matching the site's near-black canvas
-    context.setFillColor(backgroundColor.cgColor)
-    context.fill(CGRect(x: 0, y: 0, width: canvasW, height: canvasH + exportBleed))
-
-    // One soft accent glow bleeding out from under the notch
+// Paints only the blurred shadow of `shape`: the shape itself is drawn far
+// off-canvas and its shadow offset back into place. Shadow geometry is in
+// device pixels, so it is multiplied by the render scale.
+func softShape(_ context: CGContext, scale: CGFloat, color: NSColor, blur: CGFloat, _ shape: CGPath) {
+    let away: CGFloat = 4000
     context.saveGState()
-    let glowColors = [accent.withAlphaComponent(0.16).cgColor, accent.withAlphaComponent(0).cgColor] as CFArray
-    if let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: glowColors, locations: [0, 1]) {
-        context.translateBy(x: canvasW / 2, y: 4)
-        context.scaleBy(x: 1, y: 0.42)
-        context.drawRadialGradient(gradient, startCenter: .zero, startRadius: 0, endCenter: .zero, endRadius: 210, options: [])
-    }
-    context.restoreGState()
-
-    // The notch silhouette, hanging from the top edge with outward fillets
+    context.setShadow(offset: CGSize(width: 0, height: away * scale), blur: blur * scale, color: color.cgColor)
+    context.translateBy(x: 0, y: away)
+    context.addPath(shape)
     context.setFillColor(NSColor.black.cgColor)
-    context.addPath(notchPath(centerX: canvasW / 2, width: 150, height: 27, cornerRadius: 10, filletRadius: 7))
     context.fillPath()
+    context.restoreGState()
+}
+
+func leaf(center: CGPoint, length: CGFloat, width: CGFloat, angle: CGFloat) -> CGPath {
+    var transform = CGAffineTransform(translationX: center.x, y: center.y).rotated(by: angle * .pi / 180)
+    let path = CGMutablePath()
+    path.move(to: CGPoint(x: -length / 2, y: 0))
+    path.addQuadCurve(to: CGPoint(x: length / 2, y: 0), control: CGPoint(x: 0, y: -width))
+    path.addQuadCurve(to: CGPoint(x: -length / 2, y: 0), control: CGPoint(x: 0, y: width))
+    return path.copy(using: &transform)!
+}
+
+// The hand-drawn arrow: a cubic swoop with a little deterministic wobble, so
+// it reads as one pen stroke rather than a vector primitive.
+func handStroke(from p0: CGPoint, _ c1: CGPoint, _ c2: CGPoint, to p3: CGPoint, wobble: CGFloat, phase: CGFloat) -> CGPath {
+    let path = CGMutablePath()
+    let steps = 90
+    for i in 0...steps {
+        let t = CGFloat(i) / CGFloat(steps)
+        let u = 1 - t
+        let x = u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p3.x
+        let y = u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p3.y
+        let jitter = wobble * (sin(t * 11 + phase) * 0.6 + sin(t * 23 + phase * 2) * 0.4) * sin(t * .pi)
+        let point = CGPoint(x: x, y: y + jitter)
+        if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+    }
+    return path
+}
+
+var renderScale: CGFloat = 1
+
+func drawBackground(into context: CGContext) {
+    let fullH = canvasH + exportBleed
+    let space = CGColorSpace(name: CGColorSpace.sRGB)
+
+    // Warm paper, a touch brighter toward the top-left where the light comes from
+    if let paper = CGGradient(colorsSpace: space, colors: [paperTop.cgColor, paperBottom.cgColor] as CFArray, locations: [0, 1]) {
+        context.drawLinearGradient(paper, start: CGPoint(x: 120, y: 0), end: CGPoint(x: 420, y: fullH), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+    }
+
+    // Dappled foliage shadow drifting in from the top-right corner, kept faint
+    let foliage = srgb(0x7F8E78, 0.11)
+    let leaves: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)] = [
+        (612, 18, 70, 22, -28), (570, 46, 58, 18, 12), (640, 82, 64, 20, 54),
+        (596, 112, 46, 15, -6), (530, 14, 48, 15, 40), (648, 150, 52, 16, -40),
+        (552, 84, 40, 13, 70), (624, 196, 38, 12, 18), (24, 330, 54, 17, -60), (52, 372, 44, 14, 20),
+    ]
+    for (x, y, l, w, a) in leaves {
+        softShape(context, scale: renderScale, color: foliage, blur: 9, leaf(center: CGPoint(x: x, y: y), length: l, width: w, angle: a))
+    }
+    // Window light: two soft diagonal beams across the paper
+    for (offset, alpha) in [(CGFloat(0), CGFloat(0.55)), (CGFloat(120), CGFloat(0.35))] {
+        let beam = CGMutablePath()
+        beam.addLines(between: [
+            CGPoint(x: 300 + offset, y: -20), CGPoint(x: 360 + offset, y: -20),
+            CGPoint(x: 120 + offset, y: fullH + 20), CGPoint(x: 60 + offset, y: fullH + 20),
+        ])
+        beam.closeSubpath()
+        softShape(context, scale: renderScale, color: NSColor(white: 1, alpha: alpha), blur: 36, beam)
+    }
+
+    // Drafting marks borrowed from the icon's construction lines
+    let hairline = sage.withAlphaComponent(0.22)
+    context.setStrokeColor(hairline.cgColor)
+    context.setLineWidth(0.75)
+    context.setLineCap(.butt)
+    // The shared baseline through both icons
+    context.strokeLineSegments(between: [CGPoint(x: 28, y: appIconCenter.y), CGPoint(x: canvasW - 28, y: appIconCenter.y)])
+    // The hanger line from the top edge, as on the icon
+    context.strokeLineSegments(between: [CGPoint(x: canvasW / 2, y: 0), CGPoint(x: canvasW / 2, y: 30)])
+    // Dashed dimension over the app icon's visible body, with its note
+    context.saveGState()
+    context.setLineDash(phase: 0, lengths: [3, 3])
+    let dimY = appIconCenter.y - iconSize / 2 - 16
+    context.strokeLineSegments(between: [
+        CGPoint(x: appIconCenter.x - 52, y: dimY), CGPoint(x: appIconCenter.x + 52, y: dimY),
+    ])
+    context.restoreGState()
+    context.strokeLineSegments(between: [
+        CGPoint(x: appIconCenter.x - 52, y: dimY - 4), CGPoint(x: appIconCenter.x - 52, y: dimY + 4),
+        CGPoint(x: appIconCenter.x + 52, y: dimY - 4), CGPoint(x: appIconCenter.x + 52, y: dimY + 4),
+    ])
+    let mono = NSFont.monospacedSystemFont(ofSize: 8, weight: .regular)
+    drawText("Ø128", font: mono, color: sage.withAlphaComponent(0.55), center: CGPoint(x: appIconCenter.x + 72, y: dimY))
+    // Registration crosses in the lower corners
+    for corner in [CGPoint(x: 34, y: 362), CGPoint(x: canvasW - 34, y: 362)] {
+        context.strokeLineSegments(between: [
+            CGPoint(x: corner.x - 6, y: corner.y), CGPoint(x: corner.x + 6, y: corner.y),
+            CGPoint(x: corner.x, y: corner.y - 6), CGPoint(x: corner.x, y: corner.y + 6),
+        ])
+    }
+    drawText("macOS 26+  ·  Apple silicon", font: mono, color: sage.withAlphaComponent(0.55), center: CGPoint(x: canvasW / 2, y: 362), kern: 0.6)
 
     // Wordmark
-    drawText(wordmark, font: .systemFont(ofSize: 31, weight: .semibold), color: textPrimary, center: CGPoint(x: canvasW / 2, y: 88))
+    drawText(wordmark, font: .systemFont(ofSize: 28, weight: .semibold), color: wordmarkInk, center: CGPoint(x: canvasW / 2, y: 62), kern: -0.4)
 
-    // A quiet straight arrow on the icons' centerline. Painted-pixel
-    // clearance is an equal 34pt on both sides, measured against each icon's
-    // VISUAL edge at this height (app icon case right edge x = 215.5, folder
-    // body left edge x = 431 + 5 = 436), with the 1.25pt round-cap overhang
-    // accounted for.
-    let arrowColor = NSColor(white: 1, alpha: 0.32)
-    let arrowY = appIconCenter.y
-    let arrowStart: CGFloat = 250.75
-    let arrowEnd: CGFloat = 400.75
-    // Shaft and chevron stroked as ONE path in ONE operation: with the
-    // translucent stroke color, separate strokes would double the alpha
-    // where they overlap at the vertex and render a brighter blob on the tip.
-    let arrowPath = CGMutablePath()
-    arrowPath.move(to: CGPoint(x: arrowStart, y: arrowY))
-    arrowPath.addLine(to: CGPoint(x: arrowEnd, y: arrowY))
-    arrowPath.move(to: CGPoint(x: arrowEnd - 11, y: arrowY - 9))
-    arrowPath.addLine(to: CGPoint(x: arrowEnd, y: arrowY))
-    arrowPath.addLine(to: CGPoint(x: arrowEnd - 11, y: arrowY + 9))
-    context.setStrokeColor(arrowColor.cgColor)
-    context.setLineWidth(2.5)
+    // The hand-drawn arrow, swooping over the gap toward Applications. Opaque
+    // ink, so the head strokes can overlap the shaft without darkening.
+    let start = CGPoint(x: 246, y: 176)
+    let end = CGPoint(x: 418, y: 170)
+    let shaft = handStroke(from: start, CGPoint(x: 284, y: 118), CGPoint(x: 372, y: 108), to: end, wobble: 1.1, phase: 0.7)
+    context.setStrokeColor(sageInk.cgColor)
     context.setLineCap(.round)
     context.setLineJoin(.round)
-    context.addPath(arrowPath)
+    context.setLineWidth(2.4)
+    context.addPath(shaft)
+    context.strokePath()
+    let head = CGMutablePath()
+    head.move(to: CGPoint(x: end.x - 15, y: end.y - 6))
+    head.addQuadCurve(to: end, control: CGPoint(x: end.x - 6, y: end.y - 2))
+    head.addQuadCurve(to: CGPoint(x: end.x - 3, y: end.y - 16), control: CGPoint(x: end.x - 1, y: end.y - 7))
+    context.setLineWidth(2.4)
+    context.addPath(head)
     context.strokePath()
 
-    // Helper caption under the arrow
-    drawText("Drag to install", font: .systemFont(ofSize: 12, weight: .medium), color: NSColor(white: 1, alpha: 0.40), center: CGPoint(x: canvasW / 2, y: 246))
+    // Handwritten note riding under the swoop
+    let hand = NSFont(name: "Noteworthy-Bold", size: 15) ?? .systemFont(ofSize: 14, weight: .medium)
+    context.saveGState()
+    context.translateBy(x: canvasW / 2, y: 152)
+    context.rotate(by: -3 * .pi / 180)
+    drawText("drag me over", font: hand, color: sageInk, center: .zero)
+    context.restoreGState()
 }
 
 func render(scale: CGFloat, height: CGFloat = canvasH, drawExtras: ((CGContext) -> Void)? = nil) -> NSBitmapImageRep {
@@ -128,6 +201,7 @@ func render(scale: CGFloat, height: CGFloat = canvasH, drawExtras: ((CGContext) 
     context.scaleBy(x: scale, y: -scale)
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+    renderScale = scale
     drawBackground(into: context)
     drawExtras?(context)
     NSGraphicsContext.current?.flushGraphics()

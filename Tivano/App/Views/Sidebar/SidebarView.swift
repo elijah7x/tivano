@@ -2377,10 +2377,11 @@ private struct SettledHeader: View {
 @MainActor
 private func threadActivityStatus(_ thread: ChatThread, runtime: ThreadRuntime?) -> ThreadActivityStatus {
     ThreadActivityStatus.resolve(
-        lastStatus: thread.lastStatus,
+        lastStatus: thread.unreadStatus ?? thread.lastStatus,
+        hasUnread: thread.hasUnread,
         needsApproval: !(runtime?.approvals.isEmpty ?? true),
         needsAnswer: !(runtime?.questions.isEmpty ?? true),
-        isWorking: runtime?.isRunning == true || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true || !(runtime?.backgroundTasks.isEmpty ?? true)
+        isWorking: runtime?.isRunning == true || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true || !(runtime?.backgroundTasks.isEmpty ?? true) || runtime?.isWaitingForLimit == true
     )
 }
 

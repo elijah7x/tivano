@@ -533,6 +533,19 @@ struct ThreadTimeline: View, Equatable {
             }
         }
         .id(runtime.threadID)
+        .background {
+            let thread = model.thread(runtime.threadID)
+            ThreadResultReadProbe(
+                model: model, threadID: runtime.threadID,
+                revision: thread?.unreadRevision, hasUnread: thread?.hasUnread == true,
+                canRead: !runtime.isLoadingHistory && !runtime.isRunning
+                    && !runtime.isHydraMerging && !runtime.hasWorkingHelpers
+                    && runtime.backgroundTasks.isEmpty && !runtime.isWaitingForLimit
+                    && (thread?.lastAttentionTurnID == nil
+                        || runtime.turns.contains { $0.id == thread?.lastAttentionTurnID && $0.status != .running })
+            )
+        }
+
         // Torn down mid-scroll (a thread switch, a panel closed): the freeze lifts with it,
         // so the app never goes on hearing this timeline as scrolling.
         .onDisappear {
@@ -2787,5 +2800,99 @@ extension EnvironmentValues {
     var timelineBlockID: String {
         get { self[TimelineBlockIDKey.self] }
         set { self[TimelineBlockIDKey.self] = newValue }
+    }
+}
+
+
+/// Confirms the rendered conversation, not a sidebar selection. AppKit visibleRect
+/// only accounts for clipping; window occlusion and hidden ancestors are checked too.
+/// Source: developer.apple.com/documentation/appkit/nsview/visiblerect
+private struct ThreadResultReadProbe: NSViewRepresentable {
+    let model: AppModel
+    let threadID: UUID
+    let revision: UUID?
+    let hasUnread: Bool
+    let canRead: Bool
+
+    func makeNSView(context: Context) -> ResultView { ResultView() }
+
+    func updateNSView(_ view: ResultView, context: Context) {
+        view.model = model
+        view.threadID = threadID
+        view.revision = revision
+        view.hasUnread = hasUnread
+        view.canRead = canRead
+        model.threadViewVisibility[view.registrationID] = (threadID, { [weak view] in
+            view?.isReadableWindow == true
+        })
+        view.scheduleRead()
+    }
+
+    static func dismantleNSView(_ view: ResultView, coordinator: ()) {
+        view.model?.threadViewVisibility[view.registrationID] = nil
+        view.invalidate()
+        view.model = nil
+    }
+
+    final class ResultView: NSView {
+        let registrationID = UUID()
+        weak var model: AppModel?
+        var threadID: UUID?
+        var revision: UUID?
+        var hasUnread = false
+        var canRead = false
+        private var generation = 0
+        private var observers: [any NSObjectProtocol] = []
+
+        var isReadableWindow: Bool {
+            guard NSApp.isActive, !NSApp.isHidden, let window,
+                  window.isVisible, !window.isMiniaturized,
+                  window.occlusionState.contains(.visible),
+                  !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty else { return false }
+            return true
+        }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            let center = NotificationCenter.default
+            for name in [NSApplication.didBecomeActiveNotification,
+                         NSWindow.didChangeOcclusionStateNotification,
+                         NSWindow.didDeminiaturizeNotification] {
+                observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.scheduleRead() }
+                })
+            }
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        func invalidate() {
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+            observers.removeAll()
+            generation += 1
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            scheduleRead()
+        }
+
+        override func layout() {
+            super.layout()
+            scheduleRead()
+        }
+
+        func scheduleRead() {
+            generation += 1
+            let expectedGeneration = generation
+            let expectedRevision = revision
+            let expectedThreadID = threadID
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == expectedGeneration,
+                      self.hasUnread, self.canRead, self.isReadableWindow,
+                      let id = expectedThreadID else { return }
+                self.model?.markRead(id, revision: expectedRevision)
+            }
+        }
     }
 }

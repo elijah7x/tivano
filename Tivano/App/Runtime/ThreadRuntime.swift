@@ -328,7 +328,9 @@ final class ThreadRuntime {
     @ObservationIgnored private var headBudgetSpent = false
     @ObservationIgnored private var headReportsNext = false
     /// The team's finished work is on its way to the remote (see `AppModel.autoMergeHydraWork`).
-    var isHydraMerging = false
+    var isHydraMerging = false {
+        didSet { if !isHydraMerging { app?.publishDeferredResult(threadID) } }
+    }
     /// This chat's finished work is waiting for another chat's merge to finish, and goes
     /// right after it (see `AppModel.autoMergeHydraWork`).
     var isHydraMergeQueued = false
@@ -1309,13 +1311,18 @@ final class ThreadRuntime {
         currentProviderDiff = nil
         currentProviderAnchor = nil
         append(userItem)
+        app.clearDeferredResult(threadID)
         phase = .starting
         turnStartedAt = .now
         app.updateThread(threadID) {
             $0.updatedAt = .now
             $0.lastStatus = .running
+            $0.pendingResultTurnID = nil
+            $0.hasUnread = false
+            $0.unreadRevision = UUID()
         }
         // A settled thread put back to work is open again.
+        app.updateDockBadge()
         app.reopenIfSettled(threadID)
         endDelegationStream()
         hydraCurrentTurnTouchedPaths = []
@@ -1986,8 +1993,13 @@ final class ThreadRuntime {
 
     // MARK: - Controls
 
+    @ObservationIgnored private var userStoppedTurnID: UUID?
+
+    var isWaitingForLimit: Bool { app?.autoContinue.resumesAt[threadID] != nil }
+
     func interrupt() {
         guard phase != .idle else { return }
+        userStoppedTurnID = currentTurnID
         let turnID = currentTurnID
         interruptWatchdog?.cancel()
         interruptWatchdog = nil
@@ -2238,7 +2250,13 @@ final class ThreadRuntime {
         hydraCurrentTurnTouchedPaths = []
         // The thread's status is its last remaining turn's, or none: with every turn gone
         // it is unused again, so a new thread reuses it and ⌘W deletes it.
-        app.updateThread(threadID) { $0.lastStatus = turns.last?.status }
+        app.updateThread(threadID) {
+            $0.lastStatus = turns.last?.status
+            $0.pendingResultTurnID = nil
+            $0.hasUnread = false
+            $0.unreadRevision = UUID()
+        }
+        app.updateDockBadge()
         saveRevision += 1
         usage = nil
         if let fileError { appendNotice(.error, fileError) }
@@ -2537,6 +2555,7 @@ final class ThreadRuntime {
             saveNow()
         case .backgroundTasks(let descriptions):
             backgroundTasks = descriptions
+            if descriptions.isEmpty { app?.publishDeferredResult(threadID) }
         case .messageDelta(let id, let text):
             queueDelta(id, .message, text)
         case .messageCompleted(let id, let text):
@@ -2617,7 +2636,9 @@ final class ThreadRuntime {
             if let error { appendNotice(.error, error) }
             Task { await finishTurn(status: status, turnID: turnID) }
         case .exited(let error):
+            let backgroundStopped = !backgroundTasks.isEmpty
             backgroundTasks = []
+            if backgroundStopped { app?.publishDeferredResult(threadID, status: .failed) }
             flushDeltas()
             // A session that exits while it starts is reported by its `start()` throwing:
             // `ensureSession` starts over where it can, and otherwise the turn ends with
@@ -2732,6 +2753,8 @@ final class ThreadRuntime {
         // Claimed before the first suspension below: a completion and an exit can both
         // arrive for one turn, and the second finalizer finds it taken.
         guard finishingTurnID != turnID else { return }
+        let userStopped = userStoppedTurnID == turnID
+        if userStopped { userStoppedTurnID = nil }
         finishingTurnID = turnID
         defer { finishingTurnID = nil }
         // Command diffs land before the turn's own summary counts them, and
@@ -2852,7 +2875,7 @@ final class ThreadRuntime {
         guard thread?.isArchived != true else {
             headBudgetSpent = false
             let continues = replayBackgroundTurn()
-            app?.turnFinished(threadID, status: status, continues: continues)
+            app?.turnFinished(threadID, status: status, continues: continues, turnID: turnID, userStopped: userStopped)
             return
         }
         // The Return-while-running message jumps the queue: it goes right away
@@ -2898,7 +2921,7 @@ final class ThreadRuntime {
                 continues = true
             }
         }
-        app?.turnFinished(threadID, status: status, continues: continues)
+        app?.turnFinished(threadID, status: status, continues: continues, turnID: turnID, userStopped: userStopped)
         // The job is done: the lead has answered, every head is back and nothing is
         // waiting. With the setting on, the work goes out and lands by itself, whether
         // heads took part or the lead did it all; a job that changed no file is let be.
@@ -4313,6 +4336,9 @@ extension ThreadRuntime {
         app?.updateThread(threadID) {
             $0.updatedAt = .now
             $0.lastStatus = .running
+            $0.pendingResultTurnID = nil
+            $0.hasUnread = false
+            $0.unreadRevision = UUID()
         }
     }
 

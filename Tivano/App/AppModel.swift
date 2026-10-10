@@ -84,15 +84,6 @@ final class AppModel {
                 if let selectedThreadID { selectionCell(selectedThreadID).value = true }
                 SwitchLatency.noteSwitch(to: selectedThreadID.flatMap(thread)?.title ?? "none")
             }
-            if let selectedThreadID {
-                // A helper or head under the selected thread is on screen with it, so
-                // reading the thread reads them too; otherwise their unread mark would
-                // stick on the dock after the thread that set it is back in view.
-                // The write waits for the selection to paint, so the click itself
-                // never rewrites the library.
-                let ids = [selectedThreadID] + children(of: selectedThreadID).map(\.id)
-                Task { @MainActor [weak self] in self?.markRead(ids) }
-            }
             if oldValue != selectedThreadID {
                 scheduleIdleSessionStop(leaving: oldValue)
                 if let id = selectedThreadID {
@@ -241,9 +232,14 @@ final class AppModel {
         libraryLoad = load
         var library = await load.value
         let originalThreads = library.threads
-        for index in library.threads.indices where !CaptureRun.isEnabled && (library.threads[index].lastStatus == .running || library.threads[index].hydra?.status == .running) {
-            if library.threads[index].lastStatus == .running {
+        for index in library.threads.indices where !CaptureRun.isEnabled && (library.threads[index].lastStatus == .running || library.threads[index].pendingResultTurnID != nil || library.threads[index].hydra?.status == .running) {
+            if library.threads[index].lastStatus == .running || library.threads[index].pendingResultTurnID != nil {
                 library.threads[index].lastStatus = .interrupted
+                library.threads[index].unreadStatus = .interrupted
+                library.threads[index].hasUnread = !library.threads[index].isHydraHead
+                library.threads[index].unreadRevision = UUID()
+                library.threads[index].pendingResultTurnID = nil
+                library.threads[index].lastAttentionTurnID = nil
             }
             if library.threads[index].hydra?.status == .running {
                 library.threads[index].hydra?.status = .stopped
@@ -876,6 +872,7 @@ final class AppModel {
             updateThread(helper.id) {
                 $0.isSettled = true
                 $0.settledAt = now
+                $0.hasUnread = false
             }
         }
         updateDockBadge()
@@ -1220,26 +1217,34 @@ final class AppModel {
 
     // MARK: - Attention
 
-    /// Whether a thread is on screen right now: the selected thread itself, a helper in
-    /// its parent's floating panel, or a sidebar helper shown inline beneath its selected
-    /// parent. Sidebar helpers count only while the parent is unfolded (`foldsHelpers == false`)
-    /// and not settled, which is the same condition `SidebarView` uses to show them inline.
-    private func isOnScreen(_ thread: ChatThread) -> Bool {
-        if selectedThreadID == thread.id { return true }
-        guard let parent = thread.parentThreadID, parent == selectedThreadID else { return false }
-        if thread.isInPanel { return !thread.isArchived }
-        guard !thread.isArchived, let parentThread = self.thread(parent) else { return false }
-        return !parentThread.isArchived && !parentThread.isInPanel
-            && !parentThread.foldsHelpers && !parentThread.isSettled
+    @ObservationIgnored private var deferredResults: [UUID: (status: TurnStatus, turnID: UUID)] = [:]
+
+    func publishDeferredResult(_ id: UUID, status: TurnStatus? = nil) {
+        guard let result = deferredResults[id] else { return }
+        turnFinished(id, status: status ?? result.status, continues: false, turnID: result.turnID, userStopped: false)
+    }
+
+    func clearDeferredResult(_ id: UUID) { deferredResults[id] = nil }
+
+    @ObservationIgnored var threadViewVisibility: [UUID: (threadID: UUID, visible: () -> Bool)] = [:]
+
+    func isOnScreen(_ thread: ChatThread) -> Bool {
+        NSApp.isActive && threadViewVisibility.values.contains {
+            $0.threadID == thread.id && $0.visible()
+        }
+    }
+
+    func markRead(_ id: UUID, revision: UUID?) {
+        guard let thread = thread(id), thread.hasUnread,
+              thread.unreadRevision == revision else { return }
+        updateThread(id) { $0.hasUnread = false }
+        updateDockBadge()
     }
 
     func threadNeedsAttention(_ id: UUID) {
         guard !CaptureRun.isEnabled, let thread = thread(id) else { return }
-        // Already in view with the app frontmost: the approval or question is on
-        // screen, so no banner and no dock bounce. Seen too, so no unread mark is
-        // left behind to stick on the dock.
+        // Visible requests need no banner; opening them does not resolve the request.
         if NSApp.isActive && isOnScreen(thread) {
-            markRead(id)
             return
         }
         notify(threadID: id, title: thread.title, body: "Waiting for your decision.")
@@ -1248,38 +1253,42 @@ final class AppModel {
 
     /// A turn ended. `continues` means a queued message picks up right away, so the agent is
     /// still at work and neither the chime nor a notification claims otherwise.
-    func turnFinished(_ id: UUID, status: TurnStatus, continues: Bool) {
-        // The thread itself selected, or its panel helper or Hydra head on screen with
-        // the selected parent, while the app is frontmost: in view.
-        let onScreen = thread(id).map(isOnScreen) ?? false
-        let isVisible = NSApp.isActive && onScreen
+    func turnFinished(_ id: UUID, status: TurnStatus, continues: Bool, turnID: UUID, userStopped: Bool) {
+        defer {
+            if let parentID = thread(id)?.parentThreadID { publishDeferredResult(parentID) }
+        }
+        guard thread(id)?.lastAttentionTurnID != turnID else { return }
+        let isVisible = thread(id).map(isOnScreen) ?? false
         let isHead = thread(id)?.isHydraHead == true
+        let waitingForLimit = autoContinue.turnFinished(id, status: status, continues: continues)
+        let runtime = existingRuntime(for: id)
+        let stillWorking = continues || waitingForLimit || runtime?.isWaitingForLimit == true || runtime?.isRunning == true
+            || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true
+            || !(runtime?.backgroundTasks.isEmpty ?? true)
+        let duplicate = thread(id)?.lastAttentionTurnID == turnID
+        if !isHead && !userStopped && !continues && stillWorking {
+            deferredResults[id] = (status, turnID)
+        } else if !stillWorking || continues || userStopped {
+            deferredResults[id] = nil
+        }
         updateThread(id) {
-            $0.lastStatus = status
+            // A queued successor may already have started: do not replace its running status.
+            if runtime?.isRunning != true { $0.lastStatus = status }
             $0.updatedAt = .now
-            // Out of view the thread goes unread, for the dock; in view it is read,
-            // which also clears an unread mark from an earlier finish while away so
-            // the badge cannot stick around after the chat is back on screen. Heads
-            // report to their lead and never mark themselves.
-            if !isHead { $0.hasUnread = !isVisible }
+            guard !duplicate else { return }
+            $0.pendingResultTurnID = stillWorking && !userStopped ? turnID : nil
+            if !stillWorking { $0.lastAttentionTurnID = turnID }
+            $0.unreadRevision = UUID()
+            $0.hasUnread = !isHead && !stillWorking && !userStopped && status != .running
+            $0.unreadStatus = $0.hasUnread ? status : nil
         }
         updateDockBadge()
-        // A helper panel closed mid-turn kept its session alive to finish stopping cleanly;
-        // it has now.
-        if sessionsToRelease.remove(id) != nil { existingRuntime(for: id)?.stopSession() }
-        // A turn stopped by a spent usage limit waits for the reset and goes on by itself:
-        // no chime and no "stopped with an error", the wait says what is happening.
-        if autoContinue.turnFinished(id, status: status, continues: continues) { return }
-        // A head reports to its lead, which is the chat that chimes and notifies when
-        // the whole job is done. A head with another turn coming (its report, after its
-        // budget ran out) reports at the end of that one.
+        if sessionsToRelease.remove(id) != nil { runtime?.stopSession() }
         if isHead, let head = thread(id) {
             if !continues { hydraHeadTurnFinished(head, status: status) }
             return
         }
-        guard !continues else { return }
-        // A stop the user asked for needs no chime; the agent finishing on its own gets one,
-        // whether or not the thread is in view.
+        guard !duplicate, !stillWorking, !userStopped else { return }
         let chimed = settings.chimeWhenFinished && status != .interrupted
         if chimed { FinishChime.play() }
         guard !isVisible, settings.notifyWhenFinished, let thread = thread(id) else { return }
@@ -1289,30 +1298,7 @@ final class AppModel {
         case .failed: "Stopped with an error."
         case .running: ""
         }
-        // The chime has already sounded, so the banner stays quiet rather than doubling it.
         notify(threadID: id, title: thread.title, body: body, sound: chimed ? nil : .default)
-    }
-
-    func markRead(_ id: UUID) {
-        guard thread(id)?.hasUnread == true else { return }
-        updateThread(id) { $0.hasUnread = false }
-        updateDockBadge()
-    }
-
-    /// Several threads read at once cost one write to the library, so the cells and
-    /// the sidebar see one change, not one per thread.
-    func markRead(_ ids: [UUID]) {
-        let wanted = Set(ids.filter { thread($0)?.hasUnread == true })
-        var copy = threads
-        var changed = false
-        for index in copy.indices where wanted.contains(copy[index].id) && copy[index].hasUnread {
-            copy[index].hasUnread = false
-            changed = true
-        }
-        guard changed else { return }
-        threads = copy
-        scheduleSave()
-        updateDockBadge()
     }
 
     func requestNotificationPermission() {

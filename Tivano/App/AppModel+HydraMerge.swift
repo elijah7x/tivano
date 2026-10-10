@@ -160,7 +160,7 @@ extension AppModel {
                 return
             }
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
-            note(leadID, "Hydra did not merge: the team's files are outside every project.", strayBody(stray))
+            note(leadID, "Hydra did not merge: the team's files are outside every project.", strayBody(stray), status: .failed)
             return
         }
         let several = groups.count > 1
@@ -232,7 +232,7 @@ extension AppModel {
             // the first try: the retry a minute from now normally just lands.
             let saysIt = !retryable || runtime.hydraMerges.suffix(2).filter { $0.outcome == .failed && $0.retryable == true }.count >= 2
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .failed, project: project.name, label: label, url: url, files: 0, detail: detail, retryable: retryable ? true : nil))
-            if saysIt { note(leadID, title(headline), body) }
+            if saysIt { note(leadID, title(headline), body, status: .failed) }
             return .failed
         }
 
@@ -971,7 +971,7 @@ extension AppModel {
     }
 
     /// A note from Hydra in the lead's timeline, and word of it when the chat is out of view.
-    private func note(_ leadID: UUID, _ title: String, _ body: String) {
+    private func note(_ leadID: UUID, _ title: String, _ body: String, status: TurnStatus = .completed) {
         // The note lands under the id the merging pill has been drawn with, so the timeline
         // keeps one row from the first stage to the outcome; the id is spent here, so a
         // second note in the same run would get one of its own.
@@ -979,9 +979,13 @@ extension AppModel {
         let id = runtime?.hydraMergeNoteID
         runtime?.hydraMergeNoteID = nil
         runtime?.appendHydraNote(title + "\n" + body, id: id)
-        let onScreen = selectedThreadID == leadID
-        guard !(NSApp.isActive && onScreen) else { return }
-        updateThread(leadID) { $0.hasUnread = true }
+        clearDeferredResult(leadID)
+        updateThread(leadID) {
+            $0.pendingResultTurnID = nil
+            $0.unreadStatus = status
+            $0.hasUnread = true
+            $0.unreadRevision = UUID()
+        }
         updateDockBadge()
         if settings.notifyWhenFinished, let lead = thread(leadID) {
             notify(threadID: leadID, title: lead.title, body: title)

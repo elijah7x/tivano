@@ -144,6 +144,10 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// When it settled; the latest settled thread sits first among them.
     var settledAt: Date?
     var hasUnread: Bool
+    var unreadStatus: TurnStatus?
+    var unreadRevision: UUID?
+    var lastAttentionTurnID: UUID?
+    var pendingResultTurnID: UUID?
     var hasCustomTitle: Bool
     /// The thread's place once its project has been reordered by dragging; nil keeps newest first.
     var sortOrder: Double?
@@ -250,6 +254,10 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         isSettled = container.value(.isSettled, default: false)
         settledAt = container.value(.settledAt, default: nil)
         hasUnread = container.value(.hasUnread, default: false)
+        unreadStatus = container.value(.unreadStatus, default: nil)
+        unreadRevision = container.value(.unreadRevision, default: nil)
+        lastAttentionTurnID = container.value(.lastAttentionTurnID, default: nil)
+        pendingResultTurnID = container.value(.pendingResultTurnID, default: nil)
         hasCustomTitle = container.value(.hasCustomTitle, default: false)
         sortOrder = container.value(.sortOrder, default: nil)
         activityOrder = container.value(.activityOrder, default: nil)

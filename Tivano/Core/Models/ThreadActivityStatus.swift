@@ -1,14 +1,15 @@
 import Foundation
 
-/// Live attention takes precedence over work; terminal status describes the last turn,
-/// not whether the owner considers the task finished. Read/unread is independent.
+/// Pending decisions and live work remain visible; terminal results are reminders
+/// only until they have been read. The stored last turn status remains unchanged.
 enum ThreadActivityStatus: Equatable, Sendable {
     case idle, running, completed, approval, question, failed, interrupted
 
-    static func resolve(lastStatus: TurnStatus?, needsApproval: Bool, needsAnswer: Bool, isWorking: Bool) -> Self {
+    static func resolve(lastStatus: TurnStatus?, hasUnread: Bool, needsApproval: Bool, needsAnswer: Bool, isWorking: Bool) -> Self {
         if needsApproval { return .approval }
         if needsAnswer { return .question }
         if isWorking { return .running }
+        guard hasUnread else { return .idle }
         switch lastStatus {
         case .completed: return .completed
         case .failed: return .failed

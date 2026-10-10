@@ -20,8 +20,13 @@ them in lockstep:
 - The background must be staged at exactly `/.background.tiff`.
 - The app must be `Tivano.app` and the symlink `Applications` (their icon
   positions are keyed by those names).
-- Window content is 660x370 with icon centers at (165, 208) and (495, 208),
-  matching the artwork; `WindowBounds` is 660x398 to account for the titlebar.
+- The artwork is composed for 660x400 with icon centers at (165, 200) and
+  (495, 200). `WindowBounds` is 660x480: macOS 27 Finder always shows a tab
+  bar and honors the user's global path bar, leaving roughly 384-412pt of
+  content, so the composition plus the image's bottom bleed covers every case
+  without a scrollbar.
+- Finder draws icon labels in dark text on this background in both light and
+  dark appearance, so the paper must stay light.
 
 The `.DS_Store` was baked against a throwaway volume, so the alias inside it
 carries that volume's creation date. Finder resolves background aliases by
