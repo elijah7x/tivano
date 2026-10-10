@@ -264,8 +264,22 @@ final class AppUpdater {
         installTask = Task { [self] in
             defer { installTask = nil }
             progress.begin()
+            var downloadedImage: URL?
+            defer {
+                if let downloadedImage { try? FileManager.default.removeItem(at: downloadedImage) }
+            }
             do {
-                let image = try await download(update.downloadURL)
+                let image: URL
+                do {
+                    image = try await download(update.downloadURL)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    guard let fallback = update.fallbackDownloadURL else { throw error }
+                    image = try await download(fallback)
+                }
+                downloadedImage = image
+                try Task.checkCancellation()
                 progress.beginVerification()
                 if let expected = update.sha256 {
                     do {
@@ -277,9 +291,18 @@ final class AppUpdater {
                         throw error
                     }
                 }
+                try Task.checkCancellation()
                 let staged = try await stage(image: image, expectedVersion: update.version)
-                progress.beginStaging()
-                try handOff(staged: staged, version: update.version)
+                do {
+                    try Task.checkCancellation()
+                    progress.beginStaging()
+                    try handOff(staged: staged, version: update.version)
+                } catch {
+                    try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
+                    throw error
+                }
+            } catch is CancellationError {
+                progress.fail()
             } catch {
                 progress.fail()
                 await MainActor.run {
@@ -482,6 +505,8 @@ private final class Downloader: NSObject, URLSessionDownloadDelegate, @unchecked
     private struct State {
         var continuation: CheckedContinuation<URL, Error>?
         var destination: URL?
+        var task: URLSessionDownloadTask?
+        var cancelled = false
     }
 
     private let onProgress: @Sendable (Double) -> Void
@@ -493,29 +518,84 @@ private final class Downloader: NSObject, URLSessionDownloadDelegate, @unchecked
 
     func download(_ url: URL, to destination: URL) async throws {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForRequest = 8
         configuration.timeoutIntervalForResource = 1800
         configuration.waitsForConnectivity = false
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
-        state.withLock { $0.destination = destination }
+        defer { session.invalidateAndCancel() }
         var request = URLRequest(url: url)
         request.setValue("Tivano/\(AppInfo.version)", forHTTPHeaderField: "User-Agent")
-        _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
-            state.withLock { $0.continuation = continuation }
-            session.downloadTask(with: request).resume()
+        do {
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+                    let task = session.downloadTask(with: request)
+                    let start = state.withLock { state in
+                        guard !state.cancelled else { return false }
+                        state.continuation = continuation
+                        state.destination = destination
+                        state.task = task
+                        return true
+                    }
+                    if start {
+                        task.resume()
+                    } else {
+                        task.cancel()
+                        continuation.resume(throwing: CancellationError())
+                    }
+                }
+                try Task.checkCancellation()
+            } onCancel: {
+                self.cancel()
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
         }
+    }
+
+    private func cancel() {
+        let pending = state.withLock { state in
+            state.cancelled = true
+            let pending = (state.task, state.continuation)
+            state.task = nil
+            state.continuation = nil
+            return pending
+        }
+        pending.0?.cancel()
+        pending.1?.resume(throwing: CancellationError())
     }
 
     private func finish(_ result: Result<URL, Error>) {
         let continuation = state.withLock { state -> CheckedContinuation<URL, Error>? in
-            defer { state.continuation = nil }
+            defer { state.continuation = nil; state.task = nil }
             return state.continuation
         }
         continuation?.resume(with: result)
     }
 
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        guard let original = task.originalRequest?.url, let redirected = request.url,
+              redirected.scheme == "https", redirected.port == nil || redirected.port == 443 else {
+            completionHandler(nil)
+            return
+        }
+        if original.host == "elijah.ac.cn" {
+            // The static mirror has no legitimate redirects; use the other origin instead.
+            completionHandler(nil)
+        } else if original.host == "github.com" {
+            let hosts = ["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com", "github-releases.githubusercontent.com"]
+            completionHandler(hosts.contains(redirected.host ?? "") ? request : nil)
+        } else {
+            completionHandler(redirected.host == original.host ? request : nil)
+        }
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard state.withLock({ !$0.cancelled && $0.continuation != nil }) else { return }
         guard totalBytesExpectedToWrite > 0 else {
             onProgress(0)
             return
@@ -524,27 +604,33 @@ private final class Downloader: NSObject, URLSessionDownloadDelegate, @unchecked
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        // The file goes away when this returns, so it moves now.
-        guard let destination = state.withLock({ $0.destination }) else {
-            finish(.failure(UpdateInstallError("The download had nowhere to go.")))
-            return
+        // Serialize the file handoff with cancellation, but resume outside the lock.
+        // Otherwise cancel could clean up before this callback moves the file into place.
+        let completed = state.withLock { state -> (CheckedContinuation<URL, Error>, Result<URL, Error>)? in
+            guard !state.cancelled, let continuation = state.continuation,
+                  let destination = state.destination else { return nil }
+            defer { state.continuation = nil; state.task = nil }
+            if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                return (continuation, .failure(UpdateInstallError("The download failed with HTTP \(http.statusCode).")))
+            }
+            do {
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.moveItem(at: location, to: destination)
+                return (continuation, .success(destination))
+            } catch {
+                return (continuation, .failure(error))
+            }
         }
-        if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            finish(.failure(UpdateInstallError("The download failed with HTTP \(http.statusCode).")))
-            return
-        }
-        do {
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.moveItem(at: location, to: destination)
-            finish(.success(destination))
-        } catch {
-            finish(.failure(error))
-        }
+        if let (continuation, result) = completed { continuation.resume(with: result) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error {
-            finish(.failure(UpdateInstallError("The update could not be downloaded. \(error.localizedDescription)")))
+            if (error as NSError).code == NSURLErrorCancelled, (error as NSError).domain == NSURLErrorDomain {
+                finish(.failure(CancellationError()))
+            } else {
+                finish(.failure(UpdateInstallError("The update could not be downloaded. \(error.localizedDescription)")))
+            }
         }
     }
 }

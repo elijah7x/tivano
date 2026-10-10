@@ -1,0 +1,6 @@
+[Unit]
+Description=Rotate Tivano mirror access logs only
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate --state /var/lib/tivano-mirror/logrotate.status /etc/tivano-mirror/logrotate.conf

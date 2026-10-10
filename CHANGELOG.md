@@ -6,6 +6,24 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-10-10
+
+### Bug fixes
+
+- Let composer text use the full width above a separate bottom control row, so narrow layouts wrap naturally without leaving an empty right-hand column. Keep the send button at the bottom right and collapse the model chip when space is tight.
+- Keep replies following the conversation's end as text streams and the layout changes. Restore following when scrolling back to the bottom, while preserving the reading position when browsing earlier messages.
+- Compare mirror and GitHub update feeds concurrently within a bounded response window, so a stale mirror cannot mask a newer responding source; preserve known versions and checksums and reject conflicting release metadata.
+- Cancel update downloads when their caller is cancelled, settle callbacks once and remove temporary files; never bypass verification when retrying a failed transport.
+
+### Refinements
+
+- Prefer the earliest responding feed for the same version and retry the other trusted installer origin on transport failure, in either direction. Report what the update check found without claiming unreachable sources are current.
+- Sync verified installers and update metadata to the restricted domestic mirror after publishing each release.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.0.3] - 2026-10-10
 
 ### Bug fixes

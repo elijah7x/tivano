@@ -1,0 +1,14 @@
+/var/log/nginx/tivano-mirror.log {
+    daily
+    maxsize 10M
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 nginx root
+    sharedscripts
+    postrotate
+        /bin/kill -USR1 $(cat /run/nginx.pid) 2>/dev/null || true
+    endscript
+}

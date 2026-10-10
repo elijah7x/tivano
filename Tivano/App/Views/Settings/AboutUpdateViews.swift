@@ -599,7 +599,7 @@ private struct AboutVersionPill: View {
 
         var title: String {
             switch self {
-            case .upToDate: "Up to date"
+            case .upToDate: "No update found"
             case .failed: "Check failed"
             case .unchecked: "Not checked yet"
             }
@@ -692,9 +692,9 @@ private struct AboutVersionPill: View {
     /// The seal is not a button, but it is still worth saying what it means.
     private var standingHelp: String {
         switch standing {
-        case .upToDate: String(format: Chrome.localized("Tivano %@ is the latest version"), AppInfo.version)
-        case .failed: checker.lastError ?? Chrome.localized("The last check did not reach GitHub")
-        case .unchecked: Chrome.localized("Tivano has not asked GitHub for a release yet")
+        case .upToDate: String(format: Chrome.localized("No newer version was found for Tivano %@."), AppInfo.version)
+        case .failed: checker.lastError ?? Chrome.localized("The last update check failed.")
+        case .unchecked: Chrome.localized("No update check has completed yet.")
         }
     }
 
@@ -834,7 +834,7 @@ struct AboutUpdateCheckRow: View {
     }
 
     private var detail: String {
-        if checker.isChecking { return Chrome.localized("Asking GitHub for the latest release…") }
+        if checker.isChecking { return Chrome.localized("Checking update sources…") }
         let checked = checker.lastCheckedAt.map { String(format: Chrome.localized("Checked %@."), $0.formatted(.relative(presentation: .named))) } ?? Chrome.localized("Not checked yet.")
         if let error = checker.lastError { return "\(error) \(checked)" }
         if checker.updateAvailable, let version = checker.update?.version {

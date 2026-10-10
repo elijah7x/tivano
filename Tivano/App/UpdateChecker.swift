@@ -50,12 +50,23 @@ struct AvailableUpdate: Codable, Equatable, Sendable {
     var releasedAt: Date?
     /// The release page, for reading the notes in the browser.
     var pageURL: URL
+
+    /// Only exact, checksummed assets can move between the two trusted origins.
+    var fallbackDownloadURL: URL? {
+        guard let sha256, sha256.count == 64,
+              sha256.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
+        let mirror = "https://elijah.ac.cn/tivano/releases/\(tag)/Tivano-\(version).dmg"
+        let canonical = "https://github.com/elijah7x/tivano/releases/download/\(tag)/Tivano-\(version).dmg"
+        if downloadURL.absoluteString == mirror { return URL(string: canonical) }
+        if downloadURL.absoluteString == canonical { return URL(string: mirror) }
+        return nil
+    }
 }
 
 /// Checks the app's GitHub releases for a newer version and remembers what it found.
 ///
-/// A check reads a public static feed, with raw GitHub content and the releases API as
-/// fallbacks, and keeps the newest stable version that ships a disk
+/// A check compares public static feeds concurrently within a bounded response window,
+/// falling back to the releases API, and keeps the newest observed stable version with a disk
 /// image, and compares it with the running build. The result is persisted, so the About page
 /// shows a known update the moment it opens, and `updateAvailable` is recomputed from the
 /// running version, so an update that was installed stops being one. Checks run on launch,
@@ -70,6 +81,7 @@ final class UpdateChecker {
     static let projectURL = URL(string: "https://github.com/elijah7x/tivano")!
     private static let apiURL = URL(string: "https://api.github.com/repos/elijah7x/tivano/releases?per_page=20")!
     private static let feedURLs = [
+        URL(string: "https://elijah.ac.cn/tivano/updates.json")!,
         URL(string: "https://elijah7x.github.io/tivano/updates.json")!,
         URL(string: "https://raw.githubusercontent.com/elijah7x/tivano/gh-pages/updates.json")!,
     ]
@@ -174,6 +186,7 @@ final class UpdateChecker {
             if found.size == nil {
                 found.size = await downloadSize(of: found.downloadURL)
             }
+            try Task.checkCancellation()
             update = found
             lastError = nil
             lastCheckedAt = .now
@@ -181,8 +194,11 @@ final class UpdateChecker {
             if background, updateAvailable {
                 notifyOnce(about: found)
             }
+        } catch is CancellationError {
+            return updateAvailable
         } catch {
-            lastError = (error as? UpdateError)?.errorDescription ?? Chrome.localized("Couldn't reach GitHub.")
+            guard !Task.isCancelled else { return updateAvailable }
+            lastError = (error as? UpdateError)?.errorDescription ?? Chrome.localized("Couldn't reach any update source.")
             lastCheckedAt = .now
             UserDefaults.standard.set(lastCheckedAt, forKey: Keys.lastChecked)
         }
@@ -190,26 +206,75 @@ final class UpdateChecker {
     }
 
     private func fetchUpdate() async throws -> AvailableUpdate {
-        for url in Self.feedURLs {
-            do {
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 8
-                let (data, response) = try await session.data(for: request)
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { continue }
-                let found = try Self.updateFromFeed(data)
-                // A stale CDN must not replace a newer result already seen on this machine.
-                if let saved = update, let savedVersion = AppVersion(saved.version),
-                   let foundVersion = AppVersion(found.version), savedVersion > foundVersion { continue }
-                return found
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // Missing, blocked or malformed static sources fall through to the next source.
-                continue
+        // A whole-resource deadline also bounds slow trickles, not only idle waits.
+        // Verified in the SDK NSURLSession.h timeoutIntervalForResource contract.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        configuration.timeoutIntervalForRequest = 2
+        configuration.timeoutIntervalForResource = 2
+        configuration.waitsForConnectivity = false
+        configuration.httpAdditionalHeaders = ["User-Agent": "Tivano/\(AppInfo.version)", "Accept": "application/json"]
+        let feedSession = URLSession(configuration: configuration)
+        defer { feedSession.invalidateAndCancel() }
+        let candidates = await withTaskGroup(of: AvailableUpdate?.self, returning: [AvailableUpdate].self) { group in
+            for url in Self.feedURLs {
+                group.addTask {
+                    do {
+                        let (data, response) = try await feedSession.data(from: url)
+                        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+                        return try await Self.updateFromFeed(data)
+                    } catch {
+                        return nil
+                    }
+                }
+            }
+            var results: [AvailableUpdate] = []
+            for await result in group {
+                if let result { results.append(result) }
+            }
+            return results
+        }
+        try Task.checkCancellation()
+        // Arrival order breaks same-version ties; versions always outrank latency.
+        let best = candidates.reduce(nil as AvailableUpdate?) { best, candidate in
+            guard let best else { return candidate }
+            return AppVersion(candidate.version)! > AppVersion(best.version)! ? candidate : best
+        }
+        if let found = best {
+            let peers = candidates.filter { AppVersion($0.version) == AppVersion(found.version) }
+            guard peers.allSatisfy({ $0.sha256 == found.sha256 && $0.size == found.size }) else {
+                throw UpdateError.invalidFeed
+            }
+            let olderThanSaved = update.flatMap { AppVersion($0.version) }
+                .map { $0 > AppVersion(found.version)! } ?? false
+            if !olderThanSaved { return try Self.reconcile(found, with: update) }
+        }
+        let releases: [GitHubRelease]
+        do {
+            releases = try await fetchReleases()
+        } catch {
+            try Task.checkCancellation()
+            throw error
+        }
+        try Task.checkCancellation()
+        guard let found = Self.newestRelease(in: releases) else { throw UpdateError.noRelease }
+        return try Self.reconcile(found, with: update)
+    }
+
+    private static func reconcile(_ found: AvailableUpdate, with saved: AvailableUpdate?) throws -> AvailableUpdate {
+        guard let saved, let old = AppVersion(saved.version), let new = AppVersion(found.version) else { return found }
+        guard new >= old else { throw UpdateError.noRelease }
+        if new == old, let knownDigest = saved.sha256 {
+            if let digest = found.sha256 {
+                guard digest == knownDigest, saved.size == nil || saved.size == found.size else {
+                    throw UpdateError.invalidFeed
+                }
+            } else {
+                // API fallback must not erase the integrity metadata of a known release.
+                return saved
             }
         }
-        let releases = try await fetchReleases()
-        guard let found = Self.newestRelease(in: releases) else { throw UpdateError.noRelease }
         return found
     }
 
@@ -217,20 +282,23 @@ final class UpdateChecker {
         guard data.count <= 1_048_576 else { throw UpdateError.invalidFeed }
         let feed = try JSONDecoder().decode(StaticUpdateFeed.self, from: data)
         guard feed.schemaVersion == 1, let found = newestRelease(in: feed.releases),
-              let digest = found.sha256, digest.count == 64,
+              found.releasedAt != nil, let digest = found.sha256, digest.count == 64,
               digest.allSatisfy({ "0123456789abcdef".contains($0) }),
               let size = found.size, size > 0 else { throw UpdateError.invalidFeed }
         let expected = "https://github.com/elijah7x/tivano/releases/download/\(found.tag)/Tivano-\(found.version).dmg"
-        guard found.downloadURL.absoluteString == expected else { throw UpdateError.invalidFeed }
+        let mirror = "https://elijah.ac.cn/tivano/releases/\(found.tag)/Tivano-\(found.version).dmg"
+        guard [expected, mirror].contains(found.downloadURL.absoluteString) else { throw UpdateError.invalidFeed }
         return found
     }
 
     private func fetchReleases() async throws -> [GitHubRelease] {
+        try Task.checkCancellation()
         var token = GitHubCredentials.storedToken()
         if token == nil, !UserDefaults.standard.bool(forKey: "GitHubCLIDeclined") {
             await LoginEnvironment.load()
             token = await GitHubCredentials.cliToken()
         }
+        try Task.checkCancellation()
         do {
             return try await fetchReleases(token: token)
         } catch UpdateError.unauthorized where token != nil {

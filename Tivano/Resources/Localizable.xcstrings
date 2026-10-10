@@ -1,6 +1,30 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "No update found" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "未发现更新" } } }
+    },
+    "No newer version was found for Tivano %@." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "未发现比 Tivano %@ 更新的版本。" } } }
+    },
+    "The last update check failed." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "上次更新检查失败。" } } }
+    },
+    "No update check has completed yet." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "尚未完成更新检查。" } } }
+    },
+    "Checking update sources…" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "正在检查更新源…" } } }
+    },
+    "Couldn't reach any update source." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "无法连接任何更新源。" } } }
+    },
     "The update information could not be read." : {
       "extractionState": "manual",
       "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "无法读取更新信息。" } } }

@@ -24,7 +24,8 @@ ASSET_LABEL="$DMG_NAME (Apple silicon, notarized)"
   exit 1
 }
 NOTES="$(mktemp -t tivano-notes)"
-trap 'rm -f "$NOTES"' EXIT
+MIRROR_FEED="$(mktemp -t tivano-mirror-feed)"
+trap 'rm -f "$NOTES" "$MIRROR_FEED"' EXIT
 python3 scripts/build_changelog.py --section "$VERSION" > "$NOTES" || { echo "No ## [$VERSION] section in CHANGELOG.md. Add one before publishing."; exit 1; }
 
 step() { printf '\n==> %s\n' "$1"; }
@@ -110,3 +111,18 @@ fi
 printf '\nPublished: https://github.com/%s/releases/tag/%s\n' "$PROJECT" "$TAG"
 step "Publishing the static update feed"
 python3 scripts/publish_update_feed.py --tag "$TAG" --dmg "$DMG"
+
+step "Syncing the domestic update mirror"
+# Generate from this exact release, not a possibly stale asynchronous Pages deployment.
+python3 scripts/publish_update_feed.py --tag "$TAG" --dmg "$DMG" --output "$MIRROR_FEED"
+MIRROR_HOST="${TIVANO_MIRROR_HOST:-tivano-mirror}"
+MIRROR_ARGS=(--host "$MIRROR_HOST" --dmg "$DMG" --feed "$MIRROR_FEED")
+MIRROR_VIA="${TIVANO_MIRROR_VIA:-}"
+if [ -z "$MIRROR_VIA" ] && [ "$(ssh -G "$MIRROR_HOST" 2>/dev/null | awk '$1 == "hostname" {print $2}')" = "$MIRROR_HOST" ]; then
+  MIRROR_VIA=hephaestus
+fi
+if [ -n "$MIRROR_VIA" ]; then MIRROR_ARGS+=(--via "$MIRROR_VIA"); fi
+if ! python3 scripts/publish_update_mirror.py "${MIRROR_ARGS[@]}"; then
+  echo "GitHub release is already published, but the mirror sync failed. Retry publish_update_mirror.py only; do not rerun or delete the release." >&2
+  exit 1
+fi

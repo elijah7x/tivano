@@ -528,7 +528,9 @@ struct ThreadTimeline: View, Equatable {
             // Inside the content, so the scroll view hosting it can be found for the nudge
             // that tells the lazy stack where the viewport is (`refreshViewport`).
             .background(alignment: .top) {
-                ScrollViewProbe { tracking.probe = $0 }
+                ScrollViewProbe(onResolve: { tracking.probe = $0 }, onWheel: {
+                    tracking.noteWheelInput()
+                })
                     .frame(width: 0, height: 0)
             }
         }
@@ -626,32 +628,25 @@ struct ThreadTimeline: View, Equatable {
             // never the reader scrolling, and never a reason to freeze the rows.
             let nudging = tracking.isNudging
             tracking.noteNudgeSeen()
+            let wheelInput = tracking.hasRecentWheelInput
             // Movement with no phase behind it: wheel ticks. Content growing under a
             // resting reader is not scrolling.
-            if !nudging, new.centerY != old.centerY, new.contentHeight == old.contentHeight, !tracking.isCoasting {
+            if !nudging, wheelInput, new.offset != old.offset, !tracking.isCoasting {
                 noteScrollMovement()
             }
-            // The offset moving by more than the anchor's own move is the reader scrolling: a
-            // drag, a flick, or wheel ticks, which report no phase at all. Content growing
-            // under a bottom-held reader moves the offset by exactly the growth, and under a
-            // top-held one not at all; anything beyond that is the reader. Wheel ticks used
-            // to count only in frames where the content stood still, and while a turn
-            // streamed rows (or a card ticked) hardly any frame did: the reader's scroll went
-            // unrecognised, the end stayed pinned, and the timeline snapped back to it under
-            // them. (A snap to the end below moves the offset too, and lands pinned, which
-            // is right.) Not while the thread is still arriving (see `holdEnd`): the offset
-            // moving then is the layout settling, and reading it as a scroll unpinned the
-            // end and left a thread opened at its bottom sitting some way up it.
+            // An anchor's offset can lag behind a content-size change during layout or an
+            // animation. That mismatch alone is not the reader scrolling: it used to
+            // unpin a growing reply before the bottom anchor caught up. Require an actual
+            // scroll phase or wheel input in this scroll view. Wheel ticks still count
+            // when text grows in the same frame, and never borrow another pane's input.
             let anchorMove = anchorsBottomOnGrowth ? new.contentHeight - old.contentHeight : 0
             let readerMoved = abs((new.offset - old.offset) - anchorMove) > 1
-            if readerMoved { tracking.noteReaderMovement() }
-            let scrolled = tracking.isUserScrolling
-                || (!nudging && !tracking.isArriving && readerMoved
-                    && new.containerHeight == old.containerHeight && !tracking.isCoasting)
-            if !nudging, readerMoved,
-               let event = NSApp.currentEvent, event.type == .scrollWheel || event.type == .leftMouseDragged {
-                tracking.noteUserNavigation()
+            if readerMoved, tracking.isUserScrolling || tracking.isCoasting || wheelInput {
+                tracking.noteReaderMovement()
             }
+            let scrolled = tracking.isUserScrolling
+                || (!nudging && wheelInput && readerMoved
+                    && new.containerHeight == old.containerHeight && !tracking.isCoasting)
             guard tracking.placementToken == nil else { return }
             updateMountedRange(in: blocks, offset: new.travel, height: new.containerHeight)
             let atRest = !tracking.isUserScrolling && !tracking.isCoasting
@@ -1185,6 +1180,16 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     @ObservationIgnored var placementToken: UUID?
     @ObservationIgnored var placementTask: Task<Void, Never>?
     @ObservationIgnored var animatedNavigation = false
+    @ObservationIgnored private var lastWheelInputAt: CFTimeInterval = -.infinity
+
+    /// Wheel scrolling can arrive without a SwiftUI scroll phase. Keep its input long
+    /// enough for the deferred geometry callback, rather than guessing from layout.
+    var hasRecentWheelInput: Bool { CACurrentMediaTime() - lastWheelInputAt < 0.15 }
+
+    func noteWheelInput() {
+        lastWheelInputAt = CACurrentMediaTime()
+        noteUserNavigation()
+    }
 
     func noteUserNavigation() {
         guard !isNudging else { return }
@@ -1379,6 +1384,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// The timeline is gone (a thread switch, a panel closed): whatever it reported is
     /// withdrawn, mid-drag or mid-coast alike, so the app never goes on hearing it scroll.
     func endActivity() {
+        lastWheelInputAt = -.infinity
         settleWatch?.cancel()
         settleWatch = nil
         phaseWatch?.cancel()
@@ -1574,21 +1580,35 @@ private struct ContinuationSourceLabel: View {
 /// found (`TimelineScrollTracking.beginNudge`).
 private struct ScrollViewProbe: NSViewRepresentable {
     let onResolve: (NSView) -> Void
+    let onWheel: () -> Void
 
     func makeNSView(context: Context) -> NSView {
-        ProbeView(onResolve: onResolve)
+        ProbeView(onResolve: onResolve, onWheel: onWheel)
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         (nsView as? ProbeView)?.onResolve = onResolve
+        (nsView as? ProbeView)?.onWheel = onWheel
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
+        (nsView as? ProbeView)?.removeWheelMonitor()
     }
 
     private final class ProbeView: NSView {
         var onResolve: (NSView) -> Void
+        var onWheel: () -> Void
+        private var wheelMonitor: Any?
 
-        init(onResolve: @escaping (NSView) -> Void) {
+        init(onResolve: @escaping (NSView) -> Void, onWheel: @escaping () -> Void) {
             self.onResolve = onResolve
+            self.onWheel = onWheel
             super.init(frame: .zero)
+        }
+
+        func removeWheelMonitor() {
+            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
+            wheelMonitor = nil
         }
 
         @available(*, unavailable)
@@ -1599,7 +1619,23 @@ private struct ScrollViewProbe: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if window != nil { onResolve(self) }
+            removeWheelMonitor()
+            guard window != nil else { return }
+            onResolve(self)
+            // AppKit local monitors observe input before dispatch and return it unchanged.
+            // https://developer.apple.com/documentation/appkit/nsevent/addlocalmonitorforevents(matching:handler:)
+            wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let scrollView = enclosingScrollView,
+                      event.window === window, event.scrollingDeltaY != 0,
+                      let content = window?.contentView, let parent = content.superview else { return event }
+                let point = parent.convert(event.locationInWindow, from: nil)
+                let hit = content.hitTest(point)
+                // A nested text/code scroller, composer, panel or another window owns
+                // its own input; none of it may cancel this timeline's following.
+                guard hit?.enclosingScrollView === scrollView else { return event }
+                onWheel()
+                return event
+            }
         }
     }
 }
@@ -1699,10 +1735,14 @@ private struct ScrollMetrics: Equatable {
         // space under the chrome; the veil would flash over nothing.
         let excess = max(0, geometry.contentSize.height + insets - geometry.containerSize.height)
         travel = min(max(0, geometry.contentOffset.y + geometry.contentInsets.top), excess)
-        if geometry.contentSize.height + insets <= geometry.containerSize.height + 1 {
+        if geometry.contentSize.height <= geometry.containerSize.height + 1 {
             distanceFromBottom = 0
         } else {
-            distanceFromBottom = geometry.contentSize.height + geometry.contentInsets.bottom
+            // On macOS the safe-area composer already reduces containerSize. Adding
+            // its bottom inset again reports a reader at the end as one composer-height
+            // away, so scrolling back down never re-enables following. visibleRect also
+            // includes the inset; use the content viewport's offset and size instead.
+            distanceFromBottom = geometry.contentSize.height
                 - geometry.contentOffset.y - geometry.containerSize.height
         }
     }

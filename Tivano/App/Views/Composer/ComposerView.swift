@@ -146,9 +146,9 @@ struct ComposerView: View {
         // Layout only: the resolved thread and help strings are plain values handed down,
         // so neither a keystroke nor a thread write re-evaluates the pill itself.
         let thread = model.thread(runtime.threadID)
-        // One pill: the text on the left, the controls tucked into its trailing end. The
-        // controls sit on the pill's bottom line, so they stay put while the text grows upward.
-        HStack(alignment: .bottom, spacing: 8) {
+        // The text owns the full width; the controls have their own bottom row,
+        // so wrapping never reserves an empty column above the buttons.
+        VStack(alignment: .leading, spacing: 8) {
             ComposerTextColumn(
                 runtime: runtime,
                 controller: controller,
@@ -160,8 +160,9 @@ struct ComposerView: View {
                 onCursorChange: cursorMoved(to:),
                 onBlur: blur
             )
-            // A single line of text is as tall as the send button, so an empty pill is 44 high.
-            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+            .padding(.trailing, 6)
 
             if let thread {
                 ComposerControls(
@@ -541,7 +542,7 @@ struct ComposerView: View {
 
 // MARK: - Pill
 
-/// The pill's text side: the attachment strip, the notice and the text view. It owns the
+/// The pill's full-width text area: the attachment strip, the notice and the text view. It owns the
 /// draft-text binding and the growth math, so a keystroke never reaches the pill itself.
 private struct ComposerTextColumn: View {
     @Environment(WindowLiveResize.self) private var liveResize
@@ -612,7 +613,7 @@ private struct ComposerTextColumn: View {
     }
 }
 
-/// The pill's trailing controls: the attach button, the model chip, the context ring
+/// The pill's bottom controls: the attach button, the model chip, the context ring
 /// and send. It takes the resolved thread and help values as plain values, so a thread
 /// write repaints the controls without reaching the pill or the text.
 private struct ComposerControls: View {
@@ -651,7 +652,15 @@ private struct ComposerControls: View {
                     chooseOther: { showingRecents = false; onChooseFiles() }
                 )
             }
-            ModelEffortSlot(runtime: runtime, thread: thread, compact: compact)
+            ViewThatFits(in: .horizontal) {
+                ModelEffortSlot(runtime: runtime, thread: thread, compact: compact)
+                    .fixedSize()
+                if !compact {
+                    ModelEffortSlot(runtime: runtime, thread: thread, compact: true)
+                        .fixedSize()
+                }
+            }
+            Spacer(minLength: 8)
             // A floating panel's box (compact chip) leaves the ring out: a head's context
             // is not what the panel is for, and the row is short of room as it is.
             if !compact {
@@ -659,7 +668,7 @@ private struct ComposerControls: View {
             }
             SendButton(runtime: runtime, goesToHead: goesToHead, queueGoesToHead: queueGoesToHead, send: onSend)
         }
-        .fixedSize()
+        .frame(maxWidth: .infinity)
     }
 }
 
