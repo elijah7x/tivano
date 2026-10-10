@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.0.2",
-      "name": "Tivano 1.0.2",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.0.2/Tivano-1.0.2.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\n## Refinements\n\n- Fill the update progress bar with the current theme's accent instead of a fixed blue.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-10T04:01:29Z",
+      "tag_name": "v1.0.3",
+      "name": "Tivano 1.0.3",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.0.3/Tivano-1.0.3.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Check public static update feeds before the GitHub Releases API, so normal updates no longer depend on GitHub sign-in or a shared IP's anonymous API quota. Keep the original release endpoint and DMG naming for 1.0.2 and earlier clients.\n- Verify the static feed's installer checksum before mounting, alongside the existing Developer ID, bundle-ID, version and Gatekeeper checks.\n\n## Refinements\n\n- Publish update metadata after the notarized DMG is available, with Pages and raw-content fallback sources; reuse local GitHub credentials only for the final API fallback and explain rate-limit failures.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-10T05:26:49Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.0.2.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.0.2/Tivano-1.0.2.dmg",
-          "size": 6359403,
-          "sha256": "f4cdf8391d8da8701510a01d717a6f67bdce48a3d890bc6d3a516d0322a6a97e"
+          "name": "Tivano-1.0.3.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.0.3/Tivano-1.0.3.dmg",
+          "size": 6348243,
+          "sha256": "cdab001beb764b972d99e4db4df9e73c639d118d56eaef194462da829b793749"
         }
       ]
     }
