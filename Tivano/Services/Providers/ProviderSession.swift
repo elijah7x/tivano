@@ -106,6 +106,8 @@ enum ProviderEvent: Sendable {
     case question(QuestionRequest)
     case requestResolved(id: String)
     case usage(ContextUsage)
+    /// Previously reported occupancy is no longer current; wait for a new provider report.
+    case contextUsageCleared
     /// Tokens newly consumed by one request or turn, with the identity behind
     /// them. Distinct from `usage`, which is context occupancy: an event here
     /// is spend, and a head's spend carries its `agentID`; the turn keeps each

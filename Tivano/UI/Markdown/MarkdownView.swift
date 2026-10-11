@@ -590,7 +590,8 @@ enum RichLink {
     static func prettyAttributed(_ source: String, streaming: Bool = false) -> AttributedString {
         if streaming {
             if let pretty = streamingPretty.last(where: { $0.source == source }) { return pretty.value }
-            let value = build(source)
+            // Synthetic closers affect display only, never the source or cache key.
+            let value = build(StreamMend.mended(source))
             if streamingPretty.count == streamingSlots { streamingPretty.removeFirst() }
             streamingPretty.append((source, value))
             return value
@@ -598,7 +599,9 @@ enum RichLink {
         if let hit = prettyCache.value(for: source) { return hit }
         let value: AttributedString
         if let slot = streamingPretty.lastIndex(where: { $0.source == source }) {
-            value = streamingPretty.remove(at: slot).value
+            let streamed = streamingPretty.remove(at: slot).value
+            // Truly unclosed markup must settle as written, not as its streamed preview.
+            value = StreamMend.mended(source) == source ? streamed : build(source)
         } else {
             value = build(source)
         }

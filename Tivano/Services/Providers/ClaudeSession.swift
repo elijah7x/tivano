@@ -45,6 +45,7 @@ final class ClaudeSession: ProviderSession {
     private var tasksByAgent: [String: String] = [:]
     private var backgroundTasks: [(id: String, description: String)] = []
     private var turnActive = false
+    private var contextRevision = 0
     private var interruptRequested = false
     private var isStopping = false
     /// Set once the CLI has answered the initialize. Before that, a result or an exit is
@@ -164,6 +165,8 @@ final class ClaudeSession: ProviderSession {
         if !models.isEmpty { onEvent?(.models(models, current: configuration.model)) }
         let commands = SlashCommand.claudeCommands(initialization["commands"]?.array ?? [])
         if !commands.isEmpty { onEvent?(.commands(commands)) }
+        invalidateContextUsage()
+        refreshContextUsage()
         return id
     }
 
@@ -337,7 +340,28 @@ final class ClaudeSession: ProviderSession {
         }
     }
 
+    private func invalidateContextUsage() {
+        contextRevision += 1
+        onEvent?(.contextUsageCleared)
+    }
+
+    /// Official Agent SDK get_context_usage control request, not result.usage (turn spend).
+    /// https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/query.py
+    private func refreshContextUsage() {
+        let revision = contextRevision
+        Task { [weak self] in
+            guard let self, self.isRunning, !self.isStopping, !self.turnActive,
+                  self.contextRevision == revision else { return }
+            guard let report = try? await self.control(["subtype": "get_context_usage"]),
+                  self.contextRevision == revision, !self.turnActive,
+                  !self.hasClosed, !self.isStopping,
+                  let usage = Self.contextUsage(report) else { return }
+            self.onEvent?(.usage(usage))
+        }
+    }
+
     private func writeUserMessage(_ content: JSONValue) {
+        invalidateContextUsage()
         turnActive = true
         interruptRequested = false
         onEvent?(.turnStarted(providerTurnID: nil))
@@ -368,6 +392,7 @@ final class ClaudeSession: ProviderSession {
         let type = message["type"]?.string
         if parent == nil, type == "stream_event" || type == "assistant", isStarted, !turnActive {
             // Claude Code answers a finished background task's notification with a turn of its own, without a send from the app.
+            invalidateContextUsage()
             turnActive = true
             interruptRequested = false
             onEvent?(.turnStarted(providerTurnID: nil))
@@ -433,6 +458,7 @@ final class ClaudeSession: ProviderSession {
                 onEvent?(.sessionReady(sessionID: id))
             }
         case "compact_boundary":
+            invalidateContextUsage()
             onEvent?(.notice(Notice(level: .info, message: "Context compacted.")))
         case "task_started":
             handleTaskStarted(message)
@@ -622,19 +648,13 @@ final class ClaudeSession: ProviderSession {
             return
         }
         turnActive = false
-        if let usage = Self.contextUsage(message) {
-            onEvent?(.usage(usage))
-            // The result is the turn's own account of itself: Claude Code reports
-            // one usage object per API call, cache reads included, and the total
-            // is theirs. Whether that total covers usage from heads running
-            // inside the turn is not something the CLI reports, so no head usage
-            // is added on top of it: a head's progress tokens stay where they
-            // are, reported to its panel.
-            if let spend = Self.turnSpendEvent(message, model: model) {
-                TokenLedger.shared.record(spend: spend.totalTokens)
-                onEvent?(.tokenSpend(spend))
-            }
+        // Spend and context occupancy have independent sources. A failed context
+        // query must neither fabricate occupancy nor drop the turn's spend.
+        if let spend = Self.turnSpendEvent(message, model: model) {
+            TokenLedger.shared.record(spend: spend.totalTokens)
+            onEvent?(.tokenSpend(spend))
         }
+        refreshContextUsage()
         for requestID in pendingTools.keys { onEvent?(.requestResolved(id: requestID)) }
         pendingTools.removeAll()
         // Every call of the turn has had its result; an interrupted one never will.
@@ -857,15 +877,9 @@ final class ClaudeSession: ProviderSession {
         )
     }
 
-    private static func contextUsage(_ message: JSONValue) -> ContextUsage? {
-        guard let usage = message["usage"] else { return nil }
-        let last = usage["iterations"]?.array?.last ?? usage
-        let used = (last["input_tokens"]?.int ?? 0)
-            + (last["cache_read_input_tokens"]?.int ?? 0)
-            + (last["cache_creation_input_tokens"]?.int ?? 0)
-            + (last["output_tokens"]?.int ?? 0)
-        guard used > 0 else { return nil }
-        let window = message["modelUsage"]?.object?.values.compactMap { $0["contextWindow"]?.int }.max()
+    private static func contextUsage(_ report: JSONValue) -> ContextUsage? {
+        guard let used = report["totalTokens"]?.int, used >= 0,
+              let window = report["maxTokens"]?.int, window > 0 else { return nil }
         return ContextUsage(usedTokens: used, windowTokens: window)
     }
 

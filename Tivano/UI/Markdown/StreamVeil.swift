@@ -285,11 +285,20 @@ struct VeiledText: View {
 
     private func ingest() {
         guard mapping.source != source || mapping.active != veiled else { return }
+        let changed = mapping.source != source
         mapping.active = veiled
         mapping.source = source
-        mapping.styled = source.styled
-        mapping.indices = Array(mapping.styled.characters.indices) + [mapping.styled.endIndex]
-        if veiled { veil.advance(source.characters, at: .now) }
+        if veiled {
+            mapping.styled = source.styled
+            mapping.indices = Array(mapping.styled.characters.indices) + [mapping.styled.endIndex]
+            veil.advance(source.characters, at: .now)
+        } else if changed {
+            // Static text needs no character map. An unchanged streaming tail keeps its
+            // map until the last fade settles; rewritten text must not reuse its ranges.
+            mapping.styled = AttributedString()
+            mapping.indices = []
+            veil.reset()
+        }
     }
 
     @MainActor

@@ -262,9 +262,10 @@ final class ProviderRegistry {
                 }
             }
             return candidates
-        case .pi:
+        case .pi, .kimi:
             let home = LoginEnvironment.homeDirectory
-            return ["\(home)/.npm-global/bin/pi", "/opt/homebrew/bin/pi", "/usr/local/bin/pi", "\(home)/.local/bin/pi", "\(home)/.volta/bin/pi", "\(home)/.bun/bin/pi"].map { URL(fileURLWithPath: $0) }
+            let name = provider.executableName
+            return ["\(home)/.npm-global/bin/\(name)", "/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)", "\(home)/.volta/bin/\(name)", "\(home)/.bun/bin/\(name)"].map { URL(fileURLWithPath: $0) }
         default:
             return []
         }
@@ -581,7 +582,7 @@ final class ProviderRegistry {
         case .copilot: try? await CopilotSession.listModels(executable: executable, environment: environment)
         case .commandcode: try? await CommandCodeAPI.listModels(executable: executable, environment: environment)
         case .pi: try? await PiCLI.listModels(executable: executable, environment: environment)
-        case .cursor, .grok, .devin: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
+        case .cursor, .grok, .devin, .kimi: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
         case .opencode, .opencodeGo: await openCodeCatalog(force: force, executable: executable, environment: environment)
         case .deepseek, .meta, .zai: nil
         }
@@ -926,6 +927,8 @@ final class ProviderRegistry {
             return await CommandCodeAPI.authStatus(executable: executable, environment: environment)
         case .pi:
             return await PiCLI.authStatus(executable: executable, environment: environment)
+        case .kimi:
+            return await ACPSession.authStatus(provider: provider, executable: executable, environment: environment)
         case .opencode, .opencodeGo:
             guard let result = try? await Shell.run(executable, ["auth", "list"], environment: environment, timeout: 20) else { return .unknown }
             let text = TextCleanup.stripANSI(result.output + result.errorOutput)

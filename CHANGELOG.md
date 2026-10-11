@@ -6,6 +6,25 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-10-11
+
+### New features
+
+- Add Kimi Code through its official CLI and ACP, with native sessions, model and thinking selection, permission modes, image prompts, MCP forwarding and interactive questions. Use Kimi's official icon.
+- Add a Power section above Languages in General settings. Prevent idle system sleep while chat or Hydra tasks run, enabled by default; release the assertion when all tasks finish or the option is disabled, while allowing display sleep, manual sleep and lid-close sleep.
+
+### Bug fixes
+
+- Read Claude's context occupancy from its official context report instead of cumulative turn usage. Clear stale readings while the context changes, omit unavailable readings, and show percentages above 100% without overflowing the meter.
+
+### Refinements
+
+- Style bold, italic, strikethrough and inline code in streaming replies from their first word, instead of showing raw markers that restyle and reflow the line once they close. Text that never closes settles as written when the reply finishes, and finished paragraphs no longer keep a per-character map.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.0.6] - 2026-10-10
 
 ### Bug fixes

@@ -149,6 +149,7 @@ final class AppSettings {
         static let efforts = "lastEfforts"
         static let lastHydraPair = "lastHydraPairID"
         static let textGeneration = "textGeneration"
+        static let preventSleepDuringTasks = "preventSleepDuringTasks"
         static let appLanguage = "appLanguage"
         static let commitInstructions = "commitInstructions"
         static let terminalHeight = "terminalHeight"
@@ -212,6 +213,15 @@ final class AppSettings {
     /// A soft chime plays when a turn finishes, whether or not the thread is in view.
     var chimeWhenFinished: Bool {
         didSet { defaults.set(chimeWhenFinished, forKey: Key.chime) }
+    }
+
+    @ObservationIgnored var onSleepPreventionChanged: (() -> Void)?
+
+    var preventSleepDuringTasks: Bool {
+        didSet {
+            defaults.set(preventSleepDuringTasks, forKey: Key.preventSleepDuringTasks)
+            onSleepPreventionChanged?()
+        }
     }
 
     var confirmBeforeDeleting: Bool {
@@ -755,6 +765,7 @@ final class AppSettings {
         defaultWorkspaceMode = WorkspaceMode(rawValue: defaults.string(forKey: Key.workspaceMode) ?? "") ?? .local
         notifyWhenFinished = defaults.object(forKey: Key.notify) as? Bool ?? true
         chimeWhenFinished = defaults.object(forKey: Key.chime) as? Bool ?? true
+        preventSleepDuringTasks = defaults.object(forKey: Key.preventSleepDuringTasks) as? Bool ?? true
         confirmBeforeDeleting = defaults.object(forKey: Key.confirmDelete) as? Bool ?? true
         autoContinueAfterLimit = defaults.object(forKey: Key.autoContinueAfterLimit) as? Bool ?? false
         threadFinishAction = ThreadFinishAction(rawValue: defaults.string(forKey: Key.threadFinishAction) ?? "") ?? .settle

@@ -203,7 +203,11 @@ final class ThreadRuntime {
     /// as a message: the source's prompt goes out ahead of the first ordinary message
     /// (see `startTurn`), and never becomes part of the user's own message or draft.
     private(set) var continuation: ThreadContinuation?
-    private(set) var phase: RuntimePhase = .idle
+    private(set) var phase: RuntimePhase = .idle {
+        didSet {
+            if (oldValue == .idle) != (phase == .idle) { app?.updateTaskSleepPrevention() }
+        }
+    }
     private(set) var isReverting = false
     private(set) var approvals: [ApprovalRequest] = []
     private(set) var questions: [QuestionRequest] = []
@@ -329,7 +333,10 @@ final class ThreadRuntime {
     @ObservationIgnored private var headReportsNext = false
     /// The team's finished work is on its way to the remote (see `AppModel.autoMergeHydraWork`).
     var isHydraMerging = false {
-        didSet { if !isHydraMerging { app?.publishDeferredResult(threadID) } }
+        didSet {
+            if oldValue != isHydraMerging { app?.updateTaskSleepPrevention() }
+            if !isHydraMerging { app?.publishDeferredResult(threadID) }
+        }
     }
     /// This chat's finished work is waiting for another chat's merge to finish, and goes
     /// right after it (see `AppModel.autoMergeHydraWork`).
@@ -643,7 +650,9 @@ final class ThreadRuntime {
         if thread?.hydra?.kind == .tivano {
             hydraTokens = turns.flatMap { $0.tokenSpends ?? [] }.reduce(0) { $0 + $1.totalTokens }
         }
-        usage = usage ?? document.usage
+        // Claude's older saved meter came from turn spend, not context occupancy.
+        // Only a fresh report from the live CLI may populate its meter.
+        if thread?.provider != .claude { usage = usage ?? document.usage }
         continuation = document.continuation ?? continuation
         followUps = document.followUps.filter { !$0.isEmpty } + followUps
         hydraMerges = document.hydraMerges + hydraMerges
@@ -1694,7 +1703,7 @@ final class ThreadRuntime {
             case .copilot: CopilotSession(configuration: configuration)
             case .commandcode: CommandCodeSession(configuration: configuration)
             case .pi: PiSession(configuration: configuration)
-            case .cursor, .opencode, .opencodeGo, .grok, .devin: ACPSession(configuration: configuration)
+            case .cursor, .opencode, .opencodeGo, .grok, .devin, .kimi: ACPSession(configuration: configuration)
             case .deepseek: DeepSeekSession(configuration: configuration)
             case .meta: MetaSession(configuration: configuration)
             case .zai: ZaiSession(configuration: configuration)
@@ -2600,6 +2609,9 @@ final class ThreadRuntime {
         case .requestResolved(let id):
             approvals.removeAll { $0.id == id }
             questions.removeAll { $0.id == id }
+        case .contextUsageCleared:
+            usage = nil
+            saveRevision += 1
         case .usage(let usage):
             self.usage = usage
             saveRevision += 1
@@ -3068,7 +3080,7 @@ final class ThreadRuntime {
             if let edits = update.edits { noteHydraEdits(edits) }
             if let status = update.status, status != .running { settleHydraCommand("\(agentID)-\(toolID)") }
             headRuntime.rehearse(event)
-        case .usage, .sessionReady, .models, .commands, .title, .assistantMessageID, .backgroundTasks:
+        case .usage, .contextUsageCleared, .sessionReady, .models, .commands, .title, .assistantMessageID, .backgroundTasks:
             break
         default:
             headRuntime.rehearse(event)

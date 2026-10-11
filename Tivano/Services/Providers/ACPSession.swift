@@ -20,7 +20,7 @@ private actor ACPLaunchGate {
     }
 }
 
-/// Drives Agent Client Protocol agents: Cursor, OpenCode, Grok and Devin.
+/// Drives Agent Client Protocol agents: Cursor, OpenCode, Grok, Devin and Kimi Code.
 @MainActor
 final class ACPSession: ProviderSession {
     private static let launchGate = ACPLaunchGate(spacing: 1.5)
@@ -40,6 +40,13 @@ final class ACPSession: ProviderSession {
     private var thoughtID: String?
     private var counter = 0
     private var pendingPermissions: [String: RPCID] = [:]
+    private struct PendingQuestion {
+        var rpcID: RPCID
+        var form: ACPQuestionForm?
+        var permissionOptions: [String: String] = [:]
+    }
+    private var pendingQuestions: [String: PendingQuestion] = [:]
+    private var toolKinds: [String: ToolCall.Kind] = [:]
     private var promptActive = false
     private var cancelRequested = false
     /// Tool calls already routed to the checklist (opencode `todowrite` arrives as a
@@ -136,11 +143,12 @@ final class ACPSession: ProviderSession {
         do {
             session = try await openSession(connection)
         } catch let error as RPCError where error.message.localizedCaseInsensitiveContains("auth") && !authMethods.isEmpty {
+            if configuration.provider == .kimi { throw Self.kimiLoginRequired }
             _ = try await deadlineRequest(connection, "authenticate", ["methodId": .string(authMethods[0])])
             session = try await openSession(connection)
         }
         applySessionState(session)
-        await applySelection(
+        try await applySelection(
             model: configuration.model,
             effort: configuration.effort,
             fastMode: configuration.fastMode,
@@ -162,13 +170,16 @@ final class ACPSession: ProviderSession {
         if usesParameterizedModels {
             capabilities["_meta"] = ["parameterizedModelPicker": true]
         }
+        if configuration.provider == .kimi {
+            capabilities["elicitation"] = ["form": [:]]
+        }
         return .object(capabilities)
     }
 
     func send(_ input: TurnInput) async throws {
         guard let connection, !connection.isClosed, let sessionID else { throw ProviderError.notRunning }
         runtimeMode = input.runtimeMode
-        await applySelection(
+        try await applySelection(
             model: input.model,
             effort: input.effort,
             fastMode: input.fastMode,
@@ -204,6 +215,7 @@ final class ACPSession: ProviderSession {
             onEvent?(.requestResolved(id: key))
         }
         pendingPermissions.removeAll()
+        cancelQuestions(connection)
         connection.notify("session/cancel", ["sessionId": .string(sessionID)])
     }
 
@@ -228,10 +240,44 @@ final class ACPSession: ProviderSession {
         }
     }
 
-    func answerQuestion(_ requestID: String, answers: [String: [String]]) {}
+    func answerQuestion(_ requestID: String, answers: [String: [String]]) {
+        answerQuestion(requestID, answers: answers, delivered: { _ in })
+    }
 
     func answerQuestion(_ requestID: String, answers: [String: [String]], delivered: @escaping @MainActor (Bool) -> Void) {
-        delivered(false)
+        guard !isStopping, let connection, !connection.isClosed, let pending = pendingQuestions[requestID] else {
+            delivered(false)
+            return
+        }
+        let response: JSONValue
+        if answers.values.allSatisfy({ $0.isEmpty }) {
+            response = pending.form == nil ? ["outcome": ["outcome": "cancelled"]] : ["action": "cancel"]
+        } else if let form = pending.form {
+            guard let accepted = form.response(answers: answers) else { delivered(false); return }
+            response = accepted
+        } else {
+            guard let selected = answers["q0"]?.first, let optionID = pending.permissionOptions[selected] else {
+                delivered(false)
+                return
+            }
+            response = ["outcome": ["outcome": "selected", "optionId": .string(optionID)]]
+        }
+        connection.respond(to: pending.rpcID, result: response) { [weak self] succeeded in
+            if succeeded, self?.pendingQuestions.removeValue(forKey: requestID) != nil {
+                self?.onEvent?(.requestResolved(id: requestID))
+            }
+            delivered(succeeded)
+        }
+    }
+
+    private func cancelQuestions(_ connection: JSONRPCConnection) {
+        for (key, pending) in pendingQuestions {
+            let response: JSONValue = pending.form == nil
+                ? ["outcome": ["outcome": "cancelled"]] : ["action": "cancel"]
+            connection.respond(to: pending.rpcID, result: response)
+            onEvent?(.requestResolved(id: key))
+        }
+        pendingQuestions.removeAll()
     }
 
     func stopAndWait(timeout: TimeInterval) async {
@@ -243,6 +289,28 @@ final class ACPSession: ProviderSession {
     func stop() {
         isStopping = true
         connection?.close()
+    }
+
+    private static var kimiLoginRequired: ProviderError {
+        .failed(AppText.localized("Sign in to Kimi Code with `kimi login`, then try again."))
+    }
+
+    static func authStatus(provider: ProviderKind, executable: URL, environment: [String: String]) async -> ProviderStatus.Auth {
+        let process = StdioProcess(executable: executable, arguments: ["acp"], directory: FileManager.default.temporaryDirectory, environment: environment)
+        let connection = JSONRPCConnection(process: process, sendsVersion: true)
+        defer { connection.close() }
+        do {
+            try connection.start()
+            _ = try await withDeadline(seconds: 20, provider: provider.displayName, operation: "authenticate") {
+                _ = try await connection.request("initialize", ["protocolVersion": 1, "clientCapabilities": [:]])
+                return try await connection.request("authenticate", ["methodId": "login"])
+            }
+            return .signedIn(nil)
+        } catch let error as RPCError where error.code == -32000 && error.message.localizedCaseInsensitiveContains("auth") {
+            return .signedOut
+        } catch {
+            return .unknown
+        }
     }
 
     // MARK: - Catalog
@@ -318,12 +386,11 @@ final class ACPSession: ProviderSession {
         guard let modelConfigID, !configuration.provider.namesModelVariants else { return }
         let original = currentModel
         for model in models where model.efforts.isEmpty {
-            await setConfigOption(modelConfigID, value: model.id)
+            guard (try? await setConfigOption(modelConfigID, value: model.id)) != nil else { continue }
             currentModel = model.id
         }
         if let original, !Self.sameModel(original, currentModel) {
-            await setConfigOption(modelConfigID, value: original)
-            currentModel = original
+            if (try? await setConfigOption(modelConfigID, value: original)) != nil { currentModel = original }
         }
     }
 
@@ -465,48 +532,58 @@ final class ACPSession: ProviderSession {
         return baseModelID(lhs) == baseModelID(rhs)
     }
 
-    private func applySelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async {
+    private func applySelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async throws {
         guard let connection, let sessionID else { return }
         if let model, !model.isEmpty {
             let wireID = usesParameterizedModels ? Self.baseModelID(model) : providerID(for: model, effort: effort, fastMode: fastMode)
             if !Self.sameModel(wireID, currentModel) {
                 if let modelConfigID {
-                    await setConfigOption(modelConfigID, value: wireID)
+                    try await setConfigOption(modelConfigID, value: wireID)
                 } else {
-                    _ = try? await connection.request("session/set_model", ["sessionId": .string(sessionID), "modelId": .string(wireID)])
+                    _ = try await connection.request("session/set_model", ["sessionId": .string(sessionID), "modelId": .string(wireID)])
                 }
                 currentModel = wireID
             }
         }
         if let effort, !effort.isEmpty, let effortConfigID, effort != currentEffort {
-            await setConfigOption(effortConfigID, value: effort)
+            try await setConfigOption(effortConfigID, value: effort)
             currentEffort = effort
         }
         if let fastConfigID {
             let wanted = fastMode ? "true" : "false"
             if wanted != currentFast {
-                await setConfigOption(fastConfigID, value: wanted)
+                try await setConfigOption(fastConfigID, value: wanted)
                 currentFast = wanted
             }
         }
-        if let mode = interaction == .plan ? planMode : buildMode, mode != currentMode {
+        let wantedMode: String?
+        if configuration.provider == .kimi, interaction != .plan {
+            wantedMode = switch runtimeMode {
+            case .supervised, .autoAcceptEdits: "default"
+            case .auto: "auto"
+            case .fullAccess: "yolo"
+            }
+        } else {
+            wantedMode = interaction == .plan ? planMode : buildMode
+        }
+        if let mode = wantedMode, mode != currentMode {
             if let modeConfigID {
-                await setConfigOption(modeConfigID, value: mode)
+                try await setConfigOption(modeConfigID, value: mode)
             } else if hasModeAPI {
-                _ = try? await connection.request("session/set_mode", ["sessionId": .string(sessionID), "modeId": .string(mode)])
+                _ = try await connection.request("session/set_mode", ["sessionId": .string(sessionID), "modeId": .string(mode)])
             }
             currentMode = mode
         }
     }
 
-    private func setConfigOption(_ configID: String, value: String) async {
-        guard let connection, let sessionID else { return }
-        let result = try? await connection.request("session/set_config_option", [
+    private func setConfigOption(_ configID: String, value: String) async throws {
+        guard let connection, let sessionID else { throw ProviderError.notRunning }
+        let result = try await connection.request("session/set_config_option", [
             "sessionId": .string(sessionID),
             "configId": .string(configID),
             "value": .string(value),
         ])
-        if let options = result?["configOptions"]?.array { applyConfigOptions(options) }
+        if let options = result["configOptions"]?.array { applyConfigOptions(options) }
     }
 
     // MARK: - Updates
@@ -535,7 +612,9 @@ final class ACPSession: ProviderSession {
                 if !steps.isEmpty { onEvent?(.todos(steps)) }
                 return
             }
-            onEvent?(.toolStarted(id: id, call: makeToolCall(update)))
+            let call = makeToolCall(update)
+            toolKinds[id] = call.kind
+            onEvent?(.toolStarted(id: id, call: call))
             let initial = makeToolUpdate(update)
             if initial.output != nil || initial.status != nil { onEvent?(.toolUpdated(id: id, update: initial)) }
         case "tool_call_update":
@@ -546,6 +625,7 @@ final class ACPSession: ProviderSession {
                 if !steps.isEmpty { onEvent?(.todos(steps)) }
                 return
             }
+            if let kind = update["kind"]?.string { toolKinds[id] = Self.kind(kind) }
             onEvent?(.toolUpdated(id: id, update: makeToolUpdate(update)))
         case "plan":
             let steps = Self.parseTodoItems(update["entries"])
@@ -578,14 +658,44 @@ final class ACPSession: ProviderSession {
     }
 
     private func handleRequest(_ id: RPCID, _ method: String, _ params: JSONValue) {
+        if method == "elicitation/create", configuration.provider == .kimi {
+            guard let form = ACPQuestionForm(params) else {
+                connection?.respond(to: id, errorCode: -32602, message: "Unsupported question form")
+                return
+            }
+            pendingQuestions[id.key] = PendingQuestion(rpcID: id, form: form)
+            onEvent?(.question(QuestionRequest(id: id.key, questions: form.questions)))
+            return
+        }
         guard method == "session/request_permission" else {
             connection?.respond(to: id, errorCode: -32601, message: "Method not found")
             return
         }
         let options = params["options"]?.array ?? []
         let toolCall = params["toolCall"] ?? .null
-        let call = makeToolCall(toolCall)
-        if let optionID = automaticOption(for: call.kind, options: options) {
+        var call = makeToolCall(toolCall)
+        if let toolID = toolCall["toolCallId"]?.string, let knownKind = toolKinds[toolID], toolCall["kind"] == nil {
+            call.kind = knownKind
+        }
+        let isQuestion = configuration.provider == .kimi && (toolCall["title"]?.string == "AskUserQuestion"
+            || options.contains { $0["optionId"]?.string?.hasPrefix("q0_") == true })
+        let isPlan = configuration.provider == .kimi && options.contains { $0["optionId"]?.string?.hasPrefix("plan_") == true }
+        if isQuestion {
+            var choices: [QuestionRequest.Choice] = []
+            var optionIDs: [String: String] = [:]
+            for option in options where option["kind"]?.string == "allow_once" {
+                guard let optionID = option["optionId"]?.string, let label = option["name"]?.string else { continue }
+                choices.append(.init(label: label, detail: nil))
+                optionIDs[label] = optionID
+            }
+            pendingQuestions[id.key] = PendingQuestion(rpcID: id, form: nil, permissionOptions: optionIDs)
+            onEvent?(.question(QuestionRequest(id: id.key, questions: [
+                .init(id: "q0", header: call.title, prompt: permissionDetail(toolCall) ?? call.title,
+                      choices: choices, allowsMultiple: false, allowsOther: false, isSecret: false)
+            ])))
+            return
+        }
+        if !isPlan, let optionID = automaticOption(for: call.kind, options: options) {
             connection?.respond(to: id, result: ["outcome": ["outcome": "selected", "optionId": .string(optionID)]])
             return
         }
@@ -599,19 +709,29 @@ final class ACPSession: ProviderSession {
             return .init(id: optionID, title: option["name"]?.string ?? optionID, role: role)
         }
         pendingPermissions[id.key] = id
-        let kind: ApprovalRequest.Kind = switch call.kind {
-        case .command: .command
-        case .edit: .fileChange
-        default: .tool
+        let kind: ApprovalRequest.Kind
+        if isPlan {
+            kind = .plan
+        } else {
+            kind = switch call.kind {
+            case .command: .command
+            case .edit: .fileChange
+            default: .tool
+            }
         }
         onEvent?(.approval(ApprovalRequest(
             id: id.key,
             kind: kind,
             title: call.title,
-            detail: call.detail,
+            detail: call.detail ?? permissionDetail(toolCall),
             options: mapped,
             toolItemID: toolCall["toolCallId"]?.string
         )))
+    }
+
+    private func permissionDetail(_ toolCall: JSONValue) -> String? {
+        let text = (toolCall["content"]?.array ?? []).compactMap { $0["content"]?["text"]?.string }.joined(separator: "\n")
+        return text.isEmpty ? nil : text
     }
 
     private func automaticOption(for kind: ToolCall.Kind, options: [JSONValue]) -> String? {
@@ -630,7 +750,9 @@ final class ACPSession: ProviderSession {
         guard promptActive else { return }
         promptActive = false
         todoToolCallIDs.removeAll()
+        toolKinds.removeAll()
         if let connection, !connection.isClosed {
+            cancelQuestions(connection)
             for (key, id) in pendingPermissions {
                 connection.respond(to: id, result: ["outcome": ["outcome": "cancelled"]]) { [weak self] succeeded in
                     if succeeded, let self, self.pendingPermissions.removeValue(forKey: key) != nil {
@@ -642,7 +764,14 @@ final class ACPSession: ProviderSession {
         if cancelRequested || stopReason == "cancelled" {
             onEvent?(.turnCompleted(status: .interrupted, error: nil))
         } else if let error {
-            onEvent?(.turnCompleted(status: .failed, error: error.localizedDescription))
+            let detail: String
+            if configuration.provider == .kimi, let rpc = error as? RPCError,
+               rpc.code == -32000, rpc.message.localizedCaseInsensitiveContains("auth") {
+                detail = Self.kimiLoginRequired.localizedDescription
+            } else {
+                detail = error.localizedDescription
+            }
+            onEvent?(.turnCompleted(status: .failed, error: detail))
         } else if stopReason == "refusal" {
             onEvent?(.turnCompleted(status: .failed, error: "The agent declined this request."))
         } else {

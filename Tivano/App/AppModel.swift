@@ -104,6 +104,7 @@ final class AppModel {
     var isCommandPalettePresented = false
     var alert: AppAlert?
 
+    @ObservationIgnored private let taskSleepPrevention = TaskSleepPrevention()
     @ObservationIgnored private var runtimes: [UUID: ThreadRuntime] = [:]
     @ObservationIgnored private var runtimeLastAccess: [UUID: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var runtimeCapacityScheduled = false
@@ -129,6 +130,16 @@ final class AppModel {
         terminals = TerminalStore()
         sidebar = SidebarLayout()
         autoContinue = AutoContinue(app: self)
+        settings.onSleepPreventionChanged = { [weak self] in
+            self?.updateTaskSleepPrevention()
+        }
+    }
+
+    func updateTaskSleepPrevention() {
+        taskSleepPrevention.update(
+            isEnabled: settings.preventSleepDuringTasks && !CaptureRun.isEnabled,
+            hasRunningTasks: runtimes.values.contains { $0.isRunning || $0.isHydraMerging }
+        )
     }
 
     /// Mirrors a list into its cells: values that changed are written to their cell (and only
@@ -461,6 +472,7 @@ final class AppModel {
         if let runtime = runtimes[id] { return runtime }
         let runtime = ThreadRuntime(threadID: id, app: self)
         runtimes[id] = runtime
+        updateTaskSleepPrevention()
         if !runtimeCapacityScheduled {
             runtimeCapacityScheduled = true
             DispatchQueue.main.async { [weak self] in
@@ -562,6 +574,7 @@ final class AppModel {
         runtime.saveNow()
         runtime.cancelPersistence()
         runtimes[id] = nil
+        updateTaskSleepPrevention()
         runtimeLastAccess[id] = nil
         idleSessionStops.removeValue(forKey: id)?.cancel()
         return true
@@ -1147,6 +1160,7 @@ final class AppModel {
         runtimes[thread.id]?.cancelPersistence()
         runtimes[thread.id]?.stopSession()
         runtimes[thread.id] = nil
+        updateTaskSleepPrevention()
         terminals.closeAll(for: thread.id)
         if deletingDocument { Storage.deleteDocument(thread.id) }
     }

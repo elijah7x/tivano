@@ -15,6 +15,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case copilot
     case commandcode
     case pi
+    case kimi
 
     var id: String { rawValue }
 
@@ -34,6 +35,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .copilot: "Copilot"
         case .commandcode: "Command Code"
         case .pi: "Pi"
+        case .kimi: "Kimi Code"
         }
     }
 
@@ -53,6 +55,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .copilot: "copilot"
         case .commandcode: "cmd"
         case .pi: "pi"
+        case .kimi: "kimi"
         }
     }
 
@@ -75,6 +78,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .copilot: "copilot login"
         case .commandcode: "cmd login"
         case .pi: "pi"
+        case .kimi: "kimi login"
         }
     }
 
@@ -94,6 +98,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .copilot: URL(string: "https://github.com/github/copilot-cli")!
         case .commandcode: URL(string: "https://commandcode.ai/docs/quickstart")!
         case .pi: URL(string: "https://pi.dev/docs/latest")!
+        case .kimi: URL(string: "https://www.kimi.com/code/docs/en/kimi-code-cli/")!
         }
     }
 
@@ -101,7 +106,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var isAPIKeyBased: Bool { self == .deepseek || self == .meta || self == .zai }
 
     /// Driven over the Agent Client Protocol by `ACPSession`.
-    var usesACP: Bool { self == .cursor || self == .opencode || self == .opencodeGo || self == .grok || self == .devin }
+    var usesACP: Bool { self == .cursor || self == .opencode || self == .opencodeGo || self == .grok || self == .devin || self == .kimi }
 
     /// Providers with an API key field in Settings: the API-key providers, which need one,
     /// and Command Code, whose CLI takes a Studio key through `COMMAND_CODE_API_KEY` as an

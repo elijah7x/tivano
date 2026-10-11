@@ -751,7 +751,7 @@ private struct ContextMeter: View {
                     Circle()
                         .stroke(.quaternary, lineWidth: 2.5)
                     Circle()
-                        .trim(from: 0, to: fraction ?? 0)
+                        .trim(from: 0, to: min(max(fraction ?? 0, 0), 1))
                         .stroke((fraction ?? 0) > 0.85 ? AnyShapeStyle(Chrome.warning) : AnyShapeStyle(.tint), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }

@@ -337,7 +337,7 @@ struct ContextUsage: Codable, Hashable, Sendable {
 
     var fraction: Double? {
         guard let windowTokens, windowTokens > 0 else { return nil }
-        return min(1, Double(usedTokens) / Double(windowTokens))
+        return Double(usedTokens) / Double(windowTokens)
     }
 }
 

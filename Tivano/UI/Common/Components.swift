@@ -10,6 +10,7 @@ struct ProviderIcon: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: size, height: size)
+            .scaleEffect(provider == .kimi ? 0.92 : 1)
     }
 }
 

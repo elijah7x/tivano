@@ -391,6 +391,6 @@ struct UsageBar: View {
         .frame(height: 5)
         .accessibilityElement()
         .accessibilityLabel(Text(verbatim: Chrome.localized(label)))
-        .accessibilityValue(Text(verbatim: String(format: Chrome.localized("%lld%% used"), Int((min(max(fraction, 0), 1) * 100).rounded()))))
+        .accessibilityValue(Text(verbatim: String(format: Chrome.localized("%lld%% used"), Int((max(fraction, 0) * 100).rounded()))))
     }
 }

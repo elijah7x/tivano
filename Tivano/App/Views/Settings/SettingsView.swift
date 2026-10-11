@@ -410,6 +410,16 @@ private struct GeneralSettingsPage: View {
                 .opacity(settings.threadFinishAction == .settle ? 1 : 0.5)
             }
         }
+        ChromeSection(title: "Power") {
+            ChromeCard {
+                ChromeRow(
+                    title: "Prevent sleep while tasks are running",
+                    detail: "Keep your Mac awake while Tivano runs tasks. The display can turn off, and you can still sleep manually or close the lid."
+                ) {
+                    SettingsSwitch(isOn: $settings.preventSleepDuringTasks)
+                }
+            }
+        }
         ChromeSection(title: "Languages") {
             ChromeCard {
                 ChromeRow(title: "App language", detail: "Changes apply after the app restarts.") {

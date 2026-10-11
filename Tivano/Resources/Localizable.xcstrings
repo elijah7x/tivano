@@ -1,6 +1,26 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Kimi Code" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "Kimi Code" } } }
+    },
+    "Sign in to Kimi Code with `kimi login`, then try again." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "请先运行 `kimi login` 登录 Kimi Code，然后重试。" } } }
+    },
+    "Power" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "电源" } } }
+    },
+    "Prevent sleep while tasks are running" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "任务运行时防止休眠" } } }
+    },
+    "Keep your Mac awake while Tivano runs tasks. The display can turn off, and you can still sleep manually or close the lid." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "Tivano 运行任务时，让 Mac 保持唤醒。屏幕仍可自动熄灭，也可手动休眠或合盖休眠。" } } }
+    },
     "No update found" : {
       "extractionState": "manual",
       "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "未发现更新" } } }

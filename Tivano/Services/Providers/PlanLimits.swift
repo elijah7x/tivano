@@ -77,7 +77,7 @@ enum PlanLimitsReader {
         case .copilot: try? await CopilotSession.readPlanLimits(executable: executable, environment: environment)
         case .commandcode: await CommandCodeAPI.planLimits(environment: environment)
         case .pi: await PiPlanLimits.read(environment: environment)
-        case .cursor, .opencode, .opencodeGo, .grok, .deepseek, .meta, .zai, .devin: nil
+        case .cursor, .opencode, .opencodeGo, .grok, .deepseek, .meta, .zai, .devin, .kimi: nil
         }
     }
 
