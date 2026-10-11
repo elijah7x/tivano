@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.0.6",
-      "name": "Tivano 1.0.6",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.0.6/Tivano-1.0.6.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Let composer text use the full width above a separate bottom control row, so narrow layouts wrap naturally without leaving an empty right-hand column. Keep the send button at the bottom right and collapse the model chip when space is tight.\n- Keep replies following the conversation's end as text streams and the layout changes. Restore following when scrolling back to the bottom, while preserving the reading position when browsing earlier messages.\n- Compare mirror and GitHub update feeds concurrently within a bounded response window, so a stale mirror cannot mask a newer responding source; preserve known versions and checksums and reject conflicting release metadata.\n- Cancel update downloads when their caller is cancelled, settle callbacks once and remove temporary files; never bypass verification when retrying a failed transport.\n\n## Refinements\n\n- Prefer the earliest responding feed for the same version and retry the other trusted installer origin on transport failure, in either direction. Report what the update check found without claiming unreachable sources are current.\n- Sync verified installers and update metadata to the restricted domestic mirror after publishing each release.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-10T10:37:57Z",
+      "tag_name": "v1.0.10",
+      "name": "Tivano 1.0.10",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.0.10/Tivano-1.0.10.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## New features\n\n- Add Kimi Code through its official CLI and ACP, with native sessions, model and thinking selection, permission modes, image prompts, MCP forwarding and interactive questions. Use Kimi's official icon.\n- Add a Power section above Languages in General settings. Prevent idle system sleep while chat or Hydra tasks run, enabled by default; release the assertion when all tasks finish or the option is disabled, while allowing display sleep, manual sleep and lid-close sleep.\n\n## Bug fixes\n\n- Read Claude's context occupancy from its official context report instead of cumulative turn usage. Clear stale readings while the context changes, omit unavailable readings, and show percentages above 100% without overflowing the meter.\n\n## Refinements\n\n- Style bold, italic, strikethrough and inline code in streaming replies from their first word, instead of showing raw markers that restyle and reflow the line once they close. Text that never closes settles as written when the reply finishes, and finished paragraphs no longer keep a per-character map.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-11T05:01:36Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.0.6.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.0.6/Tivano-1.0.6.dmg",
-          "size": 6358635,
-          "sha256": "e5a1b296cb0ee2b63c0f6fd8744ca8451dc6b1180877aa99255bcbef5f67007d"
+          "name": "Tivano-1.0.10.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.0.10/Tivano-1.0.10.dmg",
+          "size": 6388587,
+          "sha256": "70ff1e2ffad01da09e0961a4bc64e0768705ece9328088a742d017d99f5d61d7"
         }
       ]
     }
