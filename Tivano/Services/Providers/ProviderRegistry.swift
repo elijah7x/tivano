@@ -44,15 +44,46 @@ final class ProviderRegistry {
     private static let commandFreshness: TimeInterval = 600
     private(set) var loadingCatalogs: Set<ProviderKind> = []
 
-    @ObservationIgnored private let settings: any ProviderSettings
+    /// Visible to `ProviderRegistry+CLIUpdates`. The registry still does not see the rest of the app.
+    @ObservationIgnored let settings: any ProviderSettings
     @ObservationIgnored private let cacheKey = "providerModelCatalogs"
     // When the provider last delivered a list, persisted under `catalogDatesKey`.
     @ObservationIgnored private let catalogDatesKey = "providerModelCatalogDates"
-    @ObservationIgnored private var catalogFetchedAt: [ProviderKind: Date] = [:]
+    @ObservationIgnored var catalogFetchedAt: [ProviderKind: Date] = [:]
 
-    /// Providers whose CLI is being updated right now (see `updateCLIIfDue`).
-    private(set) var updatingCLIs: Set<ProviderKind> = []
-    @ObservationIgnored private let cliUpdatesKey = "providerCLIUpdateDates"
+    /// Installed and latest CLI versions, and whether an update is waiting or running.
+    /// A nil `latest` is an unknown feed, not confirmation that the install is current.
+    var cliUpdates: [ProviderKind: CLIUpdateStatus] = [:]
+
+    /// Whether that provider has a running turn. AppModel installs this from its runtimes.
+    /// Shared installs consult it for every provider on the same binary.
+    @ObservationIgnored var isProviderBusy: @MainActor (ProviderKind) -> Bool = { _ in false }
+
+    /// Ownership probes and release feeds. Replacing this does not install anything.
+    @ObservationIgnored var cliProbe: CLIProbe = .live
+
+    /// `--version` and the install command. A fake run replaces these and leaves `cliProbe` for feeds.
+    @ObservationIgnored var cliCommandRunner: CLICommandRunner = .live
+
+    /// When set, used instead of `refresh(_:)`. False means the version was not confirmed.
+    @ObservationIgnored var cliProviderReloader: (@MainActor (ProviderKind) async -> Bool)?
+
+    /// When set, used instead of `loadCatalog(_:force:)`. False means the catalog was not reloaded.
+    @ObservationIgnored var cliCatalogReloader: (@MainActor (ProviderKind) async -> Bool)?
+
+    @ObservationIgnored var cliCheckTasks: [ProviderKind: CLITrackedTask<Void>] = [:]
+    @ObservationIgnored var cliCheckGeneration: [ProviderKind: UUID] = [:]
+    @ObservationIgnored var cliUpdateTasks: [String: CLITrackedTask<Bool>] = [:]
+    @ObservationIgnored var cliUpdateRequesters: [String: ProviderKind] = [:]
+    @ObservationIgnored var cliRecoveryLocks: Set<String> = []
+    @ObservationIgnored var cliRefreshPending: [String: String] = [:]
+    @ObservationIgnored var cliCheckCache: [ProviderKind: CLICheckCache] = [:]
+    @ObservationIgnored var cliCheckLoop: Task<Void, Never>?
+    /// Shared by every single check and every batch. `cliCheckConcurrency` is this cap.
+    @ObservationIgnored var cliCheckPermits = ProviderRegistry.cliCheckConcurrency
+    @ObservationIgnored var cliCheckWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Bumped when an update starts waiting or running, so a check already in flight cannot publish over it.
+    @ObservationIgnored var cliStatusEpoch: [ProviderKind: UInt] = [:]
 
     /// A list read within this window is served as it is; an older one, or one cached by an
     /// earlier build that stored no date, is read again on the next ask, so a model the
@@ -307,7 +338,7 @@ final class ProviderRegistry {
         defer { signingIn = nil }
         await LoginEnvironment.load()
         guard let executable = executable(for: provider) else {
-            let missing = "\(provider.displayName) was not found."
+            let missing = String(format: AppText.localized("%@ was not found on your PATH."), provider.displayName)
             return LoginEnvironment.diagnostic.map { missing + " " + $0 } ?? missing
         }
         // The login command starts with the executable's own name; the rest are its arguments.
@@ -348,6 +379,9 @@ final class ProviderRegistry {
                 group.addTask { await self.loadCatalog(provider, force: true) }
             }
         }
+        // The button re-reads versions. `refreshAll` does not: launch already probes every CLI,
+        // and a check there would run twice.
+        await checkCLIUpdates(freshness: 0)
     }
 
     /// How many providers are checked at the same time. Every check spawns the provider's
@@ -484,10 +518,9 @@ final class ProviderRegistry {
     /// sessions. Tivano runs both headless, so a Mac that uses them only through the
     /// app stays on the version it was installed with, and a new model then fails
     /// outright: Opus 5.5 answers Claude Code 2.1.270 with "does not support this model;
-    /// version 2.1.280 or newer is required". The app runs each CLI's own updater instead.
-    private static let cliUpdateInterval: TimeInterval = 12 * 3600
-
-    /// The providers whose CLI carries its own updater (`claude update`, `codex update`).
+    /// version 2.1.280 or newer is required". Recovery for that error goes through the
+    /// same installer as a manual update. Nothing here installs on a timer.
+    /// The providers whose reply can ask for a newer CLI (`claude`, `codex`).
     static func updatesOwnCLI(_ provider: ProviderKind) -> Bool {
         provider == .claude || provider == .codex
     }
@@ -503,50 +536,20 @@ final class ProviderRegistry {
             || text.contains("update codex")
     }
 
-    /// Runs the CLI's own updater when one is due (every 12 hours) or `force`d, and when
-    /// a newer version went in, reads the provider and its catalog again so the models
-    /// that version brings show at once. Returns whether a newer version was installed.
-    /// A binary path the user set by hand is their own build, and is left alone.
+    /// Without `force`, does nothing: version checks are read-only and installs are not on a timer.
+    /// `force` is the old Claude/Codex recovery path and runs the same update as the Update button.
     @discardableResult
     func updateCLIIfDue(_ provider: ProviderKind, force: Bool = false) async -> Bool {
-        guard Self.updatesOwnCLI(provider), !CaptureRun.isEnabled, settings.binaryPath(for: provider).isEmpty else { return false }
-        // An update already under way is not run twice; a forced one waits for it and
-        // then runs, which is quick when that one already brought the newest version.
-        if updatingCLIs.contains(provider) {
-            guard force else { return false }
-            while updatingCLIs.contains(provider) { try? await Task.sleep(for: .milliseconds(500)) }
-        }
-        var dates = (UserDefaults.standard.dictionary(forKey: cliUpdatesKey) as? [String: Double]) ?? [:]
-        if !force, let last = dates[provider.rawValue],
-           Date.now.timeIntervalSince1970 - last < Self.cliUpdateInterval { return false }
-        await LoginEnvironment.load()
-        guard let executable = executable(for: provider) else { return false }
-        updatingCLIs.insert(provider)
-        defer { updatingCLIs.remove(provider) }
-        let environment = environment(for: provider)
-        let before = await Self.cliVersion(executable, environment: environment)
-        _ = try? await Shell.run(executable, ["update"], in: FileManager.default.temporaryDirectory, environment: environment, timeout: 300)
-        dates[provider.rawValue] = Date.now.timeIntervalSince1970
-        UserDefaults.standard.set(dates, forKey: cliUpdatesKey)
-        let after = await Self.cliVersion(executable, environment: environment)
-        guard let after, after != before else { return false }
-        await refresh(provider)
-        await loadCatalog(provider, force: true)
-        return true
+        guard force, Self.updatesOwnCLI(provider) else { return false }
+        return await updateCLI(provider, recovery: true)
     }
 
-    /// The version the installed CLI reports, or nil when it cannot be run.
+    /// The version the installed CLI reports, or nil when it cannot be read.
     func installedCLIVersion(_ provider: ProviderKind) async -> String? {
         await LoginEnvironment.load()
         guard let executable = executable(for: provider) else { return nil }
-        return await Self.cliVersion(executable, environment: environment(for: provider))
-    }
-
-    private nonisolated static func cliVersion(_ executable: URL, environment: [String: String]) async -> String? {
-        guard let result = try? await Shell.run(executable, ["--version"], environment: environment, timeout: 30),
-              result.succeeded else { return nil }
-        let version = result.trimmedOutput
-        return version.isEmpty ? nil : version
+        let raw = await cliCommandRunner.readVersion(executable, environment(for: provider))
+        return Self.readableCLIVersion(raw)
     }
 
     func loadCatalog(_ provider: ProviderKind, force: Bool = false) async {

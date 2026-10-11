@@ -6,6 +6,35 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-11
+
+### New features
+
+- Show each provider CLI's installed and latest version in each provider's settings, with Check again and Update buttons and a per-provider switch for update checks. Update through the channel that installed the CLI (Homebrew, npm, bun, pnpm or Claude's own updater), wait for that provider's running tasks to finish first, and hold new sessions until the update completes.
+
+### Bug fixes
+
+- End the whole process tree when Tivano stops an agent session, so MCP servers and commands the agent started no longer keep running after their session is gone.
+- Stop a turn whose agent stays alive but goes silent, such as a stalled model stream or a suspended process, instead of showing it as running forever. After five minutes without a word the working line says how long it has had no response; after ten, Tivano stops the turn and ends a session that ignores the stop. Waiting on an approval, a question, a usage limit, a merge or working Hydra heads does not count, and a running tool gets thirty minutes.
+- Keep Pi's tool gate in each edition's own library, so Tivano Dev can no longer overwrite the gate Tivano loads into its Pi sessions.
+- Read the wait a usage-limit message names, such as "try again in ~158 min", "retry-after-ms" or "reset after 18h31m10s", so auto-continue knows when the limit resets; recognize more spend, quota and credit limit messages, without treating ordinary rate limiting as a spent limit.
+- Preserve an unreadable library's original file and save new chats to a separate recovery index. Retry failed saves, keep unsaved chats in memory, and persist library changes before deleting chat documents.
+- Keep the existing conversation when an ACP agent rejects a model or mode selection. Let Kimi's model discovery proceed without applying that selection, and fall back to approval controls when a question has no usable answer choices.
+- Retain orphaned Hydra worktree copies instead of deleting them at startup, and allow quiet heads to keep running while a tool is active.
+- Let mouse-wheel scrolling over code blocks and tables browse earlier messages without snapping back to the bottom. Prevent idle system sleep during usage-limit waits and background tasks.
+- Read GitHub's installer digest and wait for Hydra merges and successful chat saves before installing an update. Lock shared external MCP configuration during cleanup and retain failed cleanup requests for retry.
+
+### Refinements
+
+- Build only the messages around the viewport in long conversations, standing measured spacers in for the rest, so scrolling stays smooth however long the chat. Jump straight to the newest messages from far up, hide the jump-to-bottom button reliably while following the reply, pause hover and clicks on rows while the content scrolls or glides, and stream short replies in smaller, more frequent steps.
+- Run every Hydra head as a thread of its own, including heads on the lead's provider, which used to run as the CLI's own sub-agents inside the lead's session. Each head now shows its progress, can be stopped on its own and works in its own copy; the lead's own sub-agent tool is switched off while Hydra is on, and turning Hydra on or off or switching pairs restarts the lead's session. Heads left running by an older version settle as stopped.
+- Stop updating Claude and Codex silently in the background every twelve hours; version checks are now read-only. A model that needs a newer CLI still updates it and resends the message, and a failed update names the install command to run.
+- Keep full patches for only the first 60 files a single command changes, and line counts for the rest, so a codemod or generator touching hundreds of files no longer puts megabytes into the timeline and the thread file. Every file still counts toward the turn and Hydra merges, and count-only files show their path and line counts in the timeline and the diff panel.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.0.10] - 2026-10-11
 
 ### New features

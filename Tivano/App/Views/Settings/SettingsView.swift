@@ -69,7 +69,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
-        case .providers: ["codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "meta", "muse", "spark", "zai", "z.ai", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
+        case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "meta", "muse", "spark", "zai", "z.ai", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
         case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting"]
         case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "clone", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
         case .shortcuts: ["keyboard", "keys"]
@@ -590,7 +590,7 @@ private struct ProvidersRefreshButton: View {
     }
 }
 
-/// Shows what launch (or the refresh button) last found: opening or scrolling the page checks no provider.
+/// Shows provider status plus cached, read-only CLI update checks.
 /// The one read it starts on its own is each signed-in account's usage limits, which the registry
 /// throttles to once a minute, so the numbers are on screen without a trip through a chat.
 private struct ProvidersSettingsPage: View {
@@ -624,6 +624,9 @@ private struct ProvidersSettingsPage: View {
                 )
             }
         }
+        .task {
+            await model.providers.checkCLIUpdates(freshness: ProviderRegistry.cliCheckFreshnessOnOpen)
+        }
     }
 }
 
@@ -654,6 +657,32 @@ private struct ProviderSettingsSection: View {
         return !status.isChecking
     }
 
+    private var updateState: ProviderUpdateViewState {
+        let update = model.providers.cliUpdates[provider]
+        let phase: ProviderUpdateViewState.Phase
+        switch update?.phase {
+        case .checking: phase = .checking
+        case .current: phase = .current
+        case nil: phase = model.settings.monitorsUpdates(provider) ? .checking : .current
+        case .available: phase = .available
+        case .waiting: phase = .waiting
+        case .updating: phase = .updating
+        case .updated: phase = .updated
+        case .failed: phase = .failed
+        }
+        return ProviderUpdateViewState(
+            phase: phase,
+            installed: update?.installed ?? model.providers.status(provider).version,
+            latest: update?.latest,
+            command: update?.channel?.command,
+            error: update?.error,
+            updateFailed: update?.updateFailed ?? false,
+            monitoringEnabled: model.providers.monitorsCLIUpdates(provider),
+            customBinaryPath: !model.settings.binaryPath(for: provider).isEmpty,
+            channelKnown: update?.channel != nil
+        )
+    }
+
     var body: some View {
         let status = model.providers.status(provider)
         VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
@@ -667,10 +696,8 @@ private struct ProviderSettingsSection: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(verbatim: Chrome.localized(status.isChecking ? "Checking…" : status.summary))
                                 .font(.ui(size: 13))
-                            if let version = status.version, !provider.isAPIKeyBased {
-                                Text(verbatim: String(format: Chrome.localized("Version %@"), version))
-                                    .font(.ui(size: 11))
-                                    .foregroundStyle(Chrome.secondaryText)
+                            if status.isInstalled, !provider.isAPIKeyBased {
+                                ProviderUpdateSubtitle(state: updateState)
                             } else if provider.isAPIKeyBased, status.apiKeyConfigured, let host = provider.apiHost {
                                 Text(verbatim: String(format: Chrome.localized("Native API · %@"), host))
                                     .font(.ui(size: 11))
@@ -678,6 +705,13 @@ private struct ProviderSettingsSection: View {
                             }
                         }
                         Spacer()
+                        if status.isInstalled, !provider.isAPIKeyBased {
+                            ProviderUpdateAction(
+                                state: updateState,
+                                onCheck: { Task { await model.providers.checkCLIUpdate(provider, force: true) } },
+                                onUpdate: { Task { await model.providers.updateCLI(provider) } }
+                            )
+                        }
                     }
                     .padding(.leading, 16)
                     .padding(.trailing, Chrome.rowControlTrailingPadding)
@@ -738,6 +772,11 @@ private struct ProviderSettingsSection: View {
                     }
                     if !provider.isAPIKeyBased {
                         ChromeRowDivider()
+                        ProviderUpdateMonitoringRow(state: updateState, isOn: Binding(
+                            get: { model.settings.monitorsUpdates(provider) },
+                            set: { model.settings.setMonitorsUpdates($0, for: provider) }
+                        ))
+                        ChromeRowDivider()
                         ChromeRow(title: "Binary path", detail: status.executable?.path) {
                             TextField("", text: $binaryPath, prompt: Text(provider.executableName))
                                 .textFieldStyle(.roundedBorder)
@@ -746,7 +785,9 @@ private struct ProviderSettingsSection: View {
                         }
                         if !status.isInstalled {
                             ChromeRowDivider()
-                            ChromeRow(title: "Install", detail: LoginEnvironment.diagnostic ?? String(format: Chrome.localized("%@ was not found on your PATH."), provider.displayName)) {
+                            let missing = String(format: Chrome.localized("%@ was not found on your PATH."), provider.displayName)
+                            let detail = LoginEnvironment.diagnostic.map { missing + " " + $0 } ?? missing
+                            ChromeRow(title: "Install", detail: detail) {
                                 Link(destination: provider.installURL) {
                                     Text(verbatim: String(format: Chrome.localized("Get %@"), provider.displayName))
                                         .frame(height: Chrome.rowButtonLabelHeight)
@@ -789,6 +830,15 @@ private struct ProviderSettingsSection: View {
         .onChange(of: binaryPath) { _, value in
             guard value != model.settings.binaryPath(for: provider) else { return }
             model.settings.setBinaryPath(value, for: provider)
+        }
+        .onChange(of: model.settings.monitorsUpdates(provider)) { _, _ in
+            model.providers.cliMonitoringChanged(provider)
+        }
+        .onChange(of: model.settings.isEnabled(provider)) { _, _ in
+            model.providers.cliMonitoringChanged(provider)
+        }
+        .onChange(of: model.settings.binaryPath(for: provider)) { _, _ in
+            model.providers.cliMonitoringChanged(provider)
         }
         .onChange(of: apiKey) { _, value in
             // Only an edit counts: loading the stored key into the field must not save or check it.

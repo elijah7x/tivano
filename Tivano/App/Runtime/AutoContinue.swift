@@ -15,7 +15,9 @@ final class AutoContinue {
     static let margin: TimeInterval = 60
 
     /// The chats waiting for their limit, and when they go on.
-    private(set) var resumesAt: [UUID: Date] = [:]
+    private(set) var resumesAt: [UUID: Date] = [:] {
+        didSet { app?.updateTaskSleepPrevention() }
+    }
 
     /// How a chat's wait ended, once it is over. The notice's row reads this for its words
     /// after the wait; a fresh wait clears it.

@@ -3,11 +3,9 @@ import OSLog
 
 /// Drives `codex app-server` over JSON-RPC.
 ///
-/// With Hydra on, the thread starts with config overrides that put the heads on the pair's
-/// model and effort and cap how many run at once, and with developer instructions that
-/// steer the lead towards `spawn_agent`. A head is a child thread of the app-server:
-/// `thread/started` announces it with the lead as its parent, its own notifications carry
-/// its thread id and go out wrapped in `agentEvent`, and its `turn/completed` ends it.
+/// With Hydra on, the thread starts with `multi_agent` and `multi_agent_v2` switched off and
+/// with developer instructions that carry the lead's delegation-block policy: every head is
+/// a thread Tivano runs, never a child thread of this app-server.
 @MainActor
 final class CodexSession: ProviderSession {
     private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "codex")
@@ -254,18 +252,12 @@ final class CodexSession: ProviderSession {
         if let model = configuration.model { params["model"] = .string(model) }
         var config: [String: JSONValue] = [:]
         if let hydra = configuration.hydra {
-            if hydra.runsNatively {
-                config.merge(HydraPrompts.codexConfig(hydra)) { _, hydra in hydra }
-                params["developerInstructions"] = .string(HydraPrompts.policy(for: .codex, hydra))
-            } else {
-                // Heads on another provider are Tivano-run: the lead asks for them with the
-                // delegation block, and Codex's own agents are switched off for the thread,
-                // whatever the user's config enables. Told only in words, a lead still
-                // reached for spawn_agent, ran its heads on itself and the pair's model never
-                // saw them.
-                config["features"] = ["multi_agent": .bool(false)]
-                params["developerInstructions"] = .string(HydraPrompts.fallbackPolicy(hydra))
-            }
+            // The heads are Tivano-run: the lead asks for them with the delegation block,
+            // and Codex's own agents are switched off for the thread, whatever the user's
+            // config enables. Told only in words, a lead still reached for spawn_agent and
+            // ran its heads inside its own session, out of the app's sight.
+            config["features"] = ["multi_agent": .bool(false), "multi_agent_v2": .bool(false)]
+            params["developerInstructions"] = .string(HydraPrompts.fallbackPolicy(hydra))
         }
         if !config.isEmpty { params["config"] = .object(config) }
         // Anti-slop guidance rides along for every thread, Hydra or not, and combines with
@@ -1008,20 +1000,11 @@ final class CodexSession: ProviderSession {
             // A spawn names the heads it reached; the brief is the best task line when it
             // carries one, and a spawn without one still registers its heads.
             guard item["tool"]?.string == "spawnAgent" else { return }
-            // A spawn made with a profile's own model and effort routes the head to that
-            // profile (the knobs `codexConfig` exposes); exactly one match is
-            // authoritative, none or several leave the head unrouted.
-            let itemModel = item["model"]?.string
-            let itemEffort = item["reasoningEffort"]?.string
-            let routed = configuration.hydra.flatMap { hydra -> String? in
-                let matches = HydraPrompts.nativeRoutableProfiles(of: hydra).filter { $0.model == itemModel && $0.effort == itemEffort }
-                return matches.count == 1 ? matches[0].name : nil
-            }
             let prompt = item["prompt"]?.string?.trimmed ?? ""
             for receiver in (item["receiverThreadIds"]?.array ?? []).compactMap(\.string) {
                 guard receiver != threadID else { continue }
                 if !headThreads.contains(receiver) { headThreads.insert(receiver) }
-                onEvent?(.agentStarted(AgentSpawn(id: receiver, taskID: nil, toolUseID: item["id"]?.string, description: prompt.isEmpty ? "Head" : TextCleanup.singleLine(prompt, limit: 80), prompt: prompt.nilIfEmpty, model: item["model"]?.string, profile: routed)))
+                onEvent?(.agentStarted(AgentSpawn(id: receiver, taskID: nil, toolUseID: item["id"]?.string, description: prompt.isEmpty ? "Head" : TextCleanup.singleLine(prompt, limit: 80), prompt: prompt.nilIfEmpty, model: item["model"]?.string)))
             }
         case "subAgentActivity":
             guard let agentThread = item["agentThreadId"]?.string,

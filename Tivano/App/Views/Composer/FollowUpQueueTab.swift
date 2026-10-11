@@ -431,11 +431,7 @@ private struct FollowUpRow: View {
             .alignmentGuide(VerticalAlignment.center) { $0[VerticalAlignment.center] + proseLift }
             Spacer(minLength: 4)
             HStack(spacing: 0) {
-                // Native heads run inside the lead's turn, so that turn is not stopped for
-                // a queued prompt; it goes the moment they have reported.
-                let sendHelp = runtime.hasWorkingNativeHeads && runtime.isRunning
-                    ? "Send as soon as the heads report"
-                    : runtime.isRunning ? "Send now (stops the running turn)" : "Send now"
+                let sendHelp = runtime.isRunning ? "Send now (stops the running turn)" : "Send now"
                 QueueIconButton(symbol: "paperplane", help: sendHelp) {
                     runtime.sendFollowUpNow(prompt.id)
                 }

@@ -79,7 +79,10 @@ struct ThreadTimeline: View, Equatable {
     /// stack; only loading history or a jump moves the start. Nil until the thread anchors,
     /// when the newest `firstPaint` blocks are the window.
     @State private var windowStartID: String?
-    @State private var mountedRange: Range<Int>?
+    /// The blocks the stack builds, by identity; the rest of the window stands in as exact
+    /// spacers of their measured heights. Nil builds the whole window: before anything is
+    /// measured, after the width changed, and as the last repair of a blank viewport.
+    @State private var mountedWindow: MountedWindow?
     @State private var measurements = TimelineMeasurements()
     /// The runtime's unattended-turn token as this view last saw it (see
     /// `ThreadRuntime.autoStartedTurnToken`). Nil until the first turn this view sees
@@ -152,7 +155,7 @@ struct ThreadTimeline: View, Equatable {
             }
             .onAppear {
                 scrollChrome.update(travel: 0)
-                scrollState.showsJumpButton = false
+                if scrollState.showsJumpButton { scrollState.showsJumpButton = false }
             }
         } else {
             timeline(blocks, hydraMentionPersonas: hydraMentionPersonas, hydraMentionTargets: hydraMentionTargets)
@@ -211,10 +214,7 @@ struct ThreadTimeline: View, Equatable {
         // history still loads on demand; only this start moves.
         let startIndex = windowStartIndex(in: blocks)
         let hidden = startIndex
-        let range = mountedRange.map {
-            let lower = min(blocks.count, max(startIndex, $0.lowerBound))
-            return lower..<min(blocks.count, max(lower, $0.upperBound))
-        } ?? startIndex..<blocks.count
+        let range = mountedWindow?.range(in: blocks, start: startIndex) ?? startIndex..<blocks.count
         let visible = Array(blocks[range])
         let topSpace = measurements.height(of: blocks[startIndex..<range.lowerBound])
         let bottomSpace = measurements.height(of: blocks[range.upperBound..<blocks.count])
@@ -281,6 +281,8 @@ struct ThreadTimeline: View, Equatable {
     /// streaming text never yanks the reader back down.
     private func jump(to id: String, in blocks: [DisplayBlock], animated: Bool) {
         tracking.noteUserNavigation()
+        let far = id == blocks.last?.id && tracking.distanceFromBottom > Self.farJump(viewportHeight)
+        let previousWindow = mountedWindow
         var needsExpand = false
         if let index = blocks.firstIndex(where: { $0.id == id }) {
             let firstVisible = windowStartIndex(in: blocks)
@@ -294,15 +296,16 @@ struct ThreadTimeline: View, Equatable {
         }
         if let index = blocks.firstIndex(where: { $0.id == id }), !tracking.isPinnedToBottom {
             // Unknown intervening rows must measure before they can become spacers.
-            mountedRange = measurements.window(around: index, in: blocks, start: windowStartIndex(in: blocks), viewport: viewportHeight)
+            mountedWindow = MountedWindow(measurements.window(around: index, in: blocks, start: windowStartIndex(in: blocks), viewport: viewportHeight), in: blocks)
             needsExpand = true
-        } else { mountedRange = nil }
+        } else { mountTail(in: blocks) }
+        needsExpand = needsExpand || mountedWindow != previousWindow
         let generation = tracking.navigationGeneration
         let scroll = { @MainActor in
             guard generation == tracking.navigationGeneration else { return }
             position.scrollTo(id: id, anchor: .top)
         }
-        if animated {
+        if animated && !far {
             if needsExpand {
                 DispatchQueue.main.async { withAnimation(.smooth(duration: 0.35)) { scroll() } }
             } else {
@@ -347,7 +350,29 @@ struct ThreadTimeline: View, Equatable {
         historyLoadPending = true
         anchorsBottomOnGrowth = true
         windowStartID = blocks[target].id
-        mountedRange = nil
+        // The new page has never been measured, so it is built; the blocks the reader is
+        // on stay as they are rather than the whole window being built again.
+        if let window = mountedWindow {
+            mountedWindow = MountedWindow(lowerID: blocks[target].id, upperID: window.upperID)
+        }
+    }
+
+    /// Makes the stack reach the conversation's end for a reader being taken there. Close
+    /// by, the window just stretches to the end; far up, it jumps to the newest blocks
+    /// alone, rather than building every block in between.
+    private func mountTail(in blocks: [DisplayBlock]) {
+        guard let window = mountedWindow, window.upperID != nil, !blocks.isEmpty else { return }
+        if tracking.distanceFromBottom > Self.farJump(viewportHeight) {
+            mountedWindow = MountedWindow(measurements.tail(of: blocks, start: windowStartIndex(in: blocks), viewport: viewportHeight), in: blocks)
+        } else {
+            mountedWindow = MountedWindow(lowerID: window.lowerID, upperID: nil)
+        }
+    }
+
+    /// Past this distance from the end, a trip there lands at once: a glide would pass over
+    /// blocks the stack holds only as spacers.
+    private static func farJump(_ viewportHeight: CGFloat) -> CGFloat {
+        max(1200, viewportHeight * 2)
     }
 
     /// The index of the first block the lazy window keeps. Anchored on identity, a block
@@ -499,18 +524,6 @@ struct ThreadTimeline: View, Equatable {
                 }
                 .id(stackGeneration)
                 .modifier(ScrollFreeze(tracking: tracking))
-                // The end of the conversation. While it is on screen the reader is at the latest message.
-                Color.clear
-                    .frame(height: 1)
-                    .onScrollVisibilityChange(threshold: 0.01) { isVisible in
-                        guard scrollState.showsJumpButton == isVisible else { return }
-                        DispatchQueue.main.async {
-                            guard scrollState.showsJumpButton == isVisible else { return }
-                            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
-                                scrollState.showsJumpButton = !isVisible
-                            }
-                        }
-                    }
             }
             // The rows open their steps against this: an expansion at the end of the
             // conversation scrolls the timeline down to show what opened, in the tap's own
@@ -578,12 +591,12 @@ struct ThreadTimeline: View, Equatable {
         }
         .onChange(of: [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code]) {
             measurements.frames.removeAll()
-            mountedRange = nil
+            mountedWindow = nil
             tracking.armViewportRefresh()
         }
         .onChange(of: layoutWidth ?? min(860, paneWidth)) { _, width in
             measurements.invalidate(width: width)
-            mountedRange = nil
+            mountedWindow = nil
         }
         // No animation inside the timeline while the window is being dragged; a spring
         // restarted every frame is what made rows lag behind the window and land somewhere else.
@@ -598,15 +611,11 @@ struct ThreadTimeline: View, Equatable {
             }
         }
         .onScrollPhaseChange { _, phase in
-            // Fingers on the trackpad freeze the rows (no click can land then anyway); the
-            // moment the scroll coasts or settles they come back, so a click that stops a
-            // flick always reaches its target. Wheel scrolling reports no phases and is
-            // caught by the movement below instead.
+            // Inertia and animated navigation still move rows under the pointer. The
+            // movement watch restores hit-testing 150ms after the last moving frame.
             tracking.notePhase(phase)
-            if phase == .interacting {
+            if phase == .interacting || phase == .decelerating || phase == .animating {
                 noteScrollMovement()
-            } else {
-                liftScrollFreeze()
             }
             // What was put off for the scroll runs now that it is over: a repair the blank
             // watch asked for, a refresh the drift asked for.
@@ -624,14 +633,17 @@ struct ThreadTimeline: View, Equatable {
         .onScrollGeometryChange(for: ScrollMetrics.self, of: ScrollMetrics.init(geometry:)) { old, new in
             scrollChrome.update(travel: new.travel)
             tracking.noteGeometry(offset: new.offset, distanceFromBottom: new.distanceFromBottom, travel: new.travel)
+            // After every branch below has had its say on the pin.
+            defer { updateJumpButton() }
             // The timeline's own nudge (`refreshViewport`) moves the offset a point and back:
             // never the reader scrolling, and never a reason to freeze the rows.
             let nudging = tracking.isNudging
             tracking.noteNudgeSeen()
             let wheelInput = tracking.hasRecentWheelInput
-            // Movement with no phase behind it: wheel ticks. Content growing under a
-            // resting reader is not scrolling.
-            if !nudging, wheelInput, new.offset != old.offset, !tracking.isCoasting {
+            // Only scroll input or an active scroll phase freezes the rows; layout
+            // following new text under a resting reader does not.
+            if !nudging, new.offset != old.offset,
+               tracking.isUserScrolling || tracking.isCoasting || wheelInput {
                 noteScrollMovement()
             }
             // An anchor's offset can lag behind a content-size change during layout or an
@@ -648,7 +660,7 @@ struct ThreadTimeline: View, Equatable {
                 || (!nudging && wheelInput && readerMoved
                     && new.containerHeight == old.containerHeight && !tracking.isCoasting)
             guard tracking.placementToken == nil else { return }
-            updateMountedRange(in: blocks, offset: new.travel, height: new.containerHeight)
+            updateMountedWindow(in: blocks, offset: new.offset, height: new.containerHeight)
             let atRest = !tracking.isUserScrolling && !tracking.isCoasting
             if atRest, !scrolled {
                 // The content changed shape under a resting reader and an anchor moved the
@@ -743,6 +755,12 @@ struct ThreadTimeline: View, Equatable {
             // bottom anchor put the viewport) is caught a beat from now.
             tracking.armBlankWatch()
             await warmMarkdown()
+            // The window opened whole, so every block could measure. Once the thread has
+            // settled the stack narrows to the blocks around the viewport, rather than on
+            // the reader's first scrolled frame.
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled, !tracking.isUserScrolling else { return }
+            updateMountedWindow(in: blocks, offset: tracking.offset, height: viewportHeight)
         }
         .onChange(of: tracking.checkRequest) {
             // A coast whose end phase was never delivered is cleared by the phase watch,
@@ -784,10 +802,13 @@ struct ThreadTimeline: View, Equatable {
             let unattended = seenAutoStartedTurnToken.map { $0 != runtime.autoStartedTurnToken } ?? false
             seenAutoStartedTurnToken = runtime.autoStartedTurnToken
             if wasAtEnd || !unattended {
+                let far = tracking.distanceFromBottom > Self.farJump(viewportHeight)
+                mountTail(in: blocks)
                 tracking.isPinnedToBottom = true
                 anchorsBottomOnGrowth = true
-                if wasAtEnd {
+                if wasAtEnd || far {
                     // Already there: the message and the working line appear in place.
+                    // From far up it lands at once too (see `farJump`).
                     withTransaction(Self.unanimated) { position.scrollTo(edge: .bottom) }
                 } else {
                     withAnimation(.easeOut(duration: 0.25)) { position.scrollTo(edge: .bottom) }
@@ -810,10 +831,17 @@ struct ThreadTimeline: View, Equatable {
             tracking.noteUserNavigation()
             tracking.isPinnedToBottom = true
             anchorsBottomOnGrowth = true
-            mountedRange = nil
+            // From far up the end lands at once: the glide would cross blocks the stack
+            // holds only as spacers.
+            let far = tracking.distanceFromBottom > Self.farJump(viewportHeight)
+            mountTail(in: blocks)
             let generation = tracking.navigationGeneration
             DispatchQueue.main.async {
                 guard generation == tracking.navigationGeneration else { return }
+                if far {
+                    withTransaction(Self.unanimated) { position.scrollTo(edge: .bottom) }
+                    return
+                }
                 tracking.animatedNavigation = true
                 withAnimation(.smooth(duration: 0.35)) { position.scrollTo(edge: .bottom) }
             }
@@ -849,9 +877,10 @@ struct ThreadTimeline: View, Equatable {
             if visible.count > TimelineWindow.eagerLimit {
                 windowStartID = blocks[blocks.count - TimelineWindow.initial].id
             }
+            mountTail(in: blocks)
             tracking.isPinnedToBottom = true
             anchorsBottomOnGrowth = true
-            scrollState.showsJumpButton = false
+            if scrollState.showsJumpButton { scrollState.showsJumpButton = false }
             withTransaction(Self.unanimated) { position.scrollTo(edge: .bottom) }
         }
         .onChange(of: runtime.threadID) { oldID, _ in
@@ -861,7 +890,7 @@ struct ThreadTimeline: View, Equatable {
             // A new thread starts with a fresh window on its newest messages, and no
             // block from the old one is on screen any more.
             windowStartID = nil
-            mountedRange = nil
+            mountedWindow = nil
             measurements = TimelineMeasurements()
             anchorsBottomOnGrowth = true
             historyLoadPending = false
@@ -874,11 +903,15 @@ struct ThreadTimeline: View, Equatable {
         let ids = measurements.blockIDs
         entry.pinned = tracking.isPinnedToBottom
         entry.windowStartID = windowStartID
-        entry.mountedIDs = mountedRange.map { Array(ids.dropFirst($0.lowerBound).prefix($0.count)) } ?? ids
+        let start = windowStartID.flatMap { ids.firstIndex(of: $0) } ?? 0
+        let mounted = mountedWindow?.range(ids: ids, start: start).map { Array(ids[$0]) } ?? ids
+        entry.mountedIDs = mounted
         entry.frames = measurements.frames
         entry.width = measurements.width
         entry.fontSizes = [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code]
-        if let id = ids.first(where: { measurements.viewportFrame($0, offset: tracking.offset).map { $0.maxY > 0 && $0.minY < viewportHeight } ?? false }),
+        // Only a block the stack holds has a frame where it is now: a spacer's blocks keep
+        // the frames they last laid out at.
+        if let id = mounted.first(where: { measurements.viewportFrame($0, offset: tracking.offset).map { $0.maxY > 0 && $0.minY < viewportHeight } ?? false }),
            let frame = measurements.viewportFrame(id, offset: tracking.offset) {
             entry.anchorID = id
             entry.anchorOffset = frame.minY
@@ -900,7 +933,7 @@ struct ThreadTimeline: View, Equatable {
         // Unknown heights must lay out before they can stand in for offscreen rows.
         let unknownBefore = (start..<lower).first { measurements.frames[blocks[$0].id] == nil }
         let unknownAfter = (upper..<blocks.count).last { measurements.frames[blocks[$0].id] == nil }
-        mountedRange = (unknownBefore ?? lower)..<(unknownAfter.map { $0 + 1 } ?? upper)
+        mountedWindow = MountedWindow((unknownBefore ?? lower)..<(unknownAfter.map { $0 + 1 } ?? upper), in: blocks)
         keepAnchor(id, offset: entry.anchorOffset, scrollFirst: true)
         return true
     }
@@ -945,49 +978,106 @@ struct ThreadTimeline: View, Equatable {
                     scroll.reflectScrolledClipView(clip)
                 }
             }
-            scrollState.showsJumpButton = tracking.distanceFromBottom >= 48
+            updateJumpButton()
         }
+    }
+
+    /// The jump button is for a reader who left the end: unpinned and a real distance up.
+    /// It used to follow a one-point marker at the end of the content coming on and off
+    /// screen, and a pinned reader's end leaves the screen for a frame whenever a streaming
+    /// row grows ahead of the snap that follows it; the marker's "back on screen" landing
+    /// before its deferred "gone" write was dropped, and the button stayed up over a
+    /// timeline sitting at its end. It is worked out from the pin and the distance instead,
+    /// read again when the write lands, and only written when it changes.
+    private func updateJumpButton() {
+        let tracking = tracking
+        let resolve: @MainActor () -> Bool = { !tracking.isPinnedToBottom && tracking.distanceFromBottom >= 48 }
+        guard resolve() != scrollState.showsJumpButton else { return }
+        scrollState.settleJumpButton(resolve)
+    }
+
+    /// Keeps the stack to the blocks around the viewport, the way a virtualized list does:
+    /// blocks within `mountMargin` of what is on screen are built, blocks past `keepMargin`
+    /// go back to being part of a spacer of their measured height, and everything between
+    /// stays as it is, so a reader moving back and forth over a stretch rebuilds nothing.
+    /// The stack holds a screenful or two of blocks however long the chat, so a scrolled
+    /// frame walks, hit-tests and composites those and not the whole window (an eager stack
+    /// of every loaded turn was most of the cost of a scrolled frame on a long chat).
+    ///
+    /// Runs on every scrolled frame, so it writes view state only when the range moves: a
+    /// block crossing a margin, not a pixel of scroll. Positions come from the measured
+    /// heights, anchored on the first block the stack holds, whose frame is live: a block
+    /// behind a spacer keeps the frame it last laid out at, and loading history above
+    /// makes that stale. A block that has never been measured has no height to stand in
+    /// for, so it is built once it comes near, and nothing past it is placed until it has.
+    private func updateMountedWindow(in blocks: [DisplayBlock], offset: CGFloat, height: CGFloat) {
+        guard height > 0, !blocks.isEmpty else { return }
+        let start = windowStartIndex(in: blocks)
+        guard start < blocks.count else { return }
+        let current = mountedWindow?.range(in: blocks, start: start) ?? start..<blocks.count
+        guard current.lowerBound < blocks.count,
+              let anchorFrame = measurements.frames[blocks[current.lowerBound].id] else { return }
+        let spacing = TimelineMetrics.rowSpacing
+        var y = anchorFrame.minY
+        for index in start..<current.lowerBound {
+            guard let rowHeight = measurements.frames[blocks[index].id]?.height else { return }
+            y -= rowHeight + spacing
+        }
+        let top = offset - Chrome.contentTopInset
+        let bottom = top + height
+        let mountMargin = Self.mountMargin(height)
+        let keepMargin = mountMargin * 2.5
+        var want: (lower: Int?, upper: Int) = (nil, start)
+        var keep: (lower: Int?, upper: Int) = (nil, start)
+        for index in start..<blocks.count {
+            guard let rowHeight = measurements.frames[blocks[index].id]?.height else {
+                // Unmeasured: built once its top comes near; nothing below it can be placed.
+                if y <= bottom + mountMargin {
+                    if want.lower == nil { want.lower = index }
+                    if keep.lower == nil { keep.lower = index }
+                    want.upper = index
+                    keep.upper = index
+                }
+                break
+            }
+            let end = y + rowHeight
+            if want.lower == nil, end >= top - mountMargin { want.lower = index }
+            if keep.lower == nil, end >= top - keepMargin { keep.lower = index }
+            if y <= bottom + mountMargin { want.upper = index }
+            if y <= bottom + keepMargin { keep.upper = index } else { break }
+            y = end + spacing
+        }
+        // The viewport is past every block (a short thread, a bounce): nothing to place by.
+        guard let wantLower = want.lower else { return }
+        var lower = min(wantLower, max(current.lowerBound, keep.lower ?? wantLower))
+        var upper = max(want.upper + 1, min(current.upperBound, keep.upper + 1))
+        // A reader at the end follows it: whatever lands there is built as it arrives.
+        if tracking.isPinnedToBottom { upper = blocks.count }
+        // Nothing leaves while the layout is still settling (a thread opening, history
+        // landing above, a placement holding a row in place): only exact spacers keep the
+        // content where it is, and those need heights that have stopped moving.
+        if historyLoadPending || tracking.isArriving || tracking.placementToken != nil {
+            lower = min(lower, current.lowerBound)
+            upper = max(upper, current.upperBound)
+        }
+        let proposed = lower..<min(blocks.count, max(lower + 1, upper))
+        guard proposed != current else { return }
+        let window: MountedWindow? = proposed.lowerBound <= start && proposed.upperBound >= blocks.count
+            ? nil : MountedWindow(proposed, in: blocks)
+        guard window != mountedWindow else { return }
+        withTransaction(Self.unanimated) { mountedWindow = window }
+    }
+
+    /// How far beyond the viewport blocks are built ahead of the reader, so a block is
+    /// laid out a good way before it scrolls into view rather than on the frame it does.
+    private static func mountMargin(_ viewportHeight: CGFloat) -> CGFloat {
+        max(600, viewportHeight)
     }
 
     /// The content just moved under the pointer. Freezes hover and hit-testing on the
     /// rows if they are not already, and (re)arms the watch that lifts the freeze once
     /// no frame has moved for 150ms. The flag, the timestamp and the watch all live on
     /// the tracking object, so noting a frame's movement writes no view state.
-    private func updateMountedRange(in blocks: [DisplayBlock], offset: CGFloat, height: CGFloat) {
-        // Only a window a jump or a restored place opened narrows the stack, and scrolling
-        // only ever widens it: evicting rows behind the reader and building them again on
-        // the way back was a stream of fresh text views mid-scroll, the worst of its jank.
-        guard let current = mountedRange else { return }
-        guard !tracking.isPinnedToBottom, height > 0 else {
-            mountedRange = nil
-            return
-        }
-        let start = windowStartIndex(in: blocks)
-        // Positions run from the measured heights, anchored on the first mounted row: a
-        // row behind a spacer keeps the frame it last laid out at, which history loading
-        // above it makes stale, and a window picked from that would mount the wrong rows.
-        let anchor = min(blocks.count, max(start, mountedRange?.lowerBound ?? start))
-        guard anchor < blocks.count, let anchorFrame = measurements.frames[blocks[anchor].id] else { return }
-        var top = anchorFrame.minY - measurements.height(of: blocks[start..<anchor])
-        var found: Int?
-        for candidate in start..<blocks.count {
-            guard let rowHeight = measurements.frames[blocks[candidate].id]?.height else { break }
-            if top + rowHeight >= offset && top <= offset + height {
-                found = candidate
-                break
-            }
-            top += rowHeight + TimelineMetrics.rowSpacing
-        }
-        guard let index = found else { return }
-        let window = measurements.window(around: index, in: blocks, start: start, viewport: height * 2)
-        let proposed = min(window.lowerBound, current.lowerBound)..<max(window.upperBound, current.upperBound)
-        if proposed.lowerBound <= start && proposed.upperBound >= blocks.count {
-            withTransaction(Self.unanimated) { mountedRange = nil }
-        } else if proposed != current {
-            withTransaction(Self.unanimated) { mountedRange = proposed }
-        }
-    }
-
     private func noteScrollMovement() {
         tracking.lastMovementAt = CACurrentMediaTime()
         guard !tracking.isReaderScrolling else { return }
@@ -998,21 +1088,25 @@ struct ThreadTimeline: View, Equatable {
         let timeline = runtime.threadID
         tracking.settleWatch = Task { @MainActor in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(80))
-                if CACurrentMediaTime() - tracking.lastMovementAt >= 0.15 {
-                    if tracking.isReaderScrolling { tracking.isReaderScrolling = false }
-                    tracking.reportActivity(timeline: timeline)
-                    return
+                let remaining = 0.15 - (CACurrentMediaTime() - tracking.lastMovementAt)
+                if remaining > 0 {
+                    try? await Task.sleep(for: .seconds(remaining))
+                    continue
                 }
+                if tracking.isReaderScrolling { tracking.isReaderScrolling = false }
+                tracking.settleWatch = nil
+                tracking.reportActivity(timeline: timeline)
+                if tracking.repairSkippedWhileScrolling {
+                    tracking.repairSkippedWhileScrolling = false
+                    tracking.armBlankWatch()
+                }
+                if tracking.refreshSkippedWhileScrolling {
+                    tracking.refreshSkippedWhileScrolling = false
+                    tracking.armViewportRefresh()
+                }
+                return
             }
         }
-    }
-
-    private func liftScrollFreeze() {
-        tracking.settleWatch?.cancel()
-        tracking.settleWatch = nil
-        if tracking.isReaderScrolling { tracking.isReaderScrolling = false }
-        tracking.reportActivity(timeline: runtime.threadID)
     }
 
     /// Puts the viewport back on the conversation when a layout pass has left it showing
@@ -1047,6 +1141,9 @@ struct ThreadTimeline: View, Equatable {
         } else if tracking.showsNothing {
             switch tracking.blankRepairs {
             case 0:
+                // A spacer whose heights went stale can be all the viewport is over: the
+                // whole window is built again, and narrows on the next scrolled frame.
+                if mountedWindow != nil { mountedWindow = nil }
                 refreshViewport()
             case 1:
                 stackGeneration += 1
@@ -1218,8 +1315,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     @ObservationIgnored var isUserScrolling = false
     /// When the content last moved, for lifting the scroll freeze.
     @ObservationIgnored var lastMovementAt: CFTimeInterval = 0
-    /// True while a flick coasts or a programmatic scroll animates: movement that must
-    /// not freeze the rows, since a click may land any moment.
+    /// True while a flick coasts or a programmatic scroll animates.
     @ObservationIgnored var isCoasting = false
     /// The message the reader is on, for the rail: the sent message at or above the block
     /// in the middle of what is on screen. Written only when it changes, so the rail
@@ -1630,12 +1726,23 @@ private struct ScrollViewProbe: NSViewRepresentable {
                       let content = window?.contentView, let parent = content.superview else { return event }
                 let point = parent.convert(event.locationInWindow, from: nil)
                 let hit = content.hitTest(point)
-                // A nested text/code scroller, composer, panel or another window owns
-                // its own input; none of it may cancel this timeline's following.
-                guard hit?.enclosingScrollView === scrollView else { return event }
+                guard Self.routesVerticalWheel(from: hit, to: scrollView) else { return event }
                 onWheel()
                 return event
             }
+        }
+
+        private static func routesVerticalWheel(from hit: NSView?, to timeline: NSScrollView) -> Bool {
+            var owner = hit?.enclosingScrollView
+            while let scroll = owner {
+                if scroll === timeline { return true }
+                // Horizontal markdown scrollers pass vertical movement to the timeline.
+                // A nested vertical viewport keeps its own input, even with hidden bars.
+                guard !scroll.hasVerticalScroller, let document = scroll.documentView,
+                      document.bounds.height <= scroll.contentView.bounds.height + 1 else { return false }
+                owner = scroll.superview?.enclosingScrollView
+            }
+            return false
         }
     }
 }
@@ -2171,7 +2278,10 @@ final class TimelineBlockCache {
 enum TimelineWindow {
     static let firstPaint = 3
     static let initial = 24
-    static let page = 24
+    /// A page of history has never been measured, so all of it is built the frame it lands,
+    /// mid-scroll; a small page keeps that frame short, and the next one follows as the
+    /// reader goes on up.
+    static let page = 10
     /// The most blocks the eager stack holds while the reader follows the end; past it the
     /// window drops back to `initial`.
     static let eagerLimit = 96
@@ -2484,7 +2594,8 @@ private struct WorkingIndicator: View {
         let word = WorkingWords.word(seed: seed, elapsedSeconds: Int64(max(0, elapsed)))
         let isRunning = finishedAt == nil
         let hasTools = liveWork.contains { $0.kind == .tool }
-        let label = hasTools ? WorkGroupSummary.text(for: liveWork) : (isRunning ? "\(word)…" : Chrome.localized("Earlier steps"))
+        let quiet = isRunning ? runtime.quietMinutes.map { String(format: Chrome.localized("No response for %d min…"), $0) } : nil
+        let label = quiet ?? (hasTools ? WorkGroupSummary.text(for: liveWork) : (isRunning ? "\(word)…" : Chrome.localized("Earlier steps")))
         let canExpand = !thinkingSteps.isEmpty || !liveWork.isEmpty
         VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
             Button {
@@ -2607,9 +2718,26 @@ final class TimelineScrollState {
     /// own jump button fires: a growth must never move a reader who scrolled up to read.
     private(set) var areaGrowthRequest = 0
     @ObservationIgnored private var growthPending = false
+    @ObservationIgnored private var jumpButtonPending = false
 
     func jumpToLatest() {
         jumpRequest += 1
+    }
+
+    /// Out of the scroll handler, once per run-loop turn: `resolve` is read when the write
+    /// lands, so a pin or distance that swung back within the turn writes nothing.
+    func settleJumpButton(_ resolve: @escaping @MainActor () -> Bool) {
+        guard !jumpButtonPending else { return }
+        jumpButtonPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            jumpButtonPending = false
+            let shows = resolve()
+            guard shows != showsJumpButton else { return }
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                showsJumpButton = shows
+            }
+        }
     }
 
     /// One request per run-loop turn, so a height that swings within a frame asks once.
@@ -2729,6 +2857,36 @@ private struct ScrollFreeze: ViewModifier {
     }
 }
 
+/// The run of blocks the stack builds, by the ids of its first and last block, so a block
+/// arriving at the end or a pill inserted above it never shifts which blocks those are.
+/// No last id runs to the end, so a reader following the conversation gets every new block.
+private struct MountedWindow: Equatable {
+    var lowerID: String
+    var upperID: String?
+
+    init(lowerID: String, upperID: String?) {
+        self.lowerID = lowerID
+        self.upperID = upperID
+    }
+
+    init(_ range: Range<Int>, in blocks: [DisplayBlock]) {
+        lowerID = blocks[min(range.lowerBound, blocks.count - 1)].id
+        upperID = range.upperBound >= blocks.count ? nil : blocks[max(range.lowerBound, range.upperBound - 1)].id
+    }
+
+    /// The window over `blocks`, never before `start`. Nil when its first block has left.
+    func range(in blocks: [DisplayBlock], start: Int) -> Range<Int>? {
+        range(ids: blocks.lazy.map(\.id), start: start)
+    }
+
+    func range<Ids: RandomAccessCollection>(ids: Ids, start: Int) -> Range<Int>? where Ids.Element == String, Ids.Index == Int {
+        guard let found = ids.firstIndex(of: lowerID) else { return nil }
+        let lower = min(ids.count, max(start, found))
+        let upper = upperID.flatMap { id in ids[lower...].firstIndex(of: id).map { $0 + 1 } } ?? ids.count
+        return lower..<max(lower, upper)
+    }
+}
+
 @MainActor
 private final class TimelineMeasurements {
     var width: CGFloat = 0
@@ -2784,6 +2942,20 @@ private final class TimelineMeasurements {
         if let unknown = (start..<lower).first(where: { frames[blocks[$0].id] == nil }) { lower = unknown }
         if let unknown = (upper..<blocks.count).last(where: { frames[blocks[$0].id] == nil }) { upper = unknown + 1 }
         return lower..<upper
+    }
+
+    /// The newest blocks that fill a viewport and a margin above it, and every unmeasured
+    /// block before them, which has no height for a spacer to stand in for.
+    func tail(of blocks: [DisplayBlock], start: Int, viewport: CGFloat) -> Range<Int> {
+        guard start < blocks.count else { return start..<blocks.count }
+        var lower = blocks.count
+        var distance: CGFloat = 0
+        while lower > start, distance < max(600, viewport) * 2 {
+            lower -= 1
+            distance += (frames[blocks[lower].id]?.height ?? viewport) + TimelineMetrics.rowSpacing
+        }
+        if let unknown = (start..<lower).first(where: { frames[blocks[$0].id] == nil }) { lower = unknown }
+        return lower..<blocks.count
     }
 }
 

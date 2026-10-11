@@ -8,57 +8,77 @@ enum MCPExternalSync {
         guard !CaptureRun.isEnabled else { return }
         let manager = FileManager.default
         guard manager.fileExists(atPath: managedURL.path) else { return }
-        let managed = readManaged()
+        guard let managed = readManaged() else { return }
         let home = URL(fileURLWithPath: LoginEnvironment.homeDirectory, isDirectory: true)
-        remove(
+        let cursor = remove(
             ids: managed["cursor"] ?? [],
             at: home.appendingPathComponent(".cursor/mcp.json"),
             rootKey: "mcpServers"
         )
-        remove(
+        let opencode = remove(
             ids: managed["opencode"] ?? [],
             at: home.appendingPathComponent(".config/opencode/opencode.json"),
             rootKey: "mcp"
         )
-        remove(
+        let gemini = remove(
             ids: managed["gemini"] ?? [],
             at: home.appendingPathComponent(".gemini/settings.json"),
             rootKey: "mcpServers"
         )
-        try? manager.removeItem(at: managedURL)
+        if cursor && opencode && gemini {
+            try? manager.removeItem(at: managedURL)
+        }
     }
 
     /// Removes exactly `ids` from the file's `rootKey` object, leaving every
-    /// other key alone. A missing or invalid-JSON file is skipped, and the
-    /// file is rewritten only when something was removed.
-    private static func remove(ids: [String], at url: URL, rootKey: String) {
-        guard !ids.isEmpty else { return }
-        guard let data = try? Data(contentsOf: url),
-              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var entries = root[rootKey] as? [String: Any]
-        else { return }
-        var removed = false
-        for id in ids where entries[id] != nil {
-            entries.removeValue(forKey: id)
-            removed = true
+    /// other key alone. Failed cleanup keeps the marker for another launch.
+    private static func remove(ids: [String], at url: URL, rootKey: String) -> Bool {
+        guard !ids.isEmpty else { return true }
+        let target = url.standardizedFileURL.resolvingSymlinksInPath()
+        guard let lease = try? SharedLibraryLease(at: SharedResourceLock.url(resource: target.path)) else {
+            return false
         }
-        guard removed else { return }
-        root[rootKey] = entries
-        guard let out = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else {
-            return
+        return withExtendedLifetime(lease) {
+            do {
+                let data: Data
+                do {
+                    data = try Data(contentsOf: target)
+                } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+                    return true
+                }
+                guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return false
+                }
+                guard let value = root[rootKey] else { return true }
+                guard var entries = value as? [String: Any] else { return false }
+                var removed = false
+                for id in ids where entries[id] != nil {
+                    entries.removeValue(forKey: id)
+                    removed = true
+                }
+                guard removed else { return true }
+                root[rootKey] = entries
+                let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+                try out.write(to: target, options: .atomic)
+                return true
+            } catch {
+                return false
+            }
         }
-        try? out.write(to: url, options: .atomic)
     }
 
     private static let managedURL = MCPPaths.directory.appendingPathComponent("managed.json")
 
-    private static func readManaged() -> [String: [String]] {
+    private static func readManaged() -> [String: [String]]? {
         guard let data = try? Data(contentsOf: managedURL),
               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
+        else { return nil }
         var out: [String: [String]] = [:]
         for key in ["cursor", "opencode", "gemini"] {
-            out[key] = parsed[key] as? [String] ?? []
+            if let value = parsed[key] {
+                guard let ids = value as? [String] else { return nil }
+                out[key] = ids
+            }
         }
         return out
     }

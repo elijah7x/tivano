@@ -64,9 +64,15 @@ enum Storage {
         StoragePaths.directory(name)
     }
 
-    nonisolated static func loadLibrary() -> Library {
-        guard let data = try? Data(contentsOf: libraryURL) else { return Library() }
-        return (try? JSONDecoder.storage.decode(Library.self, from: data)) ?? Library()
+    nonisolated static func loadLibrary() -> Result<Library, Error> {
+        do {
+            let data = try Data(contentsOf: libraryURL)
+            return .success(try JSONDecoder.storage.decode(Library.self, from: data))
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return .success(Library())
+        } catch {
+            return .failure(error)
+        }
     }
 
     /// Reads and decodes a thread file. Safe from any thread: the decoder is made here.
@@ -542,12 +548,14 @@ final class DiskWriter: Sendable {
         }
     }
 
-    func writeSynchronously<Value: Encodable & Sendable>(_ value: Value, to url: URL) {
+    @discardableResult
+    func writeSynchronously<Value: Encodable & Sendable>(_ value: Value, to url: URL) -> Bool {
         let completions = pending.withLock { $0.removeValue(forKey: url)?.completions ?? [] }
-        queue.sync {
+        return queue.sync {
             let size = write(value, to: url)
             if let size { sizes.withLock { $0[url] = size } }
             for completion in completions { completion(size != nil) }
+            return size != nil
         }
     }
 

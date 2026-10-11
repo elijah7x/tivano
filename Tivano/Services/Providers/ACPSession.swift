@@ -20,6 +20,11 @@ private actor ACPLaunchGate {
     }
 }
 
+struct ACPSelectionError: LocalizedError {
+    let underlying: Error
+    var errorDescription: String? { underlying.localizedDescription }
+}
+
 /// Drives Agent Client Protocol agents: Cursor, OpenCode, Grok, Devin and Kimi Code.
 @MainActor
 final class ACPSession: ProviderSession {
@@ -61,6 +66,7 @@ final class ACPSession: ProviderSession {
     /// Cursor's Fast toggle (`model_config` / `fast`), when the parameterized picker is on.
     private var fastConfigID: String?
     private var hasModeAPI = false
+    private var availableModeIDs: Set<String> = []
     private var planMode: String?
     private var buildMode: String?
     private var currentMode: String?
@@ -114,6 +120,10 @@ final class ACPSession: ProviderSession {
     }
 
     func start() async throws -> String {
+        try await start(applyingSelection: true)
+    }
+
+    private func start(applyingSelection: Bool) async throws -> String {
         guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
         await Self.launchGate.wait()
         let process = StdioProcess(
@@ -148,12 +158,14 @@ final class ACPSession: ProviderSession {
             session = try await openSession(connection)
         }
         applySessionState(session)
-        try await applySelection(
-            model: configuration.model,
-            effort: configuration.effort,
-            fastMode: configuration.fastMode,
-            interaction: configuration.interactionMode
-        )
+        if applyingSelection {
+            try await applySelection(
+                model: configuration.model,
+                effort: configuration.effort,
+                fastMode: configuration.fastMode,
+                interaction: configuration.interactionMode
+            )
+        }
         guard let sessionID else {
             throw ProviderError.failed("\(configuration.provider.displayName) did not start a session.")
         }
@@ -331,7 +343,7 @@ final class ACPSession: ProviderSession {
             if case .models(let list, _) = event { models = list }
         }
         defer { session.stop() }
-        _ = try await session.start()
+        _ = try await session.start(applyingSelection: false)
         await session.probeModelEfforts()
         return models
     }
@@ -395,6 +407,7 @@ final class ACPSession: ProviderSession {
     }
 
     private func resolveModes(_ ids: [String]) {
+        availableModeIDs = Set(ids)
         planMode = ids.first { $0 == "plan" }
         buildMode = ids.first { ["agent", "build", "code", "default"].contains($0) }
             ?? ids.first { $0 != "plan" && $0 != "ask" }
@@ -533,7 +546,17 @@ final class ACPSession: ProviderSession {
     }
 
     private func applySelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async throws {
-        guard let connection, let sessionID else { return }
+        do {
+            try await updateSelection(model: model, effort: effort, fastMode: fastMode, interaction: interaction)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ACPSelectionError(underlying: error)
+        }
+    }
+
+    private func updateSelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async throws {
+        guard let connection, let sessionID else { throw ProviderError.notRunning }
         if let model, !model.isEmpty {
             let wireID = usesParameterizedModels ? Self.baseModelID(model) : providerID(for: model, effort: effort, fastMode: fastMode)
             if !Self.sameModel(wireID, currentModel) {
@@ -565,6 +588,10 @@ final class ACPSession: ProviderSession {
             }
         } else {
             wantedMode = interaction == .plan ? planMode : buildMode
+        }
+        if configuration.provider == .kimi,
+           wantedMode == nil || !availableModeIDs.contains(wantedMode ?? "") {
+            throw ProviderError.failed(AppText.localized("Kimi Code did not advertise the requested permission or interaction mode. Choose a supported mode and try again."))
         }
         if let mode = wantedMode, mode != currentMode {
             if let modeConfigID {
@@ -644,13 +671,14 @@ final class ACPSession: ProviderSession {
         case "session_info_update":
             if let title = update["title"]?.string, !title.isEmpty { onEvent?(.title(title)) }
         case "usage_update":
-            if let used = update["used"]?.int {
+            if let used = update["used"]?.int, used >= 0,
+               let size = update["size"]?.int, size > 0 {
                 // Occupancy, not spend: `used` of `size` is how full the context
                 // window is, so it feeds the context meter and nothing else. The
                 // deltas a session total would give are the growth of that meter,
                 // and a compaction or a new request drops them; charging the
                 // ledger here would bill the context, not the tokens.
-                onEvent?(.usage(ContextUsage(usedTokens: used, windowTokens: update["size"]?.int)))
+                onEvent?(.usage(ContextUsage(usedTokens: used, windowTokens: size)))
             }
         default:
             break
@@ -660,6 +688,7 @@ final class ACPSession: ProviderSession {
     private func handleRequest(_ id: RPCID, _ method: String, _ params: JSONValue) {
         if method == "elicitation/create", configuration.provider == .kimi {
             guard let form = ACPQuestionForm(params) else {
+                onEvent?(.notice(Notice(level: .warning, message: AppText.localized("Kimi Code asked a question in a form Tivano cannot display. The request was declined."))))
                 connection?.respond(to: id, errorCode: -32602, message: "Unsupported question form")
                 return
             }
@@ -688,14 +717,16 @@ final class ACPSession: ProviderSession {
                 choices.append(.init(label: label, detail: nil))
                 optionIDs[label] = optionID
             }
-            pendingQuestions[id.key] = PendingQuestion(rpcID: id, form: nil, permissionOptions: optionIDs)
-            onEvent?(.question(QuestionRequest(id: id.key, questions: [
-                .init(id: "q0", header: call.title, prompt: permissionDetail(toolCall) ?? call.title,
-                      choices: choices, allowsMultiple: false, allowsOther: false, isSecret: false)
-            ])))
-            return
+            if !choices.isEmpty, Set(choices.map(\.label)).count == choices.count {
+                pendingQuestions[id.key] = PendingQuestion(rpcID: id, form: nil, permissionOptions: optionIDs)
+                onEvent?(.question(QuestionRequest(id: id.key, questions: [
+                    .init(id: "q0", header: call.title, prompt: permissionDetail(toolCall) ?? call.title,
+                          choices: choices, allowsMultiple: false, allowsOther: false, isSecret: false)
+                ])))
+                return
+            }
         }
-        if !isPlan, let optionID = automaticOption(for: call.kind, options: options) {
+        if !isPlan, !isQuestion, let optionID = automaticOption(for: call.kind, options: options) {
             connection?.respond(to: id, result: ["outcome": ["outcome": "selected", "optionId": .string(optionID)]])
             return
         }

@@ -33,8 +33,9 @@ struct SessionConfiguration: Sendable {
     var interactionMode: InteractionMode
     /// Native API providers (DeepSeek, Meta, Z.ai) authenticate with this instead of a CLI.
     var apiKey: String?
-    /// Set while Hydra is on for the thread: providers that run heads of their own define
-    /// them at launch, on the pair's model and effort, and steer the lead towards them.
+    /// Set while Hydra is on for the thread: the session puts the lead's Hydra policy in
+    /// its system prompt and switches its own sub-agent tool off, so every head goes out
+    /// through the delegation block as a thread of Tivano's.
     var hydra: HydraLaunch?
     /// The conversation so far, for a provider that keeps nothing between launches (the
     /// API providers hold their history in memory only): the exchanges go back in as
@@ -66,7 +67,7 @@ struct TranscriptMessage: Sendable {
 }
 
 /// A head a provider started inside the lead's session.
-struct AgentSpawn: Sendable {
+struct AgentSpawn: Equatable, Sendable {
     /// The provider's id for the head, which its later events carry.
     var id: String
     /// Claude's task id, which is what stops the head; nil where the id above does.
@@ -77,10 +78,6 @@ struct AgentSpawn: Sendable {
     /// The head's brief, when the provider says.
     var prompt: String?
     var model: String?
-    /// The head profile the spawn was routed to, when the provider's report names one:
-    /// Claude's and Copilot's agent definitions are one per profile, and Codex's spawn
-    /// call carries the profile's model and effort, which the session matches back.
-    var profile: String?
     /// Whether the spawning tool call returns before the head is done. A foreground head
     /// is finished by its tool result; a background one only by the provider saying so.
     var isBackground = true

@@ -507,6 +507,20 @@ struct Git: Sendable {
         try await output(["diff", "--name-only", "-z", from, to]).split(separator: "\0").map(String.init)
     }
 
+    /// Lines added and removed per file between two trees, over `paths` alone and without a
+    /// patch: what a change too big to show line by line still counts for.
+    func lineCounts(from: String, to: String, paths: [String]) async throws -> [RevertPreview.File] {
+        var files: [RevertPreview.File] = []
+        var start = 0
+        while start < paths.count {
+            let chunk = Array(paths[start..<min(start + Self.diffPathChunk, paths.count)])
+            let text = try await output(["--literal-pathspecs", "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", from, to, "--"] + chunk)
+            files += try RevertPreview(numstat: text).files
+            start += chunk.count
+        }
+        return files
+    }
+
     /// Paths with uncommitted changes, staged or not, untracked ones included.
     func dirtyPaths() async -> [String] {
         guard let text = try? await output(["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else { return [] }

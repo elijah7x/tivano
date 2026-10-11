@@ -2,8 +2,10 @@
 
 An owner-requested build/package produces a package **and updates the corresponding
 installed app**, unless explicitly requested as build-only. Agent-initiated
-verification builds remain build-only. None of these authorize launching, quitting
-or publishing anything.
+verification builds remain build-only. An explicit Dev package request also
+authorizes quitting Dev before replacing its bundle; verify it has exited first.
+Release packaging requires separate authorization to quit a running Release app.
+Packaging never authorizes launching or publishing.
 
 ```bash
 scripts/package_local.sh --both     # current request: install both editions
@@ -25,8 +27,8 @@ separate stable bundle IDs and install paths:
 Local ZIPs are in `build.noindex/packages/`. Both editions retain hardened
 runtime and secure timestamps. Local packaging does not submit to Apple
 notarization or upload publicly; public distribution uses the release pipeline.
-The public `release.sh` pipeline also installs its verified/notarized Release
-without launching it, and keeps its temporary outputs separate from local app backups.
+The public `release.sh` pipeline builds and notarizes Release without installing,
+quitting or launching it, and keeps its temporary outputs separate from local app backups.
 
 ## Independent versions
 

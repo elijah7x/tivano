@@ -9,7 +9,14 @@ protocol ProviderSettings: AnyObject {
     func binaryPath(for provider: ProviderKind) -> String
     func lastModel(for provider: ProviderKind) -> String?
     func apiKey(for provider: ProviderKind) -> String
+    /// Whether update checks stay on for this provider. The app defaults this to on and
+    /// remembers a switch off. A conformer with no opinion of its own stays monitored.
+    func monitorsUpdates(_ provider: ProviderKind) -> Bool
     /// Moves chosen models and their preferences from a variant's id to the row its
     /// variants were merged into (see `ModelFamilies.collapsed`), keeping its effort and speed.
     func adoptModelFamilies(_ families: [ModelOption], for provider: ProviderKind)
+}
+
+extension ProviderSettings {
+    func monitorsUpdates(_ provider: ProviderKind) -> Bool { true }
 }

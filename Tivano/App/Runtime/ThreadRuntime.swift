@@ -206,12 +206,27 @@ final class ThreadRuntime {
     private(set) var phase: RuntimePhase = .idle {
         didSet {
             if (oldValue == .idle) != (phase == .idle) { app?.updateTaskSleepPrevention() }
+            // Only a turn handed to its session is watched: starting has its own steps
+            // (folders, a CLI update, the session's launch) that are no session gone quiet.
+            if oldValue != .running, phase == .running { startQuietWatchdog() }
+            if phase != .running { stopQuietWatchdog() }
         }
     }
+    /// Whole minutes the running turn has gone without a word from its session, once that
+    /// passes five (see `watchQuiet`); nil while it is talking. The working line says so.
+    private(set) var quietMinutes: Int?
+    /// System uptime at the session's last event, which stands still while the Mac sleeps,
+    /// so a night's sleep never counts as a turn gone quiet.
+    @ObservationIgnored private var lastSessionEventUptime: TimeInterval = 0
+    @ObservationIgnored private var quietWatchdog: Task<Void, Never>?
     private(set) var isReverting = false
     private(set) var approvals: [ApprovalRequest] = []
     private(set) var questions: [QuestionRequest] = []
-    private(set) var backgroundTasks: [String] = []
+    private(set) var backgroundTasks: [String] = [] {
+        didSet {
+            if oldValue.isEmpty != backgroundTasks.isEmpty { app?.updateTaskSleepPrevention() }
+        }
+    }
     private(set) var turnStartedAt: Date?
     /// Bumped whenever the thread's files may differ from what the last diff saw. The diff
     /// cache and the change stats are keyed by it, so the entries of an old revision are
@@ -293,9 +308,6 @@ final class ThreadRuntime {
     /// Heads by the tool row that stands for them in this timeline, so the row can show
     /// who was sent out.
     private(set) var hydraToolHeads: [String: UUID] = [:]
-    /// Heads by the provider's own id for them, for the events that come from inside them.
-    @ObservationIgnored private var pendingNativeSpend: [String: [TokenSpend]] = [:]
-    @ObservationIgnored private var hydraNativeHeads: [String: UUID] = [:]
     /// Reports from Tivano-run heads waiting for the lead to be idle.
     @ObservationIgnored private var hydraPendingReports: [HydraReport] = []
     /// The reports' turn is on its way (see `flushHydraReports`): a head finishing in the
@@ -356,8 +368,8 @@ final class ThreadRuntime {
     /// pill's place under the same identity and the pill morphs into the merged report
     /// rather than being replaced (see `DisplayBlock.merging`).
     var hydraMergeNoteID: String?
-    /// A native head's progress while it runs (its provider's note, its tool count, its
-    /// spend), kept here rather than on the thread record: the provider reports it many
+    /// A head's progress while it runs (its last tool, its tool count, its spend), kept
+    /// here rather than on the thread record: the provider reports it many
     /// times a second, and a write to a thread re-renders everything that lists threads.
     /// Only the panel row that shows this head follows these; they land on the record
     /// once the head finishes (see `AppModel.finishHydraHead`).
@@ -550,18 +562,11 @@ final class ThreadRuntime {
     /// The row a turn's todo list lives on, so each update finds it without scanning the
     /// timeline.
     @ObservationIgnored private var todosEntryID: String?
-    /// Paths the lead's native heads changed during this turn. Their tools arrive as
-    /// `.agentEvent` and are rehearsed onto the heads' own timelines, so without this the
-    /// lead's turn would count none of their work and a merge would take a fraction of it.
-    @ObservationIgnored private var hydraTouched: Set<String> = []
     /// Paths this turn has touched so far, kept current as the turn's edits land, so a head
     /// that asks what the turn has already changed is answered from the turn rather than by
     /// walking the timeline. Reset with the turn (see `startTurn`, `install`, `revert`) and
     /// left holding the turn's finished set once it ends (`finishTurn`).
     @ObservationIgnored private(set) var hydraCurrentTurnTouchedPaths: Set<String> = []
-    /// Snapshots around a native head's shell commands, by head and tool (see
-    /// `watchHydraCommand`).
-    @ObservationIgnored private var hydraCommandTrees: [String: Task<String?, Never>] = [:]
 
     private struct SessionSignature: Equatable {
         var provider: ProviderKind
@@ -573,9 +578,9 @@ final class ThreadRuntime {
         /// (`--model`, `--effort`, `--mode`), so any of them restarts it.
         var launchModel: String?
         var launchInteraction: InteractionMode?
-        /// Providers that run heads natively define them at launch, so the team restarts
-        /// the session when Hydra is switched or its pair changes.
+        /// Changing the team or switching Hydra restarts the session on every provider.
         var hydra: HydraLaunch?
+        var hydraPairID: UUID?
         /// The anti-slop policy travels with the session, so flipping the setting
         /// restarts it and the policy in force is the one the session was made with.
         var antiSlopEnabled: Bool
@@ -664,6 +669,11 @@ final class ThreadRuntime {
         let items = prepared ? document.items : document.items.filter { !$0.isEmptyReasoning }.map(\.cleanedOfEmDashes)
         recovered = items != document.items || document.followUps.contains(where: \.isEmpty)
         let loaded = items.map { TimelineEntry($0) }
+        // Older native heads cannot resume; their spawning rows are finished history.
+        let nativeToolIDs = Set(app?.children(of: threadID).compactMap { head -> String? in
+            guard head.hydra?.kind == .native else { return nil }
+            return head.hydra?.toolUseID
+        } ?? [])
         for entry in loaded {
             entryIndex[entry.id] = entry
             switch entry.item.content {
@@ -675,7 +685,7 @@ final class ThreadRuntime {
             endStreaming(entry)
             if case .tool(var call) = entry.item.content, call.status == .running {
                 recovered = true
-                call.finish(.failed)
+                call.finish(nativeToolIDs.contains(entry.id) ? .completed : .failed)
                 entry.item.content = .tool(call)
             }
         }
@@ -732,7 +742,7 @@ final class ThreadRuntime {
             endDelegationStream()
             hydraCurrentTurnTouchedPaths = []
         } else {
-            // Native head events can arrive while their history is loading.
+            // A turn's events can arrive while its history is loading.
             for entry in entries where entry.turnID == currentTurnID {
                 if case .tool(let call) = entry.item.content { recordCurrentTurnEdits(call.edits) }
             }
@@ -779,11 +789,11 @@ final class ThreadRuntime {
     }
 
     var isRunning: Bool { phase != .idle }
+    var isCLIStarting: Bool { isStartingSession }
 
     var thread: ChatThread? { app?.thread(threadID) }
 
-    /// Whether any head of this lead, native or Tivano-run, is still at work. The native
-    /// ones run inside the lead's own session, so a turn with heads at work is never
+    /// Whether any head of this lead is still at work. A turn with heads at work is never
     /// interrupted on the user's behalf by a new message: only the Stop button and
     /// Escape stop it, and those are the user stopping the lead on purpose.
     var hasWorkingHeads: Bool {
@@ -801,14 +811,6 @@ final class ThreadRuntime {
             }
         }
         return false
-    }
-
-    /// Whether any native head of this lead is still at work: those are the ones stopping
-    /// the lead's turn would take down. A Tivano-run head lives in a thread of its own and
-    /// reports to whatever turn the lead is on, so it survives the lead being stopped.
-    var hasWorkingNativeHeads: Bool {
-        guard let app else { return false }
-        return app.runningHydraHeads(of: threadID) > app.runningTivanoHeads(of: threadID)
     }
 
     /// Escape on a running turn: the turn is stopped and taken back. The conversation
@@ -938,11 +940,10 @@ final class ThreadRuntime {
             draft = ComposerDraft()
             return
         }
-        // Heads at work are never stopped by a new message. The native ones run inside
-        // the lead's own session, so interrupting the turn would kill them mid-task and
-        // throw away minutes of their work. The draft goes to a Tivano-run head of its
-        // own when the settings allow it, else it waits as a follow-up behind the
-        // running turn; either way nothing is interrupted.
+        // Heads at work are never stopped by a new message: their reports belong to
+        // the running turn. The draft goes to a Tivano-run head of its own when the
+        // settings allow it, else it waits as a follow-up behind the running turn; either
+        // way nothing is interrupted.
         if hasWorkingHeads {
             enqueueFollowUp(text: draft.outgoingText, attachments: draft.attachments)
             draft = ComposerDraft()
@@ -1071,10 +1072,8 @@ final class ThreadRuntime {
     /// Sends a queued follow-up right away instead of waiting its turn: the running turn
     /// stops and the prompt goes out as soon as the stop lands, exactly as Return does with
     /// the draft; idle, it simply sends. The rest of the queue waits for the new turn.
-    /// With native heads at work nothing stops, as with Return: the prompt goes to a head
-    /// of its own when the settings allow it, else it stays at the front of the queue.
-    /// Tivano-run heads live on through a stop, so with only those out the turn stops for
-    /// the prompt as it would with none: "now" means now.
+    /// Heads live on through a stop, in threads of their own, so the turn stops for the
+    /// prompt as it would with none out: "now" means now.
     func sendFollowUpNow(_ id: UUID) {
         guard !isReverting else { return }
         guard let index = followUps.firstIndex(where: { $0.id == id }) else { return }
@@ -1090,18 +1089,6 @@ final class ThreadRuntime {
             if handleLocalCommand(prompt.text.trimmingCharacters(in: .whitespacesAndNewlines)) { return }
             Task { await ensureLoaded(); await startTurn(text: prompt.text, attachments: prompt.attachments) }
         } else if pendingSend == nil {
-            // Native heads at work are never stopped for a queued prompt: they run inside
-            // the lead's session and an interrupt would kill them. The prompt goes to a
-            // Tivano-run head when the settings allow it, else back to the front of the
-            // queue to wait for the turn, and the lead keeps working.
-            if hasWorkingNativeHeads {
-                if !dispatchQueuedHead(prompt) {
-                    followUps.insert(prompt, at: 0)
-                    saveRevision += 1
-                    scheduleSave()
-                }
-                return
-            }
             pendingSend = PendingSend(text: prompt.text, attachments: prompt.attachments)
             interrupt()
         } else {
@@ -1387,9 +1374,7 @@ final class ThreadRuntime {
         let git = Git(directory)
         let checkpointRef = Git.checkpointRef(thread: threadID, turn: turnIndex, phase: "start")
         // Anything could have happened in the checkout since the last turn, so no snapshot
-        // from it stands any more. The heads' files are not cleared here: a native head
-        // works on after the lead's reply ends, and what it changed then belongs to the
-        // next turn, which takes it up at its end (see `finishTurn`).
+        // from it stands any more.
         settledTree = nil
         latestTree = nil
         treeEpoch += 1
@@ -1425,25 +1410,21 @@ final class ThreadRuntime {
             if !files.isEmpty {
                 prompt += "\n\nAttached files:\n" + files.map { "- \($0.path)" }.joined(separator: "\n")
             }
-            // A lead whose heads are Tivano-run is told how to ask Tivano for them. A
-            // session that keeps that policy in its system prompt (the API providers, and
-            // the providers with heads of their own sending them out elsewhere) gets the
-            // team note here; every other CLI also gets the policy, having nowhere else
-            // to keep it. The user's enabled delegation request is added below both paths.
+            // Every lead's heads are Tivano-run, and it is told how to ask Tivano for them.
+            // A session that keeps that policy in its system prompt (the API providers,
+            // and Claude, Codex and Copilot) gets the team note here; every other CLI also
+            // gets the policy, having nowhere else to keep it. The user's enabled delegation
+            // request is added below both paths.
             if let launch = app.hydraLaunch(for: thread) {
                 let merge = launch.autoMerges ? HydraPrompts.mergeStatus(merges: hydraMerges, unmergedFiles: app.hydraUnmergedFileCount(of: threadID)) : nil
-                if !launch.runsNatively {
-                    let team = HydraPrompts.teamStatus(app.hydraTeam(of: threadID).compactMap(\.hydra))
-                    let canDelegate = hydraBudget.canDelegate
-                    if Self.keepsHydraPolicyInSystemPrompt(thread.provider) {
-                        prompt = (hydraHeads == nil ? HydraPrompts.fallbackTurnNote(team: team, merge: merge) : HydraPrompts.fallbackReportNote(team: team, merge: merge, canDelegate: canDelegate)) + prompt
-                    } else if hydraHeads == nil {
-                        prompt = HydraPrompts.fallbackPreamble(launch, team: team, merge: merge) + prompt
-                    } else {
-                        prompt = HydraPrompts.fallbackReportPreamble(launch, team: team, merge: merge, canDelegate: canDelegate) + prompt
-                    }
-                } else if merge != nil {
-                    prompt = HydraPrompts.fallbackTurnNote(team: nil, merge: merge) + prompt
+                let team = HydraPrompts.teamStatus(app.hydraTeam(of: threadID).compactMap(\.hydra))
+                let canDelegate = hydraBudget.canDelegate
+                if Self.keepsHydraPolicyInSystemPrompt(thread.provider) {
+                    prompt = (hydraHeads == nil ? HydraPrompts.fallbackTurnNote(team: team, merge: merge) : HydraPrompts.fallbackReportNote(team: team, merge: merge, canDelegate: canDelegate)) + prompt
+                } else if hydraHeads == nil {
+                    prompt = HydraPrompts.fallbackPreamble(launch, team: team, merge: merge) + prompt
+                } else {
+                    prompt = HydraPrompts.fallbackReportPreamble(launch, team: team, merge: merge, canDelegate: canDelegate) + prompt
                 }
                 // Selecting Hydra is a request to delegate. Carry that request at the
                 // user-input boundary as well as keeping the routing policy in the session.
@@ -1515,11 +1496,12 @@ final class ThreadRuntime {
     }
 
     /// Whether the provider's session carries the lead's Hydra policy from launch: the API
-    /// sessions put it in their system prompt, and the providers with heads of their own
-    /// define the heads, or the policy for Tivano-run ones, at launch. Such a session takes
-    /// the team as part of its signature, so a change to the team restarts it.
+    /// sessions put it in their system prompt, and Claude, Codex and Copilot define it at
+    /// launch with their own sub-agent tool switched off. Such a session takes the team as
+    /// part of its signature, so a change to the team, or Hydra going on or off, restarts
+    /// it, and the switch-off holds for every turn and every relaunch.
     private static func keepsHydraPolicyInSystemPrompt(_ provider: ProviderKind) -> Bool {
-        AppModel.hydraIsNative(provider) || provider.isAPIKeyBased
+        AppModel.hydraDefinesPolicyAtLaunch(provider) || provider.isAPIKeyBased
     }
 
     /// Codex takes fast mode per turn as a service tier; models without a fast tier send none.
@@ -1549,12 +1531,14 @@ final class ThreadRuntime {
     func warmSession() {
         guard phase == .idle, session == nil, warmup == nil, !isReverting,
               let app, let thread = app.thread(threadID), !thread.isArchived, !thread.provider.isAPIKeyBased,
+              !app.providers.cliUpdateBlocksWarmup(thread.provider),
               let project = app.project(thread.projectID) else { return }
         let directory = thread.worktreePath ?? project.path
         warmup = Task { [weak self] in
             guard let self else { return }
             await ensureModel(thread)
-            guard phase == .idle, session == nil else { warmup = nil; return }
+            guard phase == .idle, session == nil,
+                  !app.providers.cliUpdateBlocksWarmup(thread.provider) else { warmup = nil; return }
             // A start that fails is not retried on every keystroke: the send makes its own.
             if (try? await ensureSession(directory: directory)) != nil { warmup = nil }
         }
@@ -1562,6 +1546,10 @@ final class ThreadRuntime {
 
     private func ensureSession(directory: String, allowNewSession: Bool = true) async throws -> any ProviderSession {
         guard let app, let thread = app.thread(threadID) else { throw ProviderError.notRunning }
+        if !thread.provider.isAPIKeyBased {
+            await app.providers.waitWhileCLIUpdating(thread.provider)
+            guard !Task.isCancelled else { throw CancellationError() }
+        }
         // Copilot switches modes live, except that Auto's assisted-approval judge is a
         // session flag: entering or leaving Auto resumes the session with it set right.
         let copilotLaunchMode: RuntimeMode? = thread.provider == .copilot && thread.runtimeMode == .auto ? .auto : nil
@@ -1572,11 +1560,7 @@ final class ThreadRuntime {
         if app.hydraIsOn(thread), let pair = app.hydraPair(for: thread), app.hydraHeadsProvider(of: pair) != thread.provider {
             await app.providers.loadCatalog(app.hydraHeadsProvider(of: pair))
         }
-        // Providers with heads of their own define them at launch (or, with the heads
-        // sent out elsewhere, the policy for asking Tivano for them); the API
-        // providers put the lead's Hydra policy in their system prompt. Either way the
-        // team is part of the session, and a change to it restarts one.
-        let hydra = Self.keepsHydraPolicyInSystemPrompt(thread.provider) ? app.hydraLaunch(for: thread) : nil
+        let hydra = app.hydraLaunch(for: thread)
         let signature = SessionSignature(
             provider: thread.provider,
             directory: directory,
@@ -1586,8 +1570,13 @@ final class ThreadRuntime {
             launchModel: thread.provider == .antigravity ? thread.model : nil,
             launchInteraction: thread.provider == .antigravity ? thread.interactionMode : nil,
             hydra: hydra,
+            hydraPairID: hydra == nil ? nil : thread.hydraPairID,
             antiSlopEnabled: app.settings.antiSlopEnabled
         )
+        if !thread.provider.isAPIKeyBased {
+            await app.providers.waitWhileCLIUpdating(thread.provider)
+            guard !Task.isCancelled else { throw CancellationError() }
+        }
         if let session, session.isRunning, sessionSignature == signature {
             if let codex = session as? CodexSession, thread.hydra?.codexHistoryArchived == true {
                 try await codex.restoreHeadHistory()
@@ -1603,8 +1592,6 @@ final class ThreadRuntime {
         await LoginEnvironment.load()
         releaseSession(stop: true)
         try await waitForReplacedSessions()
-        // The session the heads lived in is gone, and so are they.
-        stopNativeHeads()
 
         if thread.provider.isAPIKeyBased {
             guard !app.settings.apiKey(for: thread.provider).isEmpty else {
@@ -1671,6 +1658,8 @@ final class ThreadRuntime {
             return candidate
         }
 
+        await app.providers.waitWhileCLIUpdating(thread.provider)
+        guard !Task.isCancelled else { throw CancellationError() }
         guard let executable = app.providers.executable(for: thread.provider) else {
             throw ProviderError.notInstalled(thread.provider)
         }
@@ -1741,13 +1730,9 @@ final class ThreadRuntime {
             // goes with it, and the chat is told its agent starts afresh.
             releaseSession(stop: true)
             try await waitForReplacedSessions()
-            if Self.lostConversation(error) {
-                app.updateThread(threadID) { $0.providerResumeAt = nil }
-                if currentTurnID != nil {
-                    appendNotice(.warning, "\(thread.provider.displayName) no longer has this conversation. It starts a new one here, without the messages above.")
-                }
-            } else if currentTurnID != nil {
-                appendNotice(.warning, String(format: Chrome.localized("%@ couldn't pick this conversation back up (%@). It starts a new one here, without the messages above."), thread.provider.displayName, error.localizedDescription))
+            app.updateThread(threadID) { $0.providerResumeAt = nil }
+            if currentTurnID != nil {
+                appendNotice(.warning, "\(thread.provider.displayName) no longer has this conversation. It starts a new one here, without the messages above.")
             }
             candidate = makeSession(resumeID: nil)
             session = candidate
@@ -1915,23 +1900,8 @@ final class ThreadRuntime {
     /// Whether a session that would not resume the thread's conversation starts over
     /// from nothing: only when the provider confirms the conversation is gone.
     private static func startsOver(after error: Error, resuming thread: ChatThread) -> Bool {
-        guard thread.providerSessionID != nil else { return false }
-        if lostConversation(error) { return true }
-        // A rewind anchor is never given up, and neither is a conversation that only hit a
-        // passing failure: a new session would drop the history for nothing. Anything else
-        // starts over, out loud, since not every agent words a missing session the same way.
-        return thread.providerResumeAt == nil && !passingFailure(error)
-    }
-
-    /// A failure that says nothing about the conversation itself: the agent was slow, the
-    /// network or sign-in failed, or a limit was hit. Retrying the same session is right.
-    private static func passingFailure(_ error: Error) -> Bool {
-        if error is SessionDeadlineError || error is URLError || error is CancellationError { return true }
-        if case ProviderError.notInstalled = error { return true }
-        let text = error.localizedDescription.lowercased()
-        return ["timed out", "timeout", "network", "offline", "connection refused", "could not connect",
-                "unauthorized", "not authenticated", "sign in", "log in", "login", "401", "403",
-                "rate limit", "429", "usage limit", "overloaded"].contains { text.contains($0) }
+        guard thread.providerSessionID != nil, !(error is ACPSelectionError) else { return false }
+        return lostConversation(error)
     }
 
     /// The provider's word for a conversation it no longer has: Claude Code's "No
@@ -2006,9 +1976,11 @@ final class ThreadRuntime {
 
     var isWaitingForLimit: Bool { app?.autoContinue.resumesAt[threadID] != nil }
 
-    func interrupt() {
+    /// `byUser` false is Tivano stopping a turn gone quiet (see `watchQuiet`): the thread
+    /// then finishes the way a failed turn does, unread and calling for attention.
+    func interrupt(byUser: Bool = true) {
         guard phase != .idle else { return }
-        userStoppedTurnID = currentTurnID
+        if byUser { userStoppedTurnID = currentTurnID }
         let turnID = currentTurnID
         interruptWatchdog?.cancel()
         interruptWatchdog = nil
@@ -2037,6 +2009,81 @@ final class ThreadRuntime {
         }
     }
 
+    // MARK: - Quiet watchdog
+
+    /// A session can stay alive and say nothing, its model stream stalled or its process
+    /// suspended, and nothing ends the turn then: no exit, no error, no timeout. Every half
+    /// minute of a turn this looks at how long the session has been quiet: five minutes
+    /// and the working line says so, ten and the turn is stopped, and a session that ignores
+    /// the stop is ended by the interrupt watchdog eight seconds later. While a tool runs
+    /// the line keeps its tool and the stop waits thirty minutes: a long build can print
+    /// nothing for a while, but a tool whose end never arrives must not hide a hang forever.
+    private static let quietTick: Duration = .seconds(30)
+    private static let quietLabelAfter: TimeInterval = 300
+    private static let quietStopAfter: TimeInterval = 600
+    private static let quietToolStopAfter: TimeInterval = 1800
+
+    private func startQuietWatchdog() {
+        noteSessionEvent()
+        quietWatchdog?.cancel()
+        quietWatchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.quietTick)
+                guard let self, !Task.isCancelled else { return }
+                self.watchQuiet()
+            }
+        }
+    }
+
+    private func stopQuietWatchdog() {
+        quietWatchdog?.cancel()
+        quietWatchdog = nil
+        if quietMinutes != nil { quietMinutes = nil }
+    }
+
+    private func noteSessionEvent() {
+        lastSessionEventUptime = ProcessInfo.processInfo.systemUptime
+        if quietMinutes != nil { quietMinutes = nil }
+    }
+
+    private func watchQuiet() {
+        // Heads have their own watchdog (see `AppModel.startHydraWatchdog`).
+        guard phase == .running, thread?.isHydraHead != true else { return }
+        // Waiting on the reader, on a usage limit, on a merge or on heads still at work is
+        // not the session gone quiet. The clock starts over once that ends.
+        if !approvals.isEmpty || !questions.isEmpty || isWaitingForLimit || isHydraMerging || hasWorkingHeads {
+            noteSessionEvent()
+            return
+        }
+        let quiet = ProcessInfo.processInfo.systemUptime - lastSessionEventUptime
+        let toolRunning = hasRunningTool
+        if quiet >= (toolRunning ? Self.quietToolStopAfter : Self.quietStopAfter) {
+            // Stopped once: the interrupt watchdog takes it from here.
+            guard interruptWatchdog == nil, currentTurnID != nil else { return }
+            let name = thread?.provider.displayName ?? Chrome.localized("The agent")
+            let message = toolRunning
+                ? Chrome.localized("%@ sent nothing for 30 minutes while a tool ran, so Tivano stopped the turn.")
+                : Chrome.localized("%@ sent nothing for 10 minutes, so Tivano stopped the turn.")
+            appendNotice(.error, String(format: message, name))
+            interrupt(byUser: false)
+        } else if !toolRunning, quiet >= Self.quietLabelAfter {
+            let minutes = Int(quiet / 60)
+            if quietMinutes != minutes { quietMinutes = minutes }
+        }
+    }
+
+    /// Whether a tool of the running turn is still at work. Walks back from the end and
+    /// stops at the previous turn.
+    private var hasRunningTool: Bool {
+        guard let turnID = currentTurnID else { return false }
+        for entry in entries.reversed() {
+            guard let entryTurn = entry.item.turnID else { continue }
+            guard entryTurn == turnID else { break }
+            if case .tool(let call) = entry.item.content, call.status == .running { return true }
+        }
+        return false
+    }
+
     func resolve(_ request: ApprovalRequest, option: ApprovalRequest.Option) {
         approvals.removeAll { $0.id == request.id }
         if request.kind == .plan, let itemID = request.toolItemID,
@@ -2052,8 +2099,11 @@ final class ThreadRuntime {
     }
 
     func answer(_ request: QuestionRequest, answers: [String: [String]]) {
-        questions.removeAll { $0.id == request.id }
-        let delivered = answerDeliveryHandler()
+        let reportDelivery = answerDeliveryHandler()
+        let delivered: @MainActor (Bool) -> Void = { [weak self] succeeded in
+            if succeeded { self?.questions.removeAll { $0.id == request.id } }
+            reportDelivery(succeeded)
+        }
         guard let session else { delivered(false); return }
         session.answerQuestion(request.id, answers: answers, delivered: delivered)
     }
@@ -2062,7 +2112,7 @@ final class ThreadRuntime {
         let name = thread?.provider.displayName ?? Chrome.localized("the provider")
         return { [weak self] delivered in
             guard !delivered else { return }
-            self?.appendNotice(.warning, String(format: Chrome.localized("Your answer didn't reach %@: its session had already closed. Send a message to carry on."), name))
+            self?.appendNotice(.warning, String(format: Chrome.localized("Your answer didn't reach %@. The request may no longer be available, or the provider could not accept the answer. Try again or send a message to carry on."), name))
         }
     }
 
@@ -2255,7 +2305,6 @@ final class ThreadRuntime {
         turns.removeSubrange(index...)
         // A head's paths list is what the turn in flight has changed; the turn they
         // belonged to is gone.
-        hydraTouched.removeAll()
         hydraCurrentTurnTouchedPaths = []
         // The thread's status is its last remaining turn's, or none: with every turn gone
         // it is unused again, so a new thread reuses it and ⌘W deletes it.
@@ -2502,7 +2551,6 @@ final class ThreadRuntime {
 
     func stopSession() {
         releaseSession(stop: true)
-        stopNativeHeads()
         // The session's own end is dropped with it (see `releaseSession`), so a turn cut
         // off here is closed by hand: left running, the thread showed the working line
         // for good once reopened, Return queued instead of sending, a head's lead heard
@@ -2541,6 +2589,7 @@ final class ThreadRuntime {
     }
 
     private func handle(_ event: ProviderEvent) {
+        noteSessionEvent()
         if opensTurnAfterFinish {
             deferredBackgroundTurnEvents.append(event)
             return
@@ -2587,9 +2636,6 @@ final class ThreadRuntime {
             if let entry = entryIndex[id], case .tool(let call) = entry.item.content,
                call.kind == .command, call.status != .running {
                 settleCommand(id)
-            }
-            if let status = update.status, status != .running, let headID = hydraToolHeads[id] {
-                hydraToolFinished(headID, status: status, output: update.output)
             }
         case .planDelta(let id, let text):
             queueDelta(id, .plan, text)
@@ -2660,7 +2706,6 @@ final class ThreadRuntime {
             releaseSession(stop: false)
             approvals.removeAll()
             questions.removeAll()
-            stopNativeHeads()
             if currentTurnID != nil {
                 let name = thread?.provider.displayName ?? "The agent"
                 let turnID = currentTurnID
@@ -2669,27 +2714,13 @@ final class ThreadRuntime {
                 Task { await finishTurn(status: .failed, turnID: turnID) }
             }
         case .tokenSpend(let spend):
-            if let agentID = spend.agentID, thread?.hydra?.kind != .native {
-                if let headID = hydraNativeHeads[agentID], let headRuntime = app?.runtime(for: headID) {
-                    headRuntime.recordTokenSpend(spend)
-                } else {
-                    pendingNativeSpend[agentID, default: []].append(spend)
-                }
-            } else {
-                recordTokenSpend(spend)
-            }
-        case .agentStarted(let spawn):
-            hydraAgentStarted(spawn)
-        case .agentEvent(let agentID, let event):
-            hydraAgentEvent(agentID, event)
-        case .agentProgress(let agentID, let summary, let lastTool, let tokens, let toolCalls):
-            guard let headID = hydraNativeHeads[agentID], let headRuntime = app?.runtime(for: headID) else { break }
-            if let summary, !summary.isEmpty { headRuntime.hydraActivity = summary } else if let lastTool { headRuntime.hydraActivity = lastTool }
-            if let tokens { headRuntime.hydraTokens = tokens }
-            if let toolCalls { headRuntime.hydraToolCalls = toolCalls }
-            headRuntime.hydraLastEventAt = .now
-        case .agentFinished(let agentID, let status, let summary):
-            hydraAgentFinished(agentID, status: status, summary: summary)
+            // A provider sub-agent's spend is not this thread's own, as before. Hydra heads
+            // never come from there: every head is a thread of its own, with its own spend.
+            if spend.agentID == nil { recordTokenSpend(spend) }
+        case .agentStarted, .agentEvent, .agentProgress, .agentFinished:
+            // A provider's own sub-agent stays a tool row of its spawning call, Hydra on or
+            // off: heads are Tivano-run threads, never mirrored from inside a session.
+            break
         }
     }
 
@@ -2701,7 +2732,7 @@ final class ThreadRuntime {
         guard let turnID, let provider = thread?.provider, ProviderRegistry.updatesOwnCLI(provider),
               ProviderRegistry.needsNewerCLI(error) else { return false }
         // Part of the turn, so the resend's rewind takes it away with the failed attempt.
-        appendNotice(.info, "This model needs a newer \(provider.displayName). Updating it, then sending your message again.")
+        appendNotice(.info, String(format: String(localized: "This model needs a newer %@. Updating it, then sending your message again."), provider.displayName))
         Task { [weak self] in
             guard let self else { return }
             await finishTurn(status: status, turnID: turnID)
@@ -2712,10 +2743,14 @@ final class ThreadRuntime {
 
     private func resendAfterCLIUpdate(_ turnID: UUID, provider: ProviderKind, error: String) async {
         guard let app else { return }
-        let command = provider == .claude ? "claude update" : "codex update"
-        await app.providers.updateCLIIfDue(provider, force: true)
+        let updated = await app.providers.updateCLIIfDue(provider, force: true)
+        guard !Task.isCancelled else { return }
+        guard updated else {
+            appendNotice(.error, cliUpdateFailureNotice(provider, error: error))
+            return
+        }
         guard let version = await app.providers.installedCLIVersion(provider), cliResendVersions[provider] != version else {
-            appendNotice(.error, "\(error)\n\nTivano could not bring \(provider.displayName) up to date. Run `\(command)` in Terminal, then send the message again.")
+            appendNotice(.error, cliUpdateFailureNotice(provider, error: error))
             return
         }
         cliResendVersions[provider] = version
@@ -2723,14 +2758,22 @@ final class ThreadRuntime {
         releaseSession(stop: true)
         guard phase == .idle, let turn = turns.first(where: { $0.id == turnID }), let itemID = turn.userItemID,
               let entry = entryIndex[itemID], case .user(let message) = entry.item.content, !message.isFromHydra else {
-            appendNotice(.error, "\(error)\n\n\(provider.displayName) is up to date now (\(version)). Send the message again.")
+            appendNotice(.error, String(format: String(localized: "%1$@\n\n%2$@ was updated to %3$@. Send the message again."), error, provider.displayName, version))
             return
         }
         do {
             try await resend(turnID, text: message.text, attachments: message.attachments, restoreFiles: false)
         } catch {
-            appendNotice(.error, "\(provider.displayName) is up to date now (\(version)), but the message could not be sent again: \(error.localizedDescription) Send it again.")
+            appendNotice(.error, String(format: String(localized: "%1$@ was updated to %2$@, but the message could not be sent again: %3$@ Send it again."), provider.displayName, version, error.localizedDescription))
         }
+    }
+
+    /// The install command the provider's real channel would run, or a manual hint when that channel is unknown.
+    private func cliUpdateFailureNotice(_ provider: ProviderKind, error: String) -> String {
+        if let command = app?.providers.cliUpdates[provider]?.channel?.command, !command.isEmpty {
+            return String(format: String(localized: "%1$@\n\nTivano could not bring %2$@ up to date. Run `%3$@` in Terminal, then send the message again."), error, provider.displayName, command)
+        }
+        return String(format: String(localized: "%1$@\n\nTivano could not bring %2$@ up to date. Install the newer version the way you installed it, then send the message again."), error, provider.displayName)
     }
 
     private func recordTokenSpend(_ spend: TokenSpend) {
@@ -2770,10 +2813,8 @@ final class ThreadRuntime {
         finishingTurnID = turnID
         defer { finishingTurnID = nil }
         // Command diffs land before the turn's own summary counts them, and
-        // while the turn is still current so the snapshots can be compared. The heads'
-        // commands settle with them: their files are part of this turn's work.
+        // while the turn is still current so the snapshots can be compared.
         for id in Array(commandTrees.keys) { settleCommand(id) }
-        for key in Array(hydraCommandTrees.keys) { settleHydraCommand(key) }
         // A completion queued behind a stop can arrive after the next turn has begun; the
         // turn it names is over, and the one running is left alone.
         guard currentTurnID == nil || currentTurnID == turnID else { return }
@@ -2849,10 +2890,6 @@ final class ThreadRuntime {
             // chat's work included, and one such file was once merged out under a chat that
             // had changed nothing; a change of the turn that no edit reported is caught by
             // the merge's checkout sweep instead.
-            // What the lead's native heads changed, which their own timelines carry: this
-            // turn takes it, whether it came during the turn or between the last and this.
-            touched.formUnion(hydraTouched)
-            hydraTouched.removeAll()
             let touchedPaths = touched.sorted()
             // One write of `turns`: every write re-evaluates the timeline body.
             updateTurn(turnID) {
@@ -2883,7 +2920,6 @@ final class ThreadRuntime {
         // The turn's own events shared one save every few seconds; whatever they left is
         // written here, so a finished turn is always on disk.
         saveNow()
-        settleForegroundHeads(after: status)
         guard thread?.isArchived != true else {
             headBudgetSpent = false
             let continues = replayBackgroundTurn()
@@ -2937,10 +2973,9 @@ final class ThreadRuntime {
         // The job is done: the lead has answered, every head is back and nothing is
         // waiting. With the setting on, the work goes out and lands by itself, whether
         // heads took part or the lead did it all; a job that changed no file is let be.
-        // Native heads are not in the batches: they run on inside the lead's session after
-        // the lead's reply ends, and report in a turn of their own later. A merge while any
-        // head is still at work would commit its half-done files and then, the head having
-        // finished before the next turn began, never come back for the rest.
+        // A merge while any head is still at work would commit its half-done files and
+        // then, the head having finished before the next turn began, never come back for
+        // the rest.
         if !continues, status == .completed,
            hydraPendingReports.isEmpty, hydraBatches.isEmpty, hydraWaiting.isEmpty,
            let app, let thread, app.hydraIsOn(thread), app.settings.hydraAutoMerge,
@@ -3019,132 +3054,10 @@ final class ThreadRuntime {
         hydraToolHeads[toolID] = headID
     }
 
-    /// A head the provider started inside this session, or more said about one already
-    /// known: a name for the tool call that spawned it, its brief.
-    private func hydraAgentStarted(_ spawn: AgentSpawn) {
-        guard let app, let thread, app.hydraIsOn(thread) else { return }
-        if let headID = hydraNativeHeads[spawn.id] {
-            let named = !spawn.description.isEmpty && spawn.description != "Subagent"
-            app.updateThread(headID) { head in
-                guard var info = head.hydra else { return }
-                if named, info.task != spawn.description {
-                    info.task = spawn.description
-                    head.title = "\(info.persona.name) · \(TextCleanup.singleLine(spawn.description, limit: 60))"
-                }
-                if info.toolUseID == nil { info.toolUseID = spawn.toolUseID }
-                head.hydra = info
-            }
-            if let toolUseID = spawn.toolUseID { hydraToolHeads[toolUseID] = headID }
-            if let prompt = spawn.prompt, let headRuntime = app.existingRuntime(for: headID), !headRuntime.hasSentPrompts {
-                headRuntime.rehearseBrief(prompt)
-            }
-            return
-        }
-        guard let head = app.spawnNativeHead(from: threadID, spawn: spawn) else { return }
-        hydraNativeHeads[spawn.id] = head.id
-        if let pending = pendingNativeSpend.removeValue(forKey: spawn.id) {
-            for spend in pending { app.runtime(for: head.id).recordTokenSpend(spend) }
-        }
-        if let toolUseID = spawn.toolUseID { hydraToolHeads[toolUseID] = head.id }
-    }
-
-    /// An event from inside a head's transcript, rehearsed on the head's own timeline.
-    private func hydraAgentEvent(_ agentID: String, _ event: ProviderEvent) {
-        guard let app else { return }
-        // A head heard from before it was announced: on Claude the agent id is the tool
-        // call that spawned it, so the row already names its task.
-        if hydraNativeHeads[agentID] == nil, let entry = entryIndex[agentID], case .tool(let call) = entry.item.content, call.kind == .agent {
-            hydraAgentStarted(AgentSpawn(id: agentID, taskID: nil, toolUseID: agentID, description: call.title, prompt: nil, model: nil, isBackground: false))
-        }
-        guard let headID = hydraNativeHeads[agentID], let headRuntime = app.existingRuntime(for: headID) else { return }
-        switch event {
-        case .turnStarted:
-            // A head briefed again by its lead works another turn.
-            if !headRuntime.isRunning {
-                headRuntime.rehearseTurn(nil)
-                app.updateHydraHead(headID) {
-                    $0.status = .running
-                    $0.finishedAt = nil
-                }
-            }
-        case .turnCompleted(let status, _):
-            hydraAgentFinished(agentID, status: status, summary: nil)
-        case .toolStarted(let toolID, let call):
-            headRuntime.hydraToolCalls += 1
-            headRuntime.hydraActivity = ToolPresentation.label(for: call)
-            headRuntime.hydraLastEventAt = .now
-            noteHydraEdits(call.edits)
-            if call.kind == .command { watchHydraCommand("\(agentID)-\(toolID)", call) }
-            headRuntime.rehearse(event)
-        case .toolUpdated(let toolID, let update):
-            if let edits = update.edits { noteHydraEdits(edits) }
-            if let status = update.status, status != .running { settleHydraCommand("\(agentID)-\(toolID)") }
-            headRuntime.rehearse(event)
-        case .usage, .contextUsageCleared, .sessionReady, .models, .commands, .title, .assistantMessageID, .backgroundTasks:
-            break
-        default:
-            headRuntime.rehearse(event)
-        }
-    }
-
-    /// A head finished: its timeline closes and its status lands, and the tool row that
-    /// sent it out completes if the provider left it running in the background.
-    private func hydraAgentFinished(_ agentID: String, status: TurnStatus, summary: String?) {
-        guard let app, let headID = hydraNativeHeads[agentID] else { return }
-        app.finishHydraHead(headID, status: status, summary: summary)
-        if let headRuntime = app.existingRuntime(for: headID), headRuntime.isRunning {
-            headRuntime.rehearse(.turnCompleted(status: status, error: nil))
-        }
-    }
-
-    /// The tool call that sent out a foreground head has returned: the head is done, and
-    /// the result is its report. A background head's call returns at once and says
-    /// nothing about the head, which the provider ends on its own.
-    private func hydraToolFinished(_ headID: UUID, status: ToolCall.Status, output: String?) {
-        guard let app, let head = app.thread(headID), let info = head.hydra, info.kind == .native, !info.isBackground, !info.isFinished,
-              let nativeID = info.nativeID else { return }
-        let outcome: TurnStatus = switch status {
-        case .completed: .completed
-        case .declined: .interrupted
-        default: .failed
-        }
-        hydraAgentFinished(nativeID, status: outcome, summary: output)
-    }
-
-    /// The lead's turn is over, so any foreground head still marked as working went with
-    /// it: a stopped turn stopped them, a finished one finished them. Background heads
-    /// outlive the turn and end on the provider's word.
-    private func settleForegroundHeads(after status: TurnStatus) {
-        guard let app else { return }
-        for (nativeID, headID) in hydraNativeHeads {
-            guard let head = app.thread(headID), let info = head.hydra, !info.isBackground, !info.isFinished else { continue }
-            hydraAgentFinished(nativeID, status: status == .completed ? .completed : .interrupted, summary: nil)
-        }
-    }
-
-    /// The session the heads ran in has stopped: whichever were still running are done.
-    private func stopNativeHeads() {
-        guard let app else { return }
-        for headID in hydraNativeHeads.values {
-            guard let head = app.thread(headID), head.hydra?.isFinished == false else { continue }
-            app.finishHydraHead(headID, status: .interrupted, summary: nil)
-            if let headRuntime = app.existingRuntime(for: headID), headRuntime.isRunning {
-                headRuntime.rehearse(.turnCompleted(status: .interrupted, error: nil))
-            }
-        }
-        hydraNativeHeads.removeAll()
-    }
-
-    /// Asks the session to stop a native head. Returns whether it could.
-    func stopNativeHead(_ nativeID: String) async -> Bool {
-        guard let session else { return false }
-        return await session.stopAgent(nativeID)
-    }
-
-    /// The app finished a head of this lead's (see `AppModel.finishHydraHead`): a native
-    /// head's tool row completes; a Tivano-run head's report goes to the lead, once its
-    /// batch is complete. A head reporting again (steered on from the panel) replaces
-    /// any report of its own still waiting.
+    /// The app finished a head of this lead's (see `AppModel.finishHydraHead`): an older
+    /// version's native head has its tool row completed; a Tivano-run head's report goes to
+    /// the lead, once its batch is complete. A head reporting again (steered on from the
+    /// panel) replaces any report of its own still waiting.
     func hydraHeadFinished(_ headID: UUID, info: HydraHeadInfo, status: HydraHeadInfo.Status, summary: String?, landing: HydraLanding? = nil, copyPath: String? = nil) {
         switch info.kind {
         case .native:
@@ -3596,13 +3509,16 @@ final class ThreadRuntime {
         }
     }
 
-    /// How long to wait before flushing deltas onto their rows: 45 ms up to 8 KB of UTF-8,
-    /// 90 ms up to 64 KB (roughly two bytes per prose character), 150 ms beyond.
+    /// How long to wait before flushing deltas onto their rows: one display frame (16 ms)
+    /// up to 8 KB of UTF-8, 45 ms up to 64 KB (roughly two bytes per prose character), 90 ms
+    /// beyond. A frame's worth of tokens at a time is what makes a reply read as written
+    /// rather than dropped in: each flush lands as a small chunk the veil dissolves in, and
+    /// the parse only ever touches the block still being written.
     private nonisolated static func flushDelay(for length: Int?, scrolling: Bool) -> Int {
         let paced = switch length ?? 0 {
-        case ..<8_192: 45
-        case ..<65_536: 90
-        default: 150
+        case ..<8_192: 16
+        case ..<65_536: 45
+        default: 90
         }
         // Under a scrolling reader the row is not being read: it takes at most six
         // flushes a second then, so the frames of the scroll are not spent laying the
@@ -3752,9 +3668,8 @@ final class ThreadRuntime {
 
     /// Something happened on this runtime's own timeline, and it is a head's: its
     /// watchdog clock restarts and the edits that landed count (see
-    /// `AppModel.startHydraWatchdog`). A Tivano-run head counts its tools here, where
-    /// its own session reports them; a native head's count comes with its lead's events
-    /// (see `hydraAgentEvent`), which also rehearse here, so it is not counted twice.
+    /// `AppModel.startHydraWatchdog`). A head counts its tools here, where its own
+    /// session reports them.
     private func noteHydraHeadEvent(edits: Int = 0, tool: Bool = false) {
         guard let info = thread?.hydra else { return }
         hydraLastEventAt = .now
@@ -3867,7 +3782,7 @@ final class ThreadRuntime {
             latestTree = after
             // Nothing else started or ran alongside while the snapshot was taken, so it
             // still stands for the working tree and the next command starts from it.
-            if treeEpoch == epoch, commandTrees.isEmpty, hydraCommandTrees.isEmpty { settledTree = (after, epoch) }
+            if treeEpoch == epoch, commandTrees.isEmpty { settledTree = (after, epoch) }
             guard base != after, let changed = try? await git.changedPaths(from: base, to: after) else { return }
             let repository = repositoryRoot(for: git)
             let attributed = attributedPaths(inTurnOf: id, git: git, repositoryRoot: await repository.value)
@@ -3878,19 +3793,49 @@ final class ThreadRuntime {
             var real = changed.filter { !$0.isEmpty && !TouchedPaths.isBuildOutput($0) && !attributed.contains($0) }
             let root = await repository.value.path
             real = await unclaimedCommandPaths(real, root: root, owner: owner, turnStart: turnStart, commandStart: commandStart)
-            guard !real.isEmpty, let patch = try? await git.diff(from: base, to: after, paths: real), !patch.isEmpty else { return }
-            let edits = await Self.fileEdits(from: patch, repositoryRoot: repository.value)
-            guard !edits.isEmpty, let entry = entryIndex[id], case .tool(var call) = entry.item.content else { return }
-            // A provider that did report its edits keeps them.
-            guard call.edits.allSatisfy({ $0.diff == nil }) else { return }
-            call.edits = edits
-            CheckoutClaims.claim(real, root: root, owner: owner)
-            if entry.turnID == currentTurnID { recordCurrentTurnEdits(edits) }
-            entry.item.content = .tool(call)
-            saveRevision += 1
-            noteHydraHeadEvent(edits: edits.count)
-            scheduleSave()
+            await attachCommandEdits(id, paths: real, git: git, from: base, to: after, repositoryRoot: repository.value, owner: owner)
         }
+    }
+
+    /// The files past which a command's row keeps counts alone: a codemod or a generator
+    /// can rewrite hundreds of files, and a patch for each would put megabytes on the row
+    /// and in the thread file. Every file still lands as an edit, so the turn and the merge
+    /// count it; only the first ones carry the diff the row's edit lines open.
+    private static let commandPatchLimit = 60
+
+    /// Attaches every changed file, with patches for the first files and counts for the rest.
+    private func attachCommandEdits(_ id: String, paths: [String], git: Git, from base: String, to after: String, repositoryRoot: URL, owner: UUID) async {
+        guard !paths.isEmpty else { return }
+        let patched = Array(paths.prefix(Self.commandPatchLimit))
+        guard let patch = try? await git.diff(from: base, to: after, paths: patched) else { return }
+        let absolutePaths = paths.map { repositoryRoot.appendingPathComponent($0).standardizedFileURL.path }
+        let patchedPaths = Set(absolutePaths.prefix(patched.count))
+        var byPath: [String: FileEdit] = [:]
+        // A patch parser can leave Git's quoted filename escaped. Use the known paths
+        // alone, and recover an unmatched file from NUL-separated numstat below.
+        for edit in await Self.fileEdits(from: patch, repositoryRoot: repositoryRoot) where patchedPaths.contains(edit.path) {
+            byPath[edit.path] = edit
+        }
+        let counted = zip(paths, absolutePaths).compactMap { path, absolute in byPath[absolute] == nil ? path : nil }
+        if !counted.isEmpty {
+            guard let counts = try? await git.lineCounts(from: base, to: after, paths: counted) else { return }
+            for file in counts {
+                let path = repositoryRoot.appendingPathComponent(file.path).standardizedFileURL.path
+                byPath[path] = FileEdit(path: path, additions: file.additions, deletions: file.deletions)
+            }
+        }
+        let edits = absolutePaths.compactMap { byPath[$0] }
+        // Do not claim a complete command while recording only a partial file set.
+        guard edits.count == paths.count, let entry = entryIndex[id], case .tool(var call) = entry.item.content else { return }
+        // A provider that did report its edits keeps them.
+        guard call.edits.allSatisfy({ $0.diff == nil }) else { return }
+        call.edits = edits
+        CheckoutClaims.claim(paths, root: repositoryRoot.path, owner: owner)
+        if entry.turnID == currentTurnID { recordCurrentTurnEdits(edits) }
+        entry.item.content = .tool(call)
+        saveRevision += 1
+        noteHydraHeadEvent(edits: edits.count)
+        scheduleSave()
     }
 
     /// One working-tree snapshot at a time for this thread, each waiting for the one
@@ -3911,56 +3856,6 @@ final class ThreadRuntime {
         let paths = edits.compactMap { TouchedPaths.relative($0.path, root: root) }
         claimReportedPaths(paths, root: root)
         hydraCurrentTurnTouchedPaths.formUnion(paths)
-    }
-
-    /// Files a native head reported editing. They land on the head's own timeline, but the
-    /// work is done in the lead's checkout and counts as the lead's turn.
-    private func noteHydraEdits(_ edits: [FileEdit]) {
-        guard !edits.isEmpty, let root = workingRoot else { return }
-        let paths = edits.compactMap { TouchedPaths.relative($0.path, root: root) }
-        claimReportedPaths(paths, root: root)
-        hydraTouched.formUnion(paths)
-        hydraCurrentTurnTouchedPaths.formUnion(paths)
-    }
-
-    /// A native head's shell command, watched exactly as the lead's own are and for the
-    /// same reason: agents edit from the shell without reporting it. What changed goes to
-    /// the turn's files rather than onto a row, because the row lives in the head's
-    /// runtime and it is the lead's turn that a merge takes its files from.
-    private func watchHydraCommand(_ key: String, _ call: ToolCall) {
-        guard hydraCommandTrees[key] == nil, ShellCommandKind.mayWriteFiles(call.title), repositoryGit != nil,
-              let before = treeBeforeCommand() else { return }
-        hydraCommandTrees[key] = Task<String?, Never> { before }
-        commandStarts[key] = .now
-        settledTree = nil
-        treeEpoch += 1
-    }
-
-    private func settleHydraCommand(_ key: String) {
-        let commandStart = commandStarts.removeValue(forKey: key)
-        let turnStart = turns.first(where: { $0.id == currentTurnID })?.startedAt ?? .distantPast
-        let owner = claimOwner
-        guard let before = hydraCommandTrees.removeValue(forKey: key), let git = repositoryGit else { return }
-        let epoch = treeEpoch
-        // Kept with the lead's own settles, so the turn waits for them before it counts
-        // its files.
-        commandSettles[key] = Task { [weak self] in
-            guard let base = await before.value, let self else { return }
-            guard let after = await captureTree(git).value else { return }
-            latestTree = after
-            if treeEpoch == epoch, commandTrees.isEmpty, hydraCommandTrees.isEmpty { settledTree = (after, epoch) }
-            guard base != after, let paths = try? await git.changedPaths(from: base, to: after) else { return }
-            let root = await repositoryRoot(for: git).value.path
-            var writes = paths.filter { !$0.isEmpty && !TouchedPaths.isBuildOutput($0) }
-            writes = await unclaimedCommandPaths(writes, root: root, owner: owner, turnStart: turnStart, commandStart: commandStart)
-            guard !writes.isEmpty else { return }
-            CheckoutClaims.claim(writes, root: root, owner: owner)
-            let touched = writes.compactMap { path in
-                workingRoot.flatMap { TouchedPaths.relative((root as NSString).appendingPathComponent(path), root: $0) }
-            }
-            hydraTouched.formUnion(touched)
-            hydraCurrentTurnTouchedPaths.formUnion(touched)
-        }
     }
 
     private var claimOwner: UUID {
@@ -4207,7 +4102,7 @@ final class ThreadRuntime {
         phase == .idle && session == nil && providerHistoryOperation == nil && !isReverting && pendingSend == nil && !isLoadingHistory
             && draft.isEmpty && followUpEdit == nil && messageEdit == nil
             && approvals.isEmpty && questions.isEmpty
-            && hydraPendingReports.isEmpty && hydraBatches.isEmpty && hydraWaiting.isEmpty && hydraNativeHeads.isEmpty
+            && hydraPendingReports.isEmpty && hydraBatches.isEmpty && hydraWaiting.isEmpty
             && !hydraFlushScheduled && hydraLanding == nil && !isHydraMerging && headBudget == nil
             && commandTrees.isEmpty && commandSettles.isEmpty
     }

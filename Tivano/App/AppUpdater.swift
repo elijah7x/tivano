@@ -47,6 +47,8 @@ final class UpdateInstallProgress {
         case verifying
         /// The verified app is copied next to the installed one.
         case staging
+        /// The verified update stays here until the team's merges finish; cancellation is safe.
+        case waitingForMerge
         /// The installer owns the update; the app is about to quit.
         case handoff
         /// After the relaunch: the sweep to 100%.
@@ -80,7 +82,7 @@ final class UpdateInstallProgress {
 
     var isInstallRunning: Bool {
         switch phase {
-        case .preparing, .downloading, .verifying, .staging, .handoff: true
+        case .preparing, .downloading, .verifying, .staging, .waitingForMerge, .handoff: true
         default: false
         }
     }
@@ -134,6 +136,12 @@ final class UpdateInstallProgress {
         stopCreep()
         phase = .handoff
         apply(UpdateProgressMilestones.handoffEnd)
+    }
+
+    func waitForMerge() {
+        guard isInstallRunning else { return }
+        stopCreep()
+        phase = .waitingForMerge
     }
 
     /// A step failed. The pill goes back to its ready face; the installer explains why.
@@ -296,6 +304,12 @@ final class AppUpdater {
                 do {
                     try Task.checkCancellation()
                     progress.beginStaging()
+                    let model = WindowManager.shared.model
+                    if model.isAnyHydraMergeRunning { progress.waitForMerge() }
+                    while model.isAnyHydraMergeRunning {
+                        try await Task.sleep(for: .milliseconds(250))
+                    }
+                    try Task.checkCancellation()
                     try handOff(staged: staged, version: update.version)
                 } catch {
                     try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
@@ -314,6 +328,11 @@ final class AppUpdater {
                 }
             }
         }
+    }
+
+    func cancelInstall() {
+        guard progress.phase == .waitingForMerge else { return }
+        installTask?.cancel()
     }
 
     // MARK: - Download
@@ -437,6 +456,9 @@ final class AppUpdater {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = try FileHandle(forWritingTo: log)
         process.standardError = process.standardOutput
+        guard WindowManager.shared.model.flushForQuit() else {
+            throw UpdateInstallError(Chrome.localized("Tivano couldn't save your chats. The update was not installed. Resolve the disk error and try again."))
+        }
         try process.run()
         UserDefaults.standard.set(version, forKey: Self.relaunchVersionKey)
         progress.noteHandoff()
@@ -447,11 +469,9 @@ final class AppUpdater {
             UserDefaults.standard.removeObject(forKey: Self.relaunchVersionKey)
             UpdateInstallProgress.shared.fail()
         }
-        Task { @MainActor in
-            // Let the handoff tick land before the windows go.
-            try? await Task.sleep(for: .milliseconds(350))
-            NSApp.terminate(nil)
-        }
+        // Do not yield after the merge check: a new merge must not start between
+        // launching the installer and requesting termination.
+        NSApp.terminate(nil)
     }
 
     /// Waits for the app to quit, swaps the bundles, and opens the new one. A swap that fails
@@ -611,7 +631,7 @@ private final class Downloader: NSObject, URLSessionDownloadDelegate, @unchecked
                   let destination = state.destination else { return nil }
             defer { state.continuation = nil; state.task = nil }
             if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                return (continuation, .failure(UpdateInstallError("The download failed with HTTP \(http.statusCode).")))
+                return (continuation, .failure(UpdateInstallError(String(format: Chrome.localized("The download failed with HTTP %d."), http.statusCode))))
             }
             do {
                 try? FileManager.default.removeItem(at: destination)
@@ -629,7 +649,7 @@ private final class Downloader: NSObject, URLSessionDownloadDelegate, @unchecked
             if (error as NSError).code == NSURLErrorCancelled, (error as NSError).domain == NSURLErrorDomain {
                 finish(.failure(CancellationError()))
             } else {
-                finish(.failure(UpdateInstallError("The update could not be downloaded. \(error.localizedDescription)")))
+                finish(.failure(UpdateInstallError(String(format: Chrome.localized("The update could not be downloaded. %@"), error.localizedDescription))))
             }
         }
     }

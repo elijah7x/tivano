@@ -145,6 +145,7 @@ final class AppSettings {
         static let autoHideTopControls = "autoHideTopControls"
         static let binaryPaths = "providerBinaryPaths"
         static let disabledProviders = "disabledProviders"
+        static let unmonitoredProviders = "unmonitoredProviderUpdates"
         static let models = "lastModels"
         static let efforts = "lastEfforts"
         static let lastHydraPair = "lastHydraPairID"
@@ -582,6 +583,12 @@ final class AppSettings {
         didSet { defaults.set(disabledProviders, forKey: Key.disabledProviders) }
     }
 
+    /// CLI update checks the user turned off, stored by provider id. Older preferences
+    /// have no entry, so a provider stays monitored until it is listed here.
+    private(set) var unmonitoredProviders: [String] {
+        didSet { defaults.set(unmonitoredProviders, forKey: Key.unmonitoredProviders) }
+    }
+
     private(set) var lastModels: [String: String] {
         didSet { defaults.set(lastModels, forKey: Key.models) }
     }
@@ -807,6 +814,7 @@ final class AppSettings {
         commandcodeAPIKeyInput = ""
         binaryPaths = defaults.dictionary(forKey: Key.binaryPaths) as? [String: String] ?? [:]
         disabledProviders = defaults.stringArray(forKey: Key.disabledProviders) ?? []
+        unmonitoredProviders = defaults.stringArray(forKey: Key.unmonitoredProviders) ?? []
         lastModels = defaults.dictionary(forKey: Key.models) as? [String: String] ?? [:]
         lastEfforts = defaults.dictionary(forKey: Key.efforts) as? [String: String] ?? [:]
         lastHydraPairID = defaults.string(forKey: Key.lastHydraPair).flatMap(UUID.init(uuidString:))
@@ -986,6 +994,15 @@ final class AppSettings {
     func setEnabled(_ enabled: Bool, for provider: ProviderKind) {
         disabledProviders.removeAll { $0 == provider.rawValue }
         if !enabled { disabledProviders.append(provider.rawValue) }
+    }
+
+    func monitorsUpdates(_ provider: ProviderKind) -> Bool {
+        !unmonitoredProviders.contains(provider.rawValue)
+    }
+
+    func setMonitorsUpdates(_ monitors: Bool, for provider: ProviderKind) {
+        unmonitoredProviders.removeAll { $0 == provider.rawValue }
+        if !monitors { unmonitoredProviders.append(provider.rawValue) }
     }
 
     func lastModel(for provider: ProviderKind) -> String? {

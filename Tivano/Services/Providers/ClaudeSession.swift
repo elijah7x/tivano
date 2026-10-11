@@ -2,12 +2,10 @@ import Foundation
 
 /// Drives Claude Code in headless stream-json mode, routing permission prompts to the app.
 ///
-/// With Hydra on, the session defines the heads as session agents (`--agents`), steers the
-/// lead towards them with an appended system prompt, and asks for the heads' own text and
-/// thinking (`--forward-subagent-text`). A head's messages carry the spawning tool call in
-/// `parent_tool_use_id`; each such stream keeps its own block bookkeeping, and its events go
-/// out wrapped in `agentEvent`. The `task_started`, `task_progress` and `task_notification`
-/// system messages bracket a head's life.
+/// With Hydra on, the session appends the lead's delegation-block policy to the system prompt
+/// and launches with `--disallowedTools Agent Task`: every head is a thread Tivano
+/// runs, never a sub-agent of this session. Messages that still carry a
+/// `parent_tool_use_id` keep their own block bookkeeping and go out wrapped in `agentEvent`.
 @MainActor
 final class ClaudeSession: ProviderSession {
     var onEvent: ((ProviderEvent) -> Void)?
@@ -75,7 +73,7 @@ final class ClaudeSession: ProviderSession {
         if let cached = knownOptions[executable.path] { return cached }
         guard let result = try? await Shell.run(executable, ["--help"], environment: environment, timeout: 20) else { return [] }
         let help = TextCleanup.stripANSI(result.output + result.errorOutput)
-        let found = ["--system-prompt-snapshot", "--forward-subagent-text"].filter { help.contains($0) }
+        let found = ["--system-prompt-snapshot"].filter { help.contains($0) }
         let options = Set(found)
         knownOptions[executable.path] = options
         return options
@@ -96,7 +94,7 @@ final class ClaudeSession: ProviderSession {
         // Connected servers from Settings are the only MCP servers the session sees.
         // --strict-mcp-config leaves the user's own Claude config files alone but out of this session; with none connected, the flag is not passed and Claude reads its own config as usual.
         if let mcpConfig = MCPProviderConfig.claudeConfigPath() { arguments += ["--mcp-config", mcpConfig, "--strict-mcp-config"] }
-        var environment = configuration.environment
+        let environment = configuration.environment
         let options = await Self.knownOptions(of: executable, environment: environment)
         // Resumed chats must use the current setting, even with Hydra off.
         if options.contains("--system-prompt-snapshot") { arguments += ["--system-prompt-snapshot", "off"] }
@@ -104,21 +102,11 @@ final class ClaudeSession: ProviderSession {
         if let hydra = configuration.hydra {
             // The system prompt is rendered fresh rather than replayed from the
             // conversation's first request, so switching Hydra on for an existing chat
-            // reaches the model.
-            if hydra.runsNatively {
-                // The heads and the lead's brief.
-                arguments += ["--agents", HydraPrompts.claudeAgents(hydra).compactString]
-                hydraPolicy = HydraPrompts.policy(for: .claude, hydra)
-                if options.contains("--forward-subagent-text") { arguments.append("--forward-subagent-text") }
-                // Uncapped, the CLI keeps its own limit on heads at once.
-                if let cap = hydra.maxHeads { environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = String(cap) }
-            } else {
-                // The heads run on another provider, as threads Tivano starts: the
-                // lead asks for them with the delegation block, and its own agent tool goes,
-                // since a head it spawned itself would run on its own model.
-                hydraPolicy = HydraPrompts.fallbackPolicy(hydra)
-                arguments += ["--disallowedTools", "Agent", "Task"]
-            }
+            // reaches the model. The heads are threads Tivano starts: the lead asks
+            // for them with the delegation block, and its own agent tool goes, since a
+            // head it spawned itself would run inside this session instead of the app.
+            hydraPolicy = HydraPrompts.fallbackPolicy(hydra)
+            arguments += ["--disallowedTools", "Agent", "Task"]
         }
         // Exactly one combined system prompt segment for every session, Hydra or not. The
         // off notice goes out too, so a resumed thread cannot keep earlier guidance alive.
@@ -153,12 +141,7 @@ final class ClaudeSession: ProviderSession {
         }
 
         sessionID = id
-        var initialize: [String: JSONValue] = ["subtype": "initialize", "hooks": .null]
-        if configuration.hydra?.runsNatively == true {
-            // One-line progress notes for the heads, on task_progress.
-            initialize["agentProgressSummaries"] = true
-            initialize["forwardSubagentText"] = true
-        }
+        let initialize: [String: JSONValue] = ["subtype": "initialize", "hooks": .null]
         let initialization = try await control(.object(initialize))
         isStarted = true
         let models = Self.models(in: initialization)
@@ -517,7 +500,6 @@ final class ClaudeSession: ProviderSession {
             description: message["description"]?.string ?? "Subagent",
             prompt: message["prompt"]?.string,
             model: nil,
-            profile: HydraPrompts.profileName(forAgentName: message["subagent_type"]?.string),
             isBackground: message["is_backgrounded"]?.bool ?? false
         )))
     }

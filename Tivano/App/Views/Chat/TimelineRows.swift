@@ -2205,6 +2205,22 @@ private struct ToolDetailView: View {
                     }
                     .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 10, style: .continuous))
                     .clipShape(.rect(cornerRadius: 10, style: .continuous))
+                } else if !edit.path.isEmpty {
+                    // An edit past a command's per-file patch limit keeps only its
+                    // counts: the path and the reported counts still show.
+                    HStack(spacing: 8) {
+                        Text(edit.path)
+                            .font(.chat(.caption))
+                            .foregroundStyle(Chrome.secondaryText)
+                        Spacer(minLength: 8)
+                        if edit.additions + edit.deletions > 0 {
+                            DiffStatLabel(additions: edit.additions, deletions: edit.deletions)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 10, style: .continuous))
+                    .clipShape(.rect(cornerRadius: 10, style: .continuous))
                 }
             }
             if !call.output.isEmpty {

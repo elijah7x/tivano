@@ -31,7 +31,7 @@ python3 scripts/build_changelog.py --section "$VERSION" > "$NOTES" || { echo "No
 step() { printf '\n==> %s\n' "$1"; }
 
 [ -f "$DMG" ] || { echo "No disk image at $DMG. Run scripts/release.sh first."; exit 1; }
-[ -f "$NOTES" ] || { echo "No release notes at $NOTES."; exit 1; }
+[ -s "$NOTES" ] || { echo "No release notes at $NOTES."; exit 1; }
 if ! grep -qE '^## (New features|Bug fixes|Refinements)' "$NOTES"; then
   echo "$NOTES needs at least one of the three headings: ## New features, ## Bug fixes, ## Refinements."
   exit 1

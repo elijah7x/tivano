@@ -1,6 +1,127 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Library could not be loaded": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载资料库"
+          }
+        }
+      }
+    },
+    "Tivano couldn't read its library (%@). The original file and chat documents are preserved. Repair the library and restart Tivano. Any new chats will be saved separately to %@ when you quit.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tivano 无法读取资料库（%@）。原文件和会话文档已保留。请修复资料库后重启 Tivano。退出时，新建会话会另存至 %@。"
+          }
+        }
+      }
+    },
+    "Could not save the library": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存资料库"
+          }
+        }
+      }
+    },
+    "Tivano couldn't save your changes to disk. Your chats are kept in memory and saving will be retried. Free up disk space or check folder permissions before quitting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tivano 无法将更改保存到磁盘。会话仍保留在内存中，保存会继续重试。退出前请释放磁盘空间或检查文件夹权限。"
+          }
+        }
+      }
+    },
+    "Kimi Code did not advertise the requested permission or interaction mode. Choose a supported mode and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kimi Code 未提供所选的权限或交互模式。请选择支持的模式后重试。"
+          }
+        }
+      }
+    },
+    "Kimi Code asked a question in a form Tivano cannot display. The request was declined.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kimi Code 提问所用的表单暂不受 Tivano 支持，已拒绝该请求。"
+          }
+        }
+      }
+    },
+    "Your answer didn't reach %@. The request may no longer be available, or the provider could not accept the answer. Try again or send a message to carry on.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的回答未能送达 %@。请求可能已失效，或 provider 无法接受该回答。请重试，或发送消息继续。"
+          }
+        }
+      }
+    },
+    "Waiting for Hydra merges to finish.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待 Hydra 合并完成。"
+          }
+        }
+      }
+    },
+    "The download failed with HTTP %d.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下载失败，HTTP 状态码为 %d。"
+          }
+        }
+      }
+    },
+    "The update could not be downloaded. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法下载更新。%@"
+          }
+        }
+      }
+    },
+    "Tivano couldn't save your chats. The update was not installed. Resolve the disk error and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tivano 无法保存会话，更新尚未安装。请解决磁盘错误后重试。"
+          }
+        }
+      }
+    },
     "Kimi Code" : {
       "extractionState": "manual",
       "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "Kimi Code" } } }
@@ -8,6 +129,488 @@
     "Sign in to Kimi Code with `kimi login`, then try again." : {
       "extractionState": "manual",
       "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "请先运行 `kimi login` 登录 Kimi Code，然后重试。" } } }
+    },
+    "No verified version source is available for this installation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此安装暂无已核实的版本源。" } }
+      }
+    },
+    "Claude update settings could not be read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法读取 Claude 更新设置。" } }
+      }
+    },
+  "This model needs a newer %@. Updating it, then sending your message again.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "此模型需要较新的 %@。正在更新，随后会重新发送你的消息。"
+        }
+      }
+    }
+  },
+  "%1$@\n\nTivano could not bring %2$@ up to date. Run `%3$@` in Terminal, then send the message again.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "%1$@\n\nTivano 未能将 %2$@ 更新到新版本。请在终端中运行 `%3$@`，然后重新发送该消息。"
+        }
+      }
+    }
+  },
+  "%1$@\n\nTivano could not bring %2$@ up to date. Install the newer version the way you installed it, then send the message again.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "%1$@\n\nTivano 未能将 %2$@ 更新到新版本。请按你当初的安装方式安装较新版本，然后重新发送该消息。"
+        }
+      }
+    }
+  },
+  "%1$@\n\n%2$@ was updated to %3$@. Send the message again.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "%1$@\n\n%2$@ 现已更新（%3$@）。请重新发送该消息。"
+        }
+      }
+    }
+  },
+  "%1$@ was updated to %2$@, but the message could not be sent again: %3$@ Send it again.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "%1$@ 现已更新（%2$@），但该消息未能再次发送：%3$@ 请重新发送。"
+        }
+      }
+    }
+  },
+  "The installed version could not be read.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "无法读取已安装版本。"
+        }
+      }
+    }
+  },
+  "The versions could not be compared, so the update was not kept as successful.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "无法比较版本，因此这次更新未记为成功。"
+        }
+      }
+    }
+  },
+  "The binary changed before the update ran, so Tivano did not update it.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "更新开始前可执行文件已变化，因此 Tivano 没有更新它。"
+        }
+      }
+    }
+  },
+  "No install channel was found, so Tivano did not update it.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "未找到安装渠道，因此 Tivano 没有更新它。"
+        }
+      }
+    }
+  },
+  "The installed version could not be read, so Tivano did not run the update.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "无法读取已安装版本，因此 Tivano 没有运行更新。"
+        }
+      }
+    }
+  },
+  "The update command failed.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "更新命令失败。"
+        }
+      }
+    }
+  },
+  "The update command failed: %@.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "更新命令失败：%@。"
+        }
+      }
+    }
+  },
+  "The update was cancelled before it finished.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "更新在完成前被取消。"
+        }
+      }
+    }
+  },
+  "The update command finished, but the installed version could not be read.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "更新命令已结束，但无法读取安装后的版本。"
+        }
+      }
+    }
+  },
+  "The update command finished, but the version did not change.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "更新命令已结束，但版本没有变化。"
+        }
+      }
+    }
+  },
+  "The update command finished, but the version went from %1$@ to %2$@.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "更新命令已结束，但版本从 %1$@ 退回到 %2$@。"
+        }
+      }
+    }
+  },
+  "The update command finished at %1$@, which is older than %2$@.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "更新命令结束于 %1$@，低于目标版本 %2$@。"
+        }
+      }
+    }
+  },
+  "The CLI was updated, but the provider status could not be refreshed.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "CLI 已更新，但无法刷新提供方状态。"
+        }
+      }
+    }
+  },
+  "The CLI was updated, but the model catalog could not be reloaded.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "CLI 已更新，但无法重新加载模型目录。"
+        }
+      }
+    }
+  },
+  "The release feed did not answer over HTTP.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "版本源没有通过 HTTP 应答。"
+        }
+      }
+    }
+  },
+  "The release feed answered %d.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "版本源返回了 %d。"
+        }
+      }
+    }
+  },
+  "The release feed URL is invalid.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "版本源地址无效。"
+        }
+      }
+    }
+  },
+  "The release feed returned invalid JSON.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "版本源返回的内容不是有效的 JSON。"
+        }
+      }
+    }
+  },
+  "The release feed did not include a version.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "版本源没有给出版本号。"
+        }
+      }
+    }
+  },
+  "The release feed's version could not be read.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "无法解析版本源中的版本号。"
+        }
+      }
+    }
+  },
+  "brew info failed: %@": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "brew info 失败：%@"
+        }
+      }
+    }
+  },
+  "brew info returned invalid JSON.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "brew info 返回的内容不是有效的 JSON。"
+        }
+      }
+    }
+  },
+  "brew info did not include a version.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "brew info 没有给出可用的版本号。"
+        }
+      }
+    }
+  },
+  "brew info's version could not be read.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "无法解析 brew info 中的版本号。"
+        }
+      }
+    }
+  },
+    "%@ is available." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "%@ 可用。" } } }
+    },
+    "%@ is available. A custom binary path is set, so Tivano will not update it." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "%@ 可用。已设置自定义可执行文件路径，因此 Tivano 不会更新它。" } } }
+    },
+    "%@ is available. Its install channel is unknown, so update it the way it was installed." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "%@ 可用。安装渠道未知，请按当初的安装方式自行更新。" } } }
+    },
+    "A custom binary path is set, so Tivano will not update it." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "已设置自定义可执行文件路径，因此 Tivano 不会更新它。" } } }
+    },
+    "A custom binary path is set, so Tivano will not update it. It still compares the installed version with the newest release every six hours." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "已设置自定义可执行文件路径，因此 Tivano 不会更新它。仍会每六小时将已安装版本与最新发布版比较一次。" } } }
+    },
+    "An update is available." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "有可用更新。" } } }
+    },
+    "An update is available. A custom binary path is set, so Tivano will not update it." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "有可用更新。已设置自定义可执行文件路径，因此 Tivano 不会更新它。" } } }
+    },
+    "An update is available. Its install channel is unknown, so update it the way it was installed." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "有可用更新。安装渠道未知，请按当初的安装方式自行更新。" } } }
+    },
+    "Check for updates" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "检查更新" } } }
+    },
+    "Checking for updates…" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "正在检查更新…" } } }
+    },
+    "Checks for updates again. Nothing is installed." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "再次检查更新，不会安装任何内容。" } } }
+    },
+    "Retry update" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "重试更新" } } }
+    },
+    "Running %@." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "正在运行 %@。" } } }
+    },
+    "Runs %@ again." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "将再次运行 %@。" } } }
+    },
+    "Runs %@." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "将运行 %@。" } } }
+    },
+    "Runs the update again." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "再次运行更新。" } } }
+    },
+    "The install channel is unknown, so Tivano will not update it." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "安装渠道未知，因此 Tivano 不会更新它。" } } }
+    },
+    "The install channel is unknown, so Tivano will not update it. It still compares the installed version with the newest release every six hours." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "安装渠道未知，因此 Tivano 不会更新它。仍会每六小时将已安装版本与最新发布版比较一次。" } } }
+    },
+    "The installed version could not be confirmed after updating." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新后无法确认已安装版本。"
+          }
+        }
+      }
+    },
+    "The update check failed." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "更新检查失败。" } } }
+    },
+    "The update check failed: %@" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "更新检查失败：%@" } } }
+    },
+    "The update failed." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "更新失败。" } } }
+    },
+    "The update failed: %@" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "更新失败：%@" } } }
+    },
+    "Tivano compares the installed version with the newest release every six hours." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "Tivano 每六小时将已安装版本与最新发布版比较一次。" } } }
+    },
+    "Update" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "更新" } } }
+    },
+    "Update monitoring is off." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "更新监测已关闭。" } } }
+    },
+    "Updated. Now at version %@." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "已更新。当前版本为 %@。" } } }
+    },
+    "Updated. The installed version has not been confirmed yet." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "已更新。尚未确认安装后的版本。" } } }
+    },
+    "Updated to version %@." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "已更新至版本 %@。" } } }
+    },
+    "Updates this provider's command-line tool." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "更新此服务商的命令行工具。" } } }
+    },
+    "Updates with %@. Tivano compares the installed version with the newest release every six hours." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "通过 %@ 更新。Tivano 每六小时将已安装版本与最新发布版比较一次。" } } }
+    },
+    "Updating to %@…" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "正在更新到 %@…" } } }
+    },
+    "Updating…" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "正在更新…" } } }
+    },
+    "Version unknown" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "版本未知" } } }
+    },
+    "Waiting until its active tasks finish." : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "等待当前活跃任务结束后再更新。" } } }
+    },
+    "Waiting…" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "等待中…" } } }
     },
     "Power" : {
       "extractionState": "manual",
@@ -446,6 +1049,39 @@
           "stringUnit": {
             "state": "translated",
             "value": "后台任务完成后，%@ 已继续工作。"
+          }
+        }
+      }
+    },
+    "No response for %d min…": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已 %d 分钟无响应…"
+          }
+        }
+      }
+    },
+    "%@ sent nothing for 10 minutes, so Tivano stopped the turn.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 已 10 分钟没有任何输出，Tivano 已停止这一轮。"
+          }
+        }
+      }
+    },
+    "%@ sent nothing for 30 minutes while a tool ran, so Tivano stopped the turn.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工具运行期间，%@ 已 30 分钟没有任何输出，Tivano 已停止这一轮。"
           }
         }
       }
@@ -9977,17 +10613,6 @@
         }
       }
     },
-    "Send as soon as the heads report" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "子智能体汇报后立即发送"
-          }
-        }
-      }
-    },
     "Send now" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13662,13 +14287,13 @@
         }
       }
     },
-    "For new delegated Tivano-run Codex heads after successful completion. Archived sessions keep their IDs and resume on the next message. Lead chats, native heads, older sessions and heads with user follow-ups stay visible." : {
+    "For new delegated Tivano-run Codex heads after successful completion. Archived sessions keep their IDs and resume on the next message. Lead chats, older sessions and heads with user follow-ups stay visible." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "适用于由 Tivano 运行、新委派的 Codex 子智能体，在成功完成之后生效。已归档的会话保留其 ID，并在下一条消息时恢复。主导对话、原生子智能体、较早的会话，以及收到用户后续消息的子智能体仍保持可见。"
+            "value" : "适用于由 Tivano 运行、新委派的 Codex 子智能体，在成功完成之后生效。已归档的会话保留其 ID，并在下一条消息时恢复。主导对话、较早的会话，以及收到用户后续消息的子智能体仍保持可见。"
           }
         }
       }

@@ -12,11 +12,12 @@ import Foundation
 /// (`userInput.request`) and plan exits (`exitPlanMode.request`) are server
 /// requests answered in place.
 ///
-/// With Hydra on, the session is created with the heads as custom agents on the pair's
-/// model and effort, the lead's brief appended to the system message, and sub-agent
-/// streaming switched on. A head's events carry its `agentId` and go out wrapped in
-/// `agentEvent`; `subagent.started`, `subagent.completed` and `subagent.failed` bracket
-/// its life. Copilot offers no way to stop one head on its own.
+/// With Hydra on, the session is created with the lead's delegation-block policy in
+/// the system message and the CLI's own `task` tool excluded: every head is a thread
+/// Tivano runs, never a sub-agent of this session. Sub-agent events that still arrive
+/// carry their `agentId` and go out wrapped in `agentEvent`; `subagent.started`,
+/// `subagent.completed` and `subagent.failed` bracket a sub-agent's life. Copilot
+/// offers no way to stop one on its own.
 ///
 /// Protocol reference: https://github.com/github/copilot-sdk, `nodejs/src/client.ts`
 /// and the generated `rpc.ts` and `session-events.ts`. Verified live against
@@ -126,23 +127,20 @@ final class CopilotSession: ProviderSession {
             "requestPermission": true,
             "requestUserInput": true,
             "requestExitPlanMode": true,
-            "includeSubAgentStreamingEvents": .bool(configuration.hydra?.runsNatively == true),
+            "includeSubAgentStreamingEvents": false,
             "isExperimentalMode": .bool(configuration.runtimeMode == .auto),
         ]
         if let model, !model.isEmpty { params["model"] = .string(model) }
         if let effort, !effort.isEmpty { params["reasoningEffort"] = .string(effort) }
-        // The native or fallback Hydra policy, when Hydra is on: the system message below
-        // is assembled fresh, once, with the anti-slop guidance alongside it.
+        // The Hydra policy, when Hydra is on: the system message below is assembled fresh,
+        // once, with the anti-slop guidance alongside it. The heads are Tivano-run: the
+        // lead asks for them with the delegation block, no agents of the CLI's own are
+        // defined, and its task tool goes, since a head started with it would run inside
+        // this session instead of the app.
         var hydraPolicy: String?
         if let hydra = configuration.hydra {
-            if hydra.runsNatively {
-                params["customAgents"] = .array(HydraPrompts.copilotAgents(hydra))
-                hydraPolicy = HydraPrompts.policy(for: .copilot, hydra)
-            } else {
-                // Heads on another provider are Tivano-run: the lead asks for them with the
-                // delegation block, and no agents of the CLI's own are defined.
-                hydraPolicy = HydraPrompts.fallbackPolicy(hydra)
-            }
+            hydraPolicy = HydraPrompts.fallbackPolicy(hydra)
+            params["excludedTools"] = ["task"]
         }
         // Exactly one appended system message for every session, Hydra or not. The off
         // notice goes out too, so a resumed thread cannot keep earlier guidance alive.
@@ -504,10 +502,8 @@ final class CopilotSession: ProviderSession {
     private func handleNotification(_ method: String, _ params: JSONValue) {
         guard method == "session.event", let event = params["event"], let type = event["type"]?.string else { return }
         if let eventSession = params["sessionId"]?.string, let sessionID, eventSession != sessionID { return }
-        // Sub-agents stream under their own agent id. With Hydra on they are heads and their
-        // transcripts go to the head's own timeline; otherwise their parent `task` row stands
-        // for them. Their permission prompts still need answering and their spend still
-        // counts, so those pass either way.
+        // Provider sub-agents stay on their parent task row. Permissions and account
+        // spend still pass through; the runtime excludes their spend from this thread.
         let agentID = event["agentId"]?.string
         if agentID != nil, configuration.hydra == nil, type != "assistant.usage", type.hasPrefix("assistant.") || type.hasPrefix("tool.") { return }
         let sink: (ProviderEvent) -> Void = if let agentID {
@@ -585,8 +581,7 @@ final class CopilotSession: ProviderSession {
                 toolUseID: data["toolCallId"]?.string,
                 description: brief?.description ?? data["agentDisplayName"]?.string ?? data["agentName"]?.string ?? "Subagent",
                 prompt: brief?.prompt,
-                model: data["model"]?.string,
-                profile: HydraPrompts.profileName(forAgentName: data["agentName"]?.string)
+                model: data["model"]?.string
             )))
         case "subagent.completed":
             guard let agentID, configuration.hydra != nil else { break }

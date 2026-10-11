@@ -168,7 +168,7 @@ struct HydraSettingsPage: View {
             ChromeCard {
                 ChromeRow(
                     title: "Codex local session history",
-                    detail: "For new delegated Tivano-run Codex heads after successful completion. Archived sessions keep their IDs and resume on the next message. Lead chats, native heads, older sessions and heads with user follow-ups stay visible."
+                    detail: "For new delegated Tivano-run Codex heads after successful completion. Archived sessions keep their IDs and resume on the next message. Lead chats, older sessions and heads with user follow-ups stay visible."
                 ) {
                     ChromeVisualPicker(options: [(false, "Keep visible"), (true, "Auto-archive")], selection: $settings.hydraArchivesCodexHeads) { archive in
                         Image(systemName: archive ? "archivebox" : "eye")

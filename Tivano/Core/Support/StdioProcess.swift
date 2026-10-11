@@ -197,7 +197,9 @@ final class StdioProcess: @unchecked Sendable {
                 proc_listchildpids(pid, bytes.baseAddress, Int32(bytes.count))
             }
             guard found > 0 else { return }
-            for child in children.prefix(min(Int(found) / MemoryLayout<pid_t>.size, children.count)) where child > 0 { collect(child, parent: pid) }
+            // The listing call counts pids, not bytes: dividing again dropped every child of
+            // a process with fewer than four, so a stopped agent left its MCP servers behind.
+            for child in children.prefix(min(Int(found), children.count)) where child > 0 { collect(child, parent: pid) }
         }
         collect(root)
         return collected.reversed()

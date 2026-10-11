@@ -2,10 +2,9 @@ import Foundation
 
 // Hydra's heads are threads: each one has a timeline of its own, sits in its lead's
 // floating panel while it works, and drops under the lead in the sidebar once dismissed,
-// like any helper. Native heads run inside the lead's provider session and their
-// timelines fill from the session's events; Tivano-run heads have sessions of their own,
-// each in a copy of the checkout made for it, and their work lands in the lead's checkout
-// the moment they report.
+// like any helper. Every head is Tivano-run, whatever the lead's provider: it has a
+// session of its own, in a copy of the checkout made for it, and its work lands in the
+// lead's checkout the moment it reports. No head runs inside the lead's provider session.
 
 /// What a head changed in its copy since the tree it started from: the patch itself, the
 /// files it touches, and the tree the copy holds now, which becomes the head's new base
@@ -133,12 +132,11 @@ extension AppModel {
         settings.hydraEnabled && thread.hydraEnabled && !thread.isHelper
     }
 
-    /// Whether the provider has heads of its own: it runs them inside its session, with
-    /// the pair's model and effort, and keeps the lead's Hydra policy in its system prompt.
-    /// Every other provider gets Tivano-run heads and the delegation block. Whether a given
-    /// chat's heads actually run natively is `HydraLaunch.runsNatively`: a pair that sends
-    /// the heads out on another provider makes them Tivano-run here too.
-    static func hydraIsNative(_ provider: ProviderKind) -> Bool {
+    /// Whether the provider defines the lead's Hydra policy at launch, in its system
+    /// prompt, and switches its own sub-agent tool off there (Claude's Agent, Codex's
+    /// collab agents, Copilot's task), so a lead never runs heads inside its session.
+    /// Every head is Tivano-run all the same; the other CLIs take the policy per message.
+    static func hydraDefinesPolicyAtLaunch(_ provider: ProviderKind) -> Bool {
         provider == .claude || provider == .codex || provider == .copilot
     }
 
@@ -213,7 +211,6 @@ extension AppModel {
         }
         return HydraLaunch(
             headsProvider: headsProvider,
-            runsNatively: !elsewhere && Self.hydraIsNative(thread.provider),
             headsLabel: label,
             workerModel: keepsModel ? pair?.workerModel : nil,
             workerEffort: workerEffort,
@@ -223,8 +220,7 @@ extension AppModel {
             isolatesHeads: settings.hydraIsolateHeads,
             autoMerges: settings.hydraAutoMerge,
             reviewsHeads: settings.hydraReviewHeads,
-            projects: ownRefs,
-            antiSlopEnabled: settings.antiSlopEnabled
+            projects: ownRefs
         )
     }
 
@@ -267,9 +263,7 @@ extension AppModel {
         hydraHeads(of: parentID).count { $0.hydra?.kind == .tivano && $0.hydra?.status == .running }
     }
 
-    /// How many of a lead's heads are still at work, native and Tivano-run alike. A native
-    /// head lives inside the lead's own session, so this is what says whether stopping the
-    /// lead's turn would take heads down with it.
+    /// How many of a lead's heads are still at work, whatever their kind.
     func runningHydraHeads(of parentID: UUID) -> Int {
         hydraHeads(of: parentID).count { $0.hydra?.status == .running }
     }
@@ -348,18 +342,6 @@ extension AppModel {
 
     // MARK: - Sending heads out
 
-    /// Sends out a head that mirrors one the provider started inside the lead's session.
-    /// Its timeline only rehearses what the session reports, and it works wherever the
-    /// lead does.
-    @discardableResult
-    func spawnNativeHead(from parentID: UUID, spawn: AgentSpawn) -> ChatThread? {
-        guard let head = insertHydraHead(from: parentID, task: spawn.description, kind: .native, origin: .delegated, native: spawn, batchID: nil, profile: spawn.profile) else { return nil }
-        // The brief, when the provider has said what it is; otherwise the timeline starts
-        // on the working line and the brief slots in above once it arrives.
-        runtime(for: head.id).rehearseTurn(spawn.prompt)
-        return head
-    }
-
     /// Sends out a head with a session of its own, on the pair's model and effort. With
     /// isolation on and a git repository to copy, the head first gets a worktree of its
     /// own, made as it is from the checkout of the project the delegation names (the
@@ -379,7 +361,7 @@ extension AppModel {
         profile: String? = nil,
         brief: @escaping @Sendable (HydraPersona, HydraPrompts.Workplace) -> String
     ) -> ChatThread? {
-        guard let head = insertHydraHead(from: parentID, task: task, kind: .tivano, origin: origin, native: nil, batchID: batchID, preferredIndex: preferredIndex, project: project, profile: profile) else { return nil }
+        guard let head = insertHydraHead(from: parentID, task: task, origin: origin, batchID: batchID, preferredIndex: preferredIndex, project: project, profile: profile) else { return nil }
         Task { await startTivanoHead(head.id, attachments: attachments, brief: brief) }
         return head
     }
@@ -387,9 +369,7 @@ extension AppModel {
     private func insertHydraHead(
         from parentID: UUID,
         task: String,
-        kind: HydraHeadInfo.Kind,
         origin: HydraHeadInfo.Origin,
-        native: AgentSpawn?,
         batchID: UUID?,
         preferredIndex: Int? = nil,
         project: String? = nil,
@@ -440,23 +420,22 @@ extension AppModel {
             runtime(for: parentID).appendHydraNote("Hydra: no project named \(reference) is in the sidebar or on this Mac, so \(persona.name) works in \(fallback).")
         }
 
-        // A Tivano-run head goes out on the pair's heads' provider, which may not be the
-        // lead's: there it runs the pair's model or that provider's default, and the lead's
-        // model and effort mean nothing to it. A native head lives in the lead's session.
-        let headsProvider = kind == .tivano ? (routed?.provider ?? launch?.headsProvider ?? parent.provider) : parent.provider
+        // A head goes out on the pair's heads' provider, which may not be the lead's: there
+        // it runs the pair's model or that provider's default, and the lead's model and
+        // effort mean nothing to it.
+        let headsProvider = routed?.provider ?? launch?.headsProvider ?? parent.provider
         let elsewhere = headsProvider != parent.provider
         var head = ChatThread(
             projectID: target?.id ?? parent.projectID,
             provider: headsProvider,
-            model: native?.model ?? routed?.model ?? launch?.workerModel ?? (elsewhere ? providers.defaultModel(for: headsProvider)?.id : parent.model),
+            model: routed?.model ?? launch?.workerModel ?? (elsewhere ? providers.defaultModel(for: headsProvider)?.id : parent.model),
             effort: routed?.effort ?? launch?.workerEffort ?? (elsewhere ? nil : parent.effort),
             // A Tivano-run head works in its own copy under a brief that forbids git and
             // build-output work, and its landing is a patch the lead reviews: nobody sits
             // at its chat to answer a permission prompt, so it runs with full access. Left
             // on the lead's supervised mode, a head stalled on its first gated tool until
-            // the watchdog stopped it. A native head lives in the lead's session and takes
-            // the lead's mode.
-            runtimeMode: kind == .tivano ? .fullAccess : parent.runtimeMode,
+            // the watchdog stopped it.
+            runtimeMode: .fullAccess,
             fastMode: false
         )
         head.parentThreadID = parentID
@@ -473,15 +452,11 @@ extension AppModel {
         // A routed head wears its profile in the title: "Hank · audit the parser · deep".
         if let routed { head.title += " · \(routed.name)" }
         head.hasCustomTitle = true
-        var info = HydraHeadInfo(index: index, task: task, kind: kind, origin: origin)
-        info.tracksProviderHistory = kind == .tivano
+        var info = HydraHeadInfo(index: index, task: task, kind: .tivano, origin: origin)
+        info.tracksProviderHistory = true
         info.profile = routed?.name
-        info.nativeID = native?.id
-        info.nativeTaskID = native?.taskID
-        info.toolUseID = native?.toolUseID
         info.batchID = batchID
-        info.isBackground = native?.isBackground ?? true
-        info.canStop = kind == .tivano || native?.taskID != nil || parent.provider == .codex
+        info.canStop = true
         head.hydra = info
         insertThread(head)
 
@@ -567,8 +542,7 @@ extension AppModel {
 
     // MARK: - Reporting back
 
-    /// A head is done: its status and report land on it, and its lead hears about it. A
-    /// native head's result reaches the lead through the provider; a Tivano-run head's
+    /// A head is done: its status and report land on it, and its lead hears about it. The
     /// report is relayed by the lead's runtime, which waits for the rest of a batch.
     func finishHydraHead(_ id: UUID, status: TurnStatus, summary: String?, landing: HydraLanding? = nil) {
         guard let head = thread(id), let info = head.hydra, !info.isFinished else { return }
@@ -583,7 +557,7 @@ extension AppModel {
         case .interrupted: .stopped
         case .running: .running
         }
-        // The progress a native head reported while it ran lands on the record now, once.
+        // The progress the head reported while it ran lands on the record now, once.
         let live = existingRuntime(for: id)
         updateHydraHead(id) {
             $0.status = outcome
@@ -630,8 +604,7 @@ extension AppModel {
     }
 
     /// A Tivano-run head's turn ended: its last reply is its report, and the work in its
-    /// copy lands in the lead's checkout before the lead hears of it. Native heads finish
-    /// through their provider's own events instead.
+    /// copy lands in the lead's checkout before the lead hears of it.
     func hydraHeadTurnFinished(_ head: ChatThread, status: TurnStatus) {
         guard let info = head.hydra, info.kind == .tivano else { return }
         // The turn is over, whatever it did: the time its execution took is readable now,
@@ -922,8 +895,8 @@ extension AppModel {
 
     // MARK: - Stopping and clearing
 
-    /// Stops a head where it runs: a Tivano-run head's own turn, a native head through
-    /// the lead's session.
+    /// Stops a head where it runs: its own turn. A native head from an older version is
+    /// long gone with the session it ran in, and is only marked stopped.
     func stopHydraHead(_ id: UUID) {
         guard let head = thread(id), let info = head.hydra, !info.isFinished else { return }
         switch info.kind {
@@ -935,12 +908,7 @@ extension AppModel {
                 finishHydraHead(id, status: .interrupted, summary: nil)
             }
         case .native:
-            guard let parentID = head.parentThreadID, let nativeID = info.nativeID else { return }
-            let leadRuntime = runtime(for: parentID)
-            Task {
-                let stopped = await leadRuntime.stopNativeHead(nativeID)
-                if !stopped { self.updateHydraHead(id) { $0.canStop = false } }
-            }
+            finishHydraHead(id, status: .interrupted, summary: nil)
         }
     }
 
@@ -1038,14 +1006,14 @@ extension AppModel {
     /// min…", rather than sitting on its last tool; one quiet for ten with nothing edited
     /// and no tool since the last look has stalled, and is stopped the way the panel's
     /// Stop stops it, with a report that opens by telling the lead why (see
-    /// `finishHydraHead`). Native heads are their provider's to watch. One loop for the
-    /// app; calling this again does nothing.
+    /// `finishHydraHead`). One loop for the app; calling this again does nothing.
     func startHydraWatchdog() {
         guard HydraWatchdog.loop == nil else { return }
         HydraWatchdog.loop = Task { [weak self] in
+            defer { HydraWatchdog.loop = nil }
             while !Task.isCancelled {
                 try? await Task.sleep(for: HydraWatchdog.tick)
-                guard let self else { return }
+                guard !Task.isCancelled, let self else { return }
                 self.watchHydraHeads()
             }
         }
@@ -1059,6 +1027,16 @@ extension AppModel {
             let idle = headRuntime.hydraIdleSeconds
             let tools = headRuntime.hydraToolCalls
             toolCounts[head.id] = tools
+            let hasRunningTool = headRuntime.entries.contains {
+                if case .tool(let tool) = $0.item.content { return tool.status == .running }
+                return false
+            }
+            if hasRunningTool {
+                if HydraWatchdog.labelled.remove(head.id) != nil, headRuntime.hydraActivity?.hasPrefix("Thinking for ") == true {
+                    headRuntime.hydraActivity = nil
+                }
+                continue
+            }
             if idle >= HydraWatchdog.stalledAfter, headRuntime.hydraEditCount == 0, HydraWatchdog.toolCounts[head.id] == tools {
                 HydraWatchdog.stalledHeadIDs.insert(head.id)
                 HydraWatchdog.labelled.remove(head.id)
@@ -1080,9 +1058,9 @@ extension AppModel {
     }
 
     /// Heads whose copies are gone from disk (deleted by hand, say) work in the checkout
-    /// from now on, instead of failing every tool call. And the other way round: a copy
-    /// on disk that no chat names any more (the app quit with a head half-way made, or
-    /// removing it failed) is swept away.
+    /// from now on, instead of failing every tool call. Unclaimed copies remain in
+    /// Storage.worktreesDirectory for recovery: missing chat metadata cannot prove that
+    /// a copy's work landed, even when its working directory is clean.
     func sweepHydraCopies() {
         // Copies deleted from disk still hold their names in the registry until pruned:
         // only the projects that ever had a copy, one git process at a time.
@@ -1090,7 +1068,6 @@ extension AppModel {
         let projectsWithCopies = Set(threads.filter { $0.hydra?.hasOwnCopy == true }.map(\.projectID))
         Task {
             for project in projects where projectsWithCopies.contains(project.id) { await Git(project.path).pruneWorktrees() }
-            await sweepOrphanHydraCopies(of: projects)
         }
         for head in threads where head.hydra?.hasOwnCopy == true {
             guard let copy = head.worktreePath, !FileManager.default.fileExists(atPath: copy) else { continue }
@@ -1101,37 +1078,6 @@ extension AppModel {
             updateHydraHead(head.id) { $0.baseTree = nil }
         }
         startHydraWatchdog()
-    }
-
-    /// Removes the folders in the worktrees root that were made for heads of `projects`
-    /// and that no thread names. Only a head's copy goes: its folder is named for its
-    /// project, its persona and its thread ("tivano-gus-daa2ebed", see
-    /// `makeHydraCopy`), and nothing else in that root matches. A chat's own worktree
-    /// (kept on purpose when the chat was deleted) and folders other tools made there are
-    /// never touched, nor is a folder a thread names, nor one young enough to be a copy
-    /// still being made.
-    private func sweepOrphanHydraCopies(of projects: [Project]) async {
-        let root = Storage.worktreesDirectory
-        guard let folders = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles]) else { return }
-        let named = Set(threads.compactMap { $0.worktreePath.map { URL(fileURLWithPath: $0).lastPathComponent } })
-        let slugs = projects.map { (project: $0, slug: $0.name.replacingOccurrences(of: " ", with: "-").lowercased()) }
-        let personas = Set(HydraRoster.personas.map { $0.name.replacingOccurrences(of: " ", with: "-").lowercased() })
-        for folder in folders where !named.contains(folder.lastPathComponent) {
-            let name = folder.lastPathComponent
-            // The longest project slug that opens the name is its project.
-            guard let owner = slugs.filter({ name.hasPrefix($0.slug + "-") }).max(by: { $0.slug.count < $1.slug.count }) else { continue }
-            // What follows the slug is "<persona>-<8 hex>", or "<persona>-<round>-<8 hex>".
-            var parts = name.dropFirst(owner.slug.count + 1).split(separator: "-").map(String.init)
-            guard parts.count >= 2, let suffix = parts.popLast(), suffix.count == 8, suffix.allSatisfy(\.isHexDigit) else { continue }
-            if parts.count == 2, Int(parts[1]) != nil { parts.removeLast() }
-            guard parts.count == 1, personas.contains(parts[0]) else { continue }
-            if let born = try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate, Date.now.timeIntervalSince(born) < 600 { continue }
-            // Git takes it out of its registry along with the folder; a folder git does
-            // not know (the app quit between making it and registering it) goes by hand.
-            if (try? await Git(owner.project.path).removeWorktree(at: folder.path)) == nil {
-                try? FileManager.default.removeItem(at: folder)
-            }
-        }
     }
 
     /// What a head sent out from the queue is told about the main chat: the user's last

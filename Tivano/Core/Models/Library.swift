@@ -285,7 +285,7 @@ struct Library: Codable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        projects = container.value(.projects, default: [Lenient<Project>]()).compactMap(\.value)
-        threads = container.value(.threads, default: [Lenient<ChatThread>]()).compactMap(\.value)
+        projects = try container.decode([Project].self, forKey: .projects)
+        threads = try container.decode([ChatThread].self, forKey: .threads)
     }
 }

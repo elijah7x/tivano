@@ -64,7 +64,7 @@ sys.exit(0 if m and re.search(r"^### ", m.group(1), re.M) else 1)' \
   (
     cd "$WORK"
     python3 scripts/set_version.py release catch-up-dev
-    THANKS=$(python3 scripts/release_credits.py 2>/dev/null | sed -E '/^[[:space:]]*$/d; /^- /!s/^/- /')
+    THANKS=$(python3 scripts/release_credits.py 2>/dev/null | python3 -c 'import sys; print(sys.stdin.read().strip())')
     [ -n "$THANKS" ] || THANKS="- No outside contributors."
     python3 - "$VERSION" "$(date +%F)" "$THANKS" <<'PY'
 import re, sys
@@ -75,7 +75,7 @@ text = path.read_text()
 m = re.search(r"^## \[Unreleased\]\n(.*?)(?=^## \[)", text, re.S | re.M)
 body = m.group(1).strip()
 if "### Thanks" not in body:
-    body += "\n\n### Thanks\n\n" + thanks
+    body += "\n\n" + (thanks if thanks.startswith("### Thanks\n") else "### Thanks\n\n" + thanks)
 path.write_text(text[:m.start()] + f"## [Unreleased]\n\n## [{version}] - {day}\n\n{body}\n\n" + text[m.end():])
 PY
     git add config/release.xcconfig CHANGELOG.md

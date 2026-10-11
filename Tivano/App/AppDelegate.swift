@@ -41,13 +41,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// two of git and one model call, and losing it half-way leaves the work unmerged
     /// until the user's next message. Capped, so a stuck merge never holds the quit.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model, model.isAnyHydraMergeRunning else { return .terminateNow }
+        guard let model else { return .terminateNow }
+        if model.isLibraryLoaded, !model.isAnyHydraMergeRunning {
+            return model.saveBeforeQuit() ? .terminateNow : .terminateCancel
+        }
         Task { @MainActor in
+            if !model.isLibraryLoaded { await model.bootstrap() }
+            while !model.isLibraryLoaded {
+                try? await Task.sleep(for: .milliseconds(25))
+            }
             let deadline = Date.now.addingTimeInterval(4 * 60)
             while model.isAnyHydraMergeRunning, Date.now < deadline {
                 try? await Task.sleep(for: .milliseconds(250))
             }
-            sender.reply(toApplicationShouldTerminate: true)
+            sender.reply(toApplicationShouldTerminate: model.saveBeforeQuit())
         }
         return .terminateLater
     }

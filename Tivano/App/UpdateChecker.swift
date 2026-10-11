@@ -475,8 +475,39 @@ struct GitHubRelease: Decodable, Sendable {
         }
 
         private enum CodingKeys: String, CodingKey {
-            case name, size, sha256
+            case name, size, sha256, digest
             case browserDownloadURL = "browser_download_url"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            browserDownloadURL = try container.decode(String.self, forKey: .browserDownloadURL)
+            size = try container.decodeIfPresent(Int64.self, forKey: .size)
+            let feedHash = try container.decodeIfPresent(String.self, forKey: .sha256)
+            let digest = try container.decodeIfPresent(String.self, forKey: .digest)
+            func checkedHash(_ value: String, key: CodingKeys) throws -> String {
+                guard value.utf8.count == 64, value.utf8.allSatisfy({
+                    (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+                }) else {
+                    throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "Invalid SHA-256 checksum")
+                }
+                return value.lowercased()
+            }
+            let normalizedFeed = try feedHash.map { try checkedHash($0, key: .sha256) }
+            let normalizedDigest: String?
+            if let digest {
+                guard digest.hasPrefix("sha256:") else {
+                    throw DecodingError.dataCorruptedError(forKey: .digest, in: container, debugDescription: "Unsupported asset digest")
+                }
+                normalizedDigest = try checkedHash(String(digest.dropFirst(7)), key: .digest)
+            } else {
+                normalizedDigest = nil
+            }
+            if let normalizedFeed, let normalizedDigest, normalizedFeed != normalizedDigest {
+                throw DecodingError.dataCorruptedError(forKey: .digest, in: container, debugDescription: "Conflicting asset checksums")
+            }
+            sha256 = normalizedFeed ?? normalizedDigest
         }
     }
 

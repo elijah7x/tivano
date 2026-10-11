@@ -10,11 +10,10 @@ enum PiCLI {
     /// Pi's `--thinking` levels, which the effort strings map to 1:1.
     static let thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
-    /// Where the gate extension and each session's gate file live.
+    /// Where the gate extension and each session's gate file live: in this edition's own
+    /// library, so Release and Dev never load or overwrite each other's gate.
     static var supportDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: LoginEnvironment.homeDirectory).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Tivano/pi", isDirectory: true)
+        StoragePaths.directory("pi")
     }
 
     /// `PI_CODING_AGENT_DIR` when set, else `<home>/.pi/agent`.

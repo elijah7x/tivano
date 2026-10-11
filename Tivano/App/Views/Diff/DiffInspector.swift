@@ -158,16 +158,28 @@ struct DiffInspector: View {
 /// diff does not already cover. The row's own patch is the only copy of the change while
 /// its turn runs, and it is what a turn's checkpoint diff no longer has when the agent
 /// reverted the work or moved it into a worktree, so tapping a row that reports an edit
-/// always opens that edit instead of "No changes yet".
+/// always opens that edit instead of "No changes yet". An edit past a command's per-file
+/// patch limit has no patch left, only counts: it still opens a card that carries them.
 private func focusedFiles(_ edits: [FileEdit], missingFrom files: [DiffFile]) -> [DiffFile] {
     var missing: [DiffFile] = []
     for edit in edits {
-        guard !edit.path.isEmpty, let patch = edit.diff, !patch.isEmpty else { continue }
+        guard !edit.path.isEmpty else { continue }
         let touched: Set<String> = [edit.path]
         guard !files.contains(where: { TouchedPaths.matches($0, touched: touched) }),
               !missing.contains(where: { TouchedPaths.matches($0, touched: touched) }) else { continue }
-        let file = DiffParser.parseHunks(patch, path: edit.path)
-        if file.isDeferred || !file.hunks.isEmpty { missing.append(file) }
+        if let patch = edit.diff, !patch.isEmpty {
+            let file = DiffParser.parseHunks(patch, path: edit.path)
+            if file.isDeferred || !file.hunks.isEmpty { missing.append(file) }
+            continue
+        }
+        missing.append(DiffFile(
+            path: edit.path,
+            change: .modified,
+            isBinary: false,
+            hunks: [],
+            reportedAdditions: edit.additions,
+            reportedDeletions: edit.deletions
+        ))
     }
     return missing
 }

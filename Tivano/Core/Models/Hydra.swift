@@ -2,13 +2,14 @@ import Foundation
 import SwiftUI
 
 // Hydra: one chat, many heads. With Hydra on, the chat's agent leads a team of helper
-// agents ("heads") that it sends out on the parts of a big job, in parallel. Claude, Codex
-// and Copilot run the heads natively, inside their own session, with the model and effort
-// from the pair the user set up; every other provider gets Tivano-run heads, each a thread
-// of its own, and hands their reports back to the lead as the next message. A pair may
-// also send the heads out on another provider than the lead's (a Claude lead over Gemini
-// heads, say): then they are Tivano-run whatever the lead's provider, and the lead asks for
-// them the way the other providers do.
+// agents ("heads") that it sends out on the parts of a big job, in parallel. Every head is
+// Tivano-run, whatever the lead's provider: the lead asks for heads with the delegation
+// block, each head is a thread of its own in the app with the model and effort from the
+// pair the user set up, and its report goes back to the lead as the next message. The
+// lead's own sub-agent tools (Claude's Agent, Codex's collab agents, Copilot's task) are
+// switched off while it leads, so no head ever runs inside the provider instead. A pair
+// may send the heads out on another provider than the lead's (a Claude lead over Gemini
+// heads, say).
 
 /// A purpose-tuned head configuration on a pair ("quick", "deep"): the lead routes a
 /// delegation to it by name and that head runs on the profile's model and effort instead
@@ -34,8 +35,8 @@ struct HydraHeadProfile: Codable, Hashable, Identifiable, Sendable {
         return on.isEmpty ? name : "\(name) (\(on))"
     }
 
-    /// The name as it appears in agent names ("Deep Work" gives "deep-work"), so the
-    /// profile a native spawn names can be matched back whatever the spacing or case.
+    /// The name as it appears in agent names ("Deep Work" gives "deep-work"), so a
+    /// profile named in that form still matches whatever the spacing or case.
     var agentSlug: String {
         String(name.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" })
     }
@@ -126,11 +127,6 @@ struct HydraLaunch: Hashable, Sendable {
     /// The provider the heads run on: the lead's own, unless the pair sends them out on
     /// another one (see `HydraPair.workerProvider`).
     var headsProvider: ProviderKind
-    /// Whether the lead's provider runs the heads inside its own session: only with the
-    /// heads on the lead's provider, and only where it has heads of its own (Claude, Codex,
-    /// Copilot). Otherwise the heads are Tivano-run threads, whatever the lead runs on, and
-    /// the lead asks for them with the delegation block.
-    var runsNatively: Bool
     /// The heads' model and provider in words, for the lead's brief, when they run on
     /// another provider than the lead: "Gemini 3.8 Flash on Antigravity".
     var headsLabel: String?
@@ -156,8 +152,6 @@ struct HydraLaunch: Hashable, Sendable {
     /// The projects in the sidebar, the chat's own first: the lead may send a head to any
     /// of them by name, and its work lands and merges there.
     var projects: [HydraProjectRef] = []
-    /// Whether the providers' native head definitions carry the anti-slop instructions.
-    var antiSlopEnabled = true
 
     /// How many Tivano-run heads may work at once for a pair with no cap of its own. The
     /// tasks past it wait their turn (`ThreadRuntime.spawnWaitingHeads`) and go out as
@@ -295,8 +289,9 @@ enum HydraRoster {
 /// A head thread's place in its lead's team: who it is, what it was sent to do, how it
 /// runs and how far it has got.
 struct HydraHeadInfo: Codable, Hashable, Sendable {
-    /// Native heads run inside the lead's own provider session; Tivano-run heads are
-    /// sessions of their own that Tivano starts and reports back for.
+    /// Tivano-run heads are sessions of their own that Tivano starts and reports
+    /// back for. Native heads ran inside the lead's own provider session; no lead spawns
+    /// them any more, and the case stays so older records still decode.
     enum Kind: String, Codable, Sendable {
         case native
         case tivano
@@ -500,8 +495,8 @@ struct HydraLanding: Codable, Hashable, Sendable {
     init() {}
 }
 
-/// A head the lead asked for through the delegation block, on a provider that runs no
-/// heads of its own. `name` is the head's announced name when the lead gave one: it is
+/// A head the lead asked for through the delegation block.
+/// `name` is the head's announced name when the lead gave one: it is
 /// authoritative, so the spawned head carries exactly that roster name instead of the
 /// next sequential one. Nil means the lead did not name it and the roster order decides.
 struct HydraDelegation: Hashable, Sendable {
@@ -632,34 +627,6 @@ struct HydraDelegationBudget {
 
 /// The words Hydra puts in front of the lead and the heads, per provider.
 enum HydraPrompts {
-    static let workerAgentName = "tivano-worker"
-    static let scoutAgentName = "tivano-scout"
-
-    /// The agent name a profile's worker variant is registered under on the native
-    /// providers ("tivano-worker-deep"): the lead routes a task to the profile by
-    /// spawning exactly it.
-    static func workerAgentName(for profile: HydraHeadProfile) -> String {
-        "\(workerAgentName)-\(profile.agentSlug)"
-    }
-
-    /// The profile an agent name routes to ("tivano-worker-deep" gives "deep"), slug
-    /// included; the base worker and scout names, and anything else, route nowhere.
-    static func profileName(forAgentName agentName: String?) -> String? {
-        guard let agentName, agentName.hasPrefix("\(workerAgentName)-") else { return nil }
-        return String(agentName.dropFirst(workerAgentName.count + 1))
-    }
-
-    /// The profiles a native lead can route to: only ones running on the heads' own
-    /// provider (a profile that sends heads elsewhere is Tivano-run's business, the
-    /// lead's agent tools cannot spawn it) and tuning something (one with neither model
-    /// nor effort is the shared head under another name).
-    static func nativeRoutableProfiles(of launch: HydraLaunch) -> [HydraHeadProfile] {
-        launch.headProfiles.filter {
-            ($0.provider == nil || $0.provider == launch.headsProvider)
-                && ($0.model != nil || $0.effort != nil)
-        }
-    }
-
     /// Where a Tivano-run head works: a copy of the checkout made for it, or the checkout
     /// itself when the project cannot be copied (no git, no commits yet) or the user
     /// prefers it so.
@@ -669,7 +636,8 @@ enum HydraPrompts {
     }
 
     /// What a head is told about the checkout it works in and what it may do to it. The
-    /// shared case is what every head lives with on providers that run heads natively.
+    /// shared case is a head's lot when its project cannot be copied or the user turned
+    /// the copies off.
     private static func workplaceRules(_ workplace: Workplace) -> String {
         switch workplace {
         case .ownCopy(let path):
@@ -713,7 +681,7 @@ enum HydraPrompts {
         let own = projects.first.map { "this chat's project, \($0.name) (`\($0.path)`)" } ?? "this chat's project"
         let others = projects.dropFirst()
         let named = others.isEmpty ? "" : " The other projects in the sidebar: " + others.map { "\($0.name) (`\($0.path)`)" }.joined(separator: ", ") + "."
-        return "Heads may work in any project. A head works in \(own) unless it is sent to another: an entry of the delegation block names it with \"project\" (a sidebar project's name or path, or the absolute path of any git repository on this Mac, which Tivano then adds to the sidebar), and a head spawned with your own agent tool is told the project's folder in its prompt.\(named) Whatever a head changes lands in the checkout of the project it worked in, and the team's work is merged per project, one merge request each. Your own tools run in this chat's checkout, and you may read and edit files in any project all the same: what you change elsewhere is merged along with that project's work. Run your own checks in the checkout itself: never make a worktree or a copy of the project for them."
+        return "Heads may work in any project. A head works in \(own) unless it is sent to another: an entry of the delegation block names it with \"project\" (a sidebar project's name or path, or the absolute path of any git repository on this Mac, which Tivano then adds to the sidebar).\(named) Whatever a head changes lands in the checkout of the project it worked in, and the team's work is merged per project, one merge request each. Your own tools run in this chat's checkout, and you may read and edit files in any project all the same: what you change elsewhere is merged along with that project's work. Run your own checks in the checkout itself: never make a worktree or a copy of the project for them."
     }
 
     /// What a lead is told when the setting has Tivano land the work: the merge is
@@ -730,192 +698,6 @@ enum HydraPrompts {
     /// head, head's name first, everyday words for what changed for the user, file
     /// details on one short second line only, no audit-speak, no icons.
     private static let reportStyleRule = "For each head, give one plain sentence starting with its name and describing the user-visible result; add the file details only when useful, and keep the whole account bounded to a line or two per head. Omit repeated summaries, audit jargon and decorative symbols. Say plainly what you still need from the user and what you settled or fixed yourself."
-
-    /// Appended to the lead's system prompt on providers that run heads natively: when to
-    /// delegate, how to split the work and what to do with the reports.
-    static func policy(for provider: ProviderKind, _ launch: HydraLaunch) -> String {
-        let maxHeads = launch.maxHeads
-        let autoMerges = launch.autoMerges
-        let reviewsHeads = launch.reviewsHeads
-        let projects = launch.projects
-        // The pair's routable profiles, in the words the lead routes with: on Claude and
-        // Copilot the profile's agent variant, on Codex the model and effort to pass.
-        let profiles = nativeRoutableProfiles(of: launch)
-        let profileRule: String
-        if profiles.isEmpty {
-            profileRule = ""
-        } else {
-            switch provider {
-            case .claude, .copilot:
-                let variants = profiles.map { "`\(workerAgentName(for: $0))` for \($0.name)" }.joined(separator: ", ")
-                profileRule = " Some heads are tuned for a purpose: route the task to \(variants) instead of the plain `\(workerAgentName)` when the work belongs to that purpose."
-            case .codex:
-                let routes = profiles.map { profile -> String in
-                    var parts: [String] = []
-                    if let model = profile.model { parts.append("`model` = \(model)") }
-                    if let effort = profile.effort { parts.append("`reasoning_effort` = \(effort)") }
-                    return "\(profile.name) (pass \(parts.joined(separator: " and ")))"
-                }.joined(separator: ", ")
-                profileRule = " Some heads are tuned for a purpose: route the task by passing the profile's own knobs in `spawn_agent` — \(routes) — when the work belongs to that purpose."
-            default:
-                profileRule = ""
-            }
-        }
-        let howToSpawn: String
-        let howToWait: String
-        switch provider {
-        case .claude:
-            howToSpawn = "Two agent types are yours: `\(workerAgentName)` (edits files, runs commands) and `\(scoutAgentName)` (read-only research). Spawn them with the Agent tool and prefer them over other agents while Hydra is on: they run on the model and effort the user chose for heads.\(profileRule)"
-            howToWait = "Launch every head for a job in one message so they run in parallel, in the foreground" + (maxHeads.map { ", and run at most \($0) at once." } ?? ".")
-        case .codex:
-            howToSpawn = "Spawn heads with `spawn_agent`: the `worker` agent for anything that edits files or runs commands, the `explorer` agent for read-only research.\(profileRule)"
-            howToWait = "Spawn every head for a job before waiting, so they run in parallel, and collect them with `wait_agent`; never leave a head running when you answer." + (maxHeads.map { " Run at most \($0) at once." } ?? "")
-        case .copilot:
-            howToSpawn = "Two agents are yours: `\(workerAgentName)` (edits files, runs commands) and `\(scoutAgentName)` (read-only research). Start them with the task tool and prefer them over other agents while Hydra is on: they run on the model and effort the user chose for heads.\(profileRule)"
-            howToWait = "Start every head for a job at once so they run in parallel" + (maxHeads.map { ", and run at most \($0) at a time." } ?? ".")
-        default:
-            howToSpawn = ""
-            howToWait = maxHeads.map { "Run at most \($0) heads at once." } ?? "Send every head for a job out at once so they run in parallel."
-        }
-        return """
-        # Hydra
-
-        The user switched on Hydra for this chat: you lead a team of helper agents, called heads, that work in parallel in your checkout. Switching Hydra on is the user asking you to use them, so it overrides any standing rule that says not to spawn agents unless asked. \(howToSpawn) The agents you spawn this way are the Hydra heads themselves: Tivano shows each one in the team's panel under a roster name and posts its outcome in the chat. There is no other launcher and no other kind of head, so never tell the user that Hydra heads cannot be started here; when the user asks for heads, spawn them this way.
-
-        Delegate first, work second. Anything bigger than a single obvious change to a single file is a job for heads: audits, reviews, a feature that spans files, a refactor, "check everything", research across many files or sources, several tasks in one message. In your first reply, look at the code only long enough to write good briefs, a minute and a handful of files rather than ten, then send out scouts for the reading and workers for the changes, all in that same message. Never spend minutes reading before you delegate, and never do inline what heads could be doing in parallel. Only a truly single-focus request, one file and one obvious change, is yours to do alone, and size the team to the work rather than to how many heads are free: a handful of independent pieces is a team, where three tiny steps that depend on each other are one head's task, or your own.
-
-        When you delegate:
-        - \(howToWait)
-        - Give each head one self-contained task with the exact files, symbols and acceptance criteria it needs. Heads share the checkout but not your context, so write the task as if to a capable colleague who has read nothing yet.
-        - \(briefRule)
-        - \(verificationRule)
-        - \(projectRule(projects))
-        - Split the work so no two heads edit the same file and no head's task rests on another head's unfinished changes: they run in parallel and never see each other's work. Keep integration, verification and the final answer for yourself: never send out a head to verify, redo or finish another head's work.
-        - Tell the user in one line which heads you sent out and what each one does. Tivano names the heads in roster order (Hank, Walter, Ada, Otto, Nova, Remy, Iris, Milo, Juno, Ezra, Lena, Bo, Kai, Vera, Finn, Mira, Odin, Suki, Rex, Zola, Pip, Ivo, Lux, Tova, Gus, then Hank 2 and so on): announce each head by its task and use exactly those names in that order, never invented ones. There is no head called Ives; the roster has Ivo.
-        - After delegating, yield until reports arrive.
-        - Heads go out through the tools above, never through a fenced hydra block: that is the delegation format for providers without agent tools of their own. If you end a reply with one anyway, Tivano still sends those heads out as threads of their own, but your turn ends there and their reports come back as a later message.
-
-        When they report back:
-        - The checkout changes under you while heads work, and the user may be editing too. Never use git status or git diff to check on a head, and never reconcile, revert, stash or move changes you did not make.
-        - Take a report as done work: read the files it names if something matters, but do not redo the task and do not start it over because the tree looks different from what you expected. A head that failed leaves its part to you: do it or send it out again. A head the user stopped leaves its part alone unless the user asks.
-        \(reviewsHeads ? "- " + reviewRule + "\n" : "")- Then finish the job: integrate, run one verification if it matters, and answer the user. \(reportStyleRule)
-        \(autoMerges ? "\n" + autoMergeRule + "\n" : "")
-        """
-    }
-
-    /// The system prompt a worker head runs with.
-    static let workerPrompt = """
-    You are a Hydra head in Tivano: one of several helpers working in parallel for a lead agent, in the lead's own checkout, where the lead and the other heads are changing other files at the same time. Do exactly the task you were given, and only that: do not widen it, do not touch files it does not name unless the task cannot be done otherwise, and never revert, reformat or clean up work that is not yours. Changes you did not make are expected in the checkout: leave them alone, never stash, check out, reset, restore or clean anything, and never move work into a branch or worktree, whatever the project's own guidelines say about agents and worktrees. Do not use git status or git diff to check your work: they show everyone's changes. Never run a build, a test, a lint or any other check of your work: the lead runs every check itself. Make the edits your brief names and report. If something blocks you, say so instead of guessing.
-
-    \(howToReport)
-    """
-
-    /// The system prompt a scout head runs with.
-    static let scoutPrompt = """
-    You are a Hydra head in Tivano: a read-only researcher working in parallel for a lead agent, in the lead's own checkout, where the lead and other heads are changing files at the same time; uncommitted changes there are theirs and expected. Answer exactly the question you were given, from the code and sources you can read. Change nothing.
-
-    Reply with a short report the lead can act on: the findings, with file paths and line references, and anything that contradicts what the lead assumed. No preamble.
-    """
-
-    /// Claude's `--agents` definitions: the two heads on the pair's model and effort.
-    static func claudeAgents(_ launch: HydraLaunch) -> JSONValue {
-        let antiSlop = AntiSlopPolicy.instructions(enabled: launch.antiSlopEnabled)
-        var worker: [String: JSONValue] = [
-            "description": "Hydra head that implements one delegated task: edits files, runs commands. Use proactively when a request splits into independent pieces or touches several parts of the codebase.",
-            "prompt": .string(workerPrompt + "\n\n" + antiSlop),
-            "background": false,
-        ]
-        var scout: [String: JSONValue] = [
-            "description": "Hydra head for read-only research: finds files, reads code, gathers facts and reports back. Use proactively when a job needs many files or sources read.",
-            "prompt": .string(scoutPrompt + "\n\n" + antiSlop),
-            "tools": ["Read", "Grep", "Glob", "WebFetch", "WebSearch"],
-            "background": false,
-        ]
-        if let model = launch.workerModel, model != "default" {
-            worker["model"] = .string(model)
-            scout["model"] = .string(model)
-        }
-        if let effort = launch.workerEffort, !effort.isEmpty {
-            worker["effort"] = .string(effort)
-            scout["effort"] = .string(effort)
-        }
-        var agents: [String: JSONValue] = ["\(workerAgentName)": .object(worker), "\(scoutAgentName)": .object(scout)]
-        // One worker variant per routable profile: the lead routes a task to the profile
-        // by spawning the variant, whose model and effort are the profile's own.
-        for profile in nativeRoutableProfiles(of: launch) {
-            var variant = worker
-            variant["description"] = .string("Hydra head that implements one delegated task, tuned as the '\(profile.name)' profile. Prefer it for work that belongs to '\(profile.name)' over the plain \(workerAgentName).")
-            if let model = profile.model, model != "default" { variant["model"] = .string(model) }
-            if let effort = profile.effort, !effort.isEmpty { variant["effort"] = .string(effort) }
-            agents[workerAgentName(for: profile)] = .object(variant)
-        }
-        return .object(agents)
-    }
-
-    /// Copilot's `customAgents`: the same two heads, in the CLI's own shape.
-    static func copilotAgents(_ launch: HydraLaunch) -> [JSONValue] {
-        let antiSlop = AntiSlopPolicy.instructions(enabled: launch.antiSlopEnabled)
-        func agent(name: String, display: String, description: String, prompt: String, tools: [String]?) -> JSONValue {
-            var object: [String: JSONValue] = [
-                "name": .string(name),
-                "displayName": .string(display),
-                "description": .string(description),
-                "prompt": .string(prompt),
-                "infer": true,
-            ]
-            if let tools { object["tools"] = .array(tools.map(JSONValue.string)) }
-            if let model = launch.workerModel, model != "auto" { object["model"] = .string(model) }
-            if let effort = launch.workerEffort, !effort.isEmpty { object["reasoningEffort"] = .string(effort) }
-            return .object(object)
-        }
-        let worker = agent(
-            name: workerAgentName,
-            display: "Hydra worker",
-            description: "Hydra head that implements one delegated task: edits files, runs commands. Use when a request splits into independent pieces.",
-            prompt: workerPrompt + "\n\n" + antiSlop,
-            tools: nil
-        )
-        var agents = [
-            worker,
-            // The scout's prompt keeps it read-only; the CLI's tool names are not pinned
-            // here, since a name it does not know could refuse the whole session.
-            agent(
-                name: scoutAgentName,
-                display: "Hydra scout",
-                description: "Hydra head for read-only research: finds files, reads code and reports back. Use when a job needs many files or sources read.",
-                prompt: scoutPrompt + "\n\n" + antiSlop,
-                tools: nil
-            ),
-        ]
-        // One worker variant per routable profile, as on Claude: the lead routes a task
-        // to the profile by starting the variant.
-        for profile in nativeRoutableProfiles(of: launch) {
-            guard case .object(var variant) = worker else { continue }
-            variant["name"] = .string(workerAgentName(for: profile))
-            variant["displayName"] = .string("Hydra worker · \(profile.name)")
-            variant["description"] = .string("Hydra head that implements one delegated task, tuned as the '\(profile.name)' profile. Prefer it for work that belongs to '\(profile.name)' over the plain \(workerAgentName).")
-            if let model = profile.model, model != "auto" { variant["model"] = .string(model) }
-            if let effort = profile.effort, !effort.isEmpty { variant["reasoningEffort"] = .string(effort) }
-            agents.append(.object(variant))
-        }
-        return agents
-    }
-
-    /// Codex's config overrides for the thread: the heads' model and effort, and how many
-    /// may run at once; uncapped, Codex keeps its own limit. With profiles to route to,
-    /// the spawn tool's model and effort knobs are exposed, so the lead can pass the
-    /// profile's own when it spawns the head (the session matches them back).
-    static func codexConfig(_ launch: HydraLaunch) -> [String: JSONValue] {
-        var agents: [String: JSONValue] = [:]
-        if let cap = launch.maxHeads { agents["max_concurrent_threads_per_session"] = .int(cap) }
-        if let model = launch.workerModel, !model.isEmpty { agents["default_subagent_model"] = .string(model) }
-        if let effort = launch.workerEffort, !effort.isEmpty { agents["default_subagent_reasoning_effort"] = .string(effort) }
-        var features: [String: JSONValue] = ["multi_agent": true]
-        if !nativeRoutableProfiles(of: launch).isEmpty {
-            features["multi_agent_v2"] = .object(["expose_spawn_agent_model_overrides": true])
-        }
-        return ["agents": .object(agents), "features": .object(features)]
-    }
 
     // MARK: - Tivano-run heads
 
@@ -949,9 +731,10 @@ enum HydraPrompts {
         return "Your heads so far: " + parts.joined(separator: ", ") + "."
     }
 
-    /// The standing rules for a lead on a provider that runs no heads of its own: when to
-    /// delegate, how, and what the reports mean. An API session keeps this in its system
-    /// prompt, once; a CLI session gets it in front of every message.
+    /// The standing rules for every lead, whatever its provider: when to delegate, how,
+    /// and what the reports mean. The API sessions and Claude, Codex and Copilot keep this
+    /// in their system prompt, once; every other CLI session gets it in front of every
+    /// message.
     static func fallbackPolicy(maxHeads: Int?, isolated: Bool, autoMerges: Bool = false, reviewsHeads: Bool = false, heads: String? = nil, projects: [HydraProjectRef] = [], profiles: [HydraHeadProfile] = []) -> String {
         let whereHeadsWork = isolated
             ? "Each head works in a copy of its project of its own and Tivano lands its changes in that project's checkout when it reports"
@@ -959,11 +742,14 @@ enum HydraPrompts {
         let team = maxHeads.map { "a team of up to \($0) helper agents" } ?? "a team of helper agents"
         // Heads on another provider are a different model from the lead, chosen for speed
         // more often than not: the lead hears what they are, so it briefs them as such and
-        // keeps the thinking, and it is told the block is the only way to them, since its own
-        // agent tools would run heads on its own model instead.
+        // keeps the thinking.
         let whoTheHeadsAre = heads.map {
-            " Your heads run on \($0), a different model from yours: it is quick, so give each one a well-bounded task with everything it needs written down, and keep the design, the judgement calls and the integration for yourself. The block is the only way to send heads out: never use an agent, task or sub-agent tool of your own, which would run heads on your own model instead of the one the user chose."
+            " Your heads run on \($0), a different model from yours: it is quick, so give each one a well-bounded task with everything it needs written down, and keep the design, the judgement calls and the integration for yourself."
         } ?? ""
+        // Every lead hears that the block is the only way to its heads, whatever its
+        // provider: a head spawned with the provider's own agent tool would run inside
+        // the lead's session, out of the app's sight, never as a head of the team.
+        let onlyTheBlock = " The block is the only way to send heads out: never use an agent, task, spawn_agent or sub-agent tool of your own, which would run the work inside your own session instead of as a head in Tivano."
         // Whatever the provider, a head can read, edit and run: on the API providers the
         // app gives it those tools itself, so no head is ever a text-only researcher.
         let whatHeadsCanDo = " Every head, whatever its provider, can read files, edit files and run commands in its copy, with no permission prompts to wait on; brief it to do the work, not just to describe it."
@@ -978,13 +764,12 @@ enum HydraPrompts {
         [{"task": "short title", "prompt": "complete, self-contained instructions with the exact files and acceptance criteria"}]
         ```
 
-        and stop there: do not wait, poll or verify anything after it. When a request is yours to do alone, do it and end with no block at all: an empty block sends no heads and is not needed. An entry may also carry its head's announced name, as in `{"task": "...", "prompt": "...", "name": "Otto"}`: the announced name is authoritative and the spawned head carries exactly it, so repeating the same block spawns the same names. An entry for work in another project carries `"project"` with that project's name or path, as in `{"task": "...", "prompt": "...", "project": "gaze-site"}`. Name new heads with the next roster names in order after the team listed above (Hank, Walter, Ada, Otto, Nova, Remy, Iris, Milo, Juno, Ezra, Lena, Bo, Kai, Vera, Finn, Mira, Odin, Suki, Rex, Zola, Pip, Ivo, Lux, Tova, Gus, then Hank 2 and so on), and omit the name when unsure: the next heads in order go out instead. Never invent names outside the roster: there is no head called Ives (the roster has Ivo), and an unknown name falls back to the next head in order rather than renaming anyone.\(profileRule) Inside a prompt never open a fenced code block of your own (three backticks would end the hydra block early and no head would go out): describe code in words, quote identifiers with single backticks, or indent a snippet by four spaces. Each entry goes out to a head the moment its closing brace streams, before the block is finished, so write the entries in the order the heads should start and complete one entry before beginning the next. \(whereHeadsWork); heads never see your context, so write every prompt for a capable colleague who has read nothing yet, with the exact files, symbols and acceptance criteria, give no two heads the same file, and give no head work that rests on another head's unfinished changes: they run in parallel and never see each other's work. Keep each brief bounded: one head, one task, one report you can act on. \(briefRule) \(verificationRule) \(projectRule(projects)) A head can be sent to read and report as well as to change files, so the reading goes out in parallel too. Say in one line which heads you sent out and what each one does.\(whoTheHeadsAre)\(whatHeadsCanDo) The reports arrive as a later message with the work already in place: build on them, do not redo them, never send out heads to verify or redo other heads, and never use git status or git diff to check on heads, since the checkout changes under you while they work. A message that opens with [Hydra] is from Tivano, not the user.\(reviewsHeads ? " " + reviewRule : "")\(autoMerges ? " " + autoMergeRule : "") \(reportStyleRule)
+        and stop there: do not wait, poll or verify anything after it. When a request is yours to do alone, do it and end with no block at all: an empty block sends no heads and is not needed. An entry may also carry its head's announced name, as in `{"task": "...", "prompt": "...", "name": "Otto"}`: the announced name is authoritative and the spawned head carries exactly it, so repeating the same block spawns the same names. An entry for work in another project carries `"project"` with that project's name or path, as in `{"task": "...", "prompt": "...", "project": "gaze-site"}`. Name new heads with the next roster names in order after the team listed above (Hank, Walter, Ada, Otto, Nova, Remy, Iris, Milo, Juno, Ezra, Lena, Bo, Kai, Vera, Finn, Mira, Odin, Suki, Rex, Zola, Pip, Ivo, Lux, Tova, Gus, then Hank 2 and so on), and omit the name when unsure: the next heads in order go out instead. Never invent names outside the roster: there is no head called Ives (the roster has Ivo), and an unknown name falls back to the next head in order rather than renaming anyone.\(profileRule) Inside a prompt never open a fenced code block of your own (three backticks would end the hydra block early and no head would go out): describe code in words, quote identifiers with single backticks, or indent a snippet by four spaces. Each entry goes out to a head the moment its closing brace streams, before the block is finished, so write the entries in the order the heads should start and complete one entry before beginning the next. \(whereHeadsWork); heads never see your context, so write every prompt for a capable colleague who has read nothing yet, with the exact files, symbols and acceptance criteria, give no two heads the same file, and give no head work that rests on another head's unfinished changes: they run in parallel and never see each other's work. Keep each brief bounded: one head, one task, one report you can act on. \(briefRule) \(verificationRule) \(projectRule(projects)) A head can be sent to read and report as well as to change files, so the reading goes out in parallel too. Say in one line which heads you sent out and what each one does.\(whoTheHeadsAre)\(onlyTheBlock)\(whatHeadsCanDo) The reports arrive as a later message with the work already in place: build on them, do not redo them, never send out heads to verify or redo other heads, and never use git status or git diff to check on heads, since the checkout changes under you while they work. A message that opens with [Hydra] is from Tivano, not the user.\(reviewsHeads ? " " + reviewRule : "")\(autoMerges ? " " + autoMergeRule : "") \(reportStyleRule)
         """
     }
 
     /// The policy for a lead whose session keeps it in its system prompt: the API
-    /// providers, and the providers with heads of their own whose pair sends the heads out
-    /// on another provider.
+    /// providers, and Claude, Codex and Copilot, which define it at launch.
     static func fallbackPolicy(_ launch: HydraLaunch) -> String {
         fallbackPolicy(maxHeads: launch.maxHeads, isolated: launch.isolatesHeads, autoMerges: launch.autoMerges, reviewsHeads: launch.reviewsHeads, heads: launch.headsLabel, projects: launch.projects, profiles: launch.headProfiles)
     }
@@ -1039,9 +824,7 @@ enum HydraPrompts {
     /// manual delegation mode needs a user/project/skill request, not only the standing
     /// developer policy. Keep this out of automatic reports, which have their own limit.
     static func delegationRequest(_ launch: HydraLaunch) -> String {
-        let route = launch.runsNatively
-            ? "Use the configured Hydra agent tools and head profiles."
-            : "Delegate through the final hydra block so Tivano runs the selected heads; do not use native agent tools."
+        let route = "Delegate through the final hydra block so Tivano runs the selected heads; do not use native agent tools."
         return """
         [Hydra setting: enabled]
         Use Hydra heads for this request when it involves multiple files, an audit, broad research, or independent tasks. Keep a single obvious change in one file with the lead. \(route) Follow any explicit request below to work alone or limit delegation.

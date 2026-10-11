@@ -118,9 +118,12 @@ final class AppModel {
     /// again every few minutes; it skips anything still running, so a busy chat is left alone.
     @ObservationIgnored private var hydraMergeSweepTask: Task<Void, Never>?
     private(set) var isLibraryLoaded = false
-    @ObservationIgnored private var libraryLoad: Task<Library, Never>?
+    @ObservationIgnored private var libraryLoad: Task<Result<Library, Error>, Never>?
     @ObservationIgnored private var restoreSelectionAfterLoad = false
     @ObservationIgnored private var persistenceEnabled = true
+    @ObservationIgnored private var libraryWritesBlocked = false
+    @ObservationIgnored private var libraryRecoveryURL: URL?
+    @ObservationIgnored private var librarySaveFailureShown = false
     @ObservationIgnored private var didRequestNotifications = false
 
     init() {
@@ -138,8 +141,13 @@ final class AppModel {
     func updateTaskSleepPrevention() {
         taskSleepPrevention.update(
             isEnabled: settings.preventSleepDuringTasks && !CaptureRun.isEnabled,
-            hasRunningTasks: runtimes.values.contains { $0.isRunning || $0.isHydraMerging }
+            hasRunningTasks: runtimes.values.contains(where: Self.hasActiveTasks)
         )
+    }
+
+    private static func hasActiveTasks(_ runtime: ThreadRuntime) -> Bool {
+        runtime.isRunning || runtime.isHydraMerging || runtime.isCLIStarting
+            || runtime.hasWorkingHelpers || !runtime.backgroundTasks.isEmpty || runtime.isWaitingForLimit
     }
 
     /// Mirrors a list into its cells: values that changed are written to their cell (and only
@@ -241,7 +249,19 @@ final class AppModel {
         }
         let load = Task.detached(priority: .userInitiated) { Storage.loadLibrary() }
         libraryLoad = load
-        var library = await load.value
+        var library: Library
+        switch await load.value {
+        case .success(let loaded): library = loaded
+        case .failure(let error):
+            library = Library()
+            libraryWritesBlocked = true
+            let recovery = Storage.root.appendingPathComponent("library-recovery-\(UUID().uuidString).json")
+            libraryRecoveryURL = recovery
+            alert = AppAlert(
+                title: "Library could not be loaded",
+                message: String(format: Chrome.localized("Tivano couldn't read its library (%@). The original file and chat documents are preserved. Repair the library and restart Tivano. Any new chats will be saved separately to %@ when you quit."), error.localizedDescription, recovery.path)
+            )
+        }
         let originalThreads = library.threads
         for index in library.threads.indices where !CaptureRun.isEnabled && (library.threads[index].lastStatus == .running || library.threads[index].pendingResultTurnID != nil || library.threads[index].hydra?.status == .running) {
             if library.threads[index].lastStatus == .running || library.threads[index].pendingResultTurnID != nil {
@@ -281,9 +301,9 @@ final class AppModel {
         // Needs the login PATH for gh and gives every later process the account's token.
         GitHubConnection.shared.start()
         // After the login environment, so git runs with the user's PATH.
-        sweepHydraCopies()
+        if !libraryWritesBlocked { sweepHydraCopies() }
         // A merge the last run did not finish (the app was quit under it) goes out now.
-        await resumeHydraMerges()
+        if !libraryWritesBlocked { await resumeHydraMerges() }
         // The launch sweep alone is not enough: a merge can also be missed while the app
         // stays up, and then nothing asks again until the next launch. This task asks every
         // five minutes for as long as the app runs; the sweep itself skips chats with a turn
@@ -292,7 +312,7 @@ final class AppModel {
         hydraMergeSweepTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(300))
-                guard !Task.isCancelled, let self else { return }
+                guard !Task.isCancelled, let self, !self.libraryWritesBlocked else { return }
                 await self.resumeHydraMerges()
             }
         }
@@ -308,17 +328,19 @@ final class AppModel {
         if providers.status(.zai).isInstalled {
             await providers.loadCatalog(.zai)
         }
-        // The CLIs Tivano runs headless never update themselves, and a model newer
-        // than the installed CLI fails outright. Their own updaters run here, in the
-        // background, at most every twelve hours; a newer version reloads its catalog.
-        Task { [providers] in
-            for provider in [ProviderKind.claude, .codex] where providers.status(provider).isInstalled {
-                await providers.updateCLIIfDue(provider)
+        // Read-only version checks from here on. A model that needs a newer CLI still
+        // updates when that reply arrives; nothing in this loop installs on a timer.
+        providers.isProviderBusy = { [weak self] provider in
+            guard let self else { return false }
+            for runtime in self.runtimes.values where Self.hasActiveTasks(runtime) && runtime.thread?.provider == provider {
+                return true
             }
+            return false
         }
+        providers.startCLIUpdateChecks()
         // Last, once nothing the first click needs is waiting on the disk: the attachment
         // files no thread refers to any more go, a day after they were written.
-        await Storage.sweepOrphanedAttachments()
+        if !libraryWritesBlocked { await Storage.sweepOrphanedAttachments() }
     }
 
     // MARK: - Lookup
@@ -555,7 +577,7 @@ final class AppModel {
         }
     }
 
-    /// Drops an idle thread's runtime once its document is on its way to disk. Returns
+    /// Drops an idle thread's runtime once its document is on disk. Returns
     /// whether it did; a runtime holding anything the document does not stays.
     @discardableResult
     func releaseIdleRuntime(_ id: UUID) -> Bool {
@@ -569,9 +591,11 @@ final class AppModel {
               !children(of: id).contains(where: {
                   $0.hydra?.status == .running || existingRuntime(for: $0.id)?.isRunning == true
               }) else { return false }
-        // The save is queued before the runtime goes; a read that follows waits for it
-        // (see `Storage.readDocument`), so the thread can never come back older than it left.
-        runtime.saveNow()
+        if let snapshot = runtime.unsavedSnapshot(), !DiskWriter.shared.writeThreadSynchronously(snapshot) {
+            runtime.saveNow()
+            showLibrarySaveFailure()
+            return false
+        }
         runtime.cancelPersistence()
         runtimes[id] = nil
         updateTaskSleepPrevention()
@@ -631,14 +655,16 @@ final class AppModel {
     }
 
     func removeProject(_ project: Project) {
-        for thread in threads where thread.projectID == project.id {
-            discardThreadState(thread)
-        }
+        let removed = threads.filter { $0.projectID == project.id }
+        var library = currentLibrary()
+        library.threads.removeAll { $0.projectID == project.id }
+        library.projects.removeAll { $0.id == project.id }
+        guard commitLibrary(library) else { return }
         threads.removeAll { $0.projectID == project.id }
         projects.removeAll { $0.id == project.id }
+        for thread in removed { discardThreadState(thread) }
         if settings.lastProjectID == project.id { settings.lastProjectID = nil }
         if selectedThread == nil { selectedThreadID = nil }
-        scheduleSave()
     }
 
     // MARK: - Threads
@@ -1020,62 +1046,50 @@ final class AppModel {
     var archiveRequest: ArchiveRequest?
 
     func delete(_ id: UUID, removeWorktree: Bool = false) {
-        guard let thread = thread(id) else { return }
-        // A helper still in its panel goes with the thread it belongs to.
-        for helper in children(of: id) { delete(helper.id) }
-        if selectedThreadID == id { selectNeighbor(of: id) }
-        // A head deleted mid-job reports to its lead as stopped, so the batch it was in
-        // settles and the lead's waiting heads and merge go on rather than waiting for it.
-        if thread.isHydraHead, thread.hydra?.isFinished == false {
-            finishHydraHead(id, status: .interrupted, summary: nil)
-        }
-        discardThreadState(thread)
-        threads.removeAll { $0.id == id }
-        if let project = project(thread.projectID) {
-            let git = Git(project.path)
-            // A head's copy of the checkout was Tivano's to make, so it always goes.
-            let worktree = removeWorktree || thread.hydra?.hasOwnCopy == true ? thread.worktreePath : nil
-            Task {
-                await git.deleteCheckpoints(thread: id)
-                if let worktree { try? await git.removeWorktree(at: worktree) }
-            }
-        }
-        updateDockBadge()
-        saveLibrary()
+        guard thread(id) != nil else { return }
+        deleteThreads(descendantsIncluding([id]), removeWorktree: removeWorktree ? id : nil)
     }
 
-    /// Deletes every archived thread at once: histories, terminals and checkpoints go with them.
-    /// Worktrees stay on disk, exactly as they do after a single delete.
+    /// Deletes archived chats and their helpers after their removal is safely on disk.
     func deleteArchivedThreads() {
-        let archived = threads.filter(\.isArchived)
-        guard !archived.isEmpty else { return }
-        // Helpers still in an archived thread's panel go with it.
-        let archivedIDs = Set(archived.map(\.id))
-        let removed = archived + threads.filter { helper in
-            guard let parent = helper.parentThreadID else { return false }
-            return archivedIDs.contains(parent) && !archivedIDs.contains(helper.id)
+        deleteThreads(descendantsIncluding(threads.filter(\.isArchived).map(\.id)))
+    }
+
+    private func descendantsIncluding(_ roots: [UUID]) -> [ChatThread] {
+        var ids = Set(roots)
+        var pending = roots
+        while let id = pending.popLast() {
+            for child in children(of: id) where ids.insert(child.id).inserted { pending.append(child.id) }
         }
-        if let selectedThreadID, removed.contains(where: { $0.id == selectedThreadID }) {
-            self.selectedThreadID = nil
+        return threads.filter { ids.contains($0.id) }
+    }
+
+    private func deleteThreads(_ removed: [ChatThread], removeWorktree: UUID? = nil) {
+        guard !removed.isEmpty else { return }
+        let ids = Set(removed.map(\.id))
+        var library = currentLibrary()
+        library.threads.removeAll { ids.contains($0.id) }
+        guard commitLibrary(library) else { return }
+        if let selectedThreadID, ids.contains(selectedThreadID) { selectNeighbor(of: selectedThreadID) }
+        for thread in removed where thread.isHydraHead && thread.hydra?.isFinished == false {
+            finishHydraHead(thread.id, status: .interrupted, summary: nil)
         }
-        var cleanup: [(directory: String, threadID: UUID, copy: String?)] = []
-        cleanup.reserveCapacity(removed.count)
-        for thread in removed {
-            discardThreadState(thread, deletingDocument: false)
-            if let project = project(thread.projectID) {
-                cleanup.append((project.path, thread.id, thread.hydra?.hasOwnCopy == true ? thread.worktreePath : nil))
-            }
+        let cleanup = removed.compactMap { thread -> (String, UUID, String?)? in
+            guard let project = project(thread.projectID) else { return nil }
+            let copy = thread.id == removeWorktree || thread.hydra?.hasOwnCopy == true ? thread.worktreePath : nil
+            return (project.path, thread.id, copy)
         }
+        threads.removeAll { ids.contains($0.id) }
+        if let selectedThreadID, ids.contains(selectedThreadID) { self.selectedThreadID = nil }
+        for thread in removed { discardThreadState(thread, deletingDocument: false) }
         Storage.deleteDocuments(removed.map(\.id))
         Task {
-            for item in cleanup {
-                let git = Git(item.directory)
-                await git.deleteCheckpoints(thread: item.threadID)
-                if let copy = item.copy { try? await git.removeWorktree(at: copy) }
+            for (directory, id, copy) in cleanup {
+                let git = Git(directory)
+                await git.deleteCheckpoints(thread: id)
+                if let copy { try? await git.removeWorktree(at: copy) }
             }
         }
-        let removedIDs = Set(removed.map(\.id))
-        threads.removeAll { removedIDs.contains($0.id) }
         updateDockBadge()
         scheduleSave()
     }
@@ -1371,7 +1385,7 @@ final class AppModel {
     /// and a quarter (September 22). Restarting the wait on each change also meant a steady
     /// stream of changes never saved at all.
     func scheduleSave() {
-        guard persistenceEnabled, isLibraryLoaded, saveTask == nil else { return }
+        guard persistenceEnabled, isLibraryLoaded, !libraryWritesBlocked, saveTask == nil else { return }
         let sinceLast = lastLibrarySave.map { ContinuousClock.now - $0 } ?? .seconds(60)
         let wait = max(.milliseconds(400), .seconds(4) - sinceLast)
         saveTask = Task { [weak self] in
@@ -1382,20 +1396,53 @@ final class AppModel {
         }
     }
 
-    private func saveLibrary() {
-        guard isLibraryLoaded, persistenceEnabled else { return }
-        lastLibrarySave = .now
+    private func currentLibrary() -> Library {
         var library = Library()
         library.projects = projects
         library.threads = threads
-        let url = Storage.libraryURL
-        DiskWriter.shared.encodeAndWrite(library, to: url)
+        return library
+    }
+
+    private func showLibrarySaveFailure() {
+        guard !librarySaveFailureShown else { return }
+        librarySaveFailureShown = true
+        alert = AppAlert(title: "Could not save the library", message: "Tivano couldn't save your changes to disk. Your chats are kept in memory and saving will be retried. Free up disk space or check folder permissions before quitting.")
+    }
+
+    private func saveLibrary() {
+        guard isLibraryLoaded, persistenceEnabled, !libraryWritesBlocked else { return }
+        lastLibrarySave = .now
+        DiskWriter.shared.encodeAndWrite(currentLibrary(), to: Storage.libraryURL) { [weak self] success in
+            Task { @MainActor [weak self] in
+                guard let self, self.persistenceEnabled else { return }
+                if success { self.librarySaveFailureShown = false }
+                else {
+                    self.showLibrarySaveFailure()
+                    self.scheduleSave()
+                }
+            }
+        }
+    }
+
+    /// Destructive actions cannot run until the index that forgets their files is durable.
+    private func commitLibrary(_ library: Library) -> Bool {
+        guard isLibraryLoaded, persistenceEnabled, !libraryWritesBlocked else { return false }
+        saveTask?.cancel()
+        saveTask = nil
+        guard DiskWriter.shared.writeSynchronously(library, to: Storage.libraryURL) else {
+            showLibrarySaveFailure()
+            scheduleSave()
+            return false
+        }
+        lastLibrarySave = .now
+        librarySaveFailureShown = false
+        return true
     }
 
     /// Flush recovery metadata before an opt-in provider archive. A capture or a disk
     /// write failure cannot authorize a provider-side change.
     func saveProviderHistoryIntent() async throws {
-        guard isLibraryLoaded, persistenceEnabled, !CaptureRun.isEnabled else {
+        guard isLibraryLoaded, persistenceEnabled, !libraryWritesBlocked, !CaptureRun.isEnabled else {
             throw ProviderError.failed(Chrome.localized("Provider history changes require a persistent library."))
         }
         var library = Library()
@@ -1405,26 +1452,47 @@ final class AppModel {
         lastLibrarySave = .now
     }
 
-    /// Writes everything synchronously, for use while the app terminates.
-    func saveBeforeQuit() {
-        guard isLibraryLoaded, persistenceEnabled else { return }
+    /// The updater also uses this barrier before starting its external installer.
+    func flushForQuit() -> Bool {
+        guard isLibraryLoaded else { return false }
+        guard persistenceEnabled else { return true }
+        for runtime in runtimes.values {
+            if let snapshot = runtime.unsavedSnapshot(), !DiskWriter.shared.writeThreadSynchronously(snapshot) {
+                showLibrarySaveFailure()
+                runtime.saveNow()
+                return false
+            }
+        }
+        if libraryWritesBlocked {
+            if !projects.isEmpty || !threads.isEmpty {
+                guard let libraryRecoveryURL,
+                      DiskWriter.shared.writeSynchronously(currentLibrary(), to: libraryRecoveryURL) else {
+                    showLibrarySaveFailure()
+                    return false
+                }
+            }
+        } else if !commitLibrary(currentLibrary()) {
+            return false
+        }
+        DiskWriter.shared.waitForQueuedWrites()
+        return true
+    }
+
+    /// Writes everything before stopping sessions, so a failed quit can still retry.
+    @discardableResult
+    func saveBeforeQuit() -> Bool {
+        guard flushForQuit() else { return false }
         persistenceEnabled = false
         saveTask?.cancel()
         saveTask = nil
-        var library = Library()
-        library.projects = projects
-        library.threads = threads
-        DiskWriter.shared.writeSynchronously(library, to: Storage.libraryURL)
         for runtime in runtimes.values {
             runtime.cancelPersistence()
             runtime.stopSession()
-            // A thread only read since its last save is already on disk as it is.
-            guard let snapshot = runtime.unsavedSnapshot() else { continue }
-            DiskWriter.shared.writeThreadSynchronously(snapshot)
         }
-        DiskWriter.shared.waitForQueuedWrites()
         terminals.terminateAll()
+        return true
     }
+
 }
 
 /// Reads project scripts from `tivano.json` at the project root.

@@ -719,6 +719,14 @@ struct AboutSoftwareUpdateSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+            if progress.phase == .waitingForMerge {
+                ChromeCard {
+                    ChromeRow(title: "Waiting for Hydra merges to finish.") {
+                        Button("Cancel") { AppUpdater.shared.cancelInstall() }
+                            .buttonStyle(.glass)
+                    }
+                }
+            }
             // The cards lead the page on their own, as on the About page; the version is
             // on the pill in the chrome and on the cards' popovers.
             if checker.updateAvailable, let update = checker.update {
