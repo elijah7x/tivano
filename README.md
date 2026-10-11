@@ -32,8 +32,6 @@ Tivano drives the coding agents you already have installed and signed in, on you
 - Hydra: one chat, many heads — the lead agent briefs a team of helpers, each working in its own copy of the project, and their work lands back as one merge.
 - Usage limits and credits beside the composer, for every plan that exposes them.
 
-Remote access, mobile apps, cloud sync, telemetry and a web client are left out on purpose.
-
 ## Requirements
 
 - A Mac with Apple silicon running macOS 26 or later

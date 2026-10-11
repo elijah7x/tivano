@@ -6,6 +6,33 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-10-11
+
+### Bug fixes
+
+- Keep Hydra tasks in linked worktrees under an existing repository's sidebar project, while preserving their execution and merge checkout. Stop invalid project routes instead of starting in another folder.
+- Keep built-in file reads, writes, edits and searches inside the project after resolving symbolic links, and avoid following directory links while searching.
+- Ask for approval in Pi Auto mode when a shell command uses redirection, command substitution or unrecognized arguments that may change files.
+- Reject out-of-range JSON numbers without crashing the app, including request IDs and numeric tool arguments.
+- Share MCP startup between concurrent requests and route server requests separately from replies, discarding duplicate and late replies after cancellation or timeout.
+- Preserve unreadable or damaged MCP configuration files, pause changes and offer Retry after the file is repaired.
+- Restore only the selected Git paths, including filenames containing wildcard characters, quotes or newlines.
+- Keep an old turn's completion from ending a newer turn, and save its final checkpoint in the checkout where it ran.
+- Let Diff panels close cleanly through AppKit, and keep a delayed close from clearing a newly opened panel.
+- Resume interrupted release preparation and reuse matching release refs and pull requests. Stop publishing when contributor queries fail, read every PR page and match acknowledgements exactly.
+
+### Refinements
+
+- Fade only the main conversation timeline beneath the top controls, keeping the composer glass outside the timeline mask.
+- Increase the font size of the conversation title at the top of the chat by 1 pt.
+- Show the files a command changes after it moves into another checkout first (`cd ~/other-worktree && …`) on that command's row, with full paths, without counting them toward this chat's revert or Hydra merge. Edits other running chats made there are left out.
+- Allow Interface, Content and Code font sizes up to 18, 18 and 17 pt (2 pt higher), and set their defaults to 14, 15 and 13 pt.
+- Remove the README statement that rules out remote access, mobile apps, cloud sync, telemetry and a web client.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.1.0] - 2026-10-11
 
 ### New features

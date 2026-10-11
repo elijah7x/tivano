@@ -47,10 +47,12 @@ actor MCPHub {
     private var clients: [String: MCPClient] = [:]
     private var toolCache: [String: [Tool]] = [:]
     private var failed: Set<String> = []
+    private var generation = UUID()
 
     func tools() async -> [Tool] {
         if specs == nil { specs = Self.readSpecs() }
         guard let current = specs else { return [] }
+        let generation = self.generation
         var all: [Tool] = []
         for id in current.keys.sorted() {
             if let cached = toolCache[id] {
@@ -62,12 +64,15 @@ actor MCPHub {
             let client = self.client(for: id, spec: spec)
             do {
                 let listed = try await client.listTools()
+                guard generation == self.generation else { return [] }
                 toolCache[id] = listed
                 all += listed
+            } catch is CancellationError {
+                return all
             } catch {
+                guard generation == self.generation else { return [] }
                 print("MCPHub: \(id): \(error.localizedDescription)")
                 failed.insert(id)
-                await client.stop()
             }
         }
         return all.sorted {
@@ -98,6 +103,7 @@ actor MCPHub {
     }
 
     func reload() {
+        generation = UUID()
         let existing = clients
         clients = [:]
         toolCache = [:]
@@ -164,6 +170,53 @@ private actor MCPClient {
     private var didRestart = false
     private var dead = false
     private var sessionID: String?
+    private var generation = UUID()
+    private var stopped = false
+    private var stdioInitialization: Task<MCPStdioConnection, Error>?
+    private var httpInitialization: Task<String?, Error>?
+
+    /// Cancels only this waiter, leaving the shared initialization owned by the client.
+    private final class InitializationWaiter<Value: Sendable>: Sendable {
+        private struct State {
+            var cancelled = false
+            var continuation: CheckedContinuation<Value, Error>?
+        }
+        private let state = Mutex(State())
+
+        func value(of task: Task<Value, Error>) async throws -> Value {
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await withCheckedThrowingContinuation { continuation in
+                    let cancelled = state.withLock { state in
+                        guard !state.cancelled else { return true }
+                        state.continuation = continuation
+                        return false
+                    }
+                    if cancelled {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    Task {
+                        let result = await task.result
+                        let waiting = self.state.withLock { state in
+                            let waiting = state.continuation
+                            state.continuation = nil
+                            return waiting
+                        }
+                        waiting?.resume(with: result)
+                    }
+                }
+            } onCancel: {
+                let waiting = self.state.withLock { state in
+                    state.cancelled = true
+                    let waiting = state.continuation
+                    state.continuation = nil
+                    return waiting
+                }
+                waiting?.resume(throwing: CancellationError())
+            }
+        }
+    }
 
     init(id: String, spec: MCPServerSpec) {
         self.id = id
@@ -171,6 +224,12 @@ private actor MCPClient {
     }
 
     func stop() {
+        stopped = true
+        generation = UUID()
+        stdioInitialization?.cancel()
+        stdioInitialization = nil
+        httpInitialization?.cancel()
+        httpInitialization = nil
         stdio?.stop()
         stdio = nil
         initialized = false
@@ -241,10 +300,7 @@ private actor MCPClient {
     // MARK: - Local servers over stdio
 
     private func stdioRPC(command: String, args: [String], env: [String: String], method: String, params: JSONValue?, timeout: TimeInterval) async throws -> JSONValue {
-        try await ensureStdio(command: command, args: args, env: env)
-        guard let connection = stdio else {
-            throw MCPHubError.server("The server quit.")
-        }
+        let connection = try await ensureStdio(command: command, args: args, env: env)
         return try await stdioReply(connection, method: method, params: params, timeout: timeout)
     }
 
@@ -263,45 +319,86 @@ private actor MCPClient {
         }
     }
 
-    private func ensureStdio(command: String, args: [String], env: [String: String]) async throws {
+    private func ensureStdio(command: String, args: [String], env: [String: String]) async throws -> MCPStdioConnection {
+        try Task.checkCancellation()
+        if stopped { throw CancellationError() }
         if dead { throw MCPHubError.server("The server quit.") }
-        if let connection = stdio, connection.process.isRunning, initialized { return }
-        if stdio != nil {
-            if didRestart {
-                dead = true
-                throw MCPHubError.server("The server quit.")
+        let task: Task<MCPStdioConnection, Error>
+        let epoch: UUID
+        if let existing = stdioInitialization {
+            task = existing
+            epoch = generation
+        } else {
+            if let connection = stdio, connection.process.isRunning, initialized { return connection }
+            if let connection = stdio {
+                // Only an actual process exit consumes the one restart allowance.
+                if !connection.process.isRunning {
+                    if didRestart {
+                        dead = true
+                        connection.stop()
+                        throw MCPHubError.server("The server quit.")
+                    }
+                    didRestart = true
+                }
+                connection.stop()
+                stdio = nil
             }
-            didRestart = true
+            guard let executable = LoginEnvironment.which(command, in: LoginEnvironment.current) else {
+                throw MCPHubError.server("\(command) isn't installed.")
+            }
+            var environment = LoginEnvironment.current
+            for (key, value) in env { environment[key] = value }
+            let connection: MCPStdioConnection
+            do {
+                connection = try MCPStdioConnection.launch(executable: executable, arguments: args, environment: environment)
+            } catch {
+                throw MCPHubError.server(error.localizedDescription)
+            }
+            generation = UUID()
+            epoch = generation
+            initialized = false
+            stdio = connection
+            MCPHub.track(connection.process)
+            task = Task { try await self.initializeStdio(connection, generation: epoch) }
+            stdioInitialization = task
         }
-        try await startStdio(command: command, args: args, env: env)
+        // An individual caller's cancellation does not cancel the shared handshake.
+        let connection = try await InitializationWaiter<MCPStdioConnection>().value(of: task)
+        try Task.checkCancellation()
+        guard !stopped, generation == epoch, stdio === connection else { throw CancellationError() }
+        return connection
     }
 
-    private func startStdio(command: String, args: [String], env: [String: String]) async throws {
-        guard let executable = LoginEnvironment.which(command, in: LoginEnvironment.current) else {
-            throw MCPHubError.server("\(command) isn't installed.")
-        }
-        var environment = LoginEnvironment.current
-        for (key, value) in env { environment[key] = value }
-
-        let connection: MCPStdioConnection
-        do {
-            connection = try MCPStdioConnection.launch(executable: executable, arguments: args, environment: environment)
-        } catch {
-            throw MCPHubError.server(error.localizedDescription)
-        }
-        stdio = connection
-        MCPHub.track(connection.process)
+    private func initializeStdio(_ connection: MCPStdioConnection, generation epoch: UUID) async throws -> MCPStdioConnection {
         do {
             let reply = try await stdioReply(connection, method: "initialize", params: MCPWire.initializeParams(), timeout: 60)
-            guard reply["result"]?.object != nil else {
-                throw MCPHubError.server("The server sent something unexpected: missing result.")
-            }
+            try checkInitialization(reply)
+            try Task.checkCancellation()
+            guard !stopped, generation == epoch, stdio === connection else { throw CancellationError() }
             connection.notify("notifications/initialized")
             initialized = true
+            stdioInitialization = nil
+            return connection
         } catch {
-            stop()
+            if generation == epoch, stdio === connection {
+                initialized = false
+                stdioInitialization = nil
+                // Keep an exited process as the restart marker; discard failed live handshakes.
+                if connection.process.isRunning { stdio = nil }
+            }
+            connection.stop()
             if error is MCPHubError || error is CancellationError { throw error }
             throw MCPHubError.server(error.localizedDescription)
+        }
+    }
+
+    private func checkInitialization(_ reply: JSONValue) throws {
+        guard reply["result"]?.object != nil else {
+            throw MCPHubError.server("The server sent something unexpected: missing result.")
+        }
+        // We advertise only 2025-06-18 and no optional client capabilities.
+        guard reply["result"]?["protocolVersion"]?.string == MCPWire.protocolVersion else {
+            throw MCPHubError.server("The server sent something unexpected: invalid reply.")
         }
     }
 
@@ -311,28 +408,12 @@ private actor MCPClient {
         guard let url = URL(string: urlString) else {
             throw MCPHubError.server("The server address is invalid.")
         }
-        if !initialized {
-            let id = nextID
-            nextID += 1
-            let posted = try await post(url: url, headers: headers, payload: MCPWire.request(id: id, method: "initialize", params: MCPWire.initializeParams()), id: id, timeout: 60)
-            guard let body = posted.body else {
-                throw MCPHubError.server("The server sent something unexpected: empty reply.")
-            }
-            try checkReply(body)
-            guard body["result"]?.object != nil else {
-                throw MCPHubError.server("The server sent something unexpected: missing result.")
-            }
-            sessionID = posted.sessionID ?? sessionID
-            initialized = true
-            do {
-                _ = try await post(url: url, headers: headers, payload: MCPWire.notification(method: "notifications/initialized"), id: nil, timeout: 30)
-            } catch {
-                if error is CancellationError { throw error }
-            }
-        }
+        let session = try await ensureHTTP(url: url, headers: headers)
+        try Task.checkCancellation()
+        guard !stopped else { throw CancellationError() }
         let id = nextID
         nextID += 1
-        let posted = try await post(url: url, headers: headers, payload: MCPWire.request(id: id, method: method, params: params), id: id, timeout: timeout)
+        let posted = try await post(url: url, headers: headers, sessionID: session, payload: MCPWire.request(id: id, method: method, params: params), id: id, timeout: timeout)
         guard let body = posted.body else {
             throw MCPHubError.server("The server sent something unexpected: empty reply.")
         }
@@ -340,7 +421,60 @@ private actor MCPClient {
         return body
     }
 
-    private func post(url: URL, headers: [String: String], payload: JSONValue, id: Int?, timeout: TimeInterval) async throws -> MCPHTTPReply {
+    private func ensureHTTP(url: URL, headers: [String: String]) async throws -> String? {
+        try Task.checkCancellation()
+        if stopped { throw CancellationError() }
+        if initialized { return sessionID }
+        let task: Task<String?, Error>
+        let epoch: UUID
+        if let existing = httpInitialization {
+            task = existing
+            epoch = generation
+        } else {
+            generation = UUID()
+            epoch = generation
+            task = Task { try await self.initializeHTTP(url: url, headers: headers, generation: epoch) }
+            httpInitialization = task
+        }
+        let session = try await InitializationWaiter<String?>().value(of: task)
+        try Task.checkCancellation()
+        guard !stopped, generation == epoch else { throw CancellationError() }
+        return session
+    }
+
+    private func initializeHTTP(url: URL, headers: [String: String], generation epoch: UUID) async throws -> String? {
+        do {
+            try Task.checkCancellation()
+            guard !stopped, generation == epoch else { throw CancellationError() }
+            let id = nextID
+            nextID += 1
+            let posted = try await post(url: url, headers: headers, sessionID: nil, payload: MCPWire.request(id: id, method: "initialize", params: MCPWire.initializeParams()), id: id, timeout: 60)
+            guard let body = posted.body else {
+                throw MCPHubError.server("The server sent something unexpected: empty reply.")
+            }
+            try checkReply(body)
+            try checkInitialization(body)
+            try Task.checkCancellation()
+            guard !stopped, generation == epoch else { throw CancellationError() }
+            let session = posted.sessionID
+            _ = try await post(url: url, headers: headers, sessionID: session, payload: MCPWire.notification(method: "notifications/initialized"), id: nil, timeout: 30)
+            try Task.checkCancellation()
+            guard !stopped, generation == epoch else { throw CancellationError() }
+            sessionID = session
+            initialized = true
+            httpInitialization = nil
+            return session
+        } catch {
+            if generation == epoch {
+                initialized = false
+                sessionID = nil
+                httpInitialization = nil
+            }
+            throw error
+        }
+    }
+
+    private func post(url: URL, headers: [String: String], sessionID: String?, payload: JSONValue, id: Int?, timeout: TimeInterval) async throws -> MCPHTTPReply {
         do {
             return try await MCPWire.post(to: url, headers: headers, sessionID: sessionID, payload: payload, id: id, timeout: timeout)
         } catch let error as MCPHTTPError {

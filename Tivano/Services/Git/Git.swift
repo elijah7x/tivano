@@ -364,7 +364,9 @@ struct Git: Sendable {
         defer { try? fileManager.removeItem(at: index) }
         let environment = ["GIT_INDEX_FILE": index.path]
         if await hasCommits() { try Self.check(await run(["read-tree", "HEAD"], environment: environment, lane: .checkpoint)) }
-        try Self.check(await run(["add", "-A", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(paths), timeout: 300, lane: .checkpoint))
+        if !paths.isEmpty {
+            try Self.check(await run(["--literal-pathspecs", "add", "-A", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(paths), timeout: 300, lane: .checkpoint))
+        }
         let tree = try await run(["write-tree"], environment: environment, lane: .checkpoint)
         try Self.check(tree)
         return tree.trimmedOutput
@@ -392,7 +394,7 @@ struct Git: Sendable {
         let clean = paths.filter { !upstream.contains($0) }
         let contested = paths.filter { upstream.contains($0) }
         if !clean.isEmpty {
-            try Self.check(await run(["add", "-A", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(clean), timeout: 300, lane: .checkpoint))
+            try Self.check(await run(["--literal-pathspecs", "add", "-A", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(clean), timeout: 300, lane: .checkpoint))
         }
 
         var merged: [String: Data] = [:]
@@ -407,7 +409,7 @@ struct Git: Sendable {
             case (let remote?, nil):
                 // The team deleted it: fine only while the remote left it as head had it.
                 guard remote == ancestor else { return nil }
-                try Self.check(await run(["rm", "--cached", "--quiet", "--ignore-unmatch", "--", path], environment: environment, lane: .checkpoint))
+                try Self.check(await run(["--literal-pathspecs", "rm", "--cached", "--quiet", "--ignore-unmatch", "--", path], environment: environment, lane: .checkpoint))
             case (nil, _?):
                 // The remote deleted a file the team kept or changed.
                 return nil
@@ -607,18 +609,18 @@ struct Git: Sendable {
     /// The index takes HEAD's version of `paths`; the working tree stays as it is.
     func resetIndex(paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        try Self.check(await run(["reset", "--quiet", "--pathspec-from-file=-", "--pathspec-file-nul"], input: Self.nulSeparated(paths)))
+        try Self.check(await run(["--literal-pathspecs", "reset", "--quiet", "--pathspec-from-file=-", "--pathspec-file-nul"], input: Self.nulSeparated(paths)))
     }
 
     /// Index and working tree take `ref`'s version of `paths`.
     func checkoutPaths(from ref: String, _ paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        try Self.check(await run(["checkout", "--quiet", ref, "--"] + paths))
+        try Self.check(await run(["--literal-pathspecs", "checkout", "--quiet", ref, "--"] + paths))
     }
 
     func removePaths(_ paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        try Self.check(await run(["rm", "--quiet", "--"] + paths))
+        try Self.check(await run(["--literal-pathspecs", "rm", "--quiet", "--"] + paths))
     }
 
     func pullFastForward() async throws {
@@ -666,7 +668,7 @@ struct Git: Sendable {
     private func captureTree(scratch: URL, paths: [String]?) async throws -> String {
         let environment = ["GIT_INDEX_FILE": scratch.path]
         if let paths, !paths.isEmpty, FileManager.default.fileExists(atPath: scratch.path),
-           (try? await run(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(paths), timeout: 300, lane: .checkpoint))?.succeeded == true {
+           (try? await run(["--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(paths), timeout: 300, lane: .checkpoint))?.succeeded == true {
             let tree = try await run(["write-tree"], environment: environment, lane: .checkpoint)
             try Self.check(tree)
             return tree.trimmedOutput
@@ -804,7 +806,7 @@ struct Git: Sendable {
         let end: String
         if let known { end = known } else { end = try await captureTree(paths: paths) }
         // `git diff` takes no pathspec file; a turn touches tens of files, well within the arguments.
-        var preview = try RevertPreview(numstat: await output(["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", base, end, "--"] + paths))
+        var preview = try RevertPreview(numstat: await output(["--literal-pathspecs", "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", base, end, "--"] + paths))
         guard !preview.files.isEmpty else { return preview }
         let root = try await repositoryRoot()
         let left = try await blobs(in: end, at: preview.files.map(\.path), root: root)
@@ -826,7 +828,7 @@ struct Git: Sendable {
         let restored = paths.filter { present[$0] != nil }
         if !restored.isEmpty {
             let result = try await run(
-                ["restore", "--source", ref, "--worktree", "--staged", "--pathspec-from-file=-", "--pathspec-file-nul"],
+                ["--literal-pathspecs", "restore", "--source", ref, "--worktree", "--staged", "--pathspec-from-file=-", "--pathspec-file-nul"],
                 input: Data(restored.map { root.appendingPathComponent($0).path }.joined(separator: "\0").utf8)
             )
             try Self.check(result)
@@ -834,7 +836,7 @@ struct Git: Sendable {
         let created = paths.filter { present[$0] == nil }
         if !created.isEmpty {
             _ = try? await run(
-                ["rm", "-q", "--cached", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"],
+                ["--literal-pathspecs", "rm", "-q", "--cached", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"],
                 input: Data(created.map { root.appendingPathComponent($0).path }.joined(separator: "\0").utf8)
             )
             for path in created { try? FileManager.default.removeItem(at: root.appendingPathComponent(path)) }
@@ -843,15 +845,26 @@ struct Git: Sendable {
 
     /// The blob of each of `paths` (repository-relative) in `ref`, for the ones it has.
     private func blobs(in ref: String, at paths: [String], root: URL) async throws -> [String: String] {
-        let listing = try await output(["ls-tree", "-r", "-z", "--full-name", ref, "--"] + paths.map { root.appendingPathComponent($0).path })
+        guard !paths.isEmpty else { return [:] }
+        // ls-tree's path arguments are patterns, not checkout pathspecs. Enumerate the
+        // full tree with verbatim NUL names, including directories, then match exactly.
+        let listing = try await output(["ls-tree", "-r", "-t", "-z", "--full-tree", ref])
+        let rootPath = root.standardizedFileURL.path + "/"
+        var requested: [String: [String]] = [:]
+        for path in paths {
+            let absolute = root.appendingPathComponent(path).standardizedFileURL.path
+            guard absolute.hasPrefix(rootPath) else { throw ShellError("Invalid repository-relative path: \(path)") }
+            requested[String(absolute.dropFirst(rootPath.count)), default: []].append(path)
+        }
         var blobs: [String: String] = [:]
         blobs.reserveCapacity(paths.count)
         for entry in listing.split(separator: "\0") {
             // "<mode> <type> <hash>\t<path>"
-            guard let tab = entry.firstIndex(of: "\t") else { continue }
+            guard let tab = entry.firstIndex(of: "\t") else { throw ShellError("Invalid git ls-tree entry.") }
             let fields = entry[..<tab].split(separator: " ")
-            guard fields.count == 3 else { continue }
-            blobs[String(entry[entry.index(after: tab)...])] = String(fields[2])
+            guard fields.count == 3 else { throw ShellError("Invalid git ls-tree entry.") }
+            let name = String(entry[entry.index(after: tab)...])
+            for path in requested[name] ?? [] { blobs[path] = String(fields[2]) }
         }
         return blobs
     }
@@ -861,11 +874,19 @@ struct Git: Sendable {
     private func workingBlobs(at paths: [String], root: URL) async throws -> [String: String] {
         let existing = paths.filter { FileManager.default.fileExists(atPath: root.appendingPathComponent($0).path) }
         guard !existing.isEmpty else { return [:] }
-        let result = try await run(["hash-object", "--stdin-paths"], input: Data(existing.map { root.appendingPathComponent($0).path }.joined(separator: "\n").utf8), lane: .checkpoint)
-        try Self.check(result)
-        let hashes = result.output.split(whereSeparator: \.isNewline)
-        guard hashes.count == existing.count else { throw ShellError("git hash-object answered for \(hashes.count) of \(existing.count) files.") }
-        return Dictionary(uniqueKeysWithValues: zip(existing, hashes.map(String.init)))
+        // --stdin-paths is line-based; argv preserves newlines and quotes in filenames.
+        var blobs: [String: String] = [:]
+        var start = 0
+        while start < existing.count {
+            let chunk = Array(existing[start..<min(start + Self.diffPathChunk, existing.count)])
+            let result = try await run(["hash-object", "--"] + chunk.map { root.appendingPathComponent($0).path }, lane: .checkpoint)
+            try Self.check(result)
+            let hashes = result.output.split(whereSeparator: \.isNewline)
+            guard hashes.count == chunk.count else { throw ShellError("git hash-object answered for \(hashes.count) of \(chunk.count) files.") }
+            for (path, hash) in zip(chunk, hashes) { blobs[path] = String(hash) }
+            start += chunk.count
+        }
+        return blobs
     }
 
     func deleteCheckpoints(thread: UUID) async {

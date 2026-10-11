@@ -132,19 +132,41 @@ def merged_requests(tag):
     shas = {c["sha"] for c in commits_in_range(tag)}
     date = tag_date(tag)
     if tag is not None and not date:
-        return []
+        raise RuntimeError(f"Cannot determine date of previous tag {tag}")
     url = f"repos/{PROJECT}/pulls?state=closed&sort=updated&direction=desc&per_page=100"
     try:
         out = subprocess.run(
-            ["gh", "api", url],
+            ["gh", "api", url, "--paginate", "--slurp"],
             cwd=ROOT,
             capture_output=True,
             text=True,
             check=True,
         )
-        data = json.loads(out.stdout or "[]")
-    except Exception:
-        return []
+        pages = json.loads(out.stdout)
+        if not isinstance(pages, list) or not pages or any(
+            not isinstance(page, list) for page in pages
+        ):
+            raise ValueError("expected an array of PR pages")
+        data = [pr for page in pages for pr in page]
+        for pr in data:
+            if (not isinstance(pr, dict)
+                    or not {"number", "merged_at", "merge_commit_sha", "user", "title", "state"} <= pr.keys()
+                    or not isinstance(pr.get("number"), int)
+                    or pr["number"] <= 0
+                    or pr["state"] != "closed"
+                    or not isinstance(pr["title"], str)):
+                raise ValueError("invalid PR record")
+            if pr.get("merged_at") and (
+                not isinstance(pr["merged_at"], str)
+                or not isinstance(pr.get("merge_commit_sha"), str)
+                or not isinstance(pr.get("user"), dict)
+                or not isinstance(pr["user"].get("login"), str)
+            ):
+                raise ValueError("incomplete merged PR record")
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"GitHub PR query failed: {exc.stderr.strip() or exc}") from exc
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Cannot read GitHub PR query: {exc}") from exc
     kept = []
     for pr in data:
         merged_at = pr.get("merged_at")
@@ -174,6 +196,7 @@ def merged_requests(tag):
                 "title": (pr.get("title") or "").strip(),
                 "username": author.get("login"),
                 "author_name": (author.get("login") or "").strip(),
+                "is_bot": author.get("type") == "Bot",
                 "shas": matched,
             }
         )
@@ -199,7 +222,7 @@ def ignored_email(email):
         return True
     if lowered.endswith("@users.noreply.github.com"):
         username = lowered.split("@", 1)[0].split("+")[-1]
-        return username in MAINTAINER_USERNAMES
+        return username in MAINTAINER_USERNAMES or username.endswith("[bot]")
     return lowered.endswith(IGNORED_EMAIL_SUFFIXES)
 
 
@@ -235,7 +258,8 @@ def contributors(tag):
             entry["subjects"].append(subject)
 
     for mr in mrs:
-        if not mr["username"] or mr["username"] in MAINTAINER_USERNAMES:
+        if (not mr["username"] or mr["username"].lower() in MAINTAINER_USERNAMES
+                or mr["is_bot"] or mr["username"].lower().endswith("[bot]")):
             continue
         entry = entry_for_user(mr["username"], mr["author_name"] or mr["username"])
         pair = (mr["iid"], mr["title"])
@@ -316,22 +340,29 @@ def check_notes(path, entries, tag):
     if not entries:
         return 0
     section = thanks_section(text)
-    lowered = section.lower()
-    for entry in entries:
-        for iid, title in entry["mrs"]:
-            if f"#{iid}" not in section:
-                print(
-                    f"Warning: #{iid} ({title}) is not mentioned in the Thanks section.",
-                    file=sys.stderr,
-                )
-    missing = [
-        entry
-        for entry in entries
-        if not (
-            (entry["handle"] and f"@{entry['handle']}".lower() in lowered)
-            or (entry["name"] and entry["name"].lower() in lowered)
+    credited = []
+    for line in section.splitlines():
+        match = re.fullmatch(
+            r"\s*-\s+(.+?)\s*(?:\(@([A-Za-z0-9-]+)\))?\s*:\s*(\S.*?)\s*",
+            line,
         )
-    ]
+        if not match:
+            continue
+        name, handle, contribution = match.groups()
+        # A PR number alone is not a description of the person's contribution.
+        if not re.sub(r"\(?#[0-9]+\)?|[\s.,;:()]+", "", contribution):
+            continue
+        credited.append((name.strip().casefold(), (handle or "").casefold(),
+                         {int(iid) for iid in re.findall(r"(?<![\w#])#([0-9]+)(?![\w])", contribution)}))
+    missing = []
+    for entry in entries:
+        required_prs = {iid for iid, _ in entry["mrs"]}
+        matches = [prs for name, handle, prs in credited if (
+            handle == entry["handle"].casefold() if entry["handle"]
+            else name == entry["name"].casefold()
+        )]
+        if not any(required_prs <= prs for prs in matches):
+            missing.append(entry)
     if not missing:
         return 0
     print("Missing from the Thanks section:")
@@ -371,7 +402,11 @@ def main():
     except Exception as exc:
         print(f"Cannot determine previous tag: {exc}", file=sys.stderr)
         return 1
-    entries = contributors(tag)
+    try:
+        entries = contributors(tag)
+    except Exception as exc:
+        print(f"Cannot determine release contributors: {exc}", file=sys.stderr)
+        return 1
     if check_file is not None:
         return check_notes(check_file, entries, tag)
     if not entries:

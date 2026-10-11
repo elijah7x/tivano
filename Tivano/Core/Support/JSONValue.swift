@@ -30,8 +30,10 @@ extension JSONValue {
                 self = .bool(number.boolValue)
             } else if CFNumberIsFloatType(number as CFNumber) {
                 self = .double(number.doubleValue)
+            } else if let integer = Int(number.stringValue) {
+                self = .int(integer)
             } else {
-                self = .int(number.intValue)
+                self = .double(number.doubleValue)
             }
         case let string as String:
             self = .string(string)
@@ -83,7 +85,7 @@ extension JSONValue {
     var int: Int? {
         switch self {
         case .int(let value): value
-        case .double(let value): value.isFinite ? Int(value) : nil
+        case .double(let value): Int(exactly: value.rounded(.towardZero))
         case .string(let value): Int(value)
         default: nil
         }

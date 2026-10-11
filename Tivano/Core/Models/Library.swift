@@ -195,6 +195,16 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// A Hydra head, whichever side of the panel it is on.
     var isHydraHead: Bool { hydra != nil }
 
+    /// Where this thread's tools and git calls run. The head's own copy wins while it
+    /// exists. An explicit Hydra checkout is next, and it stays after that copy is
+    /// released, so a head sent to a worktree does not fall back to the project folder.
+    /// Older heads leave the checkout nil and use the project folder once their copy is gone.
+    func executionDirectory(projectPath: String) -> String {
+        if let worktreePath, !worktreePath.isEmpty { return worktreePath }
+        if let checkout = hydra?.targetCheckout, !checkout.isEmpty { return checkout }
+        return projectPath
+    }
+
     /// Eligible for a standalone sidebar or palette entry. Hydra heads never stand alone,
     /// even after leaving their panel or when their lead is missing or archived.
     /// Sidebar layouts separately nest ordinary helpers under their visible parents.

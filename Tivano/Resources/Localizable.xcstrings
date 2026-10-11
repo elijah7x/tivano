@@ -1,6 +1,204 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Hydra: no project named %@ is in the sidebar, so %@ did not start.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hydra：侧栏中没有名为 %@ 的项目，因此 %@ 未启动。"
+          }
+        }
+      }
+    },
+    "Hydra: %@ is not a folder on this Mac, so %@ did not start.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hydra：%@ 不是这台 Mac 上的文件夹，因此 %@ 未启动。"
+          }
+        }
+      }
+    },
+    "Hydra: %@ is not a Git checkout Tivano can read, so %@ did not start.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hydra：%@ 不是 Tivano 可读取的 Git checkout，因此 %@ 未启动。"
+          }
+        }
+      }
+    },
+    "Hydra: %@ did not start because its checkout could not be read.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hydra：无法读取 %@ 的 checkout，因此未启动。"
+          }
+        }
+      }
+    },
+    "MCP configuration could not be loaded": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载 MCP 配置"
+          }
+        }
+      }
+    },
+    "MCP changes are paused": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MCP 修改已暂停"
+          }
+        }
+      }
+    },
+    "Your files and credentials are unchanged. Repair the configuration file, then retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件和凭证未被修改。请修复配置文件后重试。"
+          }
+        }
+      }
+    },
+    "Configuration file": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配置文件"
+          }
+        }
+      }
+    },
+    "Could not read MCP configuration at %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 %@ 中的 MCP 配置。"
+          }
+        }
+      }
+    },
+    "Invalid MCP configuration at %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 中的 MCP 配置无效。"
+          }
+        }
+      }
+    },
+    "MCP configuration could not be loaded. Repair the file and retry in Settings before making changes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载 MCP 配置。请修复文件并在设置中重试后再修改。"
+          }
+        }
+      }
+    },
+    "Retry": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重试"
+          }
+        }
+      }
+    },
+    "That path is outside the project. Stay inside %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该路径位于项目之外。请限定在 %@ 内。"
+          }
+        }
+      }
+    },
+    "A file path must not contain a null character.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件路径不能包含空字符。"
+          }
+        }
+      }
+    },
+    "That path is not a regular file.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该路径不是普通文件。"
+          }
+        }
+      }
+    },
+    "A search pattern must not contain a null character.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索模式不能包含空字符。"
+          }
+        }
+      }
+    },
+    "That search regular expression is invalid.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该搜索正则表达式无效。"
+          }
+        }
+      }
+    },
+    "Search failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索失败。"
+          }
+        }
+      }
+    },
     "Library could not be loaded": {
       "extractionState": "manual",
       "localizations": {

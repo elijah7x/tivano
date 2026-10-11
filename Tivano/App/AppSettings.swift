@@ -294,15 +294,15 @@ final class AppSettings {
 
     /// True when Interface, Content and Code are all on their default sizes.
     var isDefault: Bool {
-        uiFontSize == TypeScale.stockUI
+        uiFontSize == TypeScale.defaultUI
             && contentFontSize == TypeScale.defaultContent
-            && codeFontSize == TypeScale.stockCode
+            && codeFontSize == TypeScale.defaultCode
     }
 
     func resetFontSizes() {
-        uiFontSize = TypeScale.stockUI
+        uiFontSize = TypeScale.defaultUI
         contentFontSize = TypeScale.defaultContent
-        codeFontSize = TypeScale.stockCode
+        codeFontSize = TypeScale.defaultCode
     }
 
     /// Moves each size by `delta` points and clamps it to that size's own range.
@@ -781,9 +781,9 @@ final class AppSettings {
         antiSlopEnabled = defaults.object(forKey: Key.antiSlopEnabled) as? Bool ?? true
         showsWorkingCard = defaults.object(forKey: Key.showsWorkingCard) as? Bool ?? true
         timelineHapticStyle = TimelineHapticStyle(rawValue: defaults.string(forKey: Key.timelineHapticStyle) ?? "") ?? .soft
-        uiFontSize = Self.clampedFontSize(defaults, key: Key.uiFontSize, stock: TypeScale.stockUI, range: TypeScale.uiRange)
+        uiFontSize = Self.clampedFontSize(defaults, key: Key.uiFontSize, stock: TypeScale.defaultUI, range: TypeScale.uiRange)
         contentFontSize = Self.clampedFontSize(defaults, key: Key.contentFontSize, stock: TypeScale.defaultContent, range: TypeScale.contentRange)
-        codeFontSize = Self.clampedFontSize(defaults, key: Key.codeFontSize, stock: TypeScale.stockCode, range: TypeScale.codeRange)
+        codeFontSize = Self.clampedFontSize(defaults, key: Key.codeFontSize, stock: TypeScale.defaultCode, range: TypeScale.codeRange)
         sidebarActivityView = defaults.bool(forKey: Key.sidebarActivityView)
         settledCollapsed = defaults.object(forKey: Key.settledCollapsed) as? Bool ?? true
         backdropOpacity = defaults.object(forKey: Key.backdropOpacity) as? Double ?? Self.defaultBackdropOpacity
@@ -860,7 +860,7 @@ final class AppSettings {
     }
 
     /// A stored size outside its range is written back clamped. A missing key stays missing
-    /// and comes back as the stock size.
+    /// and comes back as the default size.
     private static func clampedFontSize(_ defaults: UserDefaults, key: String, stock: Int, range: ClosedRange<Int>) -> Int {
         let raw = defaults.object(forKey: key) as? Int ?? stock
         let clamped = TypeScale.clamp(raw, to: range)

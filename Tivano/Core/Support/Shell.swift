@@ -171,6 +171,34 @@ enum ShellCommandKind {
         return false
     }
 
+    /// The folder a command moves into before anything else runs (`cd ~/copy && python3 …`
+    /// or `cd ~/copy; …`), resolved against `directory` where the command starts, or nil
+    /// when it opens with something else. A path the shell would still have to expand (a
+    /// variable other than `$HOME`, `cd -`) is left unresolved rather than guessed.
+    static func leadingDirectory(of text: String, from directory: String) -> String? {
+        let command = text.trimmed
+        // Only a `cd` the rest of the line runs after: `cd x || exit` or `cd x | …` does not.
+        // Longer separators first, so `&&` wins over the `&` at the same place.
+        var next: (separator: String, start: String.Index)?
+        for separator in ["&&", "||", ";", "|", "\n", "&"] {
+            guard let range = command.range(of: separator) else { continue }
+            if let found = next, found.start <= range.lowerBound { continue }
+            next = (separator, range.lowerBound)
+        }
+        guard let next, next.separator == "&&" || next.separator == ";" else { return nil }
+        let tokens = command[..<next.start].split(whereSeparator: \.isWhitespace).map(String.init)
+        guard tokens.count == 2, tokens[0] == "cd" else { return nil }
+        var path = tokens[1]
+        if path.count >= 2, let quote = path.first, quote == "'" || quote == "\"", path.last == quote {
+            path = String(path.dropFirst().dropLast())
+        }
+        if path == "$HOME" || path.hasPrefix("$HOME/") { path = "~" + path.dropFirst("$HOME".count) }
+        guard !path.isEmpty, path != "-", !path.contains("$") else { return nil }
+        if path.hasPrefix("~") { path = (path as NSString).expandingTildeInPath }
+        let absolute = path.hasPrefix("/") ? path : (directory as NSString).appendingPathComponent(path)
+        return (absolute as NSString).standardizingPath
+    }
+
     /// A command line as the separate commands it runs. Quoting is not taken apart: a
     /// separator inside a quoted argument splits the line into parts that read as
     /// unfamiliar tools, which is the safe answer anyway.

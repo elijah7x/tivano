@@ -138,11 +138,35 @@ enum PiCLI {
 
     const readOnly = new Set(["read", "grep", "find", "ls"]);
 
-    const readOnlyBinaries = new Set([
-      "ls", "cat", "head", "tail", "grep", "rg", "find", "wc", "pwd", "echo",
-      "which", "stat", "file", "du", "tree", "sort", "uniq", "diff",
-    ]);
-    const readOnlyGit = new Set(["status", "diff", "log", "show", "branch", "blame"]);
+    const positiveInteger = (value) => /^[0-9]+$/.test(value);
+    const anyValue = (value) => value.length > 0;
+    const readOnlyBinaries = {
+      ls: { short: "ABCFGHLOPRSUacdfghiklmnopqrstux1", long: [] },
+      cat: { short: "benstuv", long: [] },
+      head: { short: "qv", long: [], values: { "-n": positiveInteger, "-c": positiveInteger } },
+      tail: { short: "qv", long: [], values: { "-n": positiveInteger, "-c": positiveInteger } },
+      wc: { short: "clmwL", long: [] },
+      pwd: { short: "LP", long: [], maxOperands: 0 },
+      echo: { short: "n", long: [] },
+      grep: {
+        short: "EFGHILRabcchilnoqrsvwx", long: ["--color=never", "--color=auto", "--color=always"],
+        values: { "-e": anyValue, "-f": anyValue, "-A": positiveInteger, "-B": positiveInteger, "-C": positiveInteger, "-m": positiveInteger },
+      },
+      rg: {
+        short: "AFHILNPSUabcchilnoqsuvwxi", long: ["--files", "--hidden", "--no-ignore", "--no-ignore-vcs", "--fixed-strings", "--line-number", "--count", "--files-with-matches", "--files-without-match", "--no-heading", "--heading", "--no-config", "--color=never", "--color=auto", "--color=always"],
+        values: { "-e": anyValue, "-f": anyValue, "-g": anyValue, "-t": anyValue, "-T": anyValue, "-A": positiveInteger, "-B": positiveInteger, "-C": positiveInteger, "-m": positiveInteger, "--glob": anyValue, "--type": anyValue, "--type-not": anyValue, "--max-count": positiveInteger },
+      },
+      sort: { short: "bcdfghinru", long: [], values: { "-k": anyValue, "-t": anyValue }, maxOperands: 1 },
+      uniq: { short: "cdui", long: [], values: { "-f": positiveInteger, "-s": positiveInteger, "-w": positiveInteger }, maxOperands: 1 },
+    };
+    const gitDiffFlags = ["--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--check", "--patch", "--no-patch", "--raw", "--no-ext-diff", "--no-textconv", "--color=never", "--color=auto", "--color=always"];
+    const readOnlyGit = {
+      status: { short: "sbz", long: ["--short", "--branch", "--porcelain", "--porcelain=v1", "--porcelain=v2", "--untracked-files=no", "--untracked-files=normal", "--untracked-files=all", "--ignored"] },
+      diff: { short: "pws", long: [...gitDiffFlags, "--cached", "--staged", "--exit-code", "--quiet"], values: { "-U": positiveInteger } },
+      log: { short: "p", long: [...gitDiffFlags, "--oneline", "--graph", "--all", "--decorate", "--no-decorate", "--reverse", "--first-parent", "--no-merges"], values: { "-n": positiveInteger, "--max-count": positiveInteger } },
+      show: { short: "ps", long: [...gitDiffFlags, "--oneline"], values: { "-U": positiveInteger } },
+      branch: { short: "arv", long: ["--all", "--remotes", "--list", "--show-current"], maxOperands: 0 },
+    };
 
     function readGate() {
       try {
@@ -153,14 +177,101 @@ enum PiCLI {
       }
     }
 
-    function isReadOnlyCommand(command) {
-      const segments = String(command ?? "").split(/&&|\|\||;|\|/);
-      return segments.every((segment) => {
-        const words = segment.trim().split(/\s+/).filter(Boolean);
-        if (words.length === 0) return true;
-        if (words[0] === "git") return words.length > 1 && readOnlyGit.has(words[1]);
-        return readOnlyBinaries.has(words[0]);
-      });
+    function simpleCommandWords(command) {
+      // Deliberately reject even quoted substitutions/metacharacters when uncertain.
+      if (typeof command !== "string" || /[\x00-\x08\x0a-\x1f\x7f$`\\<>;&|]/.test(command)) return null;
+      const words = [];
+      let word = "", quote = null, started = false;
+      for (const char of command) {
+        if (quote) {
+          if (char === quote) quote = null;
+          else word += char;
+          started = true;
+        } else if (char === "'" || char === '"') {
+          quote = char;
+          started = true;
+        } else if (char === " " || char === "\t") {
+          if (started) words.push(word);
+          word = "";
+          started = false;
+        } else {
+          if (/[(){}*?\[\]~#!]/.test(char) || /\s/.test(char)) return null;
+          word += char;
+          started = true;
+        }
+      }
+      if (quote) return null;
+      if (started) words.push(word);
+      return words.length > 0 ? words : null;
+    }
+
+    function allowedArguments(args, rule) {
+      let operands = 0, options = true;
+      const values = rule.values || {};
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (options && arg === "--") { options = false; continue; }
+        if (!options || !arg.startsWith("-") || arg === "-") { operands++; continue; }
+        if (rule.long.includes(arg)) continue;
+        if (arg.startsWith("--")) {
+          const equal = arg.indexOf("=");
+          const key = equal < 0 ? arg : arg.slice(0, equal);
+          if (!Object.hasOwn(values, key)) return false;
+          const value = equal < 0 ? args[++i] : arg.slice(equal + 1);
+          if (value === undefined || !values[key](value)) return false;
+          continue;
+        }
+        for (let j = 1; j < arg.length; j++) {
+          const key = "-" + arg[j];
+          if (Object.hasOwn(values, key)) {
+            const value = j + 1 < arg.length ? arg.slice(j + 1) : args[++i];
+            if (value === undefined || !values[key](value)) return false;
+            break;
+          }
+          if (!rule.short.includes(arg[j])) return false;
+        }
+      }
+      return operands <= (rule.maxOperands ?? Infinity);
+    }
+
+    function readOnlyFind(args) {
+      const predicates = {
+        "-name": anyValue, "-iname": anyValue, "-path": anyValue, "-ipath": anyValue,
+        "-type": (value) => /^[bcdflps]$/.test(value),
+        "-maxdepth": positiveInteger, "-mindepth": positiveInteger,
+        "-mtime": (value) => /^[+-]?[0-9]+$/.test(value),
+      };
+      let expression = false;
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (!expression && !arg.startsWith("-")) continue;
+        expression = true;
+        if (["-print", "-print0", "-empty"].includes(arg)) continue;
+        if (!Object.hasOwn(predicates, arg)) return false;
+        const value = args[++i];
+        if (value === undefined || !predicates[arg](value)) return false;
+      }
+      return true;
+    }
+
+    function isReadOnlyCommand(command, approved) {
+      const words = simpleCommandWords(command);
+      if (!words) return false;
+      const binary = words[0];
+      if (binary === "git") {
+        const subcommand = words[1];
+        if (!Object.hasOwn(readOnlyGit, subcommand) || !allowedArguments(words.slice(2), readOnlyGit[subcommand])) return false;
+        // Keep normal Git queries usable without config-selected executables.
+        const safe = ["git", "--no-pager", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-c", "format.pretty=medium", "-c", "diff.submodule=short", subcommand];
+        if (["diff", "log", "show"].includes(subcommand)) safe.push("--no-ext-diff", "--no-textconv");
+        safe.push(...words.slice(2));
+        approved.command = safe.map((word) => "'" + word.replace(/'/g, "'\\''") + "'").join(" ");
+        return true;
+      }
+      if (binary === "find") return readOnlyFind(words.slice(1));
+      if (!Object.hasOwn(readOnlyBinaries, binary) || !allowedArguments(words.slice(1), readOnlyBinaries[binary])) return false;
+      if (binary === "rg") approved.command = ["rg", "--no-config", ...words.slice(1)].map((word) => "'" + word.replace(/'/g, "'\\''") + "'").join(" ");
+      return true;
     }
 
     export default async function (pi) {
@@ -201,7 +312,13 @@ enum PiCLI {
         if (gate.runtimeMode === "fullAccess") return;
         const kind = event.toolName === "bash" ? "command" : (event.toolName === "edit" || event.toolName === "write") ? "fileChange" : "tool";
         if (kind === "fileChange" && (gate.runtimeMode === "autoAcceptEdits" || gate.runtimeMode === "auto")) return;
-        if (kind === "command" && gate.runtimeMode === "auto" && isReadOnlyCommand(event.input && event.input.command)) return;
+        if (kind === "command" && gate.runtimeMode === "auto") {
+          const approved = {};
+          if (isReadOnlyCommand(event.input && event.input.command, approved)) {
+            if (approved.command) event.input.command = approved.command;
+            return;
+          }
+        }
         const input = {};
         for (const [key, value] of Object.entries(event.input || {})) {
           input[key] = typeof value === "string" && value.length > 20000 ? value.slice(0, 20000) : value;

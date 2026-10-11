@@ -3,8 +3,8 @@ import Foundation
 // Hydra's heads are threads: each one has a timeline of its own, sits in its lead's
 // floating panel while it works, and drops under the lead in the sidebar once dismissed,
 // like any helper. Every head is Tivano-run, whatever the lead's provider: it has a
-// session of its own, in a copy of the checkout made for it, and its work lands in the
-// lead's checkout the moment it reports. No head runs inside the lead's provider session.
+// session of its own, in a copy of the checkout it was sent to, and its work lands in
+// that checkout the moment it reports. No head runs inside the lead's provider session.
 
 /// What a head changed in its copy since the tree it started from: the patch itself, the
 /// files it touches, and the tree the copy holds now, which becomes the head's new base
@@ -14,6 +14,44 @@ private struct HydraPatch: Sendable {
     var files: [HydraLanding.File]
     var droppedBuildOutputFiles: Int
     var after: String
+}
+
+/// Absolute checkout paths compared the same way a repository lease is: standardized,
+/// symlinks resolved. Shared with the merge, which groups work by the same identity.
+enum HydraPaths {
+    static func canonical(_ path: String) -> String {
+        URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    static func same(_ lhs: String, _ rhs: String) -> Bool {
+        canonical(lhs) == canonical(rhs)
+    }
+}
+
+/// The git checkout an explicit path belongs to. `common` is `git rev-parse
+/// --path-format=absolute --git-common-dir`, resolved like the merge's repository lease.
+private enum HydraGitIdentityReader {
+    struct Identity: Sendable {
+        var checkout: String
+        var common: String
+        var mainCheckout: String
+    }
+
+    static func read(at path: String) async -> Identity? {
+        let git = Git(path)
+        guard await git.isRepository() else { return nil }
+        guard let top = try? await git.output(["rev-parse", "--path-format=absolute", "--show-toplevel"]).trimmed.nilIfEmpty,
+              let commonRaw = try? await git.output(["rev-parse", "--path-format=absolute", "--git-common-dir"]).trimmed.nilIfEmpty else { return nil }
+        let checkout = HydraPaths.canonical(top)
+        let commonURL = commonRaw.hasPrefix("/")
+            ? URL(fileURLWithPath: commonRaw)
+            : URL(fileURLWithPath: checkout).appendingPathComponent(commonRaw)
+        let common = commonURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let main = (common as NSString).lastPathComponent == ".git"
+            ? URL(fileURLWithPath: common).deletingLastPathComponent().resolvingSymlinksInPath().path
+            : checkout
+        return Identity(checkout: checkout, common: common, mainCheckout: main)
+    }
 }
 
 /// One capture of a checkout's working tree, shared by the heads sent out together.
@@ -306,38 +344,152 @@ extension AppModel {
         lead.worktreePath ?? project(lead.projectID)?.path
     }
 
-    /// The project a delegation entry sends its head to: the chat's own with no name, a
-    /// sidebar project by name or by path (the path itself or one inside it), or any
-    /// folder on this Mac inside a git repository, which joins the sidebar. Nil when the
-    /// name matches nothing.
-    func hydraProject(named reference: String?, for lead: ChatThread) -> Project? {
-        guard let reference, !reference.trimmed.isEmpty else { return project(lead.projectID) }
+    /// A sidebar project whose name equals the reference, case-insensitive, after a
+    /// tilde is expanded. A path that is not itself a project's name is routed later.
+    private func hydraNamedProject(_ reference: String) -> Project? {
         let expanded = (reference as NSString).expandingTildeInPath
-        if let named = projects.first(where: { $0.name.caseInsensitiveCompare(expanded) == .orderedSame }) { return named }
-        let standard = (expanded as NSString).standardizingPath
-        let inside = projects.filter {
-            TouchedPaths.relative(expanded, root: $0.path) != nil
-                || ($0.path as NSString).standardizingPath == standard
+        guard !expanded.isEmpty else { return nil }
+        return projects.first { $0.name.caseInsensitiveCompare(expanded) == .orderedSame }
+    }
+
+    /// An explicit reference that is not a sidebar name. Nil means insert already applied
+    /// the old rules: no reference, or a name that hit.
+    private func hydraRouteReference(_ reference: String?) -> String? {
+        guard let reference, !reference.trimmed.isEmpty, hydraNamedProject(reference) == nil else { return nil }
+        return reference
+    }
+
+    /// The checkout a head's copy is made from and its work lands in. An explicit
+    /// checkout wins. Older records leave it nil and keep the previous rule: the lead's
+    /// own checkout for a head in the lead's project, else the head's project folder.
+    private func hydraCheckout(of head: ChatThread, lead: ChatThread) -> String? {
+        if let target = head.hydra?.targetCheckout, !target.isEmpty { return target }
+        return head.projectID == lead.projectID ? hydraCheckout(of: lead) : project(head.projectID)?.path
+    }
+
+    /// Whether a head is still allowed to start. A stop or a delete during routing leaves
+    /// it finished or gone; routing must not bring it back or launch its provider.
+    private func hydraHeadCanStart(_ id: UUID) -> Bool {
+        thread(id)?.hydra?.status == .running
+    }
+
+    /// Ends a head whose explicit project could not be routed, and tells its lead why.
+    /// Does nothing when the head was already stopped or removed.
+    @discardableResult
+    private func failHydraRoute(_ id: UUID, _ message: String) -> Bool {
+        guard hydraHeadCanStart(id), let parentID = thread(id)?.parentThreadID else { return false }
+        runtime(for: parentID).appendHydraNote(message)
+        finishHydraHead(id, status: .failed, summary: message)
+        return false
+    }
+
+    /// Same-repo choice: the lead's project, else the project on the repository's main
+    /// checkout, else the one added first.
+    private func hydraPreferredProject(_ matches: [Project], lead: ChatThread, mainCheckout: String) -> Project? {
+        guard !matches.isEmpty else { return nil }
+        if let leadProject = matches.first(where: { $0.id == lead.projectID }) { return leadProject }
+        if let main = matches.first(where: { HydraPaths.same($0.path, mainCheckout) }) { return main }
+        return matches.min { $0.addedAt < $1.addedAt }
+    }
+
+    /// The sidebar project an explicit path belongs to, read from the project list after
+    /// the git calls return. An unmatched repository is registered in the same actor
+    /// turn as the final lookup.
+    private func hydraProject(for identity: HydraGitIdentityReader.Identity, lead: ChatThread, headID: UUID) async -> Project? {
+        func choose(from list: [Project], commons: [UUID: String]) -> Project? {
+            let exact = list.filter { HydraPaths.same($0.path, identity.checkout) }
+            if let chosen = hydraPreferredProject(exact, lead: lead, mainCheckout: identity.mainCheckout) { return chosen }
+            let same = list.filter { commons[$0.id] == identity.common }
+            return hydraPreferredProject(same, lead: lead, mainCheckout: identity.mainCheckout)
         }
-        if let best = inside.max(by: { $0.path.count < $1.path.count }) { return best }
-        guard expanded.hasPrefix("/") else { return nil }
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue else { return nil }
-        var dir = (expanded as NSString).standardizingPath
+
+        var commons: [UUID: String] = [:]
+        var examined = Set<UUID>()
         while true {
-            if FileManager.default.fileExists(atPath: dir + "/.git") {
-                return addProject(at: URL(fileURLWithPath: dir, isDirectory: true))
+            let unread = projects.filter { !examined.contains($0.id) }
+            for project in unread {
+                guard hydraHeadCanStart(headID) else { return nil }
+                examined.insert(project.id)
+                if let common = await HydraGitIdentityReader.read(at: project.path)?.common {
+                    commons[project.id] = common
+                }
             }
-            if dir == "/" { return nil }
-            dir = (dir as NSString).deletingLastPathComponent
-            if dir.isEmpty { dir = "/" }
+            guard hydraHeadCanStart(headID) else { return nil }
+            // New projects can arrive during any git read, including the last one.
+            guard projects.allSatisfy({ examined.contains($0.id) }) else { continue }
+            if let chosen = choose(from: projects, commons: commons) { return chosen }
+            return addProject(at: URL(fileURLWithPath: identity.checkout, isDirectory: true))
         }
     }
 
-    /// The checkout a head's copy is made from and its work lands in: the lead's own for
-    /// a head in the lead's project, else the head's project folder.
-    private func hydraCheckout(of head: ChatThread, lead: ChatThread) -> String? {
-        head.projectID == lead.projectID ? hydraCheckout(of: lead) : project(head.projectID)?.path
+    /// Points a head at the project and checkout an explicit path resolved to, before
+    /// any copy or provider starts. The landing checkout remains after a copy is released;
+    /// a head sent somewhere else does not inherit the parent's worktree.
+    private func applyHydraRoute(_ id: UUID, project chosen: Project, checkout: String, lead: ChatThread) {
+        guard let head = thread(id), let parentID = head.parentThreadID, let parent = thread(parentID) else { return }
+        let sameProject = chosen.id == parent.projectID
+        let inherited: String?
+        if sameProject {
+            inherited = parent.worktreePath ?? self.project(parent.projectID)?.path
+        } else {
+            inherited = chosen.path
+        }
+        let differs = inherited.map { !HydraPaths.same($0, checkout) } ?? true
+        updateThread(id) { thread in
+            thread.projectID = chosen.id
+            if differs {
+                thread.worktreePath = nil
+                thread.branch = nil
+            } else if sameProject {
+                thread.worktreePath = parent.worktreePath
+                thread.branch = parent.branch
+            } else {
+                thread.worktreePath = nil
+                thread.branch = nil
+            }
+            if !sameProject, let info = head.hydra, !info.task.isEmpty {
+                var title = "\(info.persona.name) · \(TextCleanup.singleLine(info.task, limit: 60)) · \(chosen.name)"
+                if let profile = info.profile { title += " · \(profile)" }
+                thread.title = title
+            }
+        }
+        updateHydraHead(id) {
+            $0.targetCheckout = checkout
+            $0.pendingProjectReference = nil
+        }
+    }
+
+    /// Resolves an explicit path onto a sidebar project and a checkout. A linked worktree
+    /// of a repository already in the sidebar reuses that project. A repository that is
+    /// not reuses nothing and is added. Anything that is not a readable git checkout, and
+    /// not an exact sidebar path, fails the head instead of running it in the lead's folder.
+    private func routeHydraHead(_ id: UUID, reference: String) async -> Bool {
+        guard hydraHeadCanStart(id), let head = thread(id), let parentID = head.parentThreadID, let lead = thread(parentID) else { return false }
+        let name = head.hydra?.persona.name ?? "The head"
+        let expanded = (reference as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/") else {
+            return failHydraRoute(id, String(format: Chrome.localized("Hydra: no project named %@ is in the sidebar, so %@ did not start."), reference, name))
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue else {
+            return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
+        }
+        guard let identity = await HydraGitIdentityReader.read(at: expanded) else {
+            guard hydraHeadCanStart(id) else { return false }
+            let listed = projects.filter { HydraPaths.same($0.path, expanded) }
+            if let chosen = hydraPreferredProject(listed, lead: lead, mainCheckout: HydraPaths.canonical(expanded)) {
+                applyHydraRoute(id, project: chosen, checkout: HydraPaths.canonical(expanded), lead: lead)
+                return true
+            }
+            return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a Git checkout Tivano can read, so %@ did not start."), reference, name))
+        }
+        guard hydraHeadCanStart(id) else { return false }
+        if let chosen = await hydraProject(for: identity, lead: lead, headID: id) {
+            guard hydraHeadCanStart(id) else { return false }
+            applyHydraRoute(id, project: chosen, checkout: identity.checkout, lead: lead)
+            return true
+        }
+        return false
     }
 
     // MARK: - Sending heads out
@@ -362,7 +514,8 @@ extension AppModel {
         brief: @escaping @Sendable (HydraPersona, HydraPrompts.Workplace) -> String
     ) -> ChatThread? {
         guard let head = insertHydraHead(from: parentID, task: task, origin: origin, batchID: batchID, preferredIndex: preferredIndex, project: project, profile: profile) else { return nil }
-        Task { await startTivanoHead(head.id, attachments: attachments, brief: brief) }
+        let route = hydraRouteReference(project)
+        Task { await startTivanoHead(head.id, route: route, attachments: attachments, brief: brief) }
         return head
     }
 
@@ -412,13 +565,13 @@ extension AppModel {
         // unknown profile name falls back to the shared fields, like an unrouted one.
         let routed = profile.flatMap { launch?.profile(named: $0) }
         let persona = HydraRoster.persona(at: index)
-        let resolved = hydraProject(named: project, for: parent)
-        let target = resolved ?? self.project(parent.projectID)
+        // A name hits now. An absolute path, or a name that hits nothing, waits for the
+        // startup task: git has to say which checkout it is before the head is given a
+        // project, and the parent's worktree must not be copied on ahead of that.
+        let named = project.flatMap(hydraNamedProject)
+        let needsRoute = hydraRouteReference(project) != nil
+        let target = named ?? self.project(parent.projectID)
         let sameProject = target?.id == parent.projectID
-        if let reference = project, !reference.trimmed.isEmpty, resolved == nil {
-            let fallback = self.project(parent.projectID)?.name ?? "this chat's project"
-            runtime(for: parentID).appendHydraNote("Hydra: no project named \(reference) is in the sidebar or on this Mac, so \(persona.name) works in \(fallback).")
-        }
 
         // A head goes out on the pair's heads' provider, which may not be the lead's: there
         // it runs the pair's model or that provider's default, and the lead's model and
@@ -440,8 +593,8 @@ extension AppModel {
         )
         head.parentThreadID = parentID
         head.isInPanel = true
-        head.worktreePath = sameProject ? parent.worktreePath : nil
-        head.branch = sameProject ? parent.branch : nil
+        head.worktreePath = needsRoute ? nil : (sameProject ? parent.worktreePath : nil)
+        head.branch = needsRoute ? nil : (sameProject ? parent.branch : nil)
         if task.isEmpty {
             head.title = persona.name
         } else if !sameProject, let target {
@@ -456,9 +609,11 @@ extension AppModel {
         info.tracksProviderHistory = true
         info.profile = routed?.name
         info.batchID = batchID
+        info.pendingProjectReference = needsRoute ? project : nil
         info.canStop = true
         head.hydra = info
         insertThread(head)
+        runtime(for: head.id).hydraStartupPending = true
 
         // A new head brings the panel back and takes the stage.
         let leadRuntime = runtime(for: parentID)
@@ -467,10 +622,24 @@ extension AppModel {
         return head
     }
 
-    /// Gives a Tivano-run head its copy of the checkout, then its brief.
-    private func startTivanoHead(_ id: UUID, attachments: [Attachment], brief: @Sendable (HydraPersona, HydraPrompts.Workplace) -> String) async {
-        guard let head = thread(id), let info = head.hydra, let parentID = head.parentThreadID, let lead = thread(parentID),
-              let checkout = hydraCheckout(of: head, lead: lead) else { return }
+    /// Gives a Tivano-run head its copy of the checkout, then its brief. An explicit
+    /// path is routed here, before the copy and before the provider, so a stop or a
+    /// delete during that read never starts the head.
+    private func startTivanoHead(_ id: UUID, route: String?, attachments: [Attachment], brief: @Sendable (HydraPersona, HydraPrompts.Workplace) -> String) async {
+        var briefSent = false
+        defer {
+            if !briefSent { existingRuntime(for: id)?.hydraStartupPending = false }
+        }
+        if let route {
+            guard await routeHydraHead(id, reference: route) else { return }
+        }
+        guard let head = thread(id), let info = head.hydra, info.status == .running,
+              let parentID = head.parentThreadID, let lead = thread(parentID) else { return }
+        guard let checkout = hydraCheckout(of: head, lead: lead) else {
+            failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ did not start because its checkout could not be read."), info.persona.name))
+            return
+        }
+        updateHydraHead(id) { $0.targetCheckout = checkout }
         // A head on another provider than its lead, with no model chosen for it, runs that
         // provider's default: the catalogue it comes from may not have loaded yet.
         if head.provider != lead.provider, head.model == nil {
@@ -479,6 +648,7 @@ extension AppModel {
                 updateThread(id) { $0.model = model }
             }
         }
+        guard thread(id)?.hydra?.status == .running else { return }
         var workplace = HydraPrompts.Workplace.shared(path: checkout)
         if settings.hydraIsolateHeads, let copy = await makeHydraCopy(for: head, of: checkout) {
             updateThread(id) {
@@ -501,6 +671,7 @@ extension AppModel {
         }
         let headBrief = brief(info.persona, workplace)
         headRuntime.sendHydraBrief(headBrief, attachments: attachments)
+        briefSent = true
     }
 
     /// A worktree for `head` holding the checkout exactly as it is, uncommitted and
@@ -742,7 +913,14 @@ extension AppModel {
         }
         landing.files = prepared.files
         landing.droppedBuildOutputFiles = prepared.droppedBuildOutputFiles
-        await waitForSettledCheckout(parentID, paths: prepared.files.map(\.path))
+        let sharesCheckout: Bool
+        if let head = thread(id), let lead = thread(parentID),
+           let target = hydraCheckout(of: head, lead: lead), let leadCheckout = hydraCheckout(of: lead) {
+            sharesCheckout = HydraPaths.same(target, leadCheckout)
+        } else {
+            sharesCheckout = true
+        }
+        await waitForSettledCheckout(parentID, paths: sharesCheckout ? prepared.files.map(\.path) : [])
         let leadRuntime = runtime(for: parentID)
         let previous = leadRuntime.hydraLanding
         let applied = Task<HydraLanding, Never> {
@@ -942,6 +1120,8 @@ extension AppModel {
 
     /// Removes the copy of the checkout a head worked in. Its work has landed, or its
     /// patch is kept; a head talked to afterwards works in the checkout itself.
+    /// `targetCheckout` is that checkout when the head was sent to one, and is not a
+    /// copy, so it stays after the copy path and `baseTree` are cleared.
     func releaseHydraCopy(of id: UUID) {
         // Every caller, including manual panel clearing, must keep the session and
         // its working directory alive until provider history has finished changing.
@@ -964,6 +1144,7 @@ extension AppModel {
         let base = info.baseTree
         let name = info.persona.name
         // The session's tools are rooted in the copy; the next turn starts a fresh one.
+        // Only the copy goes. `targetCheckout` is the checkout the head was sent to.
         existingRuntime(for: id)?.stopSession()
         updateThread(id) {
             $0.worktreePath = nil
@@ -1058,9 +1239,11 @@ extension AppModel {
     }
 
     /// Heads whose copies are gone from disk (deleted by hand, say) work in the checkout
-    /// from now on, instead of failing every tool call. Unclaimed copies remain in
-    /// Storage.worktreesDirectory for recovery: missing chat metadata cannot prove that
-    /// a copy's work landed, even when its working directory is clean.
+    /// from now on, instead of failing every tool call. The copy path and `baseTree` are
+    /// cleared; an explicit `targetCheckout` stays, so the next turn does not fall back
+    /// to the project folder. Unclaimed copies remain in Storage.worktreesDirectory for
+    /// recovery: missing chat metadata cannot prove that a copy's work landed, even when
+    /// its working directory is clean.
     func sweepHydraCopies() {
         // Copies deleted from disk still hold their names in the registry until pruned:
         // only the projects that ever had a copy, one git process at a time.

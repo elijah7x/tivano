@@ -401,14 +401,16 @@ private struct HydraHeadTranscript: View {
 
     var body: some View {
         let runtime = model.runtime(for: head.id)
+        let project = model.project(head.projectID)
+        let directory = project.map { head.executionDirectory(projectPath: $0.path) } ?? workingDirectory
         Group {
             if model.settings.hydraShowsHeadDetails {
                 ThreadTimeline(
                     runtime: runtime,
                     scrollChrome: scrollChrome,
                     scrollState: scrollState,
-                    projectName: projectName,
-                    workingDirectory: workingDirectory,
+                    projectName: project?.name ?? projectName,
+                    workingDirectory: directory,
                     supportsRewind: false,
                     columnHeight: height,
                     // A panel's transcript needs no rail, and the rail's hover tracking
@@ -425,7 +427,7 @@ private struct HydraHeadTranscript: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if head.hydra?.kind == .tivano {
                 // A child Tivano runs itself can be steered and answered like any chat.
-                ComposerArea(runtime: runtime, workingDirectory: workingDirectory, compactModelChip: true, takesFocusOnAppear: false, showsChanges: false)
+                ComposerArea(runtime: runtime, workingDirectory: directory, compactModelChip: true, takesFocusOnAppear: false, showsChanges: false)
                     .overlay(alignment: .top) {
                         JumpToLatestButton(scrollState: scrollState)
                     }

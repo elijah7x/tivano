@@ -454,6 +454,8 @@ final class ThreadRuntime {
     @ObservationIgnored private var providerHistoryOperation: Task<Void, Never>?
     /// A session being started ahead of the first message (`warmSession`).
     @ObservationIgnored private var warmup: Task<Void, Never>?
+    // User messages wait behind the brief while the head's route and copy are prepared.
+    @ObservationIgnored var hydraStartupPending = false
     /// The session's ID while no message has gone through it. The provider has nothing
     /// to resume under such an ID: a session warmed while the first message was typed and
     /// replaced before it went (a setting changed the launch) was resumed as "no
@@ -490,6 +492,9 @@ final class ThreadRuntime {
     /// The turn being finalized, claimed before the first suspension: a completion and an
     /// exit can both arrive for one turn, and the second must not finalize it again.
     @ObservationIgnored private var finishingTurnID: UUID?
+    @ObservationIgnored private var finishingGeneration: UUID?
+    @ObservationIgnored private var runtimeTurnGeneration: UInt64 = 0
+    @ObservationIgnored private var runtimeOwnerTurnID: UUID?
     @ObservationIgnored private var entryIndex: [String: TimelineEntry] = [:]
     @ObservationIgnored private var pendingDeltas: [String: PendingDelta] = [:]
     @ObservationIgnored private var flushTask: Task<Void, Never>?
@@ -519,7 +524,17 @@ final class ThreadRuntime {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var historyLoad: Task<Void, Never>?
     @ObservationIgnored private var persistenceEnabled = true
-    @ObservationIgnored private var currentTurnID: UUID?
+    @ObservationIgnored private var currentTurnID: UUID? {
+        didSet {
+            guard let currentTurnID, currentTurnID != oldValue else { return }
+            runtimeTurnGeneration &+= 1
+            runtimeOwnerTurnID = currentTurnID
+            // A new turn supersedes any suspended finalizer's runtime ownership.
+            finishingTurnID = nil
+            finishingGeneration = nil
+            closingTurnID = nil
+        }
+    }
     /// The turn being closed (see `finishTurn`): its id is taken out of `currentTurnID`
     /// first, and its diffs are then waited for. An event landing in that wait (a late
     /// tool result, a notice, a Hydra note) still belongs to the turn; filed under no turn
@@ -546,6 +561,14 @@ final class ThreadRuntime {
     @ObservationIgnored private var commandTrees: [String: Task<String?, Never>] = [:]
     @ObservationIgnored private var commandStarts: [String: Date] = [:]
     @ObservationIgnored private var commandSettles: [String: Task<Void, Never>] = [:]
+    /// Commands that `cd` into another checkout first (an agent's own worktree, a sibling
+    /// repository): what each is diffed from, by tool id (see `watchForeignCommand`).
+    @ObservationIgnored private var foreignCommandBases: [String: Task<ForeignBase?, Never>] = [:]
+    /// The last tree captured in each such checkout this turn, by repository root, and
+    /// every root this thread's commands have worked in, so a new turn snapshots them
+    /// before its first command can write there.
+    @ObservationIgnored private var foreignTrees: [String: Task<String?, Never>] = [:]
+    @ObservationIgnored private var foreignRoots: Set<String> = []
     /// Snapshots run one after another: each is several git processes over the whole
     /// checkout, and a turn can have many commands in flight at once.
     @ObservationIgnored private var treeCaptures: Task<String?, Never>?
@@ -1288,15 +1311,27 @@ final class ThreadRuntime {
         // A new turn must not race a provider-side archive. This wait occurs before
         // claiming the idle runtime, and the same session is restored before sending.
         await providerHistoryOperation?.value
+        if !hydraBrief && (hydraStartupPending || app?.thread(threadID)?.hydra?.pendingProjectReference != nil) {
+            enqueueFollowUp(text: text, attachments: attachments)
+            if !hydraStartupPending, let summary = app?.thread(threadID)?.hydra?.summary {
+                appendNotice(.error, summary)
+            }
+            return
+        }
         guard phase == .idle, !isReverting else {
             enqueueFollowUp(text: text, attachments: attachments)
             return
         }
         guard let app, let initialThread = app.thread(threadID), let project = app.project(initialThread.projectID) else { return }
+        if hydraBrief && initialThread.hydra?.status != .running {
+            hydraStartupPending = false
+            return
+        }
         guard !initialThread.isArchived else {
             enqueueFollowUp(text: text, attachments: attachments)
             return
         }
+        if hydraBrief { hydraStartupPending = false }
         let turnIndex = (turns.map(\.index).max() ?? -1) + 1
         var turn = TurnRecord(index: turnIndex)
         let userItem = TimelineItem(turnID: turn.id, content: .user(UserMessage(text: text, attachments: attachments, hydraHeads: hydraHeads, hydraBrief: hydraBrief ? true : nil)))
@@ -1370,7 +1405,7 @@ final class ThreadRuntime {
 
         await ensureModel(initialThread)
 
-        let directory = initialThread.worktreePath ?? project.path
+        let directory = initialThread.executionDirectory(projectPath: project.path)
         let git = Git(directory)
         let checkpointRef = Git.checkpointRef(thread: threadID, turn: turnIndex, phase: "start")
         // Anything could have happened in the checkout since the last turn, so no snapshot
@@ -1378,6 +1413,14 @@ final class ThreadRuntime {
         settledTree = nil
         latestTree = nil
         treeEpoch += 1
+        // The other checkouts earlier commands worked in are snapshotted afresh for the
+        // same reason, alongside the checkpoint, so a command there this turn is diffed
+        // from a tree that predates it. A folder that is gone is forgotten.
+        foreignTrees = [:]
+        for root in foreignRoots {
+            guard FileManager.default.fileExists(atPath: root) else { foreignRoots.remove(root); continue }
+            foreignTrees[root] = captureTree(Git(root))
+        }
         // The checkpoint is several git processes over the whole checkout. It runs while
         // the session starts rather than in front of it, and both are waited for before a
         // word reaches the model, so nothing the agent does can slip past the snapshot.
@@ -1529,15 +1572,17 @@ final class ThreadRuntime {
     /// Only for CLI providers without a session; a send in the meantime waits for the
     /// warm-up instead of starting a second process.
     func warmSession() {
-        guard phase == .idle, session == nil, warmup == nil, !isReverting,
+        guard phase == .idle, session == nil, warmup == nil, !isReverting, !hydraStartupPending,
               let app, let thread = app.thread(threadID), !thread.isArchived, !thread.provider.isAPIKeyBased,
+              thread.hydra?.pendingProjectReference == nil,
               !app.providers.cliUpdateBlocksWarmup(thread.provider),
               let project = app.project(thread.projectID) else { return }
-        let directory = thread.worktreePath ?? project.path
+        let directory = thread.executionDirectory(projectPath: project.path)
         warmup = Task { [weak self] in
             guard let self else { return }
             await ensureModel(thread)
-            guard phase == .idle, session == nil,
+            guard phase == .idle, session == nil, !hydraStartupPending,
+                  app.thread(threadID)?.hydra?.pendingProjectReference == nil,
                   !app.providers.cliUpdateBlocksWarmup(thread.provider) else { warmup = nil; return }
             // A start that fails is not retried on every keystroke: the send makes its own.
             if (try? await ensureSession(directory: directory)) != nil { warmup = nil }
@@ -2005,7 +2050,7 @@ final class ThreadRuntime {
             try? await Task.sleep(for: .seconds(8))
             guard let self, !Task.isCancelled, self.currentTurnID == turnID, turnID != nil else { return }
             self.releaseSession(stop: true)
-            await self.finishTurn(status: .interrupted)
+            await self.finishTurn(status: .interrupted, turnID: turnID)
         }
     }
 
@@ -2190,7 +2235,7 @@ final class ThreadRuntime {
         let removed = turns[index...]
         let paths = Set(removed.flatMap { $0.touchedPaths ?? [] }).sorted()
         let end = removed.compactMap(\.endCheckpoint).last
-        return try await Git(thread.worktreePath ?? project.path).previewRestore(base: base, end: end, paths: paths)
+        return try await Git(thread.executionDirectory(projectPath: project.path)).previewRestore(base: base, end: end, paths: paths)
     }
 
     /// Edits a sent message: the conversation rewinds to before its turn, the files it and
@@ -2228,7 +2273,7 @@ final class ThreadRuntime {
             throw ProviderError.failed("Stop the running agents before reverting this conversation.")
         }
         let removed = Array(turns[index...])
-        let directory = thread.worktreePath ?? project.path
+        let directory = thread.executionDirectory(projectPath: project.path)
 
         isReverting = true
         defer { isReverting = false }
@@ -2402,7 +2447,7 @@ final class ThreadRuntime {
     func parsedDiff(selection: UUID?, providerFiles: [DiffFile]? = nil) async -> [DiffFile] {
         if let task = cachedDiff(selection: selection) { return await task.value }
         guard let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) else { return [] }
-        let root = thread.worktreePath ?? project.path
+        let root = thread.executionDirectory(projectPath: project.path)
         let git = Git(root)
         let repository = repositoryRoot(for: git)
         let selectedTurns = selection.map { id in turns.filter { $0.id == id } } ?? turns
@@ -2563,6 +2608,8 @@ final class ThreadRuntime {
         // `currentTurnID` first, the way a stop during a start does, so a message still on
         // its way to the session never goes.
         let turnID = currentTurnID
+        // A finalizer already closing the turn owns the busy runtime until it saves.
+        guard turnID != nil || finishingTurnID == nil else { return }
         currentTurnID = nil
         Task { await finishTurn(status: .interrupted, turnID: turnID) }
     }
@@ -2576,8 +2623,6 @@ final class ThreadRuntime {
         opensTurnAfterFinish = false
         let events = deferredBackgroundTurnEvents
         deferredBackgroundTurnEvents.removeAll()
-        finishingTurnID = nil
-        closingTurnID = nil
         for event in events { handle(event) }
         return true
     }
@@ -2678,7 +2723,7 @@ final class ThreadRuntime {
             if let provider = thread?.provider { app?.providers.updateCatalog(list, for: provider) }
         case .commands(let list):
             if let app, let thread, let project = app.project(thread.projectID) {
-                app.providers.updateCommands(list, for: thread.provider, directory: thread.worktreePath ?? project.path)
+                app.providers.updateCommands(list, for: thread.provider, directory: thread.executionDirectory(projectPath: project.path))
             }
         case .title(let title):
             // Provider titles are only a fallback; they must not replace the one Tivano writes.
@@ -2794,38 +2839,71 @@ final class ThreadRuntime {
     /// Closes the running turn. `turnID` names the turn when the caller has already taken
     /// it out of `currentTurnID`, as a stop during the start of a turn does, so that the
     /// message on its way can no longer be sent.
-    private func finishTurn(status: TurnStatus, turnID explicitTurnID: UUID? = nil) async {
-        interruptWatchdog?.cancel()
-        interruptWatchdog = nil
-        headBudget?.cancel()
-        headBudget = nil
-        guard let turnID = explicitTurnID ?? currentTurnID, let turn = turns.first(where: { $0.id == turnID }) else {
+    private func ownsTurnFinalization(_ turnID: UUID, generation: UUID, runtimeGeneration: UInt64) -> Bool {
+        finishingTurnID == turnID && finishingGeneration == generation
+            && runtimeTurnGeneration == runtimeGeneration
+            && runtimeOwnerTurnID == turnID
+            && (currentTurnID == nil || currentTurnID == turnID)
+    }
+
+    private func finishTurn(status: TurnStatus, turnID: UUID?) async {
+        // An explicit nil is the caller's snapshot, never a later turn's identity.
+        // Neither a stale completion nor an empty fallback may release another owner.
+        guard finishingTurnID == nil, finishingGeneration == nil,
+              runtimeOwnerTurnID == turnID,
+              currentTurnID == nil || currentTurnID == turnID else { return }
+        guard let turnID, let turn = turns.first(where: { $0.id == turnID }) else {
+            guard currentTurnID == nil, closingTurnID == nil else { return }
+            interruptWatchdog?.cancel()
+            interruptWatchdog = nil
+            headBudget?.cancel()
+            headBudget = nil
             phase = .idle
             turnStartedAt = nil
             drainPendingSend()
             return
         }
-        // Claimed before the first suspension below: a completion and an exit can both
-        // arrive for one turn, and the second finalizer finds it taken.
-        guard finishingTurnID != turnID else { return }
+        guard turn.status == .running else { return }
+        let generation = UUID()
+        let runtimeGeneration = runtimeTurnGeneration
+        finishingTurnID = turnID
+        finishingGeneration = generation
+        closingTurnID = turnID
+        defer {
+            if ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) {
+                finishingTurnID = nil
+                finishingGeneration = nil
+                if closingTurnID == turnID { closingTurnID = nil }
+            }
+        }
+        interruptWatchdog?.cancel()
+        interruptWatchdog = nil
+        headBudget?.cancel()
+        headBudget = nil
         let userStopped = userStoppedTurnID == turnID
         if userStopped { userStoppedTurnID = nil }
-        finishingTurnID = turnID
-        defer { finishingTurnID = nil }
+        // Moving the thread can happen while Git settles; its final checkpoint
+        // still belongs to the checkout where this turn ran.
+        let finalizationRoot: String?
+        if let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) {
+            finalizationRoot = thread.executionDirectory(projectPath: project.path)
+        } else {
+            finalizationRoot = nil
+        }
         // Command diffs land before the turn's own summary counts them, and
-        // while the turn is still current so the snapshots can be compared.
-        for id in Array(commandTrees.keys) { settleCommand(id) }
-        // A completion queued behind a stop can arrive after the next turn has begun; the
-        // turn it names is over, and the one running is left alone.
-        guard currentTurnID == nil || currentTurnID == turnID else { return }
+        // while the turn is still current so the snapshots can be compared, including a
+        // command's edits in another checkout it cd'd into.
+        for id in Array(commandTrees.keys) + Array(foreignCommandBases.keys) { settleCommand(id) }
+        guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
         // A finished turn waits for its diffs; a stopped or failed one gives them three
         // seconds and lets the rest land on their own, so Stop never hangs on git.
-        closingTurnID = turnID
-        defer { closingTurnID = nil }
         let settles = Array(commandSettles.values)
         commandSettles.removeAll()
         if status == .completed {
-            for task in settles { await task.value }
+            for task in settles {
+                await task.value
+                guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
+            }
         } else {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { for task in settles { await task.value } }
@@ -2834,6 +2912,7 @@ final class ThreadRuntime {
                 group.cancelAll()
             }
         }
+        guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
         currentTurnID = nil
         flushDeltas()
         approvals.removeAll()
@@ -2869,13 +2948,14 @@ final class ThreadRuntime {
         // Parsed off the main actor, and only once: a turn's patch can be large, and
         // this lands exactly as the reply appears.
         let providerFiles = providerPatch.isEmpty ? [] : await Self.parseDiff(providerPatch)
-        if let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) {
-            let root = thread.worktreePath ?? project.path
+        guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
+        if let root = finalizationRoot {
             let git = Git(root)
             var endCheckpoint: String?
             if turn.baseCheckpoint != nil {
                 let ref = Git.checkpointRef(thread: threadID, turn: turn.index, phase: "end")
                 if (try? await git.captureCheckpoint(ref)) != nil { endCheckpoint = ref }
+                guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
             }
             // Only files this thread's agent edited count, never edits made elsewhere in
             // the repository meanwhile. A path outside the checkout is no part of the turn:
@@ -2904,6 +2984,7 @@ final class ThreadRuntime {
         }
         diffRevision += 1
         let changes = FileChangeSummary(files: await parsedDiff(selection: turnID, providerFiles: providerFiles))
+        guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
 
         let summary = TurnSummary(
             turnID: turnID,
@@ -2920,8 +3001,14 @@ final class ThreadRuntime {
         // The turn's own events shared one save every few seconds; whatever they left is
         // written here, so a finished turn is always on disk.
         saveNow()
+        let budgetSpent = headBudgetSpent
+        headBudgetSpent = false
+        // Continuations can open a new turn synchronously while replaying events.
+        // Release only this finalizer before handing them the runtime.
+        finishingTurnID = nil
+        finishingGeneration = nil
+        closingTurnID = nil
         guard thread?.isArchived != true else {
-            headBudgetSpent = false
             let continues = replayBackgroundTurn()
             app?.turnFinished(threadID, status: status, continues: continues, turnID: turnID, userStopped: userStopped)
             return
@@ -2959,8 +3046,7 @@ final class ThreadRuntime {
         if !continues, status == .completed, let app, app.runningTivanoHeads(of: threadID) > 0 { continues = true }
         // A head stopped for its budget writes its report as its next turn, so its lead
         // hears what it managed rather than only that it was stopped.
-        if headBudgetSpent {
-            headBudgetSpent = false
+        if budgetSpent {
             if status == .interrupted, thread?.hydra?.kind == .tivano {
                 headReportsNext = true
                 // This turn starts on its own (see autoStartedTurnToken).
@@ -3730,8 +3816,14 @@ final class ThreadRuntime {
     private func watchCommand(_ id: String, _ call: ToolCall) {
         // A command that cannot write needs no snapshots at all: reading the checkout is
         // most of what an agent runs, and each snapshot is seconds of git on a big tree.
-        guard commandTrees[id] == nil, ShellCommandKind.mayWriteFiles(call.title), repositoryGit != nil,
-              let before = treeBeforeCommand() else { return }
+        guard commandTrees[id] == nil, foreignCommandBases[id] == nil, ShellCommandKind.mayWriteFiles(call.title) else { return }
+        if currentTurnID != nil, let root = workingRoot,
+           let directory = ShellCommandKind.leadingDirectory(of: call.title, from: root),
+           Self.isOutside(directory, root: root) {
+            watchForeignCommand(id, directory: directory)
+            return
+        }
+        guard repositoryGit != nil, let before = treeBeforeCommand() else { return }
         commandTrees[id] = Task<String?, Never> { before }
         commandStarts[id] = .now
         settledTree = nil
@@ -3770,7 +3862,19 @@ final class ThreadRuntime {
         return paths
     }
 
+    /// Whether a command's `cd` leaves the thread's checkout for another one. A folder
+    /// inside it, the checkout itself under a symlinked name, or a folder above it (whose
+    /// repository the checkout's own snapshots already span) is no other checkout: its
+    /// edits must stay relative to the thread's root, where the turn and the merge count them.
+    private static func isOutside(_ directory: String, root: String) -> Bool {
+        let directory = URL(fileURLWithPath: directory).standardizedFileURL.resolvingSymlinksInPath().path
+        let root = URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path
+        return directory != root && TouchedPaths.relative(directory, root: root) == nil
+            && TouchedPaths.relative(root, root: directory) == nil
+    }
+
     private func settleCommand(_ id: String) {
+        if foreignCommandBases[id] != nil { return settleForeignCommand(id) }
         let commandStart = commandStarts.removeValue(forKey: id)
         let turnStart = turns.first(where: { $0.id == currentTurnID })?.startedAt ?? .distantPast
         let owner = claimOwner
@@ -3838,6 +3942,86 @@ final class ThreadRuntime {
         scheduleSave()
     }
 
+    /// What a command that starts in another checkout is diffed from: that checkout's root,
+    /// a tree of it, and whether the tree is its last commit rather than a snapshot of
+    /// the working tree, in which case only files written since the command began are its.
+    struct ForeignBase: Sendable {
+        let root: URL
+        let tree: String
+        let isCommit: Bool
+    }
+
+    /// A command that moves into another checkout before it writes (`cd ~/worktree &&
+    /// python3 - <<'EOF'`): an agent that keeps its work in a worktree of its own edits
+    /// there, and the thread's checkout never sees it change. That checkout is watched
+    /// instead, from the last tree any command of the turn left there, else the one the
+    /// turn took as it began, else its last commit, with the files limited to those
+    /// written since the command started. Nothing is captured now, for the reason
+    /// `watchCommand` gives. Its edits land on the row with absolute paths outside the
+    /// thread's root, so they are no part of the turn's touched paths: a revert does not
+    /// restore them and a Hydra merge does not take them.
+    private func watchForeignCommand(_ id: String, directory: String) {
+        commandStarts[id] = .now
+        settledTree = nil
+        treeEpoch += 1
+        foreignCommandBases[id] = Task { [weak self] () -> ForeignBase? in
+            guard let root = try? await Git(directory).repositoryRoot().standardizedFileURL, let self else { return nil }
+            foreignRoots.insert(root.path)
+            if let known = foreignTrees[root.path], let tree = await known.value {
+                return ForeignBase(root: root, tree: tree, isCommit: false)
+            }
+            guard let head = try? await Git(root.path).output(["rev-parse", "--verify", "--quiet", "HEAD^{tree}"]).trimmed, !head.isEmpty else { return nil }
+            return ForeignBase(root: root, tree: head, isCommit: true)
+        }
+    }
+
+    private func settleForeignCommand(_ id: String) {
+        let commandStart = commandStarts.removeValue(forKey: id)
+        let turnStart = turns.first(where: { $0.id == currentTurnID })?.startedAt ?? .distantPast
+        let owner = claimOwner
+        guard let pending = foreignCommandBases.removeValue(forKey: id) else { return }
+        commandSettles[id] = Task { [weak self] in
+            guard let base = await pending.value, let self else { return }
+            let git = Git(base.root.path)
+            let capture = captureTree(git)
+            // The next command in that checkout starts from this one's tree.
+            foreignTrees[base.root.path] = capture
+            guard let after = await capture.value, base.tree != after,
+                  let changed = try? await git.changedPaths(from: base.tree, to: after) else { return }
+            let attributed = attributedPaths(inTurnOf: id, git: git, repositoryRoot: base.root)
+            var real = changed.filter { !$0.isEmpty && !TouchedPaths.isBuildOutput($0) && !attributed.contains($0) }
+            // A diff from the last commit holds every uncommitted change in that copy,
+            // earlier turns' included, and a chat running in that checkout may not have
+            // claimed its writes yet: either way only what was written while this command ran.
+            if base.isCommit || othersRunning(in: base.root.path), let commandStart {
+                let root = base.root.path
+                let candidates = real
+                real = await Task.detached(priority: .utility) {
+                    candidates.filter { path in
+                        let file = (root as NSString).appendingPathComponent(path)
+                        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file),
+                              let modified = attributes[.modificationDate] as? Date else { return false }
+                        return modified >= commandStart.addingTimeInterval(-1)
+                    }
+                }.value
+            }
+            real = await unclaimedCommandPaths(real, root: base.root.path, owner: owner, turnStart: turnStart, commandStart: commandStart)
+            await attachCommandEdits(id, paths: real, git: git, from: base.tree, to: after, repositoryRoot: base.root, owner: owner)
+        }
+    }
+
+    /// Whether another chat is running in `root` or a folder of it right now.
+    private func othersRunning(in root: String) -> Bool {
+        guard let app else { return false }
+        let key = URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path
+        return app.threads.contains { thread in
+            guard thread.id != threadID, app.existingRuntime(for: thread.id)?.isRunning == true,
+                  let project = app.project(thread.projectID) else { return false }
+            let other = URL(fileURLWithPath: thread.executionDirectory(projectPath: project.path)).standardizedFileURL.resolvingSymlinksInPath().path
+            return other == key || TouchedPaths.relative(other, root: key) != nil
+        }
+    }
+
     /// One working-tree snapshot at a time for this thread, each waiting for the one
     /// before it: they are heavy, and a turn's commands would otherwise run several at
     /// once, with eight heads doing the same in the same checkout.
@@ -3896,17 +4080,17 @@ final class ThreadRuntime {
         return own
     }
 
-    /// The folder this thread's agent works in: its own copy of the checkout, or the
-    /// project itself.
+    /// The folder this thread's agent works in: its own copy, else an explicit Hydra
+    /// checkout, else the project folder.
     private var workingRoot: String? {
         guard let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) else { return nil }
-        return thread.worktreePath ?? project.path
+        return thread.executionDirectory(projectPath: project.path)
     }
 
     private var repositoryGit: Git? {
         guard let currentTurnID, let turn = turns.first(where: { $0.id == currentTurnID }), turn.baseCheckpoint != nil,
               let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) else { return nil }
-        return Git(thread.worktreePath ?? project.path)
+        return Git(thread.executionDirectory(projectPath: project.path))
     }
 
     /// How much of a patch an edit carries. Past it the edit is stats only, so neither the
@@ -4104,7 +4288,7 @@ final class ThreadRuntime {
             && approvals.isEmpty && questions.isEmpty
             && hydraPendingReports.isEmpty && hydraBatches.isEmpty && hydraWaiting.isEmpty
             && !hydraFlushScheduled && hydraLanding == nil && !isHydraMerging && headBudget == nil
-            && commandTrees.isEmpty && commandSettles.isEmpty
+            && commandTrees.isEmpty && foreignCommandBases.isEmpty && commandSettles.isEmpty
     }
 
     func cancelPersistence() {

@@ -20,6 +20,9 @@ struct ThreadTimeline: View, Equatable {
     let columnHeight: CGFloat
     /// Whether the rail is shown at all; a panel docked on the left takes its edge.
     var showsMinimap = true
+    /// The main chat masks its own scroll view. Panels leave this false and keep
+    /// `.chromeEdgeFade`.
+    var usesTimelineTopFade = false
 
     /// The chat re-renders whenever its thread changes (a title, the effort, a mode); the
     /// timeline only follows when what it was handed changed.
@@ -32,6 +35,7 @@ struct ThreadTimeline: View, Equatable {
             && lhs.supportsRewind == rhs.supportsRewind
             && lhs.columnHeight == rhs.columnHeight
             && lhs.showsMinimap == rhs.showsMinimap
+            && lhs.usesTimelineTopFade == rhs.usesTimelineTopFade
     }
 
     /// Everything the scroll view and the rows report while the reader scrolls: which blocks
@@ -541,9 +545,11 @@ struct ThreadTimeline: View, Equatable {
             // Inside the content, so the scroll view hosting it can be found for the nudge
             // that tells the lazy stack where the viewport is (`refreshViewport`).
             .background(alignment: .top) {
-                ScrollViewProbe(onResolve: { tracking.probe = $0 }, onWheel: {
-                    tracking.noteWheelInput()
-                })
+                ScrollViewProbe(
+                    usesTimelineTopFade: usesTimelineTopFade,
+                    onResolve: { tracking.probe = $0 },
+                    onWheel: { tracking.noteWheelInput() }
+                )
                     .frame(width: 0, height: 0)
             }
         }
@@ -1673,38 +1679,82 @@ private struct ContinuationSourceLabel: View {
 }
 
 /// A view of no size inside the scroll view's content, through which the scroll view is
-/// found (`TimelineScrollTracking.beginNudge`).
+/// found (`TimelineScrollTracking.beginNudge`). The main chat also resolves its top fade
+/// from here. Panels leave `usesTimelineTopFade` false.
 private struct ScrollViewProbe: NSViewRepresentable {
+    var usesTimelineTopFade = false
     let onResolve: (NSView) -> Void
     let onWheel: () -> Void
 
+    final class Coordinator {
+        var fade: TimelineTopFade?
+    }
+
+    func makeCoordinator() -> Coordinator {
+        let coordinator = Coordinator()
+        coordinator.fade = TimelineTopFade()
+        return coordinator
+    }
+
     func makeNSView(context: Context) -> NSView {
-        ProbeView(onResolve: onResolve, onWheel: onWheel)
+        let probe = ProbeView(frame: .zero)
+        bind(probe, fade: context.coordinator.fade)
+        return probe
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? ProbeView)?.onResolve = onResolve
-        (nsView as? ProbeView)?.onWheel = onWheel
+        guard let probe = nsView as? ProbeView else { return }
+        bind(probe, fade: context.coordinator.fade)
     }
 
-    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
-        (nsView as? ProbeView)?.removeWheelMonitor()
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        let probe = nsView as? ProbeView
+        probe?.removeWheelMonitor()
+        coordinator.fade?.detach()
+        probe?.fade = nil
+    }
+
+    /// The fade shares the probe's resolve. `tracking.probe` is still the caller's closure.
+    private func bind(_ probe: ProbeView, fade: TimelineTopFade?) {
+        let resolve = onResolve
+        probe.fade = fade
+        probe.usesTimelineTopFade = usesTimelineTopFade
+        probe.onResolve = { view in
+            resolve(view)
+            (view as? ProbeView)?.syncTopFade()
+        }
+        probe.onWheel = onWheel
+        if probe.window != nil { probe.syncTopFade() }
     }
 
     private final class ProbeView: NSView {
-        var onResolve: (NSView) -> Void
-        var onWheel: () -> Void
+        var onResolve: (NSView) -> Void = { _ in }
+        var onWheel: () -> Void = {}
+        var usesTimelineTopFade = false
+        var fade: TimelineTopFade?
         private var wheelMonitor: Any?
 
-        init(onResolve: @escaping (NSView) -> Void, onWheel: @escaping () -> Void) {
-            self.onResolve = onResolve
-            self.onWheel = onWheel
-            super.init(frame: .zero)
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
         }
 
         func removeWheelMonitor() {
             if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
             wheelMonitor = nil
+        }
+
+        /// AppKit delivers these view callbacks on the main thread.
+        func syncTopFade() {
+            let enabled = usesTimelineTopFade
+            let candidate = enclosingScrollView
+            let fade = self.fade
+            MainActor.assumeIsolated {
+                guard enabled else {
+                    fade?.detach()
+                    return
+                }
+                fade?.attach(to: candidate)
+            }
         }
 
         @available(*, unavailable)
@@ -1716,8 +1766,14 @@ private struct ScrollViewProbe: NSViewRepresentable {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             removeWheelMonitor()
-            guard window != nil else { return }
+            guard window != nil else {
+                let fade = self.fade
+                MainActor.assumeIsolated { fade?.detach() }
+                return
+            }
             onResolve(self)
+            let fade = self.fade
+            MainActor.assumeIsolated { fade?.relayout() }
             // AppKit local monitors observe input before dispatch and return it unchanged.
             // https://developer.apple.com/documentation/appkit/nsevent/addlocalmonitorforevents(matching:handler:)
             wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
@@ -1744,6 +1800,210 @@ private struct ScrollViewProbe: NSViewRepresentable {
             }
             return false
         }
+    }
+}
+
+/// Hidden switch. Only the string `b` selects the upstream band; anything else, including a
+/// missing value, keeps the local 72pt band. Read when the mask is laid out, not observed.
+private enum TimelineFadeStyle {
+    static let defaultsKey = "timelineTopFadeStyle"
+    case a, b
+
+    static var current: TimelineFadeStyle {
+        (CaptureRun.defaults ?? .standard).string(forKey: defaultsKey) == "b" ? .b : .a
+    }
+
+    /// A matches `Chrome.veilHeight` and `Chrome.contentTopInset` (12 + 32 + 28). The
+    /// timeline's top padding fills that band, so a resting top puts the first message on
+    /// the solid side of the mask. B ends 6pt below the capsule, inside that padding.
+    var bandHeight: CGFloat {
+        switch self {
+        case .a: Chrome.veilHeight
+        case .b: Chrome.chromeTopPadding + Chrome.capsuleHeight + 6
+        }
+    }
+
+    var colors: [CGColor] {
+        switch self {
+        case .a: [Self.clear, Self.clear, Self.partial, Self.opaque]
+        case .b: [Self.clear, Self.clear, Self.opaque]
+        }
+    }
+
+    var locations: [NSNumber] {
+        let midline = Chrome.chromeTopPadding + Chrome.capsuleHeight / 2
+        switch self {
+        case .a:
+            return Self.stops(0, midline / Chrome.veilHeight, 0.74, 1)
+        case .b:
+            let height = bandHeight
+            return Self.stops(0, height > 0 ? midline / height : 0, 1)
+        }
+    }
+
+    private static let clear = CGColor(gray: 0, alpha: 0)
+    private static let partial = CGColor(gray: 0, alpha: 0.45)
+    private static let opaque = CGColor(gray: 0, alpha: 1)
+
+    private static func stops(_ values: CGFloat...) -> [NSNumber] {
+        values.map { NSNumber(value: Double($0)) }
+    }
+}
+
+/// Mask on the timeline `NSScrollView`'s own layer: one gradient band, then a solid body.
+/// The compositor applies it as the content moves, so scrolling and streaming do not touch
+/// it. A resize, a new scroll view, or a return to the window lays it out again. No color
+/// is painted behind the title.
+@MainActor
+private final class TimelineTopFade {
+    private static let maskName = "timelineTopFade"
+    private weak var scrollView: NSScrollView?
+    private weak var mask: TimelineTopFadeMask?
+    /// Restored on detach when this fade is what turned frame posts on.
+    private var enabledFramePosts = false
+
+    /// Same scroll view and the same mask is a no-op. A mask we did not create is left in place.
+    func attach(to candidate: NSScrollView?) {
+        guard let candidate else {
+            detach()
+            return
+        }
+        if let mask, scrollView === candidate, (candidate.layer?.mask as AnyObject?) === mask { return }
+        detach()
+        install(on: candidate)
+    }
+
+    /// Window entry and a fresh mount re-read the style. Scroll frames do not get here.
+    func relayout() {
+        guard let scrollView, let mask, (scrollView.layer?.mask as AnyObject?) === mask else { return }
+        mask.layout(in: scrollView)
+    }
+
+    func detach() {
+        let dying = mask
+        let host = scrollView
+        let restorePosts = enabledFramePosts
+        mask = nil
+        scrollView = nil
+        enabledFramePosts = false
+        dying?.clearObserver()
+        guard let host else { return }
+        if restorePosts { host.postsFrameChangedNotifications = false }
+        guard let dying, (host.layer?.mask as AnyObject?) === dying else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        host.layer?.mask = nil
+        CATransaction.commit()
+    }
+
+    private func install(on scrollView: NSScrollView) {
+        scrollView.wantsLayer = true
+        guard let host = scrollView.layer, host.mask == nil else { return }
+        let installed = TimelineTopFadeMask()
+        installed.name = Self.maskName
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        host.mask = installed
+        bind(mask: installed, to: scrollView)
+    }
+
+    private func bind(mask installed: TimelineTopFadeMask, to scrollView: NSScrollView) {
+        mask = installed
+        self.scrollView = scrollView
+        if !scrollView.postsFrameChangedNotifications {
+            scrollView.postsFrameChangedNotifications = true
+            enabledFramePosts = true
+        }
+        if installed.observer == nil {
+            installed.observer = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: scrollView, queue: .main
+            ) { [weak self, weak scrollView] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let scrollView, let installed = self.mask,
+                          self.scrollView === scrollView,
+                          (scrollView.layer?.mask as AnyObject?) === installed else { return }
+                    installed.layout(in: scrollView)
+                }
+            }
+        }
+        installed.layout(in: scrollView)
+    }
+}
+
+/// Gradient plus solid body. The observer token lives here, so dropping the mask drops the
+/// observation with it. The block holds the scroll view weakly.
+private final class TimelineTopFadeMask: CALayer {
+    let band = CAGradientLayer()
+    let body = CALayer()
+    var observer: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        body.backgroundColor = CGColor(gray: 0, alpha: 1)
+        addSublayer(band)
+        addSublayer(body)
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func clearObserver() {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+    }
+
+    deinit { clearObserver() }
+
+    /// Lays the band against the top edge in both flipped and unflipped scroll views.
+    /// A non-zero bounds origin is the mask frame; sublayers sit in the mask's own bounds.
+    /// Shorter than the band, the band hangs off the top and the mask clips it, so the
+    /// stops stay put instead of squeezing into the view.
+    @MainActor
+    func layout(in scrollView: NSScrollView) {
+        let hostBounds = scrollView.layer?.bounds ?? scrollView.bounds
+        let style = TimelineFadeStyle.current
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        frame = hostBounds
+        masksToBounds = true
+        let local = bounds
+        let width = local.width
+        let height = local.height
+        let bandHeight = style.bandHeight
+        guard width > 0, height > 0, bandHeight > 0 else {
+            band.frame = .zero
+            body.frame = .zero
+            return
+        }
+        let flipped = scrollView.isFlipped
+        if flipped {
+            band.frame = CGRect(x: local.minX, y: local.minY, width: width, height: bandHeight)
+            body.frame = CGRect(
+                x: local.minX, y: local.minY + bandHeight,
+                width: width, height: max(0, height - bandHeight)
+            )
+            band.startPoint = CGPoint(x: 0.5, y: 0)
+            band.endPoint = CGPoint(x: 0.5, y: 1)
+        } else {
+            band.frame = CGRect(
+                x: local.minX, y: local.minY + height - bandHeight,
+                width: width, height: bandHeight
+            )
+            body.frame = CGRect(
+                x: local.minX, y: local.minY,
+                width: width, height: max(0, height - bandHeight)
+            )
+            band.startPoint = CGPoint(x: 0.5, y: 1)
+            band.endPoint = CGPoint(x: 0.5, y: 0)
+        }
+        band.colors = style.colors
+        band.locations = style.locations
     }
 }
 

@@ -11,18 +11,20 @@ final class TypeScale {
     static let shared = TypeScale()
 
     static let stockUI = 13
+    static let defaultUI = 14
     static let stockContent = 13 // Rendering baseline; keep existing sizes and range anchored here.
-    static let defaultContent = 14
+    static let defaultContent = 15
     static let stockCode = 12
+    static let defaultCode = 13
 
-    /// One point under the stock size through three over it.
-    static let uiRange = (stockUI - 1)...(stockUI + 3)
-    static let contentRange = (stockContent - 1)...(stockContent + 3)
-    static let codeRange = (stockCode - 1)...(stockCode + 3)
+    /// One point under the stock size through five over it.
+    static let uiRange = (stockUI - 1)...(stockUI + 5)
+    static let contentRange = (stockContent - 1)...(stockContent + 5)
+    static let codeRange = (stockCode - 1)...(stockCode + 5)
 
-    var ui = stockUI
+    var ui = defaultUI
     var content = defaultContent
-    var code = stockCode
+    var code = defaultCode
 
     private init() {}
 

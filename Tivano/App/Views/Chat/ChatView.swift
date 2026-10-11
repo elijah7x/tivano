@@ -79,7 +79,7 @@ struct ChatView: View {
         // The thread and project are read here, once, and passed down as values: the timeline
         // rows and the composer never observe them, so a change to either re-renders this
         // body alone and the children only where what they were handed changed.
-        let workingDirectory = thread.flatMap { $0.worktreePath ?? project?.path }
+        let workingDirectory = thread.flatMap { thread in project.map { thread.executionDirectory(projectPath: $0.path) } }
         let directory = workingDirectory ?? LoginEnvironment.homeDirectory
         let title = thread?.title ?? ""
         // Who is in a panel comes from the model and changes rarely; the geometry
@@ -106,7 +106,8 @@ struct ChatView: View {
                 // does a pane too narrow for both: the column reads at up to 820 points and the
                 // rail floats over its gutter, so under about 900 the two would overlap.
                 showsMinimap: !scene.dockedSides.contains(.leading)
-                    && (paneSize == .zero || paneSize.width - scene.reserve.leading - scene.reserve.trailing >= 900)
+                    && (paneSize == .zero || paneSize.width - scene.reserve.leading - scene.reserve.trailing >= 900),
+                usesTimelineTopFade: true
             )
             .equatable()
             // Hover costs a responder walk and a render of this whole tree; a panel being
@@ -142,7 +143,6 @@ struct ChatView: View {
                     }
                     .modifier(ReserveSlide(reserve: scene.reserve, slides: scene.isMeasured && !liveResize.isActive && !holds && !switching, animatesWidth: true))
             }
-            .chromeEdgeFade(scrollChrome)
             .overlay(alignment: .top) {
                 ChatChromeRow(
                     runtime: runtime,
@@ -331,7 +331,7 @@ struct ChatView: View {
             thread: subagent,
             size: scene.layout.panelSize,
             // The helper works in the project folder, whatever this thread's worktree.
-            workingDirectory: subagent.worktreePath ?? project?.path,
+            workingDirectory: model.project(subagent.projectID).map { subagent.executionDirectory(projectPath: $0.path) },
             projectName: project?.name,
             onDrag: { translation in
                 let position = subagentDrag.move(by: translation, from: rest, in: scene.layout)
@@ -1255,7 +1255,7 @@ private struct ChatChromeTitle: View {
             isPresented.toggle()
         } label: {
             Text(verbatim: title.isEmpty ? Chrome.localized("New thread") : title)
-                .font(.ui(.title3, weight: .semibold))
+                .font(.ui(size: 16, weight: .semibold))
                 .foregroundStyle(title.isEmpty ? Chrome.secondaryText : Chrome.primaryText)
                 .lineLimit(1)
                 .truncationMode(.tail)

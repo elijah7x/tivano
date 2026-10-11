@@ -915,6 +915,20 @@ class OpenAICompatibleSession: ProviderSession {
                 return "Error: \(error.localizedDescription)"
             }
         }
+        if ["read_file", "write_file", "edit_file", "list_files", "search_text"].contains(tool.name) {
+            let path = args["path"]?.string ?? ""
+            let acceptsRoot = tool.name == "list_files" || tool.name == "search_text"
+            do {
+                _ = try fileTools.resolveURL(acceptsRoot && path.trimmed.isEmpty ? "." : path)
+            } catch {
+                guard !Task.isCancelled, !interrupted else { return "Stopped." }
+                let call = ToolCall(kind: (tool.name == "write_file" || tool.name == "edit_file") ? .edit
+                    : (acceptsRoot ? .search : .read), title: path)
+                onEvent?(.toolStarted(id: callID, call: call))
+                onEvent?(.toolUpdated(id: callID, update: ToolUpdate(output: error.localizedDescription, status: .failed)))
+                return "Error: \(error.localizedDescription)"
+            }
+        }
         switch tool.name {
         case "read_file":
             let path = args["path"]?.string ?? ""
@@ -959,10 +973,16 @@ class OpenAICompatibleSession: ProviderSession {
             guard await approveIfNeeded(kind: .search, title: "Search for “\(pattern)”", detail: path.isEmpty ? nil : path, toolItemID: nil) else {
                 return declined(callID)
             }
-            let text = await searchText(pattern: pattern, path: path, regex: args["regex"]?.bool ?? false)
-            guard !Task.isCancelled, !interrupted else { return "Stopped." }
-            onEvent?(.toolUpdated(id: callID, update: ToolUpdate(output: summary(text, limit: 6_000), status: .completed)))
-            return text
+            do {
+                let text = try await fileTools.searchText(pattern: pattern, path: path, regex: args["regex"]?.bool ?? false)
+                guard !Task.isCancelled, !interrupted else { return "Stopped." }
+                onEvent?(.toolUpdated(id: callID, update: ToolUpdate(output: summary(text, limit: 6_000), status: .completed)))
+                return text
+            } catch {
+                guard !Task.isCancelled, !interrupted else { return "Stopped." }
+                onEvent?(.toolUpdated(id: callID, update: ToolUpdate(output: error.localizedDescription, status: .failed)))
+                return "Error: \(error.localizedDescription)"
+            }
         case "write_file":
             let path = args["path"]?.string ?? ""
             let content = args["content"]?.string ?? ""
@@ -1111,42 +1131,6 @@ class OpenAICompatibleSession: ProviderSession {
             messages[index] = .object(message)
             total -= content.utf8.count - condensed.utf8.count
         }
-    }
-
-    private func searchText(pattern: String, path: String, regex: Bool) async -> String {
-        let trimmed = pattern.trimmed
-        guard !trimmed.isEmpty else { return "Error: a search pattern is required." }
-        let directory = URL(fileURLWithPath: workingDirectory)
-        // Search is the one file tool that used to hand the model's path to the shell
-        // untouched, so an absolute path or a climb out of the root recursively grepped
-        // ~/.ssh and returned the matches into the transcript. It answers to the same
-        // guard as read, list, write and edit now.
-        let target: String
-        if path.trimmed.isEmpty {
-            target = "."
-        } else {
-            do {
-                target = try fileTools.resolveURL(path).path
-            } catch {
-                return "Error: \(error.localizedDescription)"
-            }
-        }
-        let grep = URL(fileURLWithPath: "/usr/bin/grep")
-        var args = ["-R", "-n", "-I", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=.build", "--exclude-dir=build"]
-        args.append(regex ? "-E" : "-F")
-        // Everything past `--` is an operand, so a pattern or a path that starts with a
-        // dash is searched for rather than parsed as a flag.
-        args.append("--")
-        args.append(trimmed)
-        args.append(target)
-        guard let result = try? await Shell.run(grep, args, in: directory, environment: LoginEnvironment.current, timeout: 30, outputLimit: 64_000) else {
-            return "Search failed."
-        }
-        let output = (result.output + result.errorOutput).trimmed
-        if output.isEmpty { return "(no matches)" }
-        let lines = output.split(separator: "\n")
-        let limited = lines.prefix(120).joined(separator: "\n")
-        return lines.count > 120 ? limited + "\n…(\(lines.count) matches, truncated)" : String(limited)
     }
 
     private func runCommand(_ command: String) async -> (output: String, exitCode: Int32) {

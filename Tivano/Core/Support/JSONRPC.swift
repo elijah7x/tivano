@@ -7,7 +7,9 @@ enum RPCID: Hashable, Sendable {
     init?(_ value: JSONValue) {
         switch value {
         case .int(let id): self = .int(id)
-        case .double(let id): self = .int(Int(id))
+        case .double(let id):
+            guard let integer = Int(exactly: id) else { return nil }
+            self = .int(integer)
         case .string(let id): self = .string(id)
         default: return nil
         }

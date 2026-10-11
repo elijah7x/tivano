@@ -35,28 +35,55 @@ struct MCPSettingsPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
             MCPLeadCard()
-            if !connected.isEmpty {
-                ChromeSection(title: "Connected") {
+            if let error = model.mcp.configurationLoadError {
+                ChromeSection(title: "MCP configuration could not be loaded") {
                     ChromeCard {
-                        ForEach(Array(connected.enumerated()), id: \.element.id) { index, entry in
-                            if index > 0 { ChromeRowDivider() }
-                            MCPConnectedRow(entry: entry)
+                        ChromeRow(
+                            title: "MCP changes are paused",
+                            detail: "Your files and credentials are unchanged. Repair the configuration file, then retry."
+                        ) {
+                            Button("Retry") { model.mcp.retryConfigurationLoad() }
+                                .buttonStyle(.glass)
+                                .controlSize(.small)
+                        }
+                        ChromeRowDivider()
+                        ChromeRow(title: "Configuration file") {
+                            Text(verbatim: String(format: Chrome.localized(error.isReadFailure
+                                ? "Could not read MCP configuration at %@."
+                                : "Invalid MCP configuration at %@."), error.url.path))
+                                .font(.ui(.subheadline))
+                                .foregroundStyle(Chrome.danger)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
                         }
                     }
                 }
             }
-            MCPCustomSection(query: query)
-            ForEach(visibleSections, id: \.category) { section in
-                ChromeSection(title: section.category.title) {
-                    LazyVGrid(columns: Self.columns, spacing: 10) {
-                        ForEach(section.entries) { entry in
-                            MCPServerCard(entry: entry, celebrating: celebrating.contains(entry.id))
-                                .transition(.scale(scale: 0.9).combined(with: .opacity))
+            Group {
+                if !connected.isEmpty {
+                    ChromeSection(title: "Connected") {
+                        ChromeCard {
+                            ForEach(Array(connected.enumerated()), id: \.element.id) { index, entry in
+                                if index > 0 { ChromeRowDivider() }
+                                MCPConnectedRow(entry: entry)
+                            }
                         }
                     }
                 }
-                .animation(.spring(duration: 0.35), value: celebrating)
+                MCPCustomSection(query: query)
+                ForEach(visibleSections, id: \.category) { section in
+                    ChromeSection(title: section.category.title) {
+                        LazyVGrid(columns: Self.columns, spacing: 10) {
+                            ForEach(section.entries) { entry in
+                                MCPServerCard(entry: entry, celebrating: celebrating.contains(entry.id))
+                                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+                            }
+                        }
+                    }
+                    .animation(.spring(duration: 0.35), value: celebrating)
+                }
             }
+            .disabled(!model.mcp.isConfigurationLoaded)
             Text("Connected servers reach every provider when a thread starts: the CLIs at launch, the API models through Tivano itself.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
@@ -350,6 +377,7 @@ private struct MCPServerCard: View {
     }
 
     private func begin() {
+        guard model.mcp.isConfigurationLoaded else { return }
         if !entry.needsInput {
             model.mcp.connect(entry)
         } else {
@@ -532,6 +560,7 @@ private struct MCPCustomRow: View {
     /// The card's connect, unchanged: no fields needed connects at once, otherwise the
     /// key panel takes the variable values.
     private func begin() {
+        guard model.mcp.isConfigurationLoaded else { return }
         if !entry.needsInput {
             model.mcp.connect(entry)
         } else {
@@ -660,6 +689,7 @@ private struct MCPCustomEditor: View {
         // their space, header and save stay put, and the form scrolls inside rather than
         // stretching the popover off the screen (the lesson of the pair editor).
         .frame(width: Self.width, height: height)
+        .disabled(!model.mcp.isConfigurationLoaded)
         .onAppear {
             if server == nil {
                 isNameFocused = true
@@ -862,6 +892,10 @@ private struct MCPCustomEditor: View {
     }
 
     private func save() {
+        guard model.mcp.isConfigurationLoaded else {
+            error = Chrome.localized("MCP configuration could not be loaded. Repair the file and retry in Settings before making changes.")
+            return
+        }
         let draft = draft
         let wasConnected = server.map { model.mcp.state(for: $0.id).isConnected } ?? false
         if let failure = model.mcp.saveCustom(draft, replacing: server?.id ?? savedID) {

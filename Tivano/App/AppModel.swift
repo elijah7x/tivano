@@ -606,7 +606,7 @@ final class AppModel {
 
     var workingDirectory: String? {
         guard let thread = selectedThread, let project = project(thread.projectID) else { return nil }
-        return thread.worktreePath ?? project.path
+        return thread.executionDirectory(projectPath: project.path)
     }
 
     // MARK: - Projects
@@ -1196,7 +1196,7 @@ final class AppModel {
 
     func runScript(_ script: ProjectScript, threadID: UUID) {
         guard let thread = thread(threadID), let project = project(thread.projectID) else { return }
-        terminals.run(script, threadID: threadID, directory: thread.worktreePath ?? project.path)
+        terminals.run(script, threadID: threadID, directory: thread.executionDirectory(projectPath: project.path))
         runtime(for: threadID).isTerminalVisible = true
     }
 

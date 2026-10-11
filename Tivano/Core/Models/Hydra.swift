@@ -368,6 +368,12 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
     /// started from, which its work is measured against when it lands. Moves on with
     /// every landing, so a head steered on afterwards lands only what is new.
     var baseTree: String?
+    /// The landing checkout, kept after the head's temporary copy is released. Nil on
+    /// older records, which keep the previous project and lead checkout rules.
+    var targetCheckout: String?
+    /// Kept until an explicit route succeeds, so a failed or stopped route cannot
+    /// resume in the lead's project after its runtime is reloaded.
+    var pendingProjectReference: String?
     /// Where the head's work went the last time it reported.
     var landing: HydraLanding?
     /// When the auto-merge took this head's work out: the next merge leaves it be. The
@@ -432,6 +438,9 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
         canStop = container.value(.canStop, default: kind == .tivano)
         isBackground = container.value(.isBackground, default: true)
         baseTree = container.value(.baseTree, default: nil)
+        // Missing on a library saved before explicit checkouts: nil keeps the old rules.
+        targetCheckout = container.value(.targetCheckout, default: nil)
+        pendingProjectReference = container.value(.pendingProjectReference, default: nil)
         landing = container.value(.landing, default: nil)
         mergedAt = container.value(.mergedAt, default: nil)
         tracksProviderHistory = container.value(.tracksProviderHistory, default: false)
@@ -504,8 +513,9 @@ struct HydraDelegation: Hashable, Sendable {
     var prompt: String
     var name: String?
     /// The project the head works in when the lead named one ("project": a sidebar
-    /// project's name or path, or a repository's absolute path); nil keeps it in the
-    /// chat's own project.
+    /// project's name, or an absolute path). A worktree of a repository already in the
+    /// sidebar reuses that project and keeps the named checkout; only a new repository
+    /// is added. Nil keeps the head in the chat's own project.
     var project: String?
     /// The head profile the lead routed the task to (`"profile"` in the block); nil runs
     /// the head on the pair's shared worker model and effort.
@@ -674,14 +684,15 @@ enum HydraPrompts {
     private static let verificationRule = "Heads edit or research and report; they never build, test, lint or verify. Do not assign checks or request pass reports. Run required validation yourself in the checkout after the heads return."
 
     /// Where heads work and where their work lands: this chat's project unless an entry
-    /// names another, any project in the sidebar or any repository on the Mac, with the
-    /// merge going out per project. The lead's own tools run in this chat's checkout, but
+    /// names another. A worktree of a repository already in the sidebar reuses that
+    /// project and keeps the named checkout; only a new repository is added. The merge
+    /// goes out per checkout. The lead's own tools run in this chat's checkout, but
     /// nothing keeps it to that project.
     private static func projectRule(_ projects: [HydraProjectRef]) -> String {
         let own = projects.first.map { "this chat's project, \($0.name) (`\($0.path)`)" } ?? "this chat's project"
         let others = projects.dropFirst()
         let named = others.isEmpty ? "" : " The other projects in the sidebar: " + others.map { "\($0.name) (`\($0.path)`)" }.joined(separator: ", ") + "."
-        return "Heads may work in any project. A head works in \(own) unless it is sent to another: an entry of the delegation block names it with \"project\" (a sidebar project's name or path, or the absolute path of any git repository on this Mac, which Tivano then adds to the sidebar).\(named) Whatever a head changes lands in the checkout of the project it worked in, and the team's work is merged per project, one merge request each. Your own tools run in this chat's checkout, and you may read and edit files in any project all the same: what you change elsewhere is merged along with that project's work. Run your own checks in the checkout itself: never make a worktree or a copy of the project for them."
+        return "Heads may work in any project. A head works in \(own) unless it is sent to another: an entry of the delegation block names it with \"project\" (a sidebar project's name, or an absolute path). An absolute path that is a worktree of a repository already in the sidebar reuses that sidebar project, and the head works in the checkout that path belongs to; Tivano adds a sidebar project only when the path is a repository that is not in the sidebar yet.\(named) Whatever a head changes lands in the checkout it worked in, and the team's work is merged per checkout, one merge request each. Your own tools run in this chat's checkout, and you may read and edit files in any project all the same: what you change elsewhere is merged along with that project's work. Run your own checks in the checkout itself: never make a worktree or a copy of the project for them."
     }
 
     /// What a lead is told when the setting has Tivano land the work: the merge is

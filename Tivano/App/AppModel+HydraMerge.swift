@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CryptoKit
 
 // With "Merge when the team is done" on, a Hydra lead's finished job lands by itself: the
 // files the lead and its heads changed go out as a commit on a branch of their own, the
@@ -123,28 +124,45 @@ extension AppModel {
         // of those other checkouts cannot be told apart from a sibling's work there and
         // stays behind without a word: none of it was this merge's to take.
         let ownCheckout = lead.worktreePath ?? project.path
-        let own = await hydraWork(of: leadID, runtime: runtime, checkout: ownCheckout, git: Git(ownCheckout), projectID: project.id, leadCheckout: ownCheckout, leadProjectID: project.id, sweepsCheckout: true)
-        var groups: [(project: Project, checkout: String, work: HydraWork)] = [(project, ownCheckout, own)]
+        // A head sent to another checkout of this same project is its own merge. Its
+        // files are not part of the lead checkout's group, and that group does not
+        // fast-forward the project folder on the way past.
+        let explicitGroups = hydraExplicitCheckouts(of: leadID, besides: ownCheckout)
+        let explicitCheckouts = explicitGroups.map(\.checkout)
+        let own = await hydraWork(of: leadID, runtime: runtime, checkout: ownCheckout, git: Git(ownCheckout), projectID: project.id, leadCheckout: ownCheckout, leadProjectID: project.id, sweepsCheckout: true, otherCheckouts: explicitCheckouts)
+        var groups: [(project: Project, checkout: String, work: HydraWork, syncsProjectCheckout: Bool)] = [(project, ownCheckout, own, true)]
+        for extra in explicitGroups {
+            let work = await hydraWork(of: leadID, runtime: runtime, checkout: extra.checkout, git: Git(extra.checkout), projectID: extra.project.id, leadCheckout: ownCheckout, leadProjectID: project.id, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
+            groups.append((extra.project, extra.checkout, work, false))
+        }
         // An outside path belongs to the sidebar project with the longest path that
-        // holds it, so nested checkouts resolve to the inner one.
+        // holds it, so nested checkouts resolve to the inner one. A path already covered
+        // by an explicit checkout stays with that checkout's group.
         var owners: [String: Project] = [:]
-        for path in own.outside {
+        for path in own.outside where !explicitCheckouts.contains(where: { TouchedPaths.relative(path, root: $0) != nil }) {
             if let holder = projects.filter({ $0.id != project.id && TouchedPaths.relative(path, root: $0.path) != nil }).max(by: { $0.path.count < $1.path.count }) {
                 owners[path] = holder
             }
         }
         for other in projects where other.id != project.id && owners.values.contains(where: { $0.id == other.id }) {
-            let work = await hydraWork(of: leadID, runtime: runtime, checkout: other.path, git: Git(other.path), projectID: other.id, leadCheckout: ownCheckout, leadProjectID: project.id, sweepsCheckout: false)
-            groups.append((other, other.path, work))
+            let work = await hydraWork(of: leadID, runtime: runtime, checkout: other.path, git: Git(other.path), projectID: other.id, leadCheckout: ownCheckout, leadProjectID: project.id, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
+            groups.append((other, other.path, work, true))
         }
         // A head's scratch (a throwaway script in /tmp, a stray write into its own copy)
         // is nobody's project and not worth a word; only a real folder outside the
         // sidebar is something the user can act on.
-        let stray = own.outside.filter { path in !Self.isScratchPath(path) && !projects.contains { TouchedPaths.relative(path, root: $0.path) != nil } }
+        let stray = own.outside.filter { path in
+            !Self.isScratchPath(path)
+                && !projects.contains { TouchedPaths.relative(path, root: $0.path) != nil }
+                && !explicitCheckouts.contains { TouchedPaths.relative(path, root: $0) != nil }
+        }
         func strayBody(_ paths: [String]) -> String {
             let shown = paths.prefix(6).map { "`\($0)`" }.joined(separator: ", ") + (paths.count > 6 ? " and \(paths.count - 6) more" : "")
             return "\(paths.count == 1 ? "1 file was" : "\(paths.count) files were") changed outside every project: \(shown). Add the folder that holds them to the sidebar and ask for the merge again."
         }
+        // Heads whose checkout had nothing to send are marked with the job, not ahead of
+        // a checkout that still has files. A failed group returns before either mark.
+        let everyHeadID = groups.flatMap(\.work.headIDs)
         groups.removeAll { $0.work.paths.isEmpty }
         guard !groups.isEmpty else {
             guard !stray.isEmpty else {
@@ -153,7 +171,7 @@ extension AppModel {
                 // it spent, or the merge note counts those files forever.
                 runtime.markHydraMerged(own.turnIDs)
                 let spentAt = Date.now
-                for headID in own.headIDs { updateHydraHead(headID) { $0.mergedAt = spentAt } }
+                for headID in everyHeadID { updateHydraHead(headID) { $0.mergedAt = spentAt } }
                 if runtime.hydraMerges.last?.outcome == .held {
                     recordHydraSettlement(leadID: leadID, runtime: runtime)
                 }
@@ -166,7 +184,7 @@ extension AppModel {
         let several = groups.count > 1
         var outcomes: [HydraProjectMerge] = []
         for group in groups {
-            outcomes.append(await mergeHydraProject(of: leadID, lead: lead, project: group.project, checkout: group.checkout, work: group.work, runtime: runtime, several: several))
+            outcomes.append(await mergeHydraProject(of: leadID, lead: lead, project: group.project, checkout: group.checkout, work: group.work, runtime: runtime, several: several, syncsProjectCheckout: group.syncsProjectCheckout))
         }
         guard !outcomes.contains(.failed), !outcomes.contains(.deferred) else { return }
         // Another job that waited on this one, or was put off by it, goes now rather than
@@ -176,7 +194,7 @@ extension AppModel {
         // job merges what comes after them and never this again.
         runtime.markHydraMerged(groups.flatMap { $0.work.turnIDs })
         let mergedAt = Date.now
-        for headID in groups.flatMap({ $0.work.headIDs }) { updateHydraHead(headID) { $0.mergedAt = mergedAt } }
+        for headID in everyHeadID { updateHydraHead(headID) { $0.mergedAt = mergedAt } }
         // The projects' shares went out; only what no project holds stayed behind.
         if !stray.isEmpty {
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
@@ -218,7 +236,7 @@ extension AppModel {
     /// real conflict with the remote). Everything that clears by itself - a checkout mid-
     /// rebase, a commit landing while the work was prepared, a forge still checking the
     /// request - is retried quietly instead of posted.
-    private func mergeHydraProject(of leadID: UUID, lead: ChatThread, project: Project, checkout: String, work: HydraWork, runtime: ThreadRuntime, several: Bool) async -> HydraProjectMerge {
+    private func mergeHydraProject(of leadID: UUID, lead: ChatThread, project: Project, checkout: String, work: HydraWork, runtime: ThreadRuntime, several: Bool, syncsProjectCheckout: Bool) async -> HydraProjectMerge {
         func stage(_ name: String) -> String { several ? "\(project.name): \(name)" : name }
         func title(_ name: String) -> String { several ? "\(project.name): \(name)" : name }
         // The words carry the project's name with several projects, the step is the dot on the pill's track.
@@ -281,7 +299,7 @@ extension AppModel {
                 spent = false
             }
             let ownBranch = current == nil || current == target || spent
-            let branch = ownBranch ? Self.hydraBranchName(for: lead) : current!
+            let branch = ownBranch ? Self.hydraBranchName(for: lead, checkout: syncsProjectCheckout ? nil : checkout) : current!
 
             // A commit landing while the work is prepared (the user's, in a terminal) moves
             // HEAD under it. That is no reason to stop: the work is prepared again on top.
@@ -424,14 +442,16 @@ extension AppModel {
                 advance(.syncing)
                 let synced = await syncDefaultBranch(git, from: head, target: target, ownPaths: sorted, merged: prepared.merged, headIsMerged: spent)
                 lines.append(synced ? "The checkout is up to date." : "The checkout was left as it was: `\(target)` moved on in other ways meanwhile, or the team's files changed again; `git pull` when it suits you.")
-            } else if lead.worktreePath == nil {
+            } else if syncsProjectCheckout, lead.worktreePath == nil {
                 // The forge squashed the checkout's own branch: it follows the remote, or the
                 // next job would be built on history the remote no longer has and conflict.
+                // An explicit checkout keeps its own branch; this follow is for the lead's folder.
                 advance(.syncing)
                 let synced = await syncDefaultBranch(git, from: prepared.commit, target: target, ownPaths: [], merged: [:], headIsMerged: true)
                 lines.append(synced ? "The checkout is up to date." : "The checkout was left as it was: `\(target)` moved on in other ways meanwhile, or the team's files changed again; `git pull` when it suits you.")
-            } else {
+            } else if syncsProjectCheckout {
                 // The lead worked in a worktree: the project's own checkout follows when it can.
+                // An explicit checkout of the same repository does not fast-forward that folder.
                 advance(.syncing)
                 let main = Git(project.path)
                 if await main.status()?.branch == target, await main.dirtyPaths().isEmpty, !(await main.hasOperationInProgress()) {
@@ -551,6 +571,46 @@ extension AppModel {
         return match.flatMap { URL(string: String($0.output)) }
     }
 
+    /// Explicit checkouts this lead's unfinished heads were sent to, other than the
+    /// lead's own. Each one is merged on its own and does not fast-forward the project folder.
+    private func hydraExplicitCheckouts(of leadID: UUID, besides checkout: String) -> [(project: Project, checkout: String)] {
+        var seen: Set<String> = []
+        var result: [(project: Project, checkout: String)] = []
+        let base = HydraPaths.canonical(checkout)
+        for head in hydraTeam(of: leadID) {
+            guard let info = head.hydra, info.mergedAt == nil,
+                  info.landing?.patchPath == nil, info.landing?.error == nil,
+                  let target = info.targetCheckout, !target.isEmpty,
+                  let project = project(head.projectID) else { continue }
+            let canonical = HydraPaths.canonical(target)
+            guard canonical != base, seen.insert(canonical).inserted else { continue }
+            result.append((project, target))
+        }
+        return result
+    }
+
+    /// The checkout a head's landed paths are relative to. An explicit target wins.
+    /// Otherwise a head in the lead's project landed in the lead's checkout, and a head
+    /// sent to another project landed in that project's folder.
+    private func hydraHeadLandingRoot(_ head: ChatThread, leadCheckout: String, leadProjectID: UUID) -> String {
+        if let target = head.hydra?.targetCheckout, !target.isEmpty { return target }
+        if head.projectID == leadProjectID { return leadCheckout }
+        return project(head.projectID)?.path ?? leadCheckout
+    }
+
+    /// The checkout a thread's recorded paths belong to. A head's copy is not that
+    /// checkout: the copy is where it edited, and the work landed in the target.
+    private func hydraRecordedCheckout(_ thread: ChatThread) -> String? {
+        if let target = thread.hydra?.targetCheckout, !target.isEmpty { return target }
+        if thread.isHydraHead, let parentID = thread.parentThreadID, let lead = self.thread(parentID) {
+            if thread.projectID == lead.projectID {
+                return lead.worktreePath ?? project(lead.projectID)?.path
+            }
+            return project(thread.projectID)?.path
+        }
+        return thread.worktreePath ?? project(thread.projectID)?.path
+    }
+
     /// The files a lead's job changed, gathered three ways because no one way sees them
     /// all:
     ///
@@ -569,9 +629,17 @@ extension AppModel {
     /// Paths outside the checkout are dropped rather than passed on: a lead writes to its
     /// own memory files, and `git add -A -- <path>` on one of those fails outright and
     /// takes the whole merge with it.
-    private func hydraWork(of leadID: UUID, runtime: ThreadRuntime, checkout: String, git: Git, projectID: UUID, leadCheckout: String, leadProjectID: UUID, sweepsCheckout: Bool) async -> HydraWork {
+    private func hydraWork(of leadID: UUID, runtime: ThreadRuntime, checkout: String, git: Git, projectID: UUID, leadCheckout: String, leadProjectID: UUID, sweepsCheckout: Bool, otherCheckouts: [String] = []) async -> HydraWork {
         let turns = runtime.hydraUnmergedTurns
-        var reported: [String] = turns.flatMap { $0.touchedPaths ?? [] }
+        // Turn paths are stored relative to the lead's checkout. Anchored there, they
+        // match this pass only when this pass is that checkout, not a sibling worktree
+        // that happens to contain the same relative path.
+        var reported: [String] = turns.flatMap { $0.touchedPaths ?? [] }.map { path in
+            let trimmed = path.trimmed
+            guard !trimmed.isEmpty else { return "" }
+            if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.contains("://") { return trimmed }
+            return (leadCheckout as NSString).appendingPathComponent(trimmed)
+        }
         // What this job's own tools and landings wrote, as opposed to what its turns saw
         // change on disk: a file another chat also claims goes out here only when this
         // job edited it itself.
@@ -587,14 +655,15 @@ extension AppModel {
         for head in hydraTeam(of: leadID) {
             guard let info = head.hydra, info.mergedAt == nil,
                   info.landing?.patchPath == nil, info.landing?.error == nil else { continue }
-            // The checkout the head's work landed in: the chat's own for a head in its
-            // project, that project's for a head sent elsewhere. A path the head's tools
-            // reported lies in its own copy of that checkout and stands for the same path
-            // there; a landing path is relative to it already. Anchored at that checkout,
-            // a path resolves against this pass's checkout or counts as outside it, so a
-            // head's work in another project reaches that project's merge instead of
-            // reading as this project's, and its copy never shows up as a stray folder.
-            let headRoot = head.projectID == leadProjectID ? leadCheckout : (project(head.projectID)?.path ?? leadCheckout)
+            // The checkout the head's work landed in. An explicit target wins over the
+            // project id, so two worktrees of one sidebar project stay apart. A path the
+            // head's tools reported lies in its own copy of that checkout and stands for
+            // the same path there; a landing path is relative to it already. Anchored at
+            // that checkout, a path resolves against this pass's checkout or counts as
+            // outside it. A path that belongs to another explicit checkout is left for
+            // that pass, even when the folder sits inside this one.
+            let headRoot = hydraHeadLandingRoot(head, leadCheckout: leadCheckout, leadProjectID: leadProjectID)
+            let belongs = HydraPaths.same(headRoot, checkout)
             func anchored(_ path: String) -> String {
                 let trimmed = path.trimmed
                 guard !trimmed.isEmpty else { return "" }
@@ -604,15 +673,29 @@ extension AppModel {
                 if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.contains("://") { return trimmed }
                 return (headRoot as NSString).appendingPathComponent(trimmed)
             }
+            func claim(_ path: String) {
+                let absolute = anchored(path)
+                guard !absolute.isEmpty else { return }
+                if belongs {
+                    reported.append(absolute)
+                    edited.append(absolute)
+                    return
+                }
+                guard TouchedPaths.relative(absolute, root: checkout) == nil,
+                      !otherCheckouts.contains(where: { TouchedPaths.relative(absolute, root: $0) != nil }) else { return }
+                reported.append(absolute)
+                edited.append(absolute)
+            }
             var own: [String] = []
             var seen = Set<String>()
             func collect(_ path: String) {
-                guard !path.isEmpty, let relative = TouchedPaths.relative(anchored(path), root: checkout), seen.insert(relative).inserted else { return }
+                guard belongs, !path.isEmpty, let relative = TouchedPaths.relative(anchored(path), root: checkout), seen.insert(relative).inserted else { return }
                 own.append(relative)
             }
-            for file in info.landing?.files ?? [] { collect(file.path) }
-            reported += (info.landing?.files ?? []).map { anchored($0.path) }
-            edited += (info.landing?.files ?? []).map { anchored($0.path) }
+            for file in info.landing?.files ?? [] {
+                claim(file.path)
+                collect(file.path)
+            }
             // A head's timeline runs to megabytes. One still open is read as it is; one
             // that has gone cold is decoded off the main actor rather than brought back
             // as a runtime, which would parse the whole history on the main thread for
@@ -626,10 +709,12 @@ extension AppModel {
             }
             for item in items {
                 guard case .tool(let call) = item.content else { continue }
-                reported += call.edits.map { anchored($0.path) }
-                edited += call.edits.map { anchored($0.path) }
-                for edit in call.edits { collect(edit.path) }
+                for edit in call.edits {
+                    claim(edit.path)
+                    collect(edit.path)
+                }
             }
+            guard belongs else { continue }
             if head.worktreePath != nil { copyPaths.formUnion(own) }
             headPaths.append((head.id, HydraRoster.persona(at: info.index).name, info.index, TextCleanup.singleLine(info.task, limit: 120), own))
         }
@@ -654,7 +739,12 @@ extension AppModel {
         var paths = Set<String>()
         var outside = Set<String>()
         for path in reported where !path.isEmpty && !TouchedPaths.isBuildOutput(path) {
-            if let relative = TouchedPaths.relative(path, root: checkout) {
+            let inOtherCheckout = otherCheckouts.contains { other in
+                !HydraPaths.same(other, checkout)
+                    && HydraPaths.canonical(other).count > HydraPaths.canonical(checkout).count
+                    && TouchedPaths.relative(path, root: other) != nil
+            }
+            if !inOtherCheckout, let relative = TouchedPaths.relative(path, root: checkout) {
                 paths.insert(relative)
             } else {
                 outside.insert(path)
@@ -681,7 +771,11 @@ extension AppModel {
            let changedSince = try? await git.changedPaths(from: base, to: now) {
             let theirs = Set(alreadyDirty)
             let fresh = changedSince.filter { !theirs.contains($0) }
-            paths.formUnion(fresh.filter { !siblingClaims.contains($0) })
+            paths.formUnion(fresh.filter { relative in
+                guard !siblingClaims.contains(relative) else { return false }
+                let absolute = (checkout as NSString).appendingPathComponent(relative)
+                return !otherCheckouts.contains { TouchedPaths.relative(absolute, root: $0) != nil }
+            })
         }
 
         // Nothing waits on another chat. A file another chat also claims goes out with
@@ -740,6 +834,9 @@ extension AppModel {
             if blocks { blocking[relative] = owner }
         }
         for other in threads where other.id != leadID && other.projectID == projectID && !team.contains(other.id) {
+            // Same relative path in another worktree of this repository is that
+            // worktree's claim, not this checkout's.
+            guard let otherCheckout = hydraRecordedCheckout(other), HydraPaths.same(otherCheckout, checkout) else { continue }
             if other.isHydraHead {
                 guard let info = other.hydra, info.mergedAt == nil else { continue }
                 // A head still out has files coming whatever its lead is doing; a head
@@ -930,14 +1027,21 @@ extension AppModel {
     /// The chat's own branch: the same on every try, so a retry after a failed merge
     /// updates the request it opened. A fresh name per try opened a new request every
     /// five minutes for one job (ten of them, all conflicting, on September 22).
-    private static func hydraBranchName(for lead: ChatThread) -> String {
+    private static func hydraBranchName(for lead: ChatThread, checkout: String? = nil) -> String {
         let title = lead.title == ChatThread.untitled ? "team" : lead.title
         var slug = title.lowercased().map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined()
         while slug.contains("--") { slug = slug.replacingOccurrences(of: "--", with: "-") }
         slug = slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         if slug.count > 40 { slug = String(slug.prefix(40)).trimmingCharacters(in: CharacterSet(charactersIn: "-")) }
         let suffix = String(lead.id.uuidString.lowercased().prefix(6))
-        return "hydra/\(slug.isEmpty ? "team" : slug)-\(suffix)"
+        // Two checkouts of one repository share refs, so each extra group needs its own
+        // retry-stable branch instead of reopening another group's merge request.
+        let checkoutSuffix = checkout.map {
+            let hash = SHA256.hash(data: Data(HydraPaths.canonical($0).utf8))
+                .map { String(format: "%02x", $0) }.joined()
+            return "-" + hash.prefix(8)
+        } ?? ""
+        return "hydra/\(slug.isEmpty ? "team" : slug)-\(suffix)\(checkoutSuffix)"
     }
 
     /// The files among `paths` that hold a three-way merge's conflict markers: a line that

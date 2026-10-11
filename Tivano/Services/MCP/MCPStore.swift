@@ -17,12 +17,44 @@ final class MCPStore {
     /// The servers the user defined themselves, in the order they were made.
     private(set) var customs: [MCPCustomServer] = []
 
+    struct ConfigurationLoadError: Error {
+        let url: URL
+        let isReadFailure: Bool
+    }
+
+    enum CustomSaveError: Error {
+        case configurationBlocked
+        case validation(MCPCustomError)
+
+        var message: String {
+            switch self {
+            case .configurationBlocked: AppText.localized("MCP configuration could not be loaded. Repair the file and retry in Settings before making changes.")
+            case .validation(let error): error.message
+            }
+        }
+    }
+
+    private(set) var configurationLoadError: ConfigurationLoadError?
+    var isConfigurationLoaded: Bool { configurationLoadError == nil }
+
+    @ObservationIgnored private var probeGeneration = UUID()
+    @ObservationIgnored private var probeIDs: [String: UUID] = [:]
     @ObservationIgnored private var probes: [String: Task<Void, Never>] = [:]
 
     init() {
         load()
         // Up before anything resolves a route to it: the probe, the hub and every launch
         // reach signed-in servers through the proxy.
+        if isConfigurationLoaded {
+            MCPProxy.shared.start()
+            exportAll()
+        }
+    }
+
+    func retryConfigurationLoad() {
+        guard !isConfigurationLoaded else { return }
+        load()
+        guard isConfigurationLoaded else { return }
         MCPProxy.shared.start()
         exportAll()
     }
@@ -39,7 +71,8 @@ final class MCPStore {
 
     /// Connected and enabled servers, resolved with their field values: what providers get.
     var enabledServers: [MCPResolvedServer] {
-        connections.values
+        guard isConfigurationLoaded else { return [] }
+        return connections.values
             .filter { $0.isEnabled && $0.connectedAt != nil }
             .compactMap { connection in
                 guard let entry = entry(for: connection.catalogID) else { return nil }
@@ -65,12 +98,13 @@ final class MCPStore {
     }
 
     func setDraft(_ value: String, for field: MCPField, of entry: MCPCatalogEntry) {
+        guard isConfigurationLoaded else { return }
         drafts[entry.id, default: [:]][field.key] = value
     }
 
     /// Whether every required field of the entry has a value (draft or stored).
     func canConnect(_ entry: MCPCatalogEntry) -> Bool {
-        entry.fields.filter { $0.isRequired }.allSatisfy { !value(for: $0, of: entry).isEmpty }
+        isConfigurationLoaded && entry.fields.filter { $0.isRequired }.allSatisfy { !value(for: $0, of: entry).isEmpty }
     }
 
     // MARK: Connecting
@@ -78,7 +112,9 @@ final class MCPStore {
     /// Stores the drafts (secrets to the Keychain), probes the server, and on success marks it
     /// connected with its tools; on failure keeps the values and records the message.
     func connect(_ entry: MCPCatalogEntry) {
+        guard isConfigurationLoaded else { return }
         probes[entry.id]?.cancel()
+        probeIDs[entry.id] = nil
         var connection = connections[entry.id] ?? MCPConnection(catalogID: entry.id)
         connection.isEnabled = true
         // A sign-in belongs to one address: pointing the server elsewhere (another GitLab
@@ -113,7 +149,9 @@ final class MCPStore {
 
     /// Forgets the connection, its values and its secrets, and removes it from every provider config.
     func disconnect(_ entry: MCPCatalogEntry) {
+        guard isConfigurationLoaded else { return }
         probes[entry.id]?.cancel()
+        probeIDs[entry.id] = nil
         probes[entry.id] = nil
         MCPKeychain.deleteAll(server: entry)
         if entry.isOAuth {
@@ -129,12 +167,15 @@ final class MCPStore {
 
     /// Re-probes a connected server without changing its values.
     func refresh(_ entry: MCPCatalogEntry) {
+        guard isConfigurationLoaded else { return }
         probes[entry.id]?.cancel()
+        probeIDs[entry.id] = nil
         states[entry.id] = .connecting
         startProbe(entry)
     }
 
     func setEnabled(_ enabled: Bool, for entry: MCPCatalogEntry) {
+        guard isConfigurationLoaded else { return }
         guard var connection = connections[entry.id] else { return }
         connection.isEnabled = enabled
         connections[entry.id] = connection
@@ -147,7 +188,8 @@ final class MCPStore {
     /// Adds or replaces a custom server. Validates first; the error, when there is one,
     /// is for the editor to show and nothing is written.
     @discardableResult
-    func saveCustom(_ server: MCPCustomServer, replacing oldID: String? = nil) -> MCPCustomError? {
+    func saveCustom(_ server: MCPCustomServer, replacing oldID: String? = nil) -> CustomSaveError? {
+        guard isConfigurationLoaded else { return .configurationBlocked }
         let old = oldID.flatMap { id in customs.first { $0.id == id } }
         var taken = Set(MCPCatalog.entries.map(\.id))
         taken.formUnion(customs.map(\.id))
@@ -157,8 +199,9 @@ final class MCPStore {
         // The id is made once, at creation, from the first name; a rename never moves
         // it, so the connection and the Keychain's secrets stay where they are.
         server.id = old?.id ?? MCPCustomServer.makeID(server.name)
-        if let error = MCPCustomError.validate(server, existingIDs: taken) { return error }
+        if let error = MCPCustomError.validate(server, existingIDs: taken) { return .validation(error) }
         probes[server.id]?.cancel()
+        probeIDs[server.id] = nil
         probes[server.id] = nil
         drafts[server.id] = nil
         if let index = customs.firstIndex(where: { $0.id == server.id }) {
@@ -185,6 +228,7 @@ final class MCPStore {
 
     /// Removes a custom server: its connection and secrets go with it.
     func deleteCustom(_ server: MCPCustomServer) {
+        guard isConfigurationLoaded else { return }
         if let entry = customs.first(where: { $0.id == server.id }) {
             disconnect(entry.catalogEntry())
         }
@@ -207,6 +251,7 @@ final class MCPStore {
     /// stored value for fields the user has not changed.
     @discardableResult
     func saveCustomValues(_ values: [(key: String, value: String, isSecret: Bool)], for id: String, replacingFieldsOf oldEntry: MCPCatalogEntry?) -> Bool {
+        guard isConfigurationLoaded else { return false }
         for item in values where item.isSecret {
             guard MCPKeychain.set(item.value, server: id, field: item.key) else { return false }
         }
@@ -237,23 +282,58 @@ final class MCPStore {
     // MARK: Persistence
 
     private func load() {
-        if let data = try? Data(contentsOf: MCPPaths.customsURL),
-           let list = try? JSONDecoder().decode([MCPCustomServer].self, from: data) {
-            customs = list
-        }
-        guard let data = try? Data(contentsOf: MCPPaths.connectionsURL) else { return }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let list = try? decoder.decode([MCPConnection].self, from: data) else { return }
-        for connection in list {
-            connections[connection.catalogID] = connection
-            if connection.connectedAt != nil {
-                states[connection.catalogID] = .connected(toolCount: connection.tools.count)
+        // No callback from the previous snapshot may change the newly loaded one.
+        probeGeneration = UUID()
+        probes.values.forEach { $0.cancel() }
+        probes.removeAll()
+        probeIDs.removeAll()
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let loadedCustoms = try readConfiguration([MCPCustomServer].self, at: MCPPaths.customsURL, decoder: decoder) ?? []
+            let loadedConnections = try readConfiguration([MCPConnection].self, at: MCPPaths.connectionsURL, decoder: decoder) ?? []
+            var nextConnections: [String: MCPConnection] = [:]
+            var nextStates: [String: MCPConnectionState] = [:]
+            for connection in loadedConnections {
+                nextConnections[connection.catalogID] = connection
+                if connection.connectedAt != nil {
+                    nextStates[connection.catalogID] = .connected(toolCount: connection.tools.count)
+                }
             }
+            customs = loadedCustoms
+            connections = nextConnections
+            states = nextStates
+            drafts.removeAll()
+            configurationLoadError = nil
+        } catch let error as ConfigurationLoadError {
+            configurationLoadError = error
+        } catch {
+            configurationLoadError = ConfigurationLoadError(url: MCPPaths.connectionsURL, isReadFailure: true)
+        }
+    }
+
+    private func readConfiguration<Value: Decodable>(_ type: Value.Type, at url: URL, decoder: JSONDecoder) throws -> Value? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            let error = error as NSError
+            // Only an explicit missing-file error is a normal empty first launch.
+            if error.domain == NSCocoaErrorDomain,
+               error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError {
+                return nil
+            }
+            throw ConfigurationLoadError(url: url, isReadFailure: true)
+        }
+        do {
+            return try decoder.decode(type, from: data)
+        } catch {
+            throw ConfigurationLoadError(url: url, isReadFailure: false)
         }
     }
 
     private func save() {
+        guard isConfigurationLoaded else { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -263,6 +343,7 @@ final class MCPStore {
     }
 
     private func saveCustoms() {
+        guard isConfigurationLoaded else { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(customs) else { return }
@@ -271,6 +352,7 @@ final class MCPStore {
 
     /// Rewrites every provider's config from `enabledServers` and runs the one-time external-CLI cleanup.
     private func exportAll() {
+        guard isConfigurationLoaded else { return }
         let servers = enabledServers
         // The proxy's routes follow the enabled list: one per signed-in server.
         MCPProxy.shared.replaceAll(servers.compactMap { server in
@@ -294,7 +376,8 @@ final class MCPStore {
         return values
     }
 
-    private func probeOnce(_ entry: MCPCatalogEntry, resolved: MCPResolvedServer) async throws -> MCPProbeResult {
+    private func probeOnce(_ entry: MCPCatalogEntry, resolved: MCPResolvedServer, generation: UUID, probeID: UUID) async throws -> MCPProbeResult {
+        try requireCurrentProbe(entry.id, generation: generation, probeID: probeID)
         // A server that signs in: the browser flow first (Tivano's own, with its
         // branded page), then its route on the proxy, and only then the probe, which
         // goes through that route like every provider will.
@@ -302,30 +385,44 @@ final class MCPStore {
             if !MCPOAuth.isSignedIn(serverID: entry.id) {
                 try await MCPOAuth.signIn(serverID: entry.id, serverName: entry.name, url: remote)
             }
+            try requireCurrentProbe(entry.id, generation: generation, probeID: probeID)
             MCPProxy.shared.register(serverID: entry.id, upstream: remote, headers: [:], usesOAuth: true)
         }
+        try requireCurrentProbe(entry.id, generation: generation, probeID: probeID)
         return try await MCPProbe.probe(resolved)
     }
 
+    private func requireCurrentProbe(_ id: String, generation: UUID, probeID: UUID) throws {
+        try Task.checkCancellation()
+        guard isConfigurationLoaded, probeGeneration == generation, probeIDs[id] == probeID else {
+            throw CancellationError()
+        }
+    }
+
     private func startProbe(_ entry: MCPCatalogEntry) {
+        guard isConfigurationLoaded else { return }
+        let generation = probeGeneration
+        let probeID = UUID()
+        probeIDs[entry.id] = probeID
         probes[entry.id] = Task {
             do {
+                try requireCurrentProbe(entry.id, generation: generation, probeID: probeID)
                 let resolved = entry.resolve(values: storedValues(for: entry))
                 let result: MCPProbeResult
                 do {
-                    result = try await probeOnce(entry, resolved: resolved)
+                    result = try await probeOnce(entry, resolved: resolved, generation: generation, probeID: probeID)
                 } catch MCPProbeError.unauthorizedOAuth where resolved.oauthUpstream != nil {
-                    try Task.checkCancellation()
+                    try requireCurrentProbe(entry.id, generation: generation, probeID: probeID)
                     MCPOAuth.signOut(serverID: entry.id)
                     MCPProxy.shared.unregister(serverID: entry.id)
-                    result = try await probeOnce(entry, resolved: resolved)
+                    result = try await probeOnce(entry, resolved: resolved, generation: generation, probeID: probeID)
                 } catch MCPProbeError.http(let status, _) where resolved.oauthUpstream != nil && (status == 401 || status == 403) {
-                    try Task.checkCancellation()
+                    try requireCurrentProbe(entry.id, generation: generation, probeID: probeID)
                     MCPOAuth.signOut(serverID: entry.id)
                     MCPProxy.shared.unregister(serverID: entry.id)
-                    result = try await probeOnce(entry, resolved: resolved)
+                    result = try await probeOnce(entry, resolved: resolved, generation: generation, probeID: probeID)
                 }
-                try Task.checkCancellation()
+                try requireCurrentProbe(entry.id, generation: generation, probeID: probeID)
                 if var connection = connections[entry.id] {
                     connection.connectedAt = .now
                     connection.serverVersion = result.serverVersion
@@ -337,12 +434,14 @@ final class MCPStore {
                 exportAll()
             } catch is CancellationError {
             } catch MCPProbeError.needsSetup(let guide) {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, isConfigurationLoaded,
+                      probeGeneration == generation, probeIDs[entry.id] == probeID else { return }
                 // The token is good; the server needs a step on its side. Keep the sign-in so
                 // Check again re-probes without another browser round trip.
                 states[entry.id] = .needsSetup(guide)
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, isConfigurationLoaded,
+                      probeGeneration == generation, probeIDs[entry.id] == probeID else { return }
                 states[entry.id] = .failed(message: error.localizedDescription)
             }
         }

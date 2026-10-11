@@ -87,7 +87,13 @@ enum MCPWire {
             var data = Data()
             for try await byte in bytes { data.append(byte) }
             guard !data.isEmpty else { return MCPHTTPReply(sessionID: session, body: nil) }
-            return MCPHTTPReply(sessionID: session, body: JSONValue.parse(data))
+            let body = JSONValue.parse(data)
+            if let id {
+                guard let body, isReply(body, to: id) else {
+                    throw MCPHTTPError(status: nil, body: "")
+                }
+            }
+            return MCPHTTPReply(sessionID: session, body: body)
         }
         guard let id else { return MCPHTTPReply(sessionID: session, body: nil) }
         for try await line in bytes.lines {
@@ -95,11 +101,17 @@ enum MCPWire {
             guard trimmed.hasPrefix("data:") else { continue }
             let text = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
             guard let value = JSONValue.parse(String(text)),
-                  value.object != nil, value["id"]?.int == id
+                  isReply(value, to: id)
             else { continue }
             return MCPHTTPReply(sessionID: session, body: value)
         }
         return MCPHTTPReply(sessionID: session, body: nil)
+    }
+
+    nonisolated private static func isReply(_ value: JSONValue, to id: Int) -> Bool {
+        guard let object = value.object, object["jsonrpc"]?.string == "2.0",
+              object["method"] == nil, object["id"] == .int(id) else { return false }
+        return (object["result"] != nil) != (object["error"] != nil)
     }
 }
 
@@ -125,6 +137,7 @@ final class MCPStdioConnection: Sendable {
     private struct State {
         var nextID = 1
         var pending: [RPCID: CheckedContinuation<JSONValue, Error>] = [:]
+        var outstanding: Set<RPCID> = []
         var buffered: [RPCID: JSONValue] = [:]
         var exitStatus: Int32?
         var closed = false
@@ -150,20 +163,32 @@ final class MCPStdioConnection: Sendable {
     }
 
     func stop() {
+        close(status: nil)
         process.terminate()
     }
 
     var errorTail: String { process.errorTail }
 
     func notify(_ method: String) {
-        process.send(MCPWire.notification(method: method))
+        state.withLock { state in
+            guard !state.closed else { return }
+            process.send(MCPWire.notification(method: method))
+        }
     }
 
     func request(_ method: String, _ params: JSONValue?, timeout: TimeInterval) async throws -> JSONValue {
+        try Task.checkCancellation()
+        try state.withLock { state in
+            if state.closed { throw MCPWireError.exited(state.exitStatus) }
+        }
         guard process.isRunning else { throw MCPWireError.exited(await process.waitForExit()) }
-        let id = state.withLock { state -> Int in
+        let id = try state.withLock { state -> Int in
+            guard !state.closed else { throw MCPWireError.exited(state.exitStatus) }
             let id = state.nextID
             state.nextID += 1
+            state.outstanding.insert(.int(id))
+            // Register before enqueueing the write: a reply can beat awaitReply.
+            process.send(MCPWire.request(id: id, method: method, params: params))
             return id
         }
         let key = RPCID.int(id)
@@ -173,7 +198,6 @@ final class MCPStdioConnection: Sendable {
                 try await Task.sleep(for: .seconds(timeout))
                 throw MCPWireError.timedOut
             }
-            self.process.send(MCPWire.request(id: id, method: method, params: params))
             do {
                 guard let value = try await group.next() else { throw MCPWireError.timedOut }
                 group.cancelAll()
@@ -200,8 +224,12 @@ final class MCPStdioConnection: Sendable {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
                 let immediate = self.state.withLock { state -> Result<JSONValue, Error>? in
-                    if let value = state.buffered.removeValue(forKey: id) { return .success(value) }
                     if state.closed { return .failure(MCPWireError.exited(state.exitStatus)) }
+                    guard !Task.isCancelled, state.outstanding.contains(id) else { return .failure(CancellationError()) }
+                    if let value = state.buffered.removeValue(forKey: id) {
+                        state.outstanding.remove(id)
+                        return .success(value)
+                    }
                     state.pending[id] = continuation
                     return nil
                 }
@@ -217,10 +245,46 @@ final class MCPStdioConnection: Sendable {
     }
 
     private func handle(_ message: JSONValue) {
-        guard let object = message.object,
-              let rawID = object["id"], let id = RPCID(rawID) else { return }
+        guard let object = message.object, object["jsonrpc"]?.string == "2.0" else { return }
+        if let methodValue = object["method"] {
+            guard let method = methodValue.string,
+                  let rawID = object["id"] else { return }
+            switch rawID {
+            case .int, .string: break
+            case .double(let number):
+                guard number.isFinite else { return }
+            default: return
+            }
+            // Server request ids are independent of our outstanding request ids.
+            let reply: JSONValue = .object([
+                "jsonrpc": .string("2.0"), "id": rawID,
+                method == "ping" ? "result" : "error": method == "ping" ? .object([:]) : .object([
+                    "code": .int(-32601), "message": .string("Method not found"),
+                ]),
+            ])
+            state.withLock { state in
+                guard !state.closed else { return }
+                process.send(reply)
+            }
+            return
+        }
+        guard (object["result"] != nil) != (object["error"] != nil),
+              let rawID = object["id"] else { return }
+        let id: RPCID
+        switch rawID {
+        case .int(let number): id = .int(number)
+        case .string(let string): id = .string(string)
+        case .double(let number):
+            guard let number = Int(exactly: number) else { return }
+            id = .int(number)
+        default: return
+        }
         let continuation = state.withLock { state -> CheckedContinuation<JSONValue, Error>? in
-            if let continuation = state.pending.removeValue(forKey: id) { return continuation }
+            guard !state.closed, state.outstanding.contains(id), state.buffered[id] == nil else { return nil }
+            if let continuation = state.pending.removeValue(forKey: id) {
+                state.outstanding.remove(id)
+                return continuation
+            }
             state.buffered[id] = message
             return nil
         }
@@ -228,7 +292,11 @@ final class MCPStdioConnection: Sendable {
     }
 
     private func abandon(_ id: RPCID) {
-        let continuation = state.withLock { $0.pending.removeValue(forKey: id) }
+        let continuation = state.withLock { state in
+            state.outstanding.remove(id)
+            state.buffered.removeValue(forKey: id)
+            return state.pending.removeValue(forKey: id)
+        }
         continuation?.resume(throwing: CancellationError())
     }
 
@@ -239,6 +307,8 @@ final class MCPStdioConnection: Sendable {
             state.exitStatus = status
             let pending = Array(state.pending.values)
             state.pending.removeAll()
+            state.outstanding.removeAll()
+            state.buffered.removeAll()
             return pending
         }
         for continuation in pending { continuation.resume(throwing: MCPWireError.exited(status)) }

@@ -629,9 +629,16 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
     private var runtime: ThreadRuntime?
     private var desiredVisible = false
     private var monitors: [Any] = []
-    /// Bumps on every show and close, so a stale didClose can never clobber a fresh open.
+    /// Only an actual show owns a new generation; close notifications retain its identity.
     private var session = 0
-    private var pendingSession = 0
+    private var shownSession: Int?
+    private struct ClosingPresentation {
+        let session: Int
+        let runtime: ThreadRuntime?
+        let preservesVisibility: Bool
+    }
+    private var closingPresentations: [ClosingPresentation] = []
+    private var reopeningSession: Int?
 
     override init() {
         super.init()
@@ -675,8 +682,6 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
     func close() {
         stopMonitors()
         desiredVisible = false
-        session += 1
-        pendingSession = session
         if popover.isShown { popover.performClose(nil) }
     }
 
@@ -706,10 +711,11 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
         if popover.isShown {
             if shownOn === resolvedAnchor()?.view { return }
             stopMonitors()
-            session += 1
-            pendingSession = session
+            reopeningSession = shownSession
             popover.close()
+            reopeningSession = nil
         }
+        desiredVisible = true
         show()
     }
 
@@ -727,36 +733,45 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
     }
 
     private func show() {
-        guard let runtime, let target = resolvedAnchor() else { return }
+        guard !popover.isShown, let runtime, let target = resolvedAnchor() else { return }
         session += 1
-        guard !popover.isShown else { return }
+        stopMonitors()
         popover.setFixedContent(DiffInspector(runtime: runtime), size: NSSize(width: Self.width, height: Self.height))
-        startMonitors()
+        shownSession = session
         shownOn = target.view
         shownRuntime = runtime
+        startMonitors()
         popover.show(relativeTo: target.view.bounds, of: target.view, preferredEdge: target.edge)
     }
 
     // MARK: - Dismissal
 
-    nonisolated func popoverDidClose(_ notification: Notification) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.stopMonitors()
-            self.desiredVisible = false
-            // Only the close that posted this may clear the flag and drop the content:
-            // a Review tap that already reopened (newer session) must survive. Dropping
-            // the content releases the inspector's view tree, which otherwise stays
-            // alive, observing the runtime, until the next open replaces it.
-            if self.session == self.pendingSession {
-                if let shown = self.shownRuntime, shown.isDiffVisible { shown.isDiffVisible = false }
-                // The content goes with the close: a hosting view left in the popover kept
-                // its inspector alive, observing the runtime and re-rendering on every
-                // change while nothing was on screen.
-                self.popover.contentViewController = nil
-            }
-            self.shownRuntime = nil
+    // AppKit declares these delegate callbacks NS_SWIFT_UI_ACTOR. Capture the
+    // closing generation synchronously, before a Review tap can show another one.
+    func popoverWillClose(_ notification: Notification) {
+        guard let shownSession else { return }
+        closingPresentations.append(ClosingPresentation(
+            session: shownSession,
+            runtime: shownRuntime,
+            preservesVisibility: reopeningSession == shownSession
+        ))
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        guard !closingPresentations.isEmpty else { return }
+        let closing = closingPresentations.removeFirst()
+        // A newer presentation of the same runtime owns its visible flag now.
+        if !closing.preservesVisibility,
+           shownSession == closing.session || shownRuntime !== closing.runtime {
+            if let runtime = closing.runtime, runtime.isDiffVisible { runtime.isDiffVisible = false }
         }
+        guard shownSession == closing.session else { return }
+        stopMonitors()
+        if !closing.preservesVisibility { desiredVisible = false }
+        popover.contentViewController = nil
+        shownRuntime = nil
+        shownOn = nil
+        shownSession = nil
     }
 
     /// Clicks inside the panel pass through; any other click dismisses first
