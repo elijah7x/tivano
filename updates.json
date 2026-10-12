@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.2.2",
-      "name": "Tivano 1.2.2",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.2.2/Tivano-1.2.2.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## New features\n\n- Add the OMP provider with model and effort selection, App permission approvals and Auto fallback, App-run Hydra with independent heads, session fork and resume, todo updates, conversation titles and usage limits.\n\n## Bug fixes\n\n- Show declined OMP permissions as declined, preserve MCP error states, and reject invalid model or effort selections before starting or sending a turn.\n- Clear unread result dots immediately when opening or reselecting a conversation, including Hydra panels. Retry visibility checks after initial layout, preserve unread results while the window is hidden or minimized, and keep older acknowledgments from clearing newer results.\n\n## Refinements\n\n- Use OMP's official full-color vector logo and restore Kimi's original icon colors, keeping light and dark mode assets.\n- Simplify the About page by removing the repeated introduction and license summary above Credits.\n- Add hidden preview switches for comparing upstream styles: Settings filling the main window (`settingsPresentation` = `fullWindow`), a behind-window blur backdrop (`windowBackdropStyle` = `blur`) and unified floating glass on the composer, its tabs and approval cards (`floatingGlassStyle` = `upstream`). Defaults keep the current look.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-12T10:37:07Z",
+      "tag_name": "v1.2.6",
+      "name": "Tivano 1.2.6",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.2.6/Tivano-1.2.6.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Confirm project removal, include linked chats across projects, and preserve unfinished or modified worktrees.\n- Reject invalid usage-limit reset times without crashing, while retaining valid multi-day waits.\n- Keep stopped turns' end checkpoints and bound command-diff waits; track observed child processes after their parent exits.\n- Cancel obsolete MCP requests, validate tool results, and limit response and search-line sizes.\n- Preserve timeline windows and expanded rows during layout changes, and reopen Review after its close animation.\n- Approve OMP device calls once, apply the configured Default model, and block hidden chat actions while full-window Settings is open.\n\n## Refinements\n\n- Keep CLI installation environments separate from account credentials and require manual updates after version errors.\n- Remove private infrastructure and account details from public documentation and acceptance fixtures, and include OMP icon attribution.\n- Resume matching release publications safely and provide a tracked, explicitly installed push guard.\n- Settings now opens in the main window, with its pages in the sidebar and the chat kept as it was behind it. The composer, its tabs and approval cards share one floating glass with a theme wash and a thin rim.\n- Add a Clearer glass switch to Appearance, on by default. Turning it off swaps the window's Liquid Glass for a lighter system blur that uses less GPU. Performance Mode turns it off, and it is unavailable while a wallpaper is set.\n- Preview an activity tree for a turn's steps behind a hidden `workGroupStyle` switch (`tree`; `list` stays the default): a count summary, a thin branch per step that draws in as it arrives, and older steps paged past 60.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-12T14:06:44Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.2.2.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.2.2/Tivano-1.2.2.dmg",
-          "size": 6680764,
-          "sha256": "4a8a816ee53977acc0acd4eba34c22edaf01f4d506488e0c977cba0933a47673"
+          "name": "Tivano-1.2.6.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.2.6/Tivano-1.2.6.dmg",
+          "size": 6717648,
+          "sha256": "406e005891cc6b7030d0f76b73db06d014efe6375a878677bf55839f117177bb"
         }
       ]
     }
