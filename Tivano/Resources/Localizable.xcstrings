@@ -3023,6 +3023,17 @@
         }
       }
     },
+    "Add a preset to your model picker." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加搭配方案，即可在模型选择器中使用。"
+          }
+        }
+      }
+    },
     "Add environment variable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4299,6 +4310,17 @@
         }
       }
     },
+    "Choose a lead model and a model for the heads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择主导模型和执行模型。"
+          }
+        }
+      }
+    },
     "Choose a mark for each project" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4910,7 +4932,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "食谱"
+            "value" : "搭配方案"
           }
         }
       }
@@ -7676,6 +7698,17 @@
         }
       }
     },
+    "Lead: %@ - %@ | Head: %@ - %@ - %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主导：%@ - %@ ｜ 执行：%@ - %@ - %@"
+          }
+        }
+      }
+    },
     "Less" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8903,7 +8936,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "打开食谱"
+            "value" : "打开搭配方案"
           }
         }
       }
@@ -9205,6 +9238,17 @@
         }
       }
     },
+    "Pair presets" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搭配方案"
+          }
+        }
+      }
+    },
     "Pairs" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9212,17 +9256,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "组合"
-          }
-        }
-      }
-    },
-    "Pairs built from the models in your library: which one leads, at what effort, and which ones build. Add one and it is in the model picker." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "由你模型库中的模型搭配而成的组合：谁来主导、使用何种推理强度、哪些负责执行。添加后即可在模型选择器中使用。"
           }
         }
       }
@@ -13051,6 +13084,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在你从下方添加模型之前，选择器会显示所有服务商的全部模型。"
+          }
+        }
+      }
+    },
+    "Up to %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最多 %lld 个"
           }
         }
       }

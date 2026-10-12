@@ -244,8 +244,22 @@ print(m.group(1).strip())' "$VERSION")
       --body "Makes main equal local dev ($DEV_TREE) for $TAG."$'\n\n'"$NOTES")
   fi
   echo "$PR"
+  # The squash commit is main's only record of who wrote the release, so carry every
+  # outside author and co-author on dev since the previous release as a trailer.
+  PREV_PREP=""
+  [ -z "$LAST" ] || PREV_PREP=$(git log -1 --format=%H --grep="^Prepare Tivano ${LAST#v}\$" "$DEV_COMMIT")
+  COAUTHORS=""
+  if [ -n "$PREV_PREP" ]; then
+    COAUTHORS=$(git log --no-merges --format='%an <%ae>%n%(trailers:key=Co-authored-by,valueonly)' \
+      "$PREV_PREP..$DEV_COMMIT" | awk -v me="<$(git log -1 --format=%ae "$DEV_COMMIT")>" '
+        { gsub(/^[ \t]+|[ \t]+$/, ""); l = tolower($0) }
+        l == "" || index(l, tolower(me)) || l ~ /@(anthropic\.com|localhost)>$/ || seen[l]++ { next }
+        { print "Co-authored-by: " $0 }')
+  else
+    echo "No Prepare commit for $LAST on dev; the release commit carries no co-authors." >&2
+  fi
   gh pr merge "$PR" -R "$PROJECT" --squash --match-head-commit "$COMMIT" \
-    --subject "Release Tivano $VERSION (#${PR##*/})" --body ""
+    --subject "Release Tivano $VERSION (#${PR##*/})" --body "$COAUTHORS"
   git fetch origin --prune --quiet
   [ "$(git rev-parse 'origin/main^{tree}')" = "$DEV_TREE" ] || fail "Merged main does not match dev's tree."
 fi

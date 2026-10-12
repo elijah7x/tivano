@@ -13,6 +13,29 @@
   `git worktree remove --force <worktrees-dir>/agent-<slug>` + `git worktree prune`.
 - Never delete the main checkout, never touch another agent's worktree.
 
+## Build host (Thor)
+
+- Thor (Mac mini, ssh host `thor`) does heavy builds and runs dispatched tasks.
+  Its checkout is `/Volumes/ExHeart/forked/tivano/tivano.dev`, cloned from GitHub.
+  Artemis (ssh host `artemis`, the owner's laptop) is the only machine that reviews,
+  merges, packages or releases; `dev` lives only there.
+- Thor fetches, never pushes: it has remotes `origin` (GitHub) and `artemis`
+  (`artemis:/Users/elijah-air/Universe/Oort/forked/tivano/tivano.dev`). Before every
+  task run `git fetch origin --prune && git fetch artemis`, then branch from the base
+  the task names (default `artemis/dev`; `origin/main` only when told). If the base
+  is behind `origin/main`'s tree, say so in the report instead of guessing.
+- One task, one worktree under `/Volumes/ExHeart/forked/tivano/worktrees/<slug>`
+  on branch `thor/<slug>`. Commit the result there (one commit, plain message);
+  Artemis picks it up with `git fetch thor` and squashes it into `dev` itself.
+- A rework request ("打回") continues on the same `thor/<slug>` branch with a new
+  commit; never rebase or force-reset a branch Artemis has already fetched.
+- Thor may build, run and debug its own Dev build; it never runs
+  `scripts/package_local.sh`, `scripts/ship.sh`, pushes, or touches GitHub beyond fetch.
+- Each task ends with a short report: base commit, branch, what changed, build result
+  with the first errors verbatim, and anything left unverified.
+- Decisions that should outlive a task go into this file or `docs/` on Artemis, never
+  only into one machine's agent memory.
+
 ## Layout (four layers, one way)
 
 - `Tivano/Core` (models, pure support) reaches into nothing else in the app.
@@ -71,6 +94,14 @@
   authorizes a specific history migration. Squash applies to ordinary task
   integrations. The public-history migration was explicitly authorized on
   2026-10-08; that authorization does not apply to future rewrites.
+- Outside pull requests never merge on GitHub: main must stay dev's exact tree.
+  Fetch one with `git fetch origin pull/<N>/head:pr-<N>`, test it in a worktree
+  based on `dev`, and if accepted squash it into dev like any task integration.
+  Keep the contributor's identity from their PR commits
+  (`git log pr-<N> --format='%an <%ae>'`): they are the author
+  (`git commit --author=...`) when the change is mostly theirs, otherwise a
+  `Co-authored-by:` trailer. Then close the PR with a note that it ships in the
+  next release. `scripts/ship.sh` carries these authors onto main's release commit.
 
 ## Releasing (credit every contributor)
 

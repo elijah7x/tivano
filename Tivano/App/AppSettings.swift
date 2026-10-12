@@ -760,7 +760,8 @@ final class AppSettings {
         }
     }
 
-    /// The lead-and-heads pairings, in the order they were added.
+    /// The lead-and-heads pairings, in the order Settings and the model picker show them.
+    /// Reordering writes this array; nothing else stores the order.
     private(set) var hydraPairs: [HydraPair] {
         didSet { store(hydraPairs, forKey: Key.hydraPairs) }
     }
@@ -885,6 +886,23 @@ final class AppSettings {
 
     func removeHydraPair(_ id: UUID) {
         hydraPairs.removeAll { $0.id == id }
+    }
+
+    /// Moves a pair to sit right before or after another; returns whether the list changed.
+    /// A missing id, or a pair moved onto itself, leaves the list and every pair as they are.
+    @discardableResult
+    func moveHydraPair(_ id: UUID, to neighbourID: UUID, placeAfter: Bool) -> Bool {
+        guard id != neighbourID,
+              let from = hydraPairs.firstIndex(where: { $0.id == id }),
+              let to = hydraPairs.firstIndex(where: { $0.id == neighbourID }) else { return false }
+        var dest = to + (placeAfter ? 1 : 0)
+        if from < dest { dest -= 1 }
+        guard from != dest else { return false }
+        var reordered = hydraPairs
+        let moved = reordered.remove(at: from)
+        reordered.insert(moved, at: dest)
+        hydraPairs = reordered
+        return true
     }
 
     func hydraPair(_ id: UUID?) -> HydraPair? {

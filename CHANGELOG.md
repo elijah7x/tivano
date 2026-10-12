@@ -6,6 +6,22 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.1.13] - 2026-10-12
+
+### Bug fixes
+
+- Keep conversation text still during viewport refreshes and window reactivation instead of briefly shifting it down and back.
+- Clear a finished chat's green dot as soon as you open it, instead of waiting for its history to finish loading.
+
+### Refinements
+
+- Reorder Hydra pairs by dragging them in Settings, and keep the same order in the model picker. Simplify each pair's model, effort and head limit summary, and rename the cookbook to Pair presets (搭配方案).
+- Brighten the Breeze themes' accent to the app icon's own green, the same on dark and light grounds.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.1.7] - 2026-10-11
 
 ### Bug fixes

@@ -105,6 +105,9 @@ struct ThreadTimeline: View, Equatable {
     private var blockCache: TimelineBlockCache { TimelineBlockCache.cache(for: runtime.threadID) }
 
     var body: some View {
+        #if DEBUG
+        let _ = tracking.bindTrace(runtime.threadID, viewportHeight)
+        #endif
         let entries = runtime.entries
         // Nothing here reads an entry's content: the cache keys on identities and kinds,
         // so a streaming row redraws itself and never brings this body with it.
@@ -465,11 +468,11 @@ struct ThreadTimeline: View, Equatable {
         // coming and going is when the stack can lose its place; a look a beat from now
         // costs nothing and catches it whether or not any row says so.
         if tracking.setOutline(blocks.map { ($0.id, $0.hasUserMessage) }) {
-            tracking.armBlankWatch()
+            tracking.armBlankWatch("outline")
             // A new block at the end under a reader held there: the stack is told where
             // the viewport is, since the block may have landed below rows it built for
             // the viewport before, with the older rows still on screen above the fold.
-            if tracking.isPinnedToBottom, !tracking.isArriving { tracking.armViewportRefresh() }
+            if tracking.isPinnedToBottom, !tracking.isArriving { tracking.armViewportRefresh("outline") }
         }
         // This evaluation's own state behind the rows' reveal (see `revealEnd`).
         revealBox.presentation = TimelinePresentationStore.entry(for: runtime.threadID)
@@ -558,12 +561,7 @@ struct ThreadTimeline: View, Equatable {
             let thread = model.thread(runtime.threadID)
             ThreadResultReadProbe(
                 model: model, threadID: runtime.threadID,
-                revision: thread?.unreadRevision, hasUnread: thread?.hasUnread == true,
-                canRead: !runtime.isLoadingHistory && !runtime.isRunning
-                    && !runtime.isHydraMerging && !runtime.hasWorkingHelpers
-                    && runtime.backgroundTasks.isEmpty && !runtime.isWaitingForLimit
-                    && (thread?.lastAttentionTurnID == nil
-                        || runtime.turns.contains { $0.id == thread?.lastAttentionTurnID && $0.status != .running })
+                revision: thread?.unreadRevision, hasUnread: thread?.hasUnread == true
             )
         }
 
@@ -598,7 +596,7 @@ struct ThreadTimeline: View, Equatable {
         .onChange(of: [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code]) {
             measurements.frames.removeAll()
             mountedWindow = nil
-            tracking.armViewportRefresh()
+            tracking.armViewportRefresh("typeScale")
         }
         .onChange(of: layoutWidth ?? min(860, paneWidth)) { _, width in
             measurements.invalidate(width: width)
@@ -628,17 +626,20 @@ struct ThreadTimeline: View, Equatable {
             if phase == .idle {
                 if tracking.repairSkippedWhileScrolling {
                     tracking.repairSkippedWhileScrolling = false
-                    tracking.armBlankWatch()
+                    tracking.armBlankWatch("phaseIdle")
                 }
                 if tracking.refreshSkippedWhileScrolling {
                     tracking.refreshSkippedWhileScrolling = false
-                    tracking.armViewportRefresh()
+                    tracking.armViewportRefresh("phaseIdle")
                 }
             }
         }
         .onScrollGeometryChange(for: ScrollMetrics.self, of: ScrollMetrics.init(geometry:)) { old, new in
             scrollChrome.update(travel: new.travel)
             tracking.noteGeometry(offset: new.offset, distanceFromBottom: new.distanceFromBottom, travel: new.travel)
+            #if DEBUG
+            tracking.traceGeometry(new.containerHeight)
+            #endif
             // After every branch below has had its say on the pin.
             defer { updateJumpButton() }
             // The timeline's own nudge (`refreshViewport`) moves the offset a point and back:
@@ -683,11 +684,11 @@ struct ThreadTimeline: View, Equatable {
                     ? abs((new.offset - old.offset) - (new.contentHeight - old.contentHeight))
                     : abs(new.offset - old.offset)
                 if tracking.noteDrift(shrink + drift, tolerance: Self.jumpTolerance(viewportHeight)) {
-                    tracking.armViewportRefresh()
+                    tracking.armViewportRefresh("drift")
                 }
                 if shrink > 1 {
                     // Whatever the rows report, the layout gets checked a beat from now.
-                    tracking.armBlankWatch()
+                    tracking.armBlankWatch("shrink")
                 }
             } else if scrolled {
                 // The reader's own scrolling tells the stack where the viewport is.
@@ -759,7 +760,7 @@ struct ThreadTimeline: View, Equatable {
             loadEarlier(in: blocks, to: TimelineWindow.initial)
             // A thread that opened on nothing (its first rows never laid out where the
             // bottom anchor put the viewport) is caught a beat from now.
-            tracking.armBlankWatch()
+            tracking.armBlankWatch("open")
             await warmMarkdown()
             // The window opened whole, so every block could measure. Once the thread has
             // settled the stack narrows to the blocks around the viewport, rather than on
@@ -772,6 +773,7 @@ struct ThreadTimeline: View, Equatable {
             // A coast whose end phase was never delivered is cleared by the phase watch,
             // which asks for this check: the app hears that scroll end here (a no-op when
             // nothing changed).
+            tracking.trace("check.run", "onChange")
             tracking.reportActivity(timeline: runtime.threadID)
             repairLayout()
         }
@@ -781,7 +783,11 @@ struct ThreadTimeline: View, Equatable {
             // now. Another window coming on screen, a popover or a tooltip opening over the
             // chat included, is not the reader coming back to this one.
             guard FrontMonitor.shared.concerns(tracking.probe?.window) else { return }
+            #if DEBUG
+            tracking.noteReturnToFront(FrontMonitor.shared.traceCause)
+            #else
             tracking.noteReturnToFront()
+            #endif
         }
         .onChange(of: runtime.isRunning) { _, running in
             // Sending a message always brings the reader back to the conversation's end.
@@ -792,8 +798,8 @@ struct ThreadTimeline: View, Equatable {
                 if tracking.isPinnedToBottom {
                     scheduleBottomSnap()
                 }
-                tracking.armViewportRefresh()
-                tracking.armBlankWatch()
+                tracking.armViewportRefresh("turnEnd")
+                tracking.armBlankWatch("turnEnd")
                 Task { await warmMarkdown() }
                 return
             }
@@ -820,9 +826,10 @@ struct ThreadTimeline: View, Equatable {
                     withAnimation(.easeOut(duration: 0.25)) { position.scrollTo(edge: .bottom) }
                 }
             }
-            tracking.armViewportRefresh()
+            tracking.armViewportRefresh("turnStart")
         }
         .onChange(of: tracking.refreshRequest) {
+            tracking.trace("refresh.run", "onChange")
             refreshViewport()
         }
         .onChange(of: runtime.questions.count) { old, new in
@@ -831,7 +838,7 @@ struct ThreadTimeline: View, Equatable {
             // below need: tell the stack where the viewport is now, while the rows
             // above still cover it and no blank watch would fire.
             guard old != 0, new == 0 else { return }
-            tracking.armViewportRefresh()
+            tracking.armViewportRefresh("questionBadge")
         }
         .onChange(of: scrollState.jumpRequest) {
             tracking.noteUserNavigation()
@@ -1088,6 +1095,9 @@ struct ThreadTimeline: View, Equatable {
         tracking.lastMovementAt = CACurrentMediaTime()
         guard !tracking.isReaderScrolling else { return }
         tracking.isReaderScrolling = true
+        #if DEBUG
+        tracking.noteTraceReaderScrolling(true)
+        #endif
         tracking.reportActivity(timeline: runtime.threadID)
         tracking.settleWatch?.cancel()
         let tracking = tracking
@@ -1099,16 +1109,21 @@ struct ThreadTimeline: View, Equatable {
                     try? await Task.sleep(for: .seconds(remaining))
                     continue
                 }
-                if tracking.isReaderScrolling { tracking.isReaderScrolling = false }
+                if tracking.isReaderScrolling {
+                    tracking.isReaderScrolling = false
+                    #if DEBUG
+                    tracking.noteTraceReaderScrolling(false)
+                    #endif
+                }
                 tracking.settleWatch = nil
                 tracking.reportActivity(timeline: timeline)
                 if tracking.repairSkippedWhileScrolling {
                     tracking.repairSkippedWhileScrolling = false
-                    tracking.armBlankWatch()
+                    tracking.armBlankWatch("settleWatch")
                 }
                 if tracking.refreshSkippedWhileScrolling {
                     tracking.refreshSkippedWhileScrolling = false
-                    tracking.armViewportRefresh()
+                    tracking.armViewportRefresh("settleWatch")
                 }
                 return
             }
@@ -1132,42 +1147,58 @@ struct ThreadTimeline: View, Equatable {
     /// stays pinned there. Rows coming back on screen end the sequence wherever it is, and
     /// a fourth blank in a row is left alone.
     private func repairLayout() {
-        guard tracking.placementToken == nil else { return }
-        guard viewportHeight > 0 else { return }
+        guard tracking.placementToken == nil else {
+            tracking.trace("repair", "placement")
+            return
+        }
+        guard viewportHeight > 0 else {
+            tracking.trace("repair", "noViewport")
+            return
+        }
         guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling else {
             tracking.repairSkippedWhileScrolling = true
+            tracking.trace("repair", "scrolling")
             return
         }
         let distance = tracking.distanceFromBottom
         if distance < -1 || (tracking.isPinnedToBottom && abs(distance) > 1) {
             withTransaction(Self.unanimated) { position.scrollTo(edge: .bottom) }
             // Rows on screen: the snap was all there was to do.
-            guard tracking.showsNothing, tracking.blankRepairs < 3 else { return }
-            tracking.armViewportRefresh()
+            guard tracking.showsNothing, tracking.blankRepairs < 3 else {
+                tracking.trace("repair", "snap")
+                return
+            }
+            tracking.trace("repair", "snap.refresh")
+            tracking.armViewportRefresh("repair.snap")
         } else if tracking.showsNothing {
             switch tracking.blankRepairs {
             case 0:
                 // A spacer whose heights went stale can be all the viewport is over: the
                 // whole window is built again, and narrows on the next scrolled frame.
+                tracking.trace("repair", "blank.refresh")
                 if mountedWindow != nil { mountedWindow = nil }
                 refreshViewport()
             case 1:
+                tracking.trace("repair", "blank.rebuild")
                 stackGeneration += 1
-                tracking.armViewportRefresh()
+                tracking.armViewportRefresh("repair.rebuild")
             case 2:
+                tracking.trace("repair", "blank.pin")
                 tracking.isPinnedToBottom = true
                 anchorsBottomOnGrowth = true
                 withTransaction(Self.unanimated) { position.scrollTo(edge: .bottom) }
-                tracking.armViewportRefresh()
+                tracking.armViewportRefresh("repair.pin")
             default:
+                tracking.trace("repair", "blank.stop")
                 return
             }
         } else {
+            tracking.trace("repair", "showing")
             return
         }
         // Blank, and something was just done about it: checked again a beat from now.
         tracking.blankRepairs += 1
-        tracking.armBlankWatch()
+        tracking.armBlankWatch("repair")
     }
 
     /// A row is opening and pushing content below the fold, inside the tap's animation.
@@ -1208,36 +1239,67 @@ struct ThreadTimeline: View, Equatable {
     /// so no glide restarts per frame mid-drag; the stack is told where the viewport is.
     private func settleAfterResize() {
         guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling else {
-            tracking.armViewportRefresh()
+            tracking.armViewportRefresh("resizeScrolling")
             return
         }
         if tracking.isPinnedToBottom {
             withTransaction(Self.unanimated) { position.scrollTo(edge: .bottom) }
         } else {
-            tracking.armViewportRefresh()
+            tracking.armViewportRefresh("resizeRest")
         }
-        tracking.armBlankWatch()
+        tracking.armBlankWatch("resize")
     }
 
-    /// Tells the lazy stack where the viewport is. The stack builds rows for the viewport
-    /// the scroll view last reported to it, and an anchor moving the offset under it reports
-    /// nothing: a finished turn folding its steps into its answer, rows arriving or leaving,
-    /// history landing above. The viewport can then sit over space the stack has built
-    /// nothing for, showing nothing, and a request to scroll to where the scroll view
-    /// already is changes nothing. A real scroll does: the scroll view moves a point, the
-    /// stack builds for where it is, and it moves back once that is done. A reader at the end
-    /// is put back on the end after that, since the rows just built may have measured
-    /// differently from what the stack had guessed.
+    /// Eager rows do not need a scroll to discover the viewport. Recreate missing rows
+    /// without moving content that is already visible under the reader.
     private func refreshViewport() {
-        guard tracking.placementToken == nil else { return }
-        guard viewportHeight > 0, !tracking.isNudging else { return }
+        #if DEBUG
+        // Keep the old workaround available only in an isolated stress comparison.
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--timeline-stress"),
+           ProcessInfo.processInfo.environment["TIVANO_TIMELINE_LEGACY_NUDGE"] == "1" {
+            refreshViewportUsingLegacyNudge()
+            return
+        }
+        #endif
+        guard tracking.placementToken == nil, viewportHeight > 0 else { return }
         guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling else {
             tracking.refreshSkippedWhileScrolling = true
+            return
+        }
+        let unseenEnd = tracking.isPinnedToBottom && tracking.distanceFromBottom <= 1
+            && tracking.endUnseen && !tracking.isArriving
+        guard tracking.showsNothing || unseenEnd else {
+            tracking.trace("refresh.branch", "showing")
+            return
+        }
+        guard tracking.blankRepairs < 3 else {
+            tracking.trace("refresh.branch", "repairLimit")
+            return
+        }
+        tracking.trace("refresh.branch", "remake")
+        stackGeneration += 1
+    }
+
+    #if DEBUG
+    /// The former lazy-stack workaround moved one point and back to force placement.
+    private func refreshViewportUsingLegacyNudge() {
+        guard tracking.placementToken == nil else {
+            tracking.trace("refresh.branch", "placement")
+            return
+        }
+        guard viewportHeight > 0, !tracking.isNudging else {
+            tracking.trace("refresh.branch", viewportHeight > 0 ? "nudging" : "noViewport")
+            return
+        }
+        guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling else {
+            tracking.refreshSkippedWhileScrolling = true
+            tracking.trace("refresh.branch", "scrolling")
             return
         }
         let pinned = tracking.isPinnedToBottom && tracking.distanceFromBottom <= 1
         let generation = tracking.navigationGeneration
         if tracking.beginNudge() {
+            tracking.trace("refresh.branch", "nudge")
             tracking.restoreNudge {
                 guard generation == tracking.navigationGeneration else { return }
                 if pinned {
@@ -1248,6 +1310,10 @@ struct ThreadTimeline: View, Equatable {
             // No scroll view to move (not in a window yet): the offset itself, a point up,
             // and the end again once the stack has built for it.
             let y = tracking.offset
+            #if DEBUG
+            tracking.traceNudge("nudge.offset", "offset", beforeY: y, afterY: y - 1, originY: y)
+            #endif
+            tracking.trace("refresh.branch", "offset")
             withTransaction(Self.unanimated) { position.scrollTo(y: y - 1) }
             let generation = tracking.navigationGeneration
             DispatchQueue.main.async {
@@ -1258,9 +1324,14 @@ struct ThreadTimeline: View, Equatable {
             // Nothing to scroll (the conversation is shorter than the pane) and the last
             // block has not shown itself: no point can move, so the stack is remade, the
             // one repair that reaches it.
+            tracking.trace("refresh.branch", "remake")
             stackGeneration += 1
+        } else {
+            tracking.trace("refresh.branch", "none")
         }
     }
+
+    #endif
 
     private nonisolated static func visibleHeight(_ proxy: GeometryProxy) -> CGFloat {
         max(0, proxy.size.height - proxy.safeAreaInsets.top - proxy.safeAreaInsets.bottom)
@@ -1404,16 +1475,30 @@ final class TimelineScrollTracking: ScrollActivityReporter {
 
     func setVisible(_ id: String, _ isVisible: Bool) {
         if isVisible {
+            #if DEBUG
+            let traceUrgent = TimelineTrace.isEnabled && (showsNothing || blankRepairs > 0)
+            #endif
             guard visibleIDs.insert(id).inserted else { return }
             // Something is on screen: no blank to repair, and the next one starts fresh.
             blankWatch?.cancel()
             blankWatch = nil
             blankRepairs = 0
+            #if DEBUG
+            if TimelineTrace.isEnabled { TimelineTrace.noteVisible(self, appeared: true, urgent: traceUrgent) }
+            #endif
         } else {
+            #if DEBUG
+            let wasBlank = TimelineTrace.isEnabled && showsNothing
+            #endif
             guard visibleIDs.remove(id) != nil else { return }
             // The last row left the screen. A replacement normally lands within the
             // frame; the watch catches the case where nothing does.
-            if showsNothing { armBlankWatch() }
+            #if DEBUG
+            if TimelineTrace.isEnabled {
+                TimelineTrace.noteVisible(self, appeared: false, urgent: showsNothing != wasBlank)
+            }
+            #endif
+            if showsNothing { armBlankWatch("visibleEmpty") }
         }
         scheduleResolveActive()
     }
@@ -1491,12 +1576,20 @@ final class TimelineScrollTracking: ScrollActivityReporter {
         settleWatch = nil
         phaseWatch?.cancel()
         phaseWatch = nil
-        if isReaderScrolling { isReaderScrolling = false }
+        if isReaderScrolling {
+            isReaderScrolling = false
+            #if DEBUG
+            noteTraceReaderScrolling(false)
+            #endif
+        }
         isCoasting = false
         isUserScrolling = false
         if let reported = reportedTimeline {
             ScrollActivity.shared.setScrolling(false, timeline: reported)
         }
+        #if DEBUG
+        TimelineTrace.close(self)
+        #endif
     }
 
     /// A phase's end is not always delivered: content growing under an animated scroll
@@ -1534,6 +1627,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
                     ScrollActivity.shared.setScrolling(false, timeline: reported)
                 }
                 checkRequest += 1
+                trace("check.bump", "phaseWatch")
                 return
             }
         }
@@ -1542,23 +1636,28 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// Looks a beat from now for any row on screen; none, with rows to show, asks the
     /// timeline to repair its layout. Re-armed by every call; a row reporting itself
     /// visible disarms it.
-    func armBlankWatch() {
+    func armBlankWatch(_ source: StaticString = "") {
+        trace("blank.arm", source)
         blankWatch?.cancel()
         blankWatch = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard let self, !Task.isCancelled, showsNothing else { return }
             checkRequest += 1
+            trace("blank.fire", source)
+            trace("check.bump", "blankWatch")
         }
     }
 
     /// The reader is back in front of the timeline: whatever it did unseen, it checks
     /// itself now, with a full run of repairs available, and the stack is told where the
     /// viewport is whatever the rows report.
-    func noteReturnToFront() {
+    func noteReturnToFront(_ source: StaticString = "returnToFront") {
         blankRepairs = 0
         checkRequest += 1
-        armBlankWatch()
-        armViewportRefresh()
+        trace("front.return", source)
+        trace("check.bump", source)
+        armBlankWatch("returnToFront")
+        armViewportRefresh("returnToFront")
     }
 
     // MARK: Telling the stack where the viewport is
@@ -1579,17 +1678,24 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// Asks the timeline to tell the lazy stack where the viewport is, a beat from now:
     /// once for however many asks land in the meantime, after any nudge under way, and
     /// never more than a handful in a row.
-    func armViewportRefresh() {
+    func armViewportRefresh(_ source: StaticString = "") {
         drift = 0
-        guard !refreshPending else { return }
+        guard !refreshPending else {
+            trace("refresh.arm", source, disposition: "coalesced")
+            return
+        }
         let now = CACurrentMediaTime()
         if now - burstStartedAt > 2 {
             burstStartedAt = now
             refreshesInBurst = 0
         }
-        guard refreshesInBurst < 8 else { return }
+        guard refreshesInBurst < 8 else {
+            trace("refresh.arm", source, disposition: "capped")
+            return
+        }
         refreshesInBurst += 1
         refreshPending = true
+        trace("refresh.arm", source, disposition: "scheduled")
         Task { @MainActor [weak self] in
             // A nudge under way finishes first; its own measurements are what this one is for.
             for _ in 0..<12 {
@@ -1599,6 +1705,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
             guard let self else { return }
             refreshPending = false
             refreshRequest += 1
+            trace("refresh.bump", source)
         }
     }
 
@@ -1611,7 +1718,12 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// view's own, so it reports it to the lazy stack the way it reports the reader's
     /// scrolling. Returns false when there is no scroll view to move or nowhere to move it.
     func beginNudge() -> Bool {
-        guard nudgePhase == 0, let scrollView else { return false }
+        guard nudgePhase == 0, let scrollView else {
+            #if DEBUG
+            trace("nudge.begin", nudgePhase == 0 ? "noScrollView" : "busy")
+            #endif
+            return false
+        }
         let clip = scrollView.contentView
         let origin = clip.bounds.origin
         for step: CGFloat in [-1, 1] {
@@ -1622,14 +1734,25 @@ final class TimelineScrollTracking: ScrollActivityReporter {
             nudgePhase = 1
             clip.scroll(to: target)
             scrollView.reflectScrolledClipView(clip)
+            #if DEBUG
+            traceNudge("nudge.begin", "move", beforeY: origin.y, afterY: clip.bounds.origin.y, originY: origin.y)
+            #endif
             return true
         }
+        #if DEBUG
+        trace("nudge.begin", "unmoved")
+        #endif
         return false
     }
 
     /// The scroll view has reported its geometry since the nudge: the stack has built for it.
     func noteNudgeSeen() {
-        if nudgePhase == 1 { nudgePhase = 2 }
+        if nudgePhase == 1 {
+            nudgePhase = 2
+            #if DEBUG
+            trace("nudge.seen", "geometry")
+            #endif
+        }
     }
 
     /// Moves back to where the nudge started, once the scroll view has reported the move
@@ -1640,18 +1763,51 @@ final class TimelineScrollTracking: ScrollActivityReporter {
                 try? await Task.sleep(for: .milliseconds(17))
                 guard let self, nudgePhase == 1 else { break }
             }
-            guard let self, nudgePhase == 1 || nudgePhase == 2 else { return }
+            guard let self else { return }
+            guard nudgePhase == 1 || nudgePhase == 2 else {
+                #if DEBUG
+                trace("nudge.restore", "abandoned")
+                #endif
+                return
+            }
             nudgePhase = 3
             if let scrollView {
                 let clip = scrollView.contentView
+                #if DEBUG
+                let beforeY = clip.bounds.origin.y
+                let originY = nudgeOrigin.y
+                #endif
                 let wanted = NSRect(origin: nudgeOrigin, size: clip.bounds.size)
                 clip.scroll(to: clip.constrainBoundsRect(wanted).origin)
                 scrollView.reflectScrolledClipView(clip)
+                #if DEBUG
+                traceNudge("nudge.restore", "restore", beforeY: beforeY, afterY: clip.bounds.origin.y, originY: originY)
+                #endif
+            } else {
+                #if DEBUG
+                trace("nudge.restore", "noScrollView")
+                #endif
             }
             completion()
             try? await Task.sleep(for: .milliseconds(17))
             nudgePhase = 0
         }
+    }
+
+    /// Debug trace. Release drops the body. It only reads existing state, and never an
+    /// observed property, so a record cannot redraw the conversation.
+    @inline(__always)
+    fileprivate func trace(_ event: StaticString, _ source: StaticString, disposition: StaticString? = nil) {
+        #if DEBUG
+        guard TimelineTrace.isEnabled else { return }
+        if String(describing: event) == "refresh.arm", let disposition, String(describing: disposition) == "capped" {
+            TimelineTrace.cappedArm(self, source: source)
+            return
+        }
+        TimelineTrace.structural(self, event: event, source: source, disposition: disposition)
+        #else
+        _ = (event, source, disposition)
+        #endif
     }
 
     /// Takes the block in the middle of the on-screen run — a reply filling the viewport is
@@ -1664,6 +1820,450 @@ final class TimelineScrollTracking: ScrollActivityReporter {
         if resolved != activeBlockID { activeBlockID = resolved }
     }
 }
+
+#if DEBUG
+/// JSONL trace for the viewport repair. Off unless `TIVANO_TIMELINE_TRACE` names a file.
+/// Samples are coalesced and the file stops at `maxLines`. Writes go to a background
+/// queue; nothing here is observed, and nothing schedules work on the main run loop.
+private final class TimelineTraceOutput: @unchecked Sendable {
+    private let handle: FileHandle
+
+    init(_ handle: FileHandle) { self.handle = handle }
+
+    func write(_ data: Data) {
+        try? handle.write(contentsOf: data)
+    }
+}
+
+@MainActor
+fileprivate enum TimelineTrace {
+    fileprivate struct Snap {
+        var thread: UUID?
+        var offset: CGFloat
+        var distanceFromBottom: CGFloat
+        var travel: CGFloat
+        var viewportHeight: CGFloat?
+        var visible: Int
+        var outline: Int
+        var showsNothing: Bool
+        var blankRepairs: Int
+        var nudgePhase: Int
+        var navigationGeneration: Int
+        var userScrolling: Bool
+        var coasting: Bool
+        var readerScrolling: Bool
+        var wheel: Bool
+        var pinned: Bool
+        var endUnseen: Bool
+    }
+
+    private struct Lane {
+        var thread: UUID?
+        var viewport: CGFloat = 0
+        var readerScrolling = false
+        var geometry: Snap?
+        var geometryAt: CFTimeInterval?
+        var visible: Snap?
+        var visibleAt: CFTimeInterval?
+        var entered = 0
+        var left = 0
+        var capAt: CFTimeInterval = -.infinity
+        var capSuppressed = 0
+    }
+
+    fileprivate static var isEnabled: Bool { destination != nil && !halted }
+
+    private static let maxLines = 8000
+    private static let sampleReserve = 2000
+    private static let geometryMs = 200
+    private static let visibleMs = 200
+    private static let geometryInterval: CFTimeInterval = 0.2
+    private static let visibleInterval: CFTimeInterval = 0.2
+    private static let t0 = CACurrentMediaTime()
+    private static let posix = Locale(identifier: "en_US_POSIX")
+    private static let queue = DispatchQueue(label: "tivano.timeline.trace", qos: .utility)
+    private static let destination: URL? = {
+        let raw = ProcessInfo.processInfo.environment["TIVANO_TIMELINE_TRACE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { return nil }
+        let expanded = (raw as NSString).expandingTildeInPath
+        guard !expanded.isEmpty else { return nil }
+        return URL(fileURLWithPath: expanded, isDirectory: false)
+    }()
+
+    private static var lanes: [ObjectIdentifier: Lane] = [:]
+    private static var output: TimelineTraceOutput?
+    private static var lines = 0
+    private static var halted = false
+    /// `createFile` can re-enter the app (a file presenter). Drop that nested record
+    /// instead of opening the file again.
+    private static var opening = false
+
+    fileprivate static func bind(_ owner: TimelineScrollTracking, thread: UUID, viewport: CGFloat) {
+        guard isEnabled else { return }
+        let key = ObjectIdentifier(owner)
+        var lane = lanes[key] ?? Lane()
+        lane.thread = thread
+        if viewport > 0 { lane.viewport = viewport }
+        lanes[key] = lane
+    }
+
+    fileprivate static func setReaderScrolling(_ owner: TimelineScrollTracking, _ value: Bool) {
+        guard isEnabled else { return }
+        let key = ObjectIdentifier(owner)
+        var lane = lanes[key] ?? Lane()
+        lane.readerScrolling = value
+        lanes[key] = lane
+    }
+
+    fileprivate static func binding(_ key: ObjectIdentifier) -> (thread: UUID?, viewport: CGFloat, readerScrolling: Bool) {
+        let lane = lanes[key]
+        return (lane?.thread, lane?.viewport ?? 0, lane?.readerScrolling ?? false)
+    }
+
+    fileprivate static func noteGeometry(_ owner: TimelineScrollTracking, viewport: CGFloat) {
+        guard isEnabled else { return }
+        let snap = owner.traceSnap(viewport: viewport)
+        let key = ObjectIdentifier(owner)
+        var lane = lanes[key] ?? Lane()
+        if snap.nudgePhase != 0 {
+            let pending = lane.geometry
+            lane.geometry = nil
+            lanes[key] = lane
+            if let pending { write(pending, event: "geometry", source: "sample") }
+            write(snap, event: "geometry", source: "nudge")
+            return
+        }
+        lane.geometry = snap
+        guard lines < maxLines - sampleReserve else {
+            lanes[key] = lane
+            return
+        }
+        let now = CACurrentMediaTime()
+        if let start = lane.geometryAt, now - start >= geometryInterval {
+            lane.geometry = nil
+            lane.geometryAt = now
+            lanes[key] = lane
+            write(snap, event: "geometry", source: "sample")
+            return
+        }
+        if lane.geometryAt == nil { lane.geometryAt = now }
+        lanes[key] = lane
+    }
+
+    fileprivate static func noteVisible(_ owner: TimelineScrollTracking, appeared: Bool, urgent: Bool) {
+        guard isEnabled else { return }
+        let key = ObjectIdentifier(owner)
+        var lane = lanes[key] ?? Lane()
+        if appeared { lane.entered += 1 } else { lane.left += 1 }
+        lane.visible = owner.traceSnap(viewport: nil)
+        let now = CACurrentMediaTime()
+        let due = lane.visibleAt == nil || now - (lane.visibleAt ?? now) >= visibleInterval
+        guard urgent || (due && lines < maxLines - sampleReserve) else {
+            if lane.visibleAt == nil { lane.visibleAt = now }
+            lanes[key] = lane
+            return
+        }
+        let snap = lane.visible
+        let entered = lane.entered
+        let left = lane.left
+        let geometry = lane.geometry
+        lane.geometry = nil
+        lane.visible = nil
+        lane.entered = 0
+        lane.left = 0
+        lane.visibleAt = now
+        lanes[key] = lane
+        if let geometry { write(geometry, event: "geometry", source: "sample") }
+        if let snap {
+            let source: StaticString = urgent ? (appeared ? "appear" : "disappear") : "coalesced"
+            write(snap, event: "visible", source: source, entered: entered, left: left)
+        }
+    }
+
+    fileprivate static func cappedArm(_ owner: TimelineScrollTracking, source: StaticString) {
+        guard isEnabled else { return }
+        let key = ObjectIdentifier(owner)
+        var lane = lanes[key] ?? Lane()
+        let now = CACurrentMediaTime()
+        if now - lane.capAt < 0.5 {
+            lane.capSuppressed += 1
+            lanes[key] = lane
+            return
+        }
+        let skipped = lane.capSuppressed
+        lane.capSuppressed = 0
+        lane.capAt = now
+        lanes[key] = lane
+        structural(owner, event: "refresh.arm", source: source, disposition: "capped", suppressed: skipped)
+    }
+
+    fileprivate static func structural(
+        _ owner: TimelineScrollTracking,
+        event: StaticString,
+        source: StaticString,
+        disposition: StaticString? = nil,
+        beforeY: CGFloat? = nil,
+        afterY: CGFloat? = nil,
+        originY: CGFloat? = nil,
+        suppressed: Int? = nil
+    ) {
+        guard isEnabled else { return }
+        let key = ObjectIdentifier(owner)
+        var lane = lanes[key] ?? Lane()
+        let geometry = lane.geometry
+        let visible = lane.visible
+        let entered = lane.entered
+        let left = lane.left
+        lane.geometry = nil
+        lane.visible = nil
+        lane.entered = 0
+        lane.left = 0
+        lanes[key] = lane
+        if let geometry { write(geometry, event: "geometry", source: "sample") }
+        if let visible, entered + left > 0 {
+            write(visible, event: "visible", source: "coalesced", entered: entered, left: left)
+        }
+        write(
+            owner.traceSnap(viewport: nil),
+            event: event,
+            source: source,
+            disposition: disposition,
+            beforeY: beforeY,
+            afterY: afterY,
+            originY: originY,
+            suppressed: suppressed
+        )
+    }
+
+    fileprivate static func close(_ owner: TimelineScrollTracking) {
+        let key = ObjectIdentifier(owner)
+        guard isEnabled, let lane = lanes.removeValue(forKey: key) else {
+            lanes[key] = nil
+            return
+        }
+        if let geometry = lane.geometry {
+            write(geometry, event: "geometry", source: "sample")
+        }
+        if let visible = lane.visible, lane.entered + lane.left > 0 {
+            write(visible, event: "visible", source: "coalesced", entered: lane.entered, left: lane.left)
+        }
+    }
+
+    private static func write(
+        _ snap: Snap,
+        event: StaticString,
+        source: StaticString,
+        disposition: StaticString? = nil,
+        beforeY: CGFloat? = nil,
+        afterY: CGFloat? = nil,
+        originY: CGFloat? = nil,
+        entered: Int? = nil,
+        left: Int? = nil,
+        suppressed: Int? = nil
+    ) {
+        emit { seq in
+            var line = String()
+            line.reserveCapacity(480)
+            line.append("{\"t\":")
+            line.append(String(millis()))
+            line.append(",\"seq\":")
+            line.append(String(seq))
+            line.append(",\"event\":\"")
+            line.append(text(event))
+            line.append("\",\"source\":\"")
+            line.append(text(source))
+            line.append("\",\"thread\":")
+            if let thread = snap.thread {
+                line.append("\"")
+                line.append(thread.uuidString)
+                line.append("\"")
+            } else {
+                line.append("null")
+            }
+            line.append(",\"offset\":")
+            line.append(num(snap.offset))
+            line.append(",\"distanceFromBottom\":")
+            line.append(num(snap.distanceFromBottom))
+            line.append(",\"travel\":")
+            line.append(num(snap.travel))
+            line.append(",\"viewportHeight\":")
+            if let viewport = snap.viewportHeight {
+                line.append(num(viewport))
+            } else {
+                line.append("null")
+            }
+            line.append(",\"visible\":")
+            line.append(String(snap.visible))
+            line.append(",\"outline\":")
+            line.append(String(snap.outline))
+            line.append(",\"showsNothing\":")
+            line.append(flag(snap.showsNothing))
+            line.append(",\"blankRepairs\":")
+            line.append(String(snap.blankRepairs))
+            line.append(",\"nudgePhase\":")
+            line.append(String(snap.nudgePhase))
+            line.append(",\"navigationGeneration\":")
+            line.append(String(snap.navigationGeneration))
+            line.append(",\"userScrolling\":")
+            line.append(flag(snap.userScrolling))
+            line.append(",\"coasting\":")
+            line.append(flag(snap.coasting))
+            line.append(",\"readerScrolling\":")
+            line.append(flag(snap.readerScrolling))
+            line.append(",\"wheel\":")
+            line.append(flag(snap.wheel))
+            line.append(",\"pinned\":")
+            line.append(flag(snap.pinned))
+            line.append(",\"endUnseen\":")
+            line.append(flag(snap.endUnseen))
+            if let disposition {
+                line.append(",\"disposition\":\"")
+                line.append(text(disposition))
+                line.append("\"")
+            }
+            if let beforeY {
+                line.append(",\"beforeY\":")
+                line.append(num(beforeY))
+            }
+            if let afterY {
+                line.append(",\"afterY\":")
+                line.append(num(afterY))
+            }
+            if let originY {
+                line.append(",\"originY\":")
+                line.append(num(originY))
+            }
+            if let entered {
+                line.append(",\"entered\":")
+                line.append(String(entered))
+            }
+            if let left {
+                line.append(",\"left\":")
+                line.append(String(left))
+            }
+            if let suppressed, suppressed > 0 {
+                line.append(",\"suppressed\":")
+                line.append(String(suppressed))
+            }
+            line.append("}")
+            return line
+        }
+    }
+
+    private static func emit(_ body: (Int) -> String) {
+        guard !halted, prepare() else { return }
+        if lines >= maxLines {
+            halted = true
+            append("{\"t\":\(millis()),\"seq\":\(lines + 1),\"event\":\"trace.capped\",\"source\":\"limit\",\"maxLines\":\(maxLines)}")
+            return
+        }
+        lines += 1
+        append(body(lines))
+    }
+
+    private static func prepare() -> Bool {
+        if output != nil { return true }
+        if opening { return false }
+        guard let destination else { return false }
+        opening = true
+        defer { opening = false }
+        let path = destination.path
+        guard FileManager.default.createFile(atPath: path, contents: nil),
+              let handle = try? FileHandle(forWritingTo: destination) else {
+            halted = true
+            return false
+        }
+        output = TimelineTraceOutput(handle)
+        lines = 1
+        append("{\"t\":\(millis()),\"seq\":1,\"event\":\"trace.start\",\"source\":\"enabled\",\"maxLines\":\(maxLines),\"geometryMs\":\(geometryMs),\"visibleMs\":\(visibleMs),\"sampleReserve\":\(sampleReserve)}")
+        return true
+    }
+
+    private static func append(_ text: String) {
+        guard let output else { return }
+        let payload = Data((text + "\n").utf8)
+        queue.async { output.write(payload) }
+    }
+
+    private static func millis() -> Int { Int(((CACurrentMediaTime() - t0) * 1000).rounded()) }
+
+    private static func num(_ value: CGFloat) -> String {
+        String(format: "%.2f", locale: posix, Double(value))
+    }
+
+    private static func flag(_ value: Bool) -> String { value ? "true" : "false" }
+
+    private static func text(_ value: StaticString) -> String {
+        value.withUTF8Buffer { String(decoding: $0, as: UTF8.self) }
+    }
+}
+
+extension TimelineScrollTracking {
+    fileprivate func bindTrace(_ thread: UUID, _ viewport: CGFloat) {
+        TimelineTrace.bind(self, thread: thread, viewport: viewport)
+    }
+
+    fileprivate func noteTraceReaderScrolling(_ value: Bool) {
+        TimelineTrace.setReaderScrolling(self, value)
+    }
+
+    fileprivate func traceGeometry(_ viewport: CGFloat) {
+        guard TimelineTrace.isEnabled else { return }
+        TimelineTrace.noteGeometry(self, viewport: viewport)
+    }
+
+    fileprivate func traceNudge(
+        _ event: StaticString,
+        _ source: StaticString,
+        beforeY: CGFloat,
+        afterY: CGFloat,
+        originY: CGFloat
+    ) {
+        TimelineTrace.structural(
+            self,
+            event: event,
+            source: source,
+            beforeY: beforeY,
+            afterY: afterY,
+            originY: originY
+        )
+    }
+
+    /// Scroll flags already on this object. `readerScrolling` is the trace's own copy of
+    /// `isReaderScrolling`: reading that property from the view body would subscribe to it.
+    fileprivate func traceSnap(viewport: CGFloat?) -> TimelineTrace.Snap {
+        let bound = TimelineTrace.binding(ObjectIdentifier(self))
+        let height: CGFloat?
+        if let viewport, viewport > 0 {
+            height = viewport
+        } else if bound.viewport > 0 {
+            height = bound.viewport
+        } else {
+            height = nil
+        }
+        return TimelineTrace.Snap(
+            thread: bound.thread,
+            offset: offset,
+            distanceFromBottom: distanceFromBottom,
+            travel: travel,
+            viewportHeight: height,
+            visible: visibleIDs.count,
+            outline: outlineIDs.count,
+            showsNothing: showsNothing,
+            blankRepairs: blankRepairs,
+            nudgePhase: nudgePhase,
+            navigationGeneration: navigationGeneration,
+            userScrolling: isUserScrolling,
+            coasting: isCoasting,
+            readerScrolling: bound.readerScrolling,
+            wheel: hasRecentWheelInput,
+            pinned: isPinnedToBottom,
+            endUnseen: endUnseen
+        )
+    }
+}
+#endif
 
 /// A continued thread's provenance, compact enough for both the empty first screen and the
 /// head of a populated timeline. The source's title and nothing else.
@@ -2064,6 +2664,11 @@ final class FrontMonitor {
         guard let uncovered, let window else { return false }
         return uncovered === window
     }
+
+    #if DEBUG
+    /// Which bump just landed: the app becoming active, or this window being uncovered.
+    var traceCause: StaticString { isAppWide ? "appActive" : "windowUncovered" }
+    #endif
 
     private func bump(for window: NSWindow?) {
         uncovered = window
@@ -3276,15 +3881,17 @@ extension EnvironmentValues {
 }
 
 
-/// Confirms the rendered conversation, not a sidebar selection. AppKit visibleRect
-/// only accounts for clipping; window occlusion and hidden ancestors are checked too.
+/// Marks a result read once its conversation is on screen. A dot only exists for a finished
+/// result, so opening the thread is reading it: nothing about the runtime (history still
+/// loading, background work) holds it back. AppKit visibleRect only accounts for clipping;
+/// window occlusion and hidden ancestors are checked too, so a result that lands while the
+/// window is hidden stays unread.
 /// Source: developer.apple.com/documentation/appkit/nsview/visiblerect
 private struct ThreadResultReadProbe: NSViewRepresentable {
     let model: AppModel
     let threadID: UUID
     let revision: UUID?
     let hasUnread: Bool
-    let canRead: Bool
 
     func makeNSView(context: Context) -> ResultView { ResultView() }
 
@@ -3293,7 +3900,6 @@ private struct ThreadResultReadProbe: NSViewRepresentable {
         view.threadID = threadID
         view.revision = revision
         view.hasUnread = hasUnread
-        view.canRead = canRead
         model.threadViewVisibility[view.registrationID] = (threadID, { [weak view] in
             view?.isReadableWindow == true
         })
@@ -3312,7 +3918,6 @@ private struct ThreadResultReadProbe: NSViewRepresentable {
         var threadID: UUID?
         var revision: UUID?
         var hasUnread = false
-        var canRead = false
         private var generation = 0
         private var observers: [any NSObjectProtocol] = []
 
@@ -3361,7 +3966,7 @@ private struct ThreadResultReadProbe: NSViewRepresentable {
             let expectedThreadID = threadID
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == expectedGeneration,
-                      self.hasUnread, self.canRead, self.isReadableWindow,
+                      self.hasUnread, self.isReadableWindow,
                       let id = expectedThreadID else { return }
                 self.model?.markRead(id, revision: expectedRevision)
             }

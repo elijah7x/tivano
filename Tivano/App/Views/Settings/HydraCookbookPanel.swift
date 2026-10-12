@@ -16,10 +16,10 @@ struct HydraCookbookPanel: View {
         }
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Cookbook")
+                Text("Pair presets")
                     .font(.ui(.title3, weight: .semibold))
                     .foregroundStyle(Chrome.primaryText)
-                Text("Pairs built from the models in your library: which one leads, at what effort, and which ones build. Add one and it is in the model picker.")
+                Text("Add a preset to your model picker.")
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
