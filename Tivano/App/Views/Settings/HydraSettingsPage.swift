@@ -5,6 +5,14 @@ import SwiftUI
 struct HydraSettingsPage: View {
     @Environment(AppModel.self) private var model
 
+    /// The live grip reorder of a pair (see `RowDrag`).
+    @State private var drag = RowDrag<UUID>()
+    /// Each pair row's height including its divider: one row's slot in the card.
+    @State private var rowHeights: [UUID: CGFloat] = [:]
+
+    /// Neighbours sliding out of the grabbed row's way.
+    private static let slide = Animation.spring(response: 0.28, dampingFraction: 0.82)
+
     var body: some View {
         @Bindable var settings = model.settings
         VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
@@ -127,7 +135,7 @@ struct HydraSettingsPage: View {
                             Text("One leads, the others build")
                                 .font(.ui(.body, weight: .semibold))
                                 .foregroundStyle(Chrome.primaryText)
-                            Text("A pair says which model leads and which runs the heads. Put a deep thinker over quick hands on one provider, or lead on one provider and send the heads out on another: the strongest lead with the fastest team, every time.")
+                            Text("Choose a lead model and a model for the heads.")
                                 .font(.ui(.subheadline))
                                 .foregroundStyle(Chrome.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -143,16 +151,41 @@ struct HydraSettingsPage: View {
                             HydraAddPairButton()
                         }
                     } else {
-                        ForEach(Array(settings.hydraPairs.enumerated()), id: \.element.id) { index, pair in
-                            VStack(spacing: 0) {
-                                if index > 0 { ChromeRowDivider() }
-                                HydraPairRow(pair: pair)
+                        // A plain stack, not a lazy one: a lazy stack rebuilds a row that
+                        // changes slot and animates it in from the container's origin, and
+                        // it ignores zIndex, which the lifted row needs. The add row stays
+                        // outside, so a drag only reorders pairs that already exist.
+                        VStack(spacing: 0) {
+                            ForEach(settings.hydraPairs) { pair in
+                                let isDragged = drag.id == pair.id
+                                VStack(spacing: 0) {
+                                    ChromeRowDivider().opacity(pair.id == settings.hydraPairs.first?.id || isDragged ? 0 : 1)
+                                    HydraPairRow(
+                                        pair: pair,
+                                        isDragged: isDragged,
+                                        onDragChanged: { translation in dragChanged(pair.id, translation: translation) },
+                                        onDragEnded: { dragEnded() }
+                                    )
+                                }
+                                .modifier(HydraPairRowHeightReporter(id: pair.id, heights: $rowHeights))
+                                .offset(y: isDragged ? drag.visualOffset : 0)
+                                .zIndex(isDragged ? 1 : 0)
                             }
                         }
+                        .zIndex(drag.id == nil ? 0 : 1)
                         ChromeRowDivider()
                         ChromeRow(title: "Another pair", detail: "One per provider is enough.") {
                             HydraAddPairButton()
                         }
+                    }
+                }
+                .onChange(of: settings.hydraPairs.map(\.id)) { _, ids in
+                    let kept = Set(ids)
+                    if rowHeights.contains(where: { !kept.contains($0.key) }) {
+                        rowHeights = rowHeights.filter { kept.contains($0.key) }
+                    }
+                    if let dragged = drag.id, !kept.contains(dragged) {
+                        drag = RowDrag()
                     }
                 }
                 Text("Pairs sit at the top of the model picker: a tap puts the chat in one. Right-click a project in the sidebar to start each of its new chats on one pair.")
@@ -221,6 +254,50 @@ struct HydraSettingsPage: View {
         }
     }
 
+    // MARK: - Reorder
+
+    /// The grabbed row follows the pointer and swaps past every pair whose centre it has
+    /// crossed. The order is read fresh on every move, and a pair that has already been
+    /// removed cannot be grabbed again.
+    private func dragChanged(_ id: UUID, translation: CGFloat) {
+        guard model.settings.hydraPairs.contains(where: { $0.id == id }) else {
+            if drag.id == id { drag = RowDrag() }
+            return
+        }
+        if drag.id != id {
+            drag = RowDrag(id: id)
+        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { drag.translation = translation }
+
+        let order = model.settings.hydraPairs.map(\.id)
+        let moved = withAnimation(Self.slide) {
+            drag.settle(order: order, heights: rowHeights, fallbackHeight: 54) { neighbour, placeAfter in
+                model.settings.moveHydraPair(id, to: neighbour, placeAfter: placeAfter)
+            }
+        }
+        if moved {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
+    }
+
+    private func dragEnded() {
+        guard drag.id != nil else { return }
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { drag = RowDrag() }
+    }
+
+    private struct HydraPairRowHeightReporter: ViewModifier {
+        let id: UUID
+        @Binding var heights: [UUID: CGFloat]
+
+        func body(content: Content) -> some View {
+            content.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
+                if heights[id] != height { heights[id] = height }
+            }
+        }
+    }
+
     /// A toggle row. A reason it is blocked stands in for its detail, and the row is dimmed
     /// and inert while there is one.
     private func toggleRow(_ title: String, detail: String, isOn: Binding<Bool>, blockedBy reason: String? = nil) -> some View {
@@ -240,7 +317,7 @@ private struct HydraCookbookButton: View {
         Button {
             isOpen = true
         } label: {
-            Label("Open cookbook", systemImage: "book")
+            Label("Pair presets", systemImage: "book")
         }
         .buttonStyle(.glass)
         .controlSize(.small)
@@ -271,13 +348,34 @@ private struct HydraAddPairButton: View {
 private struct HydraPairRow: View {
     @Environment(AppModel.self) private var model
     let pair: HydraPair
+    /// Lifted and following the pointer.
+    let isDragged: Bool
+    let onDragChanged: (CGFloat) -> Void
+    let onDragEnded: () -> Void
 
+    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var isEditing = false
     @State private var isHovering = false
+    /// Whether the pointer is over the reorder grip, which brightens its icon.
+    @State private var isHoveringGrip = false
 
     var body: some View {
         let registry = model.providers
         HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal")
+                .font(.ui(size: 11, weight: .medium))
+                .foregroundStyle(Chrome.secondaryText.opacity(isHoveringGrip ? 1 : 0.7))
+                .frame(width: 24, height: 24)
+                .contentShape(.rect)
+                .onHover { hovering in isHoveringGrip = hovering }
+                .pointerStyle(isDragged ? .grabActive : .grabIdle)
+                .gesture(
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { value in onDragChanged(value.translation.height) }
+                        .onEnded { _ in onDragEnded() }
+                )
+                .help("Drag to reorder")
+                .accessibilityLabel(Text("Drag to reorder"))
             Button {
                 isEditing = true
             } label: {
@@ -319,33 +417,61 @@ private struct HydraPairRow: View {
             .help("Remove this pair")
             .accessibilityLabel(Text("Remove this pair"))
         }
-        .padding(.leading, 16)
+        .padding(.leading, 10)
         .padding(.trailing, Chrome.rowControlTrailingPadding)
         .padding(.vertical, 9)
+        // Lifted: a touch larger with a shadow over an opaque fill, so the rows
+        // sliding underneath never show through.
+        .background {
+            if isDragged {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Chrome.overlay(0.12))
+                    .shadow(color: .black.opacity(performanceMode ? 0 : 0.28), radius: performanceMode ? 0 : 10, y: performanceMode ? 0 : 4)
+            }
+        }
+        .scaleEffect(isDragged ? 1.02 : 1)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isDragged)
         .task(id: pair.headsProvider) {
             await registry.loadCatalog(pair.provider)
             await registry.loadCatalog(pair.headsProvider)
         }
     }
 
-    /// The row's second line: only what the title and the icons do not already say. The
-    /// title names the models, the icons the providers, so this reads the efforts, a head
-    /// cap when one is set, and a warning when the heads' provider is not set up. Defaults
-    /// say nothing: a pair with no effort chosen and no cap has one short line.
+    /// `Lead: model - effort | Head: model - effort - cap`. A nil model or effort stays
+    /// the inherit or default the pair actually uses, never a catalog model's current
+    /// name or a fixed effort. A chosen id with no catalog entry stays the raw id.
     private func summary(registry: ProviderRegistry) -> String {
-        var parts = [HydraPairSummary.providers(pair)]
-        if pair.customName != nil { parts.insert(HydraPairSummary.modelsTitle(pair, registry: registry), at: 0) }
-        if let efforts = HydraPairSummary.efforts(pair) { parts.append(efforts) }
-        if let cap = pair.maxHeads {
-            parts.append(cap == 1 ? Chrome.localized("One head at a time") : String(format: Chrome.localized("Up to %lld heads"), cap))
-        }
-        // Heads on a provider this Mac cannot run stay on the lead's, on the chat's own
-        // model (see `AppModel.hydraHeadsProvider`); the row says so rather than promising
-        // a team that would fail.
+        let leadModel = namedModel(pair.orchestratorModel, provider: pair.provider, registry: registry) ?? Chrome.localized("Any model")
+        let leadEffort = namedEffort(pair.orchestratorEffort) ?? Chrome.localized("Default")
+        let headModel = namedModel(pair.workerModel, provider: pair.headsProvider, registry: registry)
+            ?? (pair.sendsHeadsElsewhere
+                ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName)
+                : Chrome.localized("Same as the chat"))
+        let headEffort = namedEffort(pair.workerEffort)
+            ?? (pair.sendsHeadsElsewhere
+                ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName)
+                : Chrome.localized(model.settings.hydraTempersHeadEffort ? "Automatic" : "Same as the chat"))
+        let effectiveCap = [pair.maxHeads, model.settings.hydraMaxHeads].compactMap { $0 }.min()
+        let cap = effectiveCap.map { String(format: Chrome.localized("Up to %lld"), $0) } ?? Chrome.localized("No cap")
+        var line = String(format: Chrome.localized("Lead: %@ - %@ | Head: %@ - %@ - %@"), leadModel, leadEffort, headModel, headEffort, cap)
+        // Heads on a provider this Mac cannot run stay on the lead's (see
+        // `AppModel.hydraHeadsProvider`); the row says so rather than promising that team.
         if pair.sendsHeadsElsewhere, model.hydraHeadsProvider(of: pair) == pair.provider {
-            parts.append(String(format: Chrome.localized("%@ is not set up, heads stay on %@"), pair.headsProvider.displayName, pair.provider.displayName))
+            line += " · " + String(format: Chrome.localized("%@ is not set up, heads stay on %@"), pair.headsProvider.displayName, pair.provider.displayName)
         }
-        return parts.joined(separator: " · ")
+        return line
+    }
+
+    /// A chosen model's short name, or its id while the catalog has not listed it.
+    private func namedModel(_ id: String?, provider: ProviderKind, registry: ProviderRegistry) -> String? {
+        guard let id else { return nil }
+        return registry.model(id, for: provider)?.shortName ?? id
+    }
+
+    /// A chosen effort in the words the rest of the app uses. Nil stays nil.
+    private func namedEffort(_ effort: String?) -> String? {
+        guard let effort, !effort.isEmpty else { return nil }
+        return Chrome.localized(ModelOption.effortTitle(effort))
     }
 }
 

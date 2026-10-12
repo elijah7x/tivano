@@ -116,9 +116,10 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Muted sage for Breeze; the deeper light variant keeps text legible on white.
-    private static let breezeDarkAccent = "8BA596"
-    private static let breezeLightAccent = "5E7968"
+    /// The app icon's own green (mean of its background, sampled from the 1024 px master),
+    /// used as-is on dark and light grounds alike.
+    private static let breezeDarkAccent = "7BA58F"
+    private static let breezeLightAccent = "7BA58F"
 
     /// scheme: nil follows the system. accent/success/warning/danger: nil
     /// keeps the system hue; surface always tints the glass.
