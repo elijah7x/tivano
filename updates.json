@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.1.13",
-      "name": "Tivano 1.1.13",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.1.13/Tivano-1.1.13.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Keep conversation text still during viewport refreshes and window reactivation instead of briefly shifting it down and back.\n- Clear a finished chat's green dot as soon as you open it, instead of waiting for its history to finish loading.\n\n## Refinements\n\n- Reorder Hydra pairs by dragging them in Settings, and keep the same order in the model picker. Simplify each pair's model, effort and head limit summary, and rename the cookbook to Pair presets (搭配方案).\n- Brighten the Breeze themes' accent to the app icon's own green, the same on dark and light grounds.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-12T07:15:52Z",
+      "tag_name": "v1.2.2",
+      "name": "Tivano 1.2.2",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.2.2/Tivano-1.2.2.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## New features\n\n- Add the OMP provider with model and effort selection, App permission approvals and Auto fallback, App-run Hydra with independent heads, session fork and resume, todo updates, conversation titles and usage limits.\n\n## Bug fixes\n\n- Show declined OMP permissions as declined, preserve MCP error states, and reject invalid model or effort selections before starting or sending a turn.\n- Clear unread result dots immediately when opening or reselecting a conversation, including Hydra panels. Retry visibility checks after initial layout, preserve unread results while the window is hidden or minimized, and keep older acknowledgments from clearing newer results.\n\n## Refinements\n\n- Use OMP's official full-color vector logo and restore Kimi's original icon colors, keeping light and dark mode assets.\n- Simplify the About page by removing the repeated introduction and license summary above Credits.\n- Add hidden preview switches for comparing upstream styles: Settings filling the main window (`settingsPresentation` = `fullWindow`), a behind-window blur backdrop (`windowBackdropStyle` = `blur`) and unified floating glass on the composer, its tabs and approval cards (`floatingGlassStyle` = `upstream`). Defaults keep the current look.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-12T10:37:07Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.1.13.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.1.13/Tivano-1.1.13.dmg",
-          "size": 6608671,
-          "sha256": "0f11738d7108e1e585ff569af873262a215548dcfcfe9318f998fd40d739488c"
+          "name": "Tivano-1.2.2.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.2.2/Tivano-1.2.2.dmg",
+          "size": 6680764,
+          "sha256": "4a8a816ee53977acc0acd4eba34c22edaf01f4d506488e0c977cba0933a47673"
         }
       ]
     }
