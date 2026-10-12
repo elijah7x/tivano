@@ -79,22 +79,35 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     }
 }
 
-/// A page asked for from outside the window: the update notification and the relaunch after
-/// an install both open About. Read once by the view, then cleared.
+extension SettingsPage {
+    var startsNavGroup: Bool { self == .providers || self == .shortcuts }
+}
+
 @MainActor
 @Observable
 final class SettingsNavigation {
     static let shared = SettingsNavigation()
+    private(set) var isPresented = false
+    var page: SettingsPage = .general
     var requestedPage: SettingsPage?
+
+    func present(page: SettingsPage? = nil) {
+        withAnimation(Chrome.panelSlide) {
+            if let page { self.page = page }
+            isPresented = true
+        }
+    }
+
+    func dismiss() {
+        guard isPresented else { return }
+        withAnimation(Chrome.panelSlide) { isPresented = false }
+    }
 }
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var page: SettingsPage = .general
     @State private var search = ""
-    @State private var modelSearch = ""
-    @State private var mcpSearch = ""
-    @State private var scrollChrome = ChromeScrollModel()
     @State private var scrollTracker = SettingsScrollTracker()
 
     private var visiblePages: [SettingsPage] {
@@ -108,9 +121,8 @@ struct SettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar
-                .frame(width: 212)
-            detail
+            sidebar.frame(width: 212)
+            SettingsDetail(page: page, fullWindow: false)
                 .padding(.trailing, Chrome.sheetInset)
                 .padding(.vertical, Chrome.sheetInset)
         }
@@ -124,8 +136,6 @@ struct SettingsView: View {
             page = requested
             SettingsNavigation.shared.requestedPage = nil
         }
-        // A search that filters the selected page out of the list left the detail pane on a
-        // page no row was selected for; the first match takes over instead.
         .onChange(of: visiblePages) { _, pages in
             guard !pages.isEmpty, !pages.contains(page), let first = pages.first else { return }
             page = first
@@ -192,7 +202,109 @@ struct SettingsView: View {
         .background { WindowDragArea() }
     }
 
-    private var detail: some View {
+}
+
+struct SettingsSidebar: View {
+    @Bindable private var navigation = SettingsNavigation.shared
+    @State private var search = ""
+    @State private var scrollTracker = SettingsScrollTracker()
+
+    private var page: SettingsPage { navigation.page }
+
+    private var visiblePages: [SettingsPage] {
+        let query = search.trimmed
+        guard !query.isEmpty else { return SettingsPage.allCases }
+        return SettingsPage.allCases.filter { page in
+            Chrome.localized(page.title).localizedCaseInsensitiveContains(query)
+                || page.title.localizedCaseInsensitiveContains(query)
+                || page.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear
+                .frame(height: Chrome.trafficLightDiameter)
+                .padding(.top, Chrome.trafficLightTop)
+            SidebarRow(title: "Back", action: { WindowManager.shared.hideSettings() }) {
+                SidebarIconBadge { SidebarSymbol("arrow.left") }
+            }
+            .help("Back to your threads")
+            .padding(.horizontal, Chrome.listInset)
+            .padding(.top, 10)
+            SidebarSearchField(text: $search) {
+                if let first = visiblePages.first { navigation.page = first }
+            }
+            .padding(.horizontal, Chrome.listInset)
+            .padding(.top, 14)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(visiblePages) { item in
+                        SidebarRow(title: item.title, isSelected: page == item, action: { navigation.page = item }) {
+                            SidebarIconBadge {
+                                if item == .hydra {
+                                    // The Hydra page wears the dragon mark, the same one as the composer button.
+                                    HydraMarkImage()
+                                        .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
+                                } else {
+                                    SidebarSymbol(item.symbol, scale: item == .general ? 1.15 : 1)
+                                }
+                            }
+                            .overlay(alignment: .topTrailing) {
+                                if item == .about, UpdateChecker.shared.updateAvailable {
+                                    UpdateAvailableDot()
+                                }
+                            }
+                        }
+                        .padding(.top, item.startsNavGroup && search.trimmed.isEmpty ? Chrome.sectionHeaderSpacing : 0)
+                    }
+                    if visiblePages.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("No results")
+                                .font(.ui(.body, weight: .semibold))
+                                .foregroundStyle(Chrome.primaryText.opacity(0.92))
+                            Text("Try a setting or a provider name.")
+                                .font(.ui(.subheadline))
+                                .foregroundStyle(Chrome.secondaryText)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.top, 14)
+                    }
+                }
+                .padding(.horizontal, Chrome.listInset)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+                .allowsHitTesting(!scrollTracker.isFrozen)
+            }
+            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, _ in
+                scrollTracker.note()
+            }
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting { scrollTracker.note() } else { scrollTracker.coast() }
+            }
+            .scrollIndicators(.never)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background { WindowDragArea() }
+        .onDisappear { scrollTracker.end() }
+        .onChange(of: visiblePages) { _, pages in
+            guard !pages.isEmpty, !pages.contains(page), let first = pages.first else { return }
+            navigation.page = first
+        }
+    }
+
+}
+
+struct SettingsDetail: View {
+    @Environment(AppModel.self) private var model
+    let page: SettingsPage
+    var fullWindow = true
+    @State private var modelSearch = ""
+    @State private var mcpSearch = ""
+    @State private var scrollChrome = ChromeScrollModel()
+    @State private var scrollTracker = SettingsScrollTracker()
+
+    var body: some View {
         Group {
             if page == .archive, model.archivedThreads.isEmpty {
                 // An empty archive is one symbol in the middle of the pane: no sentence, no chrome,
@@ -207,6 +319,7 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .detailSheet()
+        .onDisappear { scrollTracker.end() }
         .onChange(of: page, initial: true) {
             scrollChrome.update(travel: 0)
             modelSearch = ""
@@ -217,12 +330,20 @@ struct SettingsView: View {
     private var pageScroll: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+                if fullWindow {
+                    Text(verbatim: Chrome.localized(page.title))
+                        .font(.ui(.title2, weight: .medium))
+                        .foregroundStyle(Chrome.primaryText)
+                        .accessibilityAddTraits(.isHeader)
+                }
                 pageContent
             }
-            .padding(.horizontal, Chrome.contentHorizontalPadding + 8)
-            // Pages without chrome controls start just below the sheet edge; the others clear their capsules.
-            .padding(.top, pageHasChromeControls ? Chrome.chromeTopPadding + Chrome.capsuleHeight + 16 : 22)
-            .padding(.bottom, 24)
+            .frame(maxWidth: fullWindow ? 680 : .infinity, alignment: .leading)
+            .padding(.horizontal, fullWindow ? Chrome.contentHorizontalPadding * 2 : Chrome.contentHorizontalPadding + 8)
+            .frame(maxWidth: .infinity)
+            // Full-window pages clear the titlebar; the old window keeps its existing inset.
+            .padding(.top, fullWindow || pageHasChromeControls ? Chrome.chromeTopPadding + Chrome.capsuleHeight + 16 : 22)
+            .padding(.bottom, fullWindow ? Chrome.contentHorizontalPadding * 2 : 24)
             .allowsHitTesting(!scrollTracker.isFrozen)
         }
         .scrollIndicators(.never)
@@ -1038,19 +1159,6 @@ private struct AboutSettingsPage: View {
             .padding(16)
             ChromeRowDivider()
             AboutUpdateCheckRow()
-            ChromeRowDivider()
-            Text("A native home for your coding agents, built in Swift with Liquid Glass. A fork of Droppy Code by Jordy Spruit (Droppy).")
-                .font(.ui(.body))
-                .padding(.leading, 16)
-                .padding(.trailing, Chrome.rowControlTrailingPadding)
-                .padding(.vertical, 11)
-            ChromeRowDivider()
-            Text("Tivano is licensed under the GNU AGPL v3.0 with attribution terms; SwiftTerm is MIT licensed.")
-                .font(.ui(.callout))
-                .foregroundStyle(Chrome.secondaryText)
-                .padding(.leading, 16)
-                .padding(.trailing, Chrome.rowControlTrailingPadding)
-                .padding(.vertical, 11)
         }
     }
 }

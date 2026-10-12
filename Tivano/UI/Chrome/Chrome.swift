@@ -164,6 +164,80 @@ extension View {
     func detailSheet() -> some View {
         modifier(DetailSheetModifier())
     }
+
+    /// The timeline's floating surfaces share a theme wash and a hairline. A tab's
+    /// tucked-under foot omits its rim so it does not cross the composer's glass.
+    func floatingGlass<S: InsettableShape>(
+        _ shape: S,
+        tint: Color? = nil,
+        rim: Color? = nil,
+        isInteractive: Bool = false,
+        hiddenRimBottom: CGFloat = 0
+    ) -> some View {
+        modifier(FloatingGlassSurface(shape: shape, tint: tint, rim: rim, isInteractive: isInteractive, hiddenRimBottom: hiddenRimBottom))
+    }
+
+    func floatingGlassContainer() -> some View {
+        modifier(FloatingGlassContainer())
+    }
+}
+
+extension Chrome {
+    static func floatingGlassWash(isDark: Bool) -> Color {
+        glassTint.opacity(isDark ? 0.15 : 0.35)
+    }
+
+    static func floatingGlassRim(isDark: Bool) -> Color {
+        isDark
+            ? Color(hue: 210 / 360, saturation: 0.18, brightness: 0.82).opacity(0.09)
+            : Color(hue: 210 / 360, saturation: 0.30, brightness: 0.38).opacity(0.10)
+    }
+}
+
+private struct FloatingGlassContainer: ViewModifier {
+    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "local"
+
+    func body(content: Content) -> some View {
+        if floatingGlassStyle == "upstream" {
+            GlassEffectContainer(spacing: 0) { content }
+        } else {
+            content
+        }
+    }
+}
+
+private struct FloatingGlassSurface<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let tint: Color?
+    let rim: Color?
+    let isInteractive: Bool
+    let hiddenRimBottom: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+
+    func body(content: Content) -> some View {
+        let isDark = colorScheme == .dark
+        let edge = shape
+            .strokeBorder(rim ?? Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1)
+            .mask(alignment: .top) { Rectangle().padding(.bottom, hiddenRimBottom) }
+        if reduceTransparency || performanceMode {
+            content
+                .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
+                .clipShape(shape)
+                .overlay { edge }
+        } else {
+            // An opaque base behind glass becomes its sample and hides the timeline.
+            content
+                .glassEffect(glass(isDark: isDark), in: shape)
+                .overlay { edge }
+        }
+    }
+
+    private func glass(isDark: Bool) -> Glass {
+        let wash = tint ?? Chrome.floatingGlassWash(isDark: isDark)
+        return isInteractive ? .regular.tint(wash).interactive() : .regular.tint(wash)
+    }
 }
 
 /// A control's surface: interactive Liquid Glass, or, inside a glass panel, the panel's
@@ -221,7 +295,9 @@ private struct DetailSheetModifier: ViewModifier {
 /// The window supplies the exterior curve and border; the backdrop follows its container.
 struct WindowBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @AppStorage("windowBackdropStyle", store: CaptureRun.defaults ?? .standard) private var windowBackdropStyle = "glass"
     /// The backdrop setting, 0 for bare glass and 1 for a solid base.
     let opacity: Double
     /// The user's wallpaper, painted edge to edge at the transparency setting's own opacity; nil for the stock glass.
@@ -250,7 +326,7 @@ struct WindowBackdrop: View {
     var body: some View {
         let isDark = colorScheme == .dark
         let isSolid = opacity >= 0.98
-        if performanceMode || (isSolid && wallpaper == nil) {
+        if performanceMode || ((isSolid || reduceTransparency) && wallpaper == nil) {
             solidBackdrop
         } else {
             Group {
@@ -274,14 +350,21 @@ struct WindowBackdrop: View {
                         }
                         .transition(.opacity)
                 } else {
-                    shape
-                        .fill(.clear)
-                        .glassEffect(in: shape)
-                        .overlay {
+                    Group {
+                        if windowBackdropStyle == "blur" {
+                            BehindWindowBlur()
+                                .clipShape(shape)
+                        } else {
                             shape
-                                .fill(isDark ? Color.black : Color.white)
-                                .opacity(Self.scrim(for: opacity, isDark: isDark))
+                                .fill(.clear)
+                                .glassEffect(in: shape)
                         }
+                    }
+                    .overlay {
+                        shape
+                            .fill(isDark ? Color.black : Color.white)
+                            .opacity(Self.scrim(for: opacity, isDark: isDark))
+                    }
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: wallpaper != nil)
@@ -291,6 +374,20 @@ struct WindowBackdrop: View {
         }
     }
 
+}
+
+/// Samples behind the window and retains its active material when the window loses focus.
+/// Exterior clipping belongs to the local container and native window frame.
+struct BehindWindowBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .behindWindow
+        view.material = .underWindowBackground
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 // No pressed feedback, while retaining Button semantics for keyboard and accessibility.

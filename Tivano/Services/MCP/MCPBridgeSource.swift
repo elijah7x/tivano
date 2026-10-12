@@ -56,21 +56,29 @@ enum MCPBridge {
     }
 
     function wrapTools(server, entries, callTool) {
-      return entries.map((entry) => ({
-        server,
-        name: String(entry.name),
-        description: describe(entry, String(entry.name)),
-        inputSchema: schemaOf(entry),
-        call: async (args) => {
+      return entries.map((entry) => {
+        const callResult = async (args) => {
           try {
             const result = await callTool(entry.name, args && typeof args === "object" ? args : {});
-            if (result && result.isError) return "Error: " + (contentText(result.content) || "tool failed");
-            return contentText(result ? result.content : []);
+            const isError = !!(result && result.isError);
+            return { text: contentText(result ? result.content : []) || (isError ? "tool failed" : ""), isError };
           } catch (error) {
-            return "Error: " + errorText(error);
+            return { text: errorText(error), isError: true };
           }
-        },
-      }));
+        };
+        return {
+          server,
+          name: String(entry.name),
+          description: describe(entry, String(entry.name)),
+          inputSchema: schemaOf(entry),
+          callResult,
+          // Existing Pi/Command Code callers keep their text-only contract.
+          call: async (args) => {
+            const result = await callResult(args);
+            return (result.isError ? "Error: " : "") + result.text;
+          },
+        };
+      });
     }
 
     function connectStdio(server, entry) {
@@ -238,9 +246,7 @@ enum MCPBridge {
     /// import it, and returns its path. Rewritten only when its text changed,
     /// so a new build's bridge replaces the old one.
     static func installBridge() throws -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: LoginEnvironment.homeDirectory).appendingPathComponent("Library/Application Support")
-        let directory = base.appendingPathComponent("\(AppInfo.name)/MCP", isDirectory: true)
+        let directory = StoragePaths.directory("MCP")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent("tivano-mcp-bridge.mjs")
         let data = Data(mcpBridgeSource.utf8)

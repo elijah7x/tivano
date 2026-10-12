@@ -14,6 +14,12 @@ final class WindowManager {
 
     private var mainWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private weak var responderBeforeSettings: NSResponder?
+
+    private var usesFullWindowSettings: Bool {
+        let defaults = CaptureRun.defaults ?? .standard
+        return defaults.string(forKey: "settingsPresentation") == "fullWindow"
+    }
 
     private enum Size {
         static let main = NSSize(width: 1320, height: 860)
@@ -30,11 +36,48 @@ final class WindowManager {
     }
 
     func showSettings(page: SettingsPage? = nil) {
-        if let page { SettingsNavigation.shared.requestedPage = page }
+        let navigation = SettingsNavigation.shared
+        if usesFullWindowSettings {
+            settingsWindow?.orderOut(nil)
+            let window = mainWindow ?? makeMainWindow()
+            mainWindow = window
+            if !navigation.isPresented {
+                // The chat stays mounted behind Settings and must not keep keyboard focus.
+                responderBeforeSettings = window.firstResponder
+                window.makeFirstResponder(nil)
+            }
+            model.isCommandPalettePresented = false
+            navigation.present(page: page)
+            present(window)
+            return
+        }
+        hideSettings()
+        if let page { navigation.requestedPage = page }
         let window = settingsWindow ?? makeSettingsWindow()
         settingsWindow = window
         centerOverMainWindow(window)
         present(window)
+    }
+
+    func hideSettings() {
+        let navigation = SettingsNavigation.shared
+        guard navigation.isPresented else { return }
+        navigation.dismiss()
+        guard let window = mainWindow else { return }
+        if let view = responderBeforeSettings as? NSView, view.window === window {
+            window.makeFirstResponder(view)
+        } else {
+            window.makeFirstResponder(nil)
+        }
+        responderBeforeSettings = nil
+    }
+
+    func toggleSettings() {
+        if usesFullWindowSettings, SettingsNavigation.shared.isPresented, mainWindow?.isKeyWindow == true {
+            hideSettings()
+        } else {
+            showSettings()
+        }
     }
 
     /// Opens a window centered over the main window, kept on the screen the main window is on.
@@ -63,6 +106,11 @@ final class WindowManager {
         let window = makeWindow(title: AppInfo.name, size: Size.main, resizable: true, windowClass: ThreadWindow.self) { RootView() }
         (window as? ThreadWindow)?.selectThread = { [weak model] offset in model?.selectThread(offset: offset) }
         (window as? ThreadWindow)?.selectThreadNumber = { [weak model] number in model?.selectThread(number: number) }
+        (window as? ThreadWindow)?.escapeSettings = { [weak self] in
+            guard SettingsNavigation.shared.isPresented else { return false }
+            self?.hideSettings()
+            return true
+        }
         window.contentMinSize = Size.mainMinimum
         if !window.setFrameUsingName(Self.mainFrameName) {
             window.center()
@@ -215,6 +263,6 @@ final class FrameHostingView: NSHostingView<AnyView> {
     /// hidden views too, and a Return meant for the shown column's card must not land on
     /// one behind it.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        !isHidden && super.performKeyEquivalent(with: event)
+        !isHiddenOrHasHiddenAncestor && super.performKeyEquivalent(with: event)
     }
 }

@@ -6,41 +6,65 @@ struct RootView: View {
 
     var body: some View {
         let sidebar = model.sidebar
+        let settingsShown = SettingsNavigation.shared.isPresented
+        let settingsSidebarWidth = max(sidebar.width, 212)
         HStack(spacing: 0) {
-            // The rows are laid out at the sidebar's width once, and the slide moves the clip
-            // alone, so no row re-wraps per frame.
-            SidebarView()
-                .frame(width: sidebar.width)
-                .frame(width: sidebar.renderedWidth, alignment: .trailing)
-                .clipped()
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { sidebar.noteLaidOutWidth($0) }
-                .overlay(alignment: .trailing) {
-                    SidebarResizeHandle(
-                        isActive: sidebar.isVisible,
-                        onBegin: { sidebar.beginDrag() },
-                        onChange: { sidebar.drag(by: $0) },
-                        onEnd: { sidebar.endDrag() }
-                    )
-                    .frame(width: SidebarResizeHandle.hitWidth)
-                    .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
+            ZStack(alignment: .leading) {
+                // Keep the chat sidebar mounted so its search and scroll survive Settings.
+                // The rows are laid out at the sidebar's width once, and the slide moves the clip
+                // alone, so no row re-wraps per frame.
+                SidebarView()
+                    .frame(width: sidebar.width)
+                    .frame(width: sidebar.renderedWidth, alignment: .trailing)
+                    .clipped()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { sidebar.noteLaidOutWidth($0) }
+                    .overlay(alignment: .trailing) {
+                        SidebarResizeHandle(
+                            isActive: sidebar.isVisible && !settingsShown,
+                            onBegin: { sidebar.beginDrag() },
+                            onChange: { sidebar.drag(by: $0) },
+                            onEnd: { sidebar.endDrag() }
+                        )
+                        .frame(width: SidebarResizeHandle.hitWidth)
+                        .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
+                    }
+                    .opacity(settingsShown ? 0 : 1)
+                    .allowsHitTesting(!settingsShown)
+                    .accessibilityHidden(settingsShown)
+                if settingsShown {
+                    SettingsSidebar()
+                        .frame(width: settingsSidebarWidth)
+                        .transition(.offset(x: -16).combined(with: .opacity))
                 }
+            }
+            .frame(width: settingsShown ? settingsSidebarWidth : nil, alignment: .leading)
 
-            DetailView()
-                .frame(minWidth: 0, maxWidth: .infinity)
-                // The sheet keeps to its own bounds. A conversation gliding sideways to make
-                // room for a panel (`ReserveSlide` carries it on an offset), a panel settling
-                // into a corner of a pane that just changed size, and rows re-wrapping in a
-                // live resize all reach past the sheet for a few frames, and drew over the
-                // sidebar or off the window's edge until they landed.
-                .clipped()
-                .padding(.leading, sidebar.isVisible ? 0 : Chrome.sheetInset)
-                .padding(.trailing, Chrome.sheetInset)
-                .padding(.vertical, Chrome.sheetInset)
+            ZStack {
+                // The chat stays built underneath, including the streaming runtime and draft.
+                DetailView()
+                    .frame(minWidth: 0, maxWidth: .infinity)
+                    // The sheet keeps to its own bounds. A conversation gliding sideways to make
+                    // room for a panel (`ReserveSlide` carries it on an offset), a panel settling
+                    // into a corner of a pane that just changed size, and rows re-wrapping in a
+                    // live resize all reach past the sheet for a few frames, and drew over the
+                    // sidebar or off the window's edge until they landed.
+                    .clipped()
+                    .opacity(settingsShown ? 0 : 1)
+                    .allowsHitTesting(!settingsShown)
+                    .accessibilityHidden(settingsShown)
+                if settingsShown {
+                    SettingsDetail(page: SettingsNavigation.shared.page)
+                        .transition(.offset(x: 24).combined(with: .opacity))
+                }
+            }
+            .padding(.leading, settingsShown || sidebar.isVisible ? 0 : Chrome.sheetInset)
+            .padding(.trailing, Chrome.sheetInset)
+            .padding(.vertical, Chrome.sheetInset)
         }
         // While the sidebar is hidden, dragging the window's leading edge pulls it back out.
         .overlay(alignment: .leading) {
             SidebarResizeHandle(
-                isActive: !sidebar.isVisible,
+                isActive: !sidebar.isVisible && !settingsShown,
                 onBegin: { sidebar.beginDrag() },
                 onChange: { sidebar.drag(by: $0) },
                 onEnd: { sidebar.endDrag() }
@@ -49,15 +73,19 @@ struct RootView: View {
             .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
         }
         .overlay(alignment: .topLeading) {
-            if !sidebar.holdsTrafficLights,
+            if !settingsShown, !sidebar.holdsTrafficLights,
                model.selectedThreadID.flatMap({ model.thread($0) }) == nil {
                 SidebarToggleButton()
                     .padding(.leading, Chrome.trafficLightsWidth + Chrome.trafficLightClearance + Chrome.chromeHorizontalPadding)
                     .padding(.top, Chrome.chromeTopPadding)
             }
         }
+        // Initial library restoration must not dismiss an About deep link after relaunch.
+        .onChange(of: model.selectedThreadID) { old, _ in
+            if old != nil { WindowManager.shared.hideSettings() }
+        }
         .background { WindowBackdrop(opacity: model.settings.backdropOpacity, wallpaper: WallpaperStore.shared.image) }
-        .background { WindowChromeConfigurator(sidebarVisible: sidebar.holdsTrafficLights, sidebarDragging: sidebar.isDragging, performanceMode: model.settings.performanceMode) }
+        .background { WindowChromeConfigurator(sidebarVisible: settingsShown || sidebar.holdsTrafficLights, sidebarDragging: sidebar.isDragging && !settingsShown, performanceMode: model.settings.performanceMode) }
         .ignoresSafeArea()
         .coordinateSpace(.named(GenieAnimator.coordinateSpace))
         .overlay { GenieLayer() }
@@ -68,7 +96,8 @@ struct RootView: View {
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
-            handleDrop(urls)
+            guard !settingsShown else { return false }
+            return handleDrop(urls)
         }
         .alert(
             Chrome.localized(model.alert?.title ?? ""),
@@ -122,7 +151,7 @@ struct DetailView: View {
     var body: some View {
         if let threadID = model.selectedThreadID, model.thread(threadID) != nil {
             let running = Set(model.threads.compactMap { model.existingRuntime(for: $0.id)?.isRunning == true ? $0.id : nil })
-            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, model: model, liveResize: liveResize)
+            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, isCovered: SettingsNavigation.shared.isPresented, model: model, liveResize: liveResize)
                 .onChange(of: threadID) { _, _ in prebuilt = [] }
                 .task(id: threadID) {
                     // The neighbours, and at launch the sidebar's top rows, one at a time, once
@@ -180,6 +209,7 @@ private struct ThreadColumns: NSViewRepresentable {
     /// Threads with a turn under way. A hidden column of one goes: its rows would stream
     /// unseen, at the same cost as on screen.
     let running: Set<UUID>
+    let isCovered: Bool
     let model: AppModel
     let liveResize: WindowLiveResize
 
@@ -189,6 +219,7 @@ private struct ThreadColumns: NSViewRepresentable {
 
     func updateNSView(_ pane: NSView, context: Context) {
         let columns = context.coordinator
+        columns.cover(pane, isCovered)
         columns.show(threadID, in: pane, model: model, liveResize: liveResize)
         columns.dropHidden(where: { running.contains($0) || model.thread($0) == nil || model.existingRuntime(for: $0) == nil })
         columns.prebuild(prebuilt.filter { model.thread($0) != nil && !running.contains($0) }, in: pane, model: model, liveResize: liveResize)
@@ -217,6 +248,23 @@ private struct ThreadColumns: NSViewRepresentable {
         /// a view tree down costs a frame's worth of time, better spent after the frame.
         private var retired: [FrameHostingView] = []
         private var retirement: Task<Void, Never>?
+        private var covering: Task<Void, Never>?
+
+        // Hide after the transition so covered chat buttons cannot answer page shortcuts.
+        func cover(_ pane: NSView, _ isCovered: Bool) {
+            guard isCovered else {
+                covering?.cancel()
+                covering = nil
+                pane.isHidden = false
+                return
+            }
+            guard !pane.isHidden, covering == nil else { return }
+            covering = Task { [weak pane] in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled else { return }
+                pane?.isHidden = true
+            }
+        }
 
         func show(_ id: UUID, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) {
             guard id != shown else { return }
@@ -414,8 +462,7 @@ private struct ProviderStatusRow: View {
 private struct OpenProvidersSettingsButton: View {
     var body: some View {
         Button("Add key") {
-            WindowManager.shared.showSettings()
-            SettingsNavigation.shared.requestedPage = .providers
+            WindowManager.shared.showSettings(page: .providers)
         }
         .buttonStyle(.glass)
         .help("Open Settings > Providers")

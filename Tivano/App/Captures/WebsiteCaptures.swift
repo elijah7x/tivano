@@ -283,6 +283,10 @@ enum WebsiteCaptures {
     // MARK: - Run
 
     static func run(model: AppModel) async {
+        if CommandLine.arguments.contains("--unread-regression") {
+            await UnreadRegression.run(model: model)
+            return
+        }
         // `--timeline-stress` is the chat-timeline jitter run. Without it, the product
         // scenes run exactly as before. Both stay on this process's `--website-captures` isolation.
         if CommandLine.arguments.contains("--timeline-stress") {

@@ -268,6 +268,7 @@ private struct HydraHeadsButton: View {
                 PopoverSectionHeader(waiting > 0 ? (waiting == 1 ? String(format: Chrome.localized("%@, 1 waiting"), header) : String(format: Chrome.localized("%@, %d waiting"), header, waiting)) : header)
                 ForEach(heads) { head in
                     HydraHeadRow(head: head, isOnStage: head.id == runtime.hydraSelectedHeadID) {
+                        model.markRead(head.id, revision: head.unreadRevision)
                         runtime.hydraSelectedHeadID = head.id
                         isPresented = false
                     }

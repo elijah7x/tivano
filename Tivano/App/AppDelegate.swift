@@ -88,9 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let identifier = userInfo["threadID"] as? String
         let isUpdate = userInfo["update"] != nil
         await MainActor.run {
-            if !isUpdate { WindowManager.shared.showMain() }
+            if !isUpdate {
+                WindowManager.shared.hideSettings()
+                WindowManager.shared.showMain()
+            }
             if let identifier, let threadID = UUID(uuidString: identifier) {
-                self.model?.selectedThreadID = threadID
+                self.model?.openThread(threadID)
             }
             NSApp.activate()
             if isUpdate { WindowManager.shared.showSettings(page: .about) }

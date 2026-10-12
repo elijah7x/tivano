@@ -16,6 +16,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case commandcode
     case pi
     case kimi
+    case omp
 
     var id: String { rawValue }
 
@@ -35,6 +36,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .copilot: "Copilot"
         case .commandcode: "Command Code"
         case .pi: "Pi"
+        case .omp: "omp"
         case .kimi: "Kimi Code"
         }
     }
@@ -55,6 +57,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .copilot: "copilot"
         case .commandcode: "cmd"
         case .pi: "pi"
+        case .omp: "omp"
         case .kimi: "kimi"
         }
     }
@@ -78,6 +81,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .copilot: "copilot login"
         case .commandcode: "cmd login"
         case .pi: "pi"
+        case .omp: "omp login"
         case .kimi: "kimi login"
         }
     }
@@ -98,6 +102,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .copilot: URL(string: "https://github.com/github/copilot-cli")!
         case .commandcode: URL(string: "https://commandcode.ai/docs/quickstart")!
         case .pi: URL(string: "https://pi.dev/docs/latest")!
+        case .omp: URL(string: "https://omp.sh")!
         case .kimi: URL(string: "https://www.kimi.com/code/docs/en/kimi-code-cli/")!
         }
     }
@@ -146,14 +151,14 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 
     /// Whether the provider can drop later turns from its own conversation.
-    var supportsRewind: Bool { self == .codex || self == .claude || self == .copilot }
+    var supportsRewind: Bool { self == .codex || self == .claude || self == .copilot || self == .omp }
 
     /// Whether the app runs the provider's `/compact` itself. The sessions that speak the
     /// provider's own command are handled locally; for every other provider the command
     /// goes to the tool, which knows what to do with it.
     var supportsCompact: Bool {
         switch self {
-        case .codex, .claude, .copilot, .deepseek, .meta, .zai, .pi: true
+        case .codex, .claude, .copilot, .deepseek, .meta, .zai, .pi, .omp: true
         default: false
         }
     }
@@ -161,6 +166,11 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Headless stream-json only carries text: the TUI pastes images, but a
     /// streaming session rejects non-text blocks, so image attachments stay off.
     var supportsImages: Bool { self != .grok && self != .antigravity }
+
+    /// Auto requires a provider reviewer; omp has none.
+    func supports(_ mode: RuntimeMode) -> Bool { !(self == .omp && mode == .auto) }
+
+    func supported(_ mode: RuntimeMode) -> RuntimeMode { supports(mode) ? mode : .autoAcceptEdits }
 }
 
 enum RuntimeMode: String, Codable, CaseIterable, Identifiable, Sendable {

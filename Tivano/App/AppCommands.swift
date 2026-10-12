@@ -10,7 +10,7 @@ struct AppCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { WindowManager.shared.showSettings() }
+            Button("Settings…") { WindowManager.shared.toggleSettings() }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .openSettings))
         }
 
@@ -38,6 +38,7 @@ struct AppCommands: Commands {
         CommandGroup(after: .sidebar) {
             Button("Toggle sidebar") { model.sidebar.toggle() }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .toggleSidebar))
+                .disabled(SettingsNavigation.shared.isPresented)
             Button("Command palette") { model.isCommandPalettePresented.toggle() }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .commandPalette))
             Button("Toggle terminal") { runtime?.isTerminalVisible.toggle() }

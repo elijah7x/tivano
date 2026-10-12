@@ -41,6 +41,7 @@ struct ComposerArea: View {
                 ComposerView(runtime: runtime, workingDirectory: workingDirectory, compactModelChip: compactModelChip, takesFocusOnAppear: takesFocusOnAppear)
                     .zIndex(1)
             }
+            .floatingGlassContainer()
             .background {
                 AttachmentAnchorCapture { diffPopover.setFallbackAnchor($0) }
             }
@@ -679,7 +680,7 @@ private struct PermissionMenu: View {
     var body: some View {
         ChromeMenuButton(symbol: thread.runtimeMode.symbol, secondary: true, help: "\(Chrome.localized(thread.runtimeMode.title)) · \(Chrome.localized(thread.runtimeMode.summary))") {
             PopoverSectionHeader("Permissions")
-            ForEach(RuntimeMode.allCases) { mode in
+            ForEach(RuntimeMode.allCases.filter { thread.provider.supports($0) }) { mode in
                 PopoverItem(mode.title, symbol: mode.symbol, isChecked: thread.runtimeMode == mode) {
                     model.updateThread(thread.id) { $0.runtimeMode = mode }
                 }
@@ -1326,11 +1327,20 @@ private struct ComposerSurface: ViewModifier {
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "local"
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
         let isDark = colorScheme == .dark
-        if isOnGlassPanel || performanceMode {
+        if floatingGlassStyle == "upstream" {
+            if isOnGlassPanel {
+                content
+                    .background(shape.fill(Chrome.panelControlFill(isDark: isDark)))
+                    .clipShape(shape)
+            } else {
+                content.floatingGlass(shape)
+            }
+        } else if isOnGlassPanel || performanceMode {
             content
                 .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
                 .clipShape(shape)

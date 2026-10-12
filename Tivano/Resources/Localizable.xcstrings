@@ -199,6 +199,534 @@
         }
       }
     },
+    "omp could not read the session state.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 无法读取会话状态。"
+          }
+        }
+      }
+    },
+    "Restart the omp session to change its permission or interaction mode.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更改权限或交互模式前，请重启 omp 会话。"
+          }
+        }
+      }
+    },
+    "omp could not change its thinking level.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 无法更改推理强度。"
+          }
+        }
+      }
+    },
+    "omp cannot rewind while busy or without a removed prompt.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 正忙或没有要移除的消息，无法回退。"
+          }
+        }
+      }
+    },
+    "omp reported an error.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 报告了错误。"
+          }
+        }
+      }
+    },
+    "omp gave up retrying.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 已停止重试。"
+          }
+        }
+      }
+    },
+    "omp exited with status %d%@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 已退出，状态码为 %d%@"
+          }
+        }
+      }
+    },
+    "omp does not support Auto permissions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 不支持 Auto 权限。"
+          }
+        }
+      }
+    },
+    "Declined: the App tool gate is missing or invalid.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：App 工具权限门控缺失或无效。"
+          }
+        }
+      }
+    },
+    "Declined: OMP subagents require Full access with Hydra off.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：OMP 子代理仅可在 Hydra 关闭且具有完全访问权限时运行。"
+          }
+        }
+      }
+    },
+    "Declined: App approval is unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：App 审批不可用。"
+          }
+        }
+      }
+    },
+    "Tivano's tool gate": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tivano 的工具权限门控"
+          }
+        }
+      }
+    },
+    "(blocked)": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "（受阻）"
+          }
+        }
+      }
+    },
+    "(blocked: %@)": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "（受阻：%@）"
+          }
+        }
+      }
+    },
+    "Yes": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "是"
+          }
+        }
+      }
+    },
+    "No": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "否"
+          }
+        }
+      }
+    },
+    "omp": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp"
+          }
+        }
+      }
+    },
+    "The model omp itself is set to": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 当前配置的模型"
+          }
+        }
+      }
+    },
+    "Permissions changed": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "权限已调整"
+          }
+        }
+      }
+    },
+    "Switched to %@: %@ does not support %@ permissions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已切换为%@：%@ 不支持%@权限。"
+          }
+        }
+      }
+    },
+    "The original omp conversation is unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原来的 omp 会话不可用。"
+          }
+        }
+      }
+    },
+    "omp listed no models.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 未列出任何模型。"
+          }
+        }
+      }
+    },
+    "omp could not list its models. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 无法列出模型。%@"
+          }
+        }
+      }
+    },
+    "omp no longer has this conversation; starting a new one.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 中已不存在此会话；将开始新会话。"
+          }
+        }
+      }
+    },
+    "omp could not start: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 无法启动：%@"
+          }
+        }
+      }
+    },
+    "omp did not load Tivano's tool gate, so it was not started. Update omp (omp update) and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 未加载 Tivano 的工具权限门控，因此没有启动。请更新 omp（omp update）后重试。"
+          }
+        }
+      }
+    },
+    "omp is still on the last turn.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 仍在处理上一轮。"
+          }
+        }
+      }
+    },
+    "omp could not switch to %@. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 无法切换到 %@。%@"
+          }
+        }
+      }
+    },
+    "omp could not compact the conversation.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 无法压缩会话。"
+          }
+        }
+      }
+    },
+    "omp could not compact the conversation. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 无法压缩会话。%@"
+          }
+        }
+      }
+    },
+    "omp holds fewer messages than the conversation shows, so the point to rewind to is unclear. The conversation was kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 中的消息比界面显示的少，无法确定回退位置。会话已保留。"
+          }
+        }
+      }
+    },
+    "omp has no message matching the one to rewind to. The conversation was kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 中没有与回退目标匹配的消息。会话已保留。"
+          }
+        }
+      }
+    },
+    "omp could not rewind the conversation. It was kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 无法回退会话。会话已保留。"
+          }
+        }
+      }
+    },
+    "omp rewound the conversation but did not say where it went on.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 已回退会话，但未返回后续会话的位置。"
+          }
+        }
+      }
+    },
+    "omp is retrying.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 正在重试。"
+          }
+        }
+      }
+    },
+    "omp reported an extension error.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 报告了扩展错误。"
+          }
+        }
+      }
+    },
+    "omp sent a notification.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "omp 发来了一条通知。"
+          }
+        }
+      }
+    },
+    "Compacting the conversation…": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在压缩会话…"
+          }
+        }
+      }
+    },
+    "Conversation compacted": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话已压缩"
+          }
+        }
+      }
+    },
+    "Subagents": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子代理"
+          }
+        }
+      }
+    },
+    "Path: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "路径：%@"
+          }
+        }
+      }
+    },
+    "account %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "账号 %lld"
+          }
+        }
+      }
+    },
+    "Declined: this is the final report, with no tools.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：当前是最终报告阶段，不能使用工具。"
+          }
+        }
+      }
+    },
+    "Declined: plan mode is read-only.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：计划模式为只读。"
+          }
+        }
+      }
+    },
+    "Declined: subagents are off in this chat, because Hydra is not running its heads in omp.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：此会话禁用了子代理，Hydra 头不在 omp 内运行。"
+          }
+        }
+      }
+    },
+    "Declined: the user declined this command.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：用户拒绝了此命令。"
+          }
+        }
+      }
+    },
+    "Declined: the user declined this file change.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：用户拒绝了此文件修改。"
+          }
+        }
+      }
+    },
+    "Declined: the user declined this tool call.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝：用户拒绝了此工具调用。"
+          }
+        }
+      }
+    },
     "Library could not be loaded": {
       "extractionState": "manual",
       "localizations": {
@@ -3756,6 +4284,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "“自动”使用对话自己的服务商。Claude 使用 Haiku，Codex 使用你的默认模型。"
+          }
+        }
+      }
+    },
+    "Back to your threads" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回聊天"
           }
         }
       }

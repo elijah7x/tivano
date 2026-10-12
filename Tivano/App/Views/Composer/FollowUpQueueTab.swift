@@ -532,11 +532,14 @@ private struct QueueIconButton: View {
 private struct FollowUpQueueSurface: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "local"
 
     func body(content: Content) -> some View {
         let shape = UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12, style: .continuous)
         let isDark = colorScheme == .dark
-        if !performanceMode {
+        if floatingGlassStyle == "upstream" {
+            content.floatingGlass(shape, hiddenRimBottom: ThreadChangesTab.overlap)
+        } else if !performanceMode {
             content
                 .glassEffect(.regular, in: shape)
                 .background {

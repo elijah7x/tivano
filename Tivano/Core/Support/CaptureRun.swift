@@ -31,5 +31,11 @@ enum CaptureRun {
     }
 
     /// The defaults suite the run owns; a run starts by wiping it.
-    nonisolated static let suiteName = "dev.tivano.Tivano.product-captures"
+    nonisolated static let suiteName: String = {
+        guard let directory = outputDirectory else { return "dev.tivano.Tivano.product-captures" }
+        // An absolute preferences domain keeps its plist inside the capture folder,
+        // rather than in the user's Library/Preferences. The path also isolates two
+        // runs and stays stable when the same capture folder is resumed.
+        return directory.standardizedFileURL.appendingPathComponent("settings").path
+    }()
 }

@@ -62,11 +62,11 @@ enum ResetCreditError: LocalizedError {
 
 @MainActor
 enum PlanLimitsReader {
-    /// Codex, Claude, Antigravity, Copilot, Command Code, Z.ai and Pi report plan limits.
-    /// Pi reports the limits of the providers it is signed into. Cursor,
+    /// Codex, Claude, Antigravity, Copilot, Command Code, Z.ai, Pi and omp report plan limits.
+    /// Pi and omp report the limits of the providers they are signed into. Cursor,
     /// OpenCode, Grok, DeepSeek, Meta and Devin expose none.
     static func exposesLimits(_ provider: ProviderKind) -> Bool {
-        provider == .codex || provider == .claude || provider == .antigravity || provider == .copilot || provider == .commandcode || provider == .zai || provider == .pi
+        provider == .codex || provider == .claude || provider == .antigravity || provider == .copilot || provider == .commandcode || provider == .zai || provider == .pi || provider == .omp
     }
 
     static func read(_ provider: ProviderKind, executable: URL, environment: [String: String]) async -> PlanLimits? {
@@ -77,6 +77,7 @@ enum PlanLimitsReader {
         case .copilot: try? await CopilotSession.readPlanLimits(executable: executable, environment: environment)
         case .commandcode: await CommandCodeAPI.planLimits(environment: environment)
         case .pi: await PiPlanLimits.read(environment: environment)
+        case .omp: await OmpPlanLimits.read(executable: executable, environment: environment)
         case .cursor, .opencode, .opencodeGo, .grok, .deepseek, .meta, .zai, .devin, .kimi: nil
         }
     }

@@ -188,6 +188,9 @@ final class ProviderRegistry {
     /// seventy-odd models, led by the one the CLI itself is set to.
     static let commandcodeSeed = CommandCodeAPI.seed
 
+    /// omp's starting catalog; its live model list replaces it.
+    static let ompSeed = [ModelOption(id: "default", name: "Default", detail: "The model omp itself is set to", efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", isDefault: true)]
+
     /// Pi's starting catalog; the live catalog from pi's RPC `get_available_models` replaces it.
     static let piSeed = [ModelOption(id: "default", name: "Default", detail: "The model pi itself is set to", efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", isDefault: true)]
 
@@ -234,6 +237,7 @@ final class ProviderRegistry {
         if catalogs[.copilot]?.isEmpty ?? true { catalogs[.copilot] = [Self.copilotAuto] }
         if catalogs[.commandcode]?.isEmpty ?? true { catalogs[.commandcode] = Self.commandcodeSeed }
         if catalogs[.pi]?.isEmpty ?? true { catalogs[.pi] = Self.piSeed }
+        if catalogs[.omp]?.isEmpty ?? true { catalogs[.omp] = Self.ompSeed }
         for provider in ProviderKind.allCases where provider.namesModelVariants {
             if let list = catalogs[provider] { settings.adoptModelFamilies(list, for: provider) }
         }
@@ -293,6 +297,9 @@ final class ProviderRegistry {
                 }
             }
             return candidates
+        case .omp:
+            let home = LoginEnvironment.homeDirectory
+            return ["\(home)/.bun/bin/omp", "\(home)/.npm-global/bin/omp", "/opt/homebrew/bin/omp", "/usr/local/bin/omp", "\(home)/.local/bin/omp", "\(home)/.volta/bin/omp"].map { URL(fileURLWithPath: $0) }
         case .pi, .kimi:
             let home = LoginEnvironment.homeDirectory
             let name = provider.executableName
@@ -570,6 +577,7 @@ final class ProviderRegistry {
             || (provider == .copilot && models(for: provider) == [Self.copilotAuto])
             || (provider == .commandcode && models(for: provider) == Self.commandcodeSeed)
             || (provider == .pi && models(for: provider) == Self.piSeed)
+            || (provider == .omp && models(for: provider) == Self.ompSeed)
             || ((provider == .opencode || provider == .opencodeGo) && Self.lacksEffortWalk(models(for: provider)))
         let stale = catalogFetchedAt[provider].map { Date.now.timeIntervalSince($0) > Self.catalogFreshness } ?? !(models(for: provider).isEmpty)
         guard force || seeded || stale || models(for: provider).isEmpty else { return }
@@ -585,6 +593,7 @@ final class ProviderRegistry {
         case .copilot: try? await CopilotSession.listModels(executable: executable, environment: environment)
         case .commandcode: try? await CommandCodeAPI.listModels(executable: executable, environment: environment)
         case .pi: try? await PiCLI.listModels(executable: executable, environment: environment)
+        case .omp: try? await OmpCLI.listModels(executable: executable, environment: environment)
         case .cursor, .grok, .devin, .kimi: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
         case .opencode, .opencodeGo: await openCodeCatalog(force: force, executable: executable, environment: environment)
         case .deepseek, .meta, .zai: nil
@@ -930,6 +939,8 @@ final class ProviderRegistry {
             return await CommandCodeAPI.authStatus(executable: executable, environment: environment)
         case .pi:
             return await PiCLI.authStatus(executable: executable, environment: environment)
+        case .omp:
+            return await OmpCLI.authStatus(executable: executable, environment: environment)
         case .kimi:
             return await ACPSession.authStatus(provider: provider, executable: executable, environment: environment)
         case .opencode, .opencodeGo:

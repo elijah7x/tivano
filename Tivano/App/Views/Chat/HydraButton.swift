@@ -107,6 +107,17 @@ struct HydraButton: View {
     /// in place while the chat slides to make room or take it back. Heads keep working
     /// either way. With nothing out yet the popover explains instead (see the body).
     private func togglePanel() {
+        if runtime.isHydraPanelHidden {
+            let heads = model.panelHeads(of: thread.id)
+            let staged = heads.filter { $0.id != runtime.hydraPoppedHeadID }
+            let selected = staged.first { $0.id == runtime.hydraSelectedHeadID }
+                ?? staged.last { $0.hydra?.status == .running }
+                ?? staged.last
+            if let selected { model.markRead(selected.id, revision: selected.unreadRevision) }
+            if let popped = heads.first(where: { $0.id == runtime.hydraPoppedHeadID }) {
+                model.markRead(popped.id, revision: popped.unreadRevision)
+            }
+        }
         withAnimation(Chrome.panelSlide) { runtime.isHydraPanelHidden.toggle() }
     }
 

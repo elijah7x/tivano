@@ -6,6 +6,27 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-12
+
+### New features
+
+- Add the OMP provider with model and effort selection, App permission approvals and Auto fallback, App-run Hydra with independent heads, session fork and resume, todo updates, conversation titles and usage limits.
+
+### Bug fixes
+
+- Show declined OMP permissions as declined, preserve MCP error states, and reject invalid model or effort selections before starting or sending a turn.
+- Clear unread result dots immediately when opening or reselecting a conversation, including Hydra panels. Retry visibility checks after initial layout, preserve unread results while the window is hidden or minimized, and keep older acknowledgments from clearing newer results.
+
+### Refinements
+
+- Use OMP's official full-color vector logo and restore Kimi's original icon colors, keeping light and dark mode assets.
+- Simplify the About page by removing the repeated introduction and license summary above Credits.
+- Add hidden preview switches for comparing upstream styles: Settings filling the main window (`settingsPresentation` = `fullWindow`), a behind-window blur backdrop (`windowBackdropStyle` = `blur`) and unified floating glass on the composer, its tabs and approval cards (`floatingGlassStyle` = `upstream`). Defaults keep the current look.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.1.13] - 2026-10-12
 
 ### Bug fixes

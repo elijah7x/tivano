@@ -126,11 +126,15 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var title: String
     var createdAt: Date
     var updatedAt: Date
-    var provider: ProviderKind
+    var provider: ProviderKind {
+        didSet { runtimeMode = Self.supportedMode(runtimeMode, on: provider) }
+    }
     var model: String?
     var effort: String?
     var fastMode: Bool
-    var runtimeMode: RuntimeMode
+    var runtimeMode: RuntimeMode {
+        didSet { runtimeMode = Self.supportedMode(runtimeMode, on: provider) }
+    }
     var interactionMode: InteractionMode
     var worktreePath: String?
     var branch: String?
@@ -220,6 +224,12 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         return defaults.object(forKey: hydraDefaultKey) as? Bool ?? true
     }
 
+    private static func supportedMode(_ mode: RuntimeMode, on provider: ProviderKind) -> RuntimeMode {
+        let supported = provider.supported(mode)
+        if supported != mode { PermissionLowering.note(provider: provider, from: mode, to: supported) }
+        return supported
+    }
+
     init(projectID: UUID, provider: ProviderKind, model: String?, effort: String?, runtimeMode: RuntimeMode, fastMode: Bool = false) {
         id = UUID()
         self.projectID = projectID
@@ -230,7 +240,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         self.model = model
         self.effort = effort
         self.fastMode = fastMode
-        self.runtimeMode = runtimeMode
+        self.runtimeMode = Self.supportedMode(runtimeMode, on: provider)
         interactionMode = .build
         isPinned = false
         isArchived = false
@@ -253,7 +263,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         // `value` swallows a type mismatch as well as a missing key, so a mode that
         // cannot be read falls back to the one that asks before it acts: a thread must
         // never quietly come back from disk with full access to the machine.
-        runtimeMode = container.value(.runtimeMode, default: .supervised)
+        runtimeMode = Self.supportedMode(container.value(.runtimeMode, default: .supervised), on: provider)
         interactionMode = container.value(.interactionMode, default: .build)
         worktreePath = container.value(.worktreePath, default: nil)
         branch = container.value(.branch, default: nil)

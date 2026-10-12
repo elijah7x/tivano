@@ -40,6 +40,7 @@ final class AppModel {
         set {
             threadStorage = newValue
             synchronizeThreads()
+            if isLibraryLoaded { announceLoweredPermissions() }
         }
     }
 
@@ -285,7 +286,8 @@ final class AppModel {
         threads = library.threads + threads.filter { !knownThreads.contains($0.id) }
         isLibraryLoaded = true
         libraryLoad = nil
-        if threads != originalThreads || projects != library.projects { scheduleSave() }
+        let permissionsLowered = announceLoweredPermissions()
+        if permissionsLowered || threads != originalThreads || projects != library.projects { scheduleSave() }
         // Capture seeds retain their staged statuses and never start account or merge services.
         if CaptureRun.isEnabled { return }
         if let lastID = settings.lastProjectID, project(lastID) == nil {
@@ -799,6 +801,7 @@ final class AppModel {
         let previous = threadStorage[index]
         var thread = previous
         change(&thread)
+        defer { if isLibraryLoaded { announceLoweredPermissions() } }
         guard thread != previous else { return }
         threadStorage[index] = thread
         if Self.structureChanged(previous, thread) {
@@ -856,6 +859,24 @@ final class AppModel {
         guard changed else { return }
         threads = updated
         scheduleSave()
+    }
+
+    @ObservationIgnored private var announcedPermissionLowerings: Set<String> = []
+
+    @discardableResult
+    private func announceLoweredPermissions() -> Bool {
+        let lowerings = PermissionLowering.drain()
+        guard !lowerings.isEmpty else { return false }
+        for lowered in lowerings {
+            let key = "\(lowered.provider.rawValue)|\(lowered.from.rawValue)|\(lowered.to.rawValue)"
+            guard announcedPermissionLowerings.insert(key).inserted else { continue }
+            alert = AppAlert(
+                title: "Permissions changed",
+                message: String(format: Chrome.localized("Switched to %@: %@ does not support %@ permissions."),
+                                Chrome.localized(lowered.to.title), lowered.provider.displayName, Chrome.localized(lowered.from.title))
+            )
+        }
+        return true
     }
 
     func rename(_ id: UUID, to title: String) {
@@ -1200,20 +1221,27 @@ final class AppModel {
         runtime(for: threadID).isTerminalVisible = true
     }
 
+    /// An explicit user navigation acknowledges only the result currently on this thread.
+    func openThread(_ id: UUID) {
+        guard let thread = thread(id) else { return }
+        markRead(id, revision: thread.unreadRevision)
+        selectedThreadID = id
+    }
+
     func selectThread(offset: Int) {
         let order = sidebarThreads
         guard !order.isEmpty else { return }
         guard let current = selectedThreadID, let index = order.firstIndex(where: { $0.id == current }) else {
-            selectedThreadID = order.first?.id
+            if let first = order.first { openThread(first.id) }
             return
         }
-        selectedThreadID = order[(index + offset + order.count) % order.count].id
+        openThread(order[(index + offset + order.count) % order.count].id)
     }
 
     func selectThread(number: Int) {
         let order = sidebarThreads
         guard order.indices.contains(number - 1) else { return }
-        selectedThreadID = order[number - 1].id
+        openThread(order[number - 1].id)
     }
 
     func createWorktree(for threadID: UUID) async {
@@ -1257,7 +1285,7 @@ final class AppModel {
     @ObservationIgnored var threadViewVisibility: [UUID: (threadID: UUID, visible: () -> Bool)] = [:]
 
     func isOnScreen(_ thread: ChatThread) -> Bool {
-        NSApp.isActive && threadViewVisibility.values.contains {
+        NSApp?.isActive == true && threadViewVisibility.values.contains {
             $0.threadID == thread.id && $0.visible()
         }
     }
@@ -1272,11 +1300,11 @@ final class AppModel {
     func threadNeedsAttention(_ id: UUID) {
         guard !CaptureRun.isEnabled, let thread = thread(id) else { return }
         // Visible requests need no banner; opening them does not resolve the request.
-        if NSApp.isActive && isOnScreen(thread) {
+        if NSApp?.isActive == true && isOnScreen(thread) {
             return
         }
         notify(threadID: id, title: thread.title, body: "Waiting for your decision.")
-        NSApp.requestUserAttention(.informationalRequest)
+        NSApp?.requestUserAttention(.informationalRequest)
     }
 
     /// A turn ended. `continues` means a queued message picks up right away, so the agent is
@@ -1339,7 +1367,7 @@ final class AppModel {
 
     func notify(threadID: UUID, title: String, body: String, sound: UNNotificationSound? = .default) {
         guard !CaptureRun.isEnabled else { return }
-        if NSApp.isActive, let thread = thread(threadID), isOnScreen(thread) { return }
+        if NSApp?.isActive == true, let thread = thread(threadID), isOnScreen(thread) { return }
         requestNotificationPermission()
         let content = UNMutableNotificationContent()
         content.title = title
@@ -1352,7 +1380,7 @@ final class AppModel {
 
     func updateDockBadge() {
         let unread = threads.count { $0.hasUnread && !$0.isArchived && !$0.isInPanel }
-        NSApp.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
+        NSApp?.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
     }
 
     // MARK: - Text generation

@@ -444,6 +444,7 @@ enum CLIUpdates {
         case .copilot: return try await registryVersion("@github/copilot", tag: "latest", probe: probe)
         case .opencode, .opencodeGo: return nil
         case .pi: return try await registryVersion("@earendil-works/pi-coding-agent", tag: "latest", probe: probe)
+        case .omp: return try await registryVersion("@oh-my-pi/pi-coding-agent", tag: "latest", probe: probe)
         case .commandcode: return try await registryVersion("command-code", tag: "latest", probe: probe)
         default:
             return nil
@@ -721,7 +722,8 @@ enum CLIUpdates {
     /// Package identities follow the official install docs: code.claude.com/docs/en/setup,
     /// learn.chatgpt.com/docs/codex/cli, opencode.ai/docs, pi.dev/docs/latest/quickstart,
     /// docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli,
-    /// and commandcode.ai/docs. Other packages do not grant update permission.
+    /// commandcode.ai/docs, and github.com/can1357/oh-my-pi#install.
+    /// Other packages do not grant update permission.
     private static func knownPackages(_ provider: ProviderKind) -> Set<String> {
         switch provider {
         case .claude: ["@anthropic-ai/claude-code"]
@@ -729,6 +731,7 @@ enum CLIUpdates {
         case .copilot: ["@github/copilot"]
         case .opencode, .opencodeGo: ["opencode-ai"]
         case .pi: ["@earendil-works/pi-coding-agent"]
+        case .omp: ["@oh-my-pi/pi-coding-agent"]
         case .commandcode: ["command-code"]
         default: []
         }

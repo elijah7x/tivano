@@ -175,7 +175,7 @@ extension AppModel {
     /// collab agents, Copilot's task), so a lead never runs heads inside its session.
     /// Every head is Tivano-run all the same; the other CLIs take the policy per message.
     static func hydraDefinesPolicyAtLaunch(_ provider: ProviderKind) -> Bool {
-        provider == .claude || provider == .codex || provider == .copilot
+        provider == .claude || provider == .codex || provider == .copilot || provider == .omp
     }
 
     /// The pair a chat leads with: the one picked for it in the composer's model picker,

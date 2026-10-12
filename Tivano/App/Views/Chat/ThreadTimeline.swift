@@ -148,24 +148,37 @@ struct ThreadTimeline: View, Equatable {
         // A history still being read off the main thread is not an empty thread: the
         // prompt for a new one would flash for the frames before it lands. Its newest
         // turns land first and show while the older ones are read.
-        if runtime.isLoadingHistory && blocks.isEmpty {
-            Color.clear
-        } else if blocks.isEmpty && !runtime.isRunning {
-            // A forwarded thread starts empty too, but it is not a new one: it explains
-            // where it came from before the reader picks anything.
-            Group {
-                if let continuation = runtime.continuation {
-                    continuationStart(continuation)
-                } else {
-                    NewThreadPrompt(threadID: runtime.threadID, projectName: projectName)
+        Group {
+            if runtime.isLoadingHistory && blocks.isEmpty {
+                Color.clear
+            } else if blocks.isEmpty && !runtime.isRunning {
+                // A forwarded thread starts empty too, but it is not a new one: it explains
+                // where it came from before the reader picks anything.
+                Group {
+                    if let continuation = runtime.continuation {
+                        continuationStart(continuation)
+                    } else {
+                        NewThreadPrompt(threadID: runtime.threadID, projectName: projectName)
+                    }
                 }
+                .onAppear {
+                    scrollChrome.update(travel: 0)
+                    if scrollState.showsJumpButton { scrollState.showsJumpButton = false }
+                }
+            } else {
+                timeline(blocks, hydraMentionPersonas: hydraMentionPersonas, hydraMentionTargets: hydraMentionTargets)
             }
-            .onAppear {
-                scrollChrome.update(travel: 0)
-                if scrollState.showsJumpButton { scrollState.showsJumpButton = false }
+        }
+        .background {
+            let thread = model.thread(runtime.threadID)
+            GeometryReader { viewport in
+                ThreadResultReadProbe(
+                    model: model, threadID: runtime.threadID,
+                    revision: thread?.unreadRevision, hasUnread: thread?.hasUnread == true
+                )
+                .frame(width: viewport.size.width, height: viewport.size.height)
             }
-        } else {
-            timeline(blocks, hydraMentionPersonas: hydraMentionPersonas, hydraMentionTargets: hydraMentionTargets)
+            .allowsHitTesting(false)
         }
     }
 
@@ -201,7 +214,7 @@ struct ThreadTimeline: View, Equatable {
             // continuation and the button is left out.
             if model.thread(continuation.sourceThreadID) != nil {
                 Button("Open original chat") {
-                    model.selectedThreadID = continuation.sourceThreadID
+                    model.openThread(continuation.sourceThreadID)
                 }
                 .buttonStyle(.plain)
                 .font(.chat(size: 13))
@@ -277,7 +290,7 @@ struct ThreadTimeline: View, Equatable {
         // system's handling.
         .environment(\.openURL, OpenURLAction { url in
             guard let headID = HydraMentionTarget.threadID(in: url) else { return .systemAction }
-            model.selectedThreadID = headID
+            model.openThread(headID)
             return .handled
         })
     }
@@ -557,13 +570,7 @@ struct ThreadTimeline: View, Equatable {
             }
         }
         .id(runtime.threadID)
-        .background {
-            let thread = model.thread(runtime.threadID)
-            ThreadResultReadProbe(
-                model: model, threadID: runtime.threadID,
-                revision: thread?.unreadRevision, hasUnread: thread?.hasUnread == true
-            )
-        }
+
 
         // Torn down mid-scroll (a thread switch, a panel closed): the freeze lifts with it,
         // so the app never goes on hearing this timeline as scrolling.
@@ -3887,7 +3894,7 @@ extension EnvironmentValues {
 /// window occlusion and hidden ancestors are checked too, so a result that lands while the
 /// window is hidden stays unread.
 /// Source: developer.apple.com/documentation/appkit/nsview/visiblerect
-private struct ThreadResultReadProbe: NSViewRepresentable {
+struct ThreadResultReadProbe: NSViewRepresentable {
     let model: AppModel
     let threadID: UUID
     let revision: UUID?
@@ -3896,10 +3903,7 @@ private struct ThreadResultReadProbe: NSViewRepresentable {
     func makeNSView(context: Context) -> ResultView { ResultView() }
 
     func updateNSView(_ view: ResultView, context: Context) {
-        view.model = model
-        view.threadID = threadID
-        view.revision = revision
-        view.hasUnread = hasUnread
+        view.configure(model: model, threadID: threadID, revision: revision, hasUnread: hasUnread)
         model.threadViewVisibility[view.registrationID] = (threadID, { [weak view] in
             view?.isReadableWindow == true
         })
@@ -3919,13 +3923,30 @@ private struct ThreadResultReadProbe: NSViewRepresentable {
         var revision: UUID?
         var hasUnread = false
         private var generation = 0
+        private var pendingRead: DispatchWorkItem?
+        private var attemptsRemaining = 8
+        private var invalidated = false
         private var observers: [any NSObjectProtocol] = []
 
+        func configure(model: AppModel, threadID: UUID, revision: UUID?, hasUnread: Bool) {
+            if self.model !== model || self.threadID != threadID || self.revision != revision
+                || self.hasUnread != hasUnread {
+                cancelRead()
+                attemptsRemaining = 8
+            }
+            self.model = model
+            self.threadID = threadID
+            self.revision = revision
+            self.hasUnread = hasUnread
+        }
+
         var isReadableWindow: Bool {
-            guard NSApp.isActive, !NSApp.isHidden, let window,
+            // Non-clipping NSViews can report visible space outside even zero-sized bounds.
+            guard !invalidated, superview != nil, NSApp.isActive, !NSApp.isHidden, let window,
                   window.isVisible, !window.isMiniaturized,
                   window.occlusionState.contains(.visible),
-                  !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty else { return false }
+                  !isHiddenOrHasHiddenAncestor,
+                  !visibleRect.intersection(bounds).isEmpty else { return false }
             return true
         }
 
@@ -3933,10 +3954,24 @@ private struct ThreadResultReadProbe: NSViewRepresentable {
             super.init(frame: frameRect)
             let center = NotificationCenter.default
             for name in [NSApplication.didBecomeActiveNotification,
+                         NSApplication.didUnhideNotification,
+                         NSApplication.didResignActiveNotification,
+                         NSApplication.didHideNotification,
+                         NSWindow.didBecomeKeyNotification,
                          NSWindow.didChangeOcclusionStateNotification,
-                         NSWindow.didDeminiaturizeNotification] {
-                observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.scheduleRead() }
+                         NSWindow.didDeminiaturizeNotification,
+                         NSWindow.didMiniaturizeNotification] {
+                observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                    let changedWindowID = (notification.object as? NSWindow).map(ObjectIdentifier.init)
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        if let changedWindowID, changedWindowID != self.window.map(ObjectIdentifier.init) { return }
+                        if !NSApp.isActive || NSApp.isHidden || self.window?.isMiniaturized == true {
+                            self.cancelRead()
+                        } else {
+                            self.scheduleRead(restart: true)
+                        }
+                    }
                 })
             }
         }
@@ -3946,12 +3981,36 @@ private struct ThreadResultReadProbe: NSViewRepresentable {
         func invalidate() {
             for observer in observers { NotificationCenter.default.removeObserver(observer) }
             observers.removeAll()
+            invalidated = true
+            cancelRead()
+        }
+
+        private func cancelRead() {
             generation += 1
+            pendingRead?.cancel()
+            pendingRead = nil
         }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            scheduleRead()
+            cancelRead()
+            scheduleRead(restart: true)
+        }
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            if superview == nil { cancelRead() }
+            else { scheduleRead(restart: true) }
+        }
+
+        override func viewDidHide() {
+            super.viewDidHide()
+            cancelRead()
+        }
+
+        override func viewDidUnhide() {
+            super.viewDidUnhide()
+            scheduleRead(restart: true)
         }
 
         override func layout() {
@@ -3959,17 +4018,45 @@ private struct ThreadResultReadProbe: NSViewRepresentable {
             scheduleRead()
         }
 
-        func scheduleRead() {
-            generation += 1
+        func scheduleRead(restart: Bool = false) {
+            guard !invalidated, hasUnread, window != nil, superview != nil else { return }
+            // Updates and layout merge into the existing chain without moving its deadline.
+            guard pendingRead == nil else { return }
+            if restart { attemptsRemaining = 8 }
+            if attemptsRemaining == 0 {
+                // After the bounded retries, a real layout/visibility event can still read.
+                guard isReadableWindow else { return }
+                attemptsRemaining = 1
+            }
+            enqueueRead(after: 0)
+        }
+
+        private func enqueueRead(after delay: TimeInterval) {
             let expectedGeneration = generation
             let expectedRevision = revision
             let expectedThreadID = threadID
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.generation == expectedGeneration,
-                      self.hasUnread, self.isReadableWindow,
-                      let id = expectedThreadID else { return }
-                self.model?.markRead(id, revision: expectedRevision)
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, !self.invalidated, self.generation == expectedGeneration else { return }
+                self.pendingRead = nil
+                guard self.hasUnread, let id = expectedThreadID,
+                      self.threadID == id, self.revision == expectedRevision,
+                      let current = self.model?.thread(id), current.hasUnread,
+                      current.unreadRevision == expectedRevision else {
+                    self.cancelRead()
+                    return
+                }
+                if self.isReadableWindow {
+                    self.model?.markRead(id, revision: expectedRevision)
+                    self.hasUnread = false
+                    self.cancelRead()
+                    return
+                }
+                self.attemptsRemaining -= 1
+                guard self.attemptsRemaining > 0, self.window != nil, self.superview != nil else { return }
+                self.enqueueRead(after: 0.25)
             }
+            pendingRead = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
     }
 }

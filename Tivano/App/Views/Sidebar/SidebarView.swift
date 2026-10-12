@@ -90,7 +90,7 @@ struct SidebarView: View {
                         prompt: Chrome.localized("Search threads"),
                         onSubmit: {
                             if let first = searchResults(helpers: helpers).first?.threads.first {
-                                model.selectedThreadID = first.id
+                                model.openThread(first.id)
                             }
                         },
                         onMove: { moveSearchSelection(by: $0, helpers: helpers) }
@@ -757,11 +757,11 @@ struct SidebarView: View {
         guard !results.isEmpty else { return }
         guard let current = model.selectedThreadID,
               let index = results.firstIndex(where: { $0.id == current }) else {
-            model.selectedThreadID = (offset < 0 ? results.last : results.first)?.id
+            if let next = offset < 0 ? results.last : results.first { model.openThread(next.id) }
             return
         }
         let next = min(max(index + offset, 0), results.count - 1)
-        model.selectedThreadID = results[next].id
+        model.openThread(results[next].id)
     }
 
     /// The projects and threads matching the query, kept for the query and library they
@@ -935,8 +935,10 @@ struct SidebarToggleButton: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        ChromeCircleButton(symbol: "sidebar.left", help: Chrome.localized("Toggle sidebar") + ShortcutStore.hint(for: .toggleSidebar)) {
-            model.sidebar.toggle()
+        if !SettingsNavigation.shared.isPresented {
+            ChromeCircleButton(symbol: "sidebar.left", help: Chrome.localized("Toggle sidebar") + ShortcutStore.hint(for: .toggleSidebar)) {
+                model.sidebar.toggle()
+            }
         }
     }
 }
@@ -1394,7 +1396,7 @@ private struct SidebarHelperRow: View, Equatable {
             HelperConnector(endsHere: isLast, action: onFold)
                 .frame(width: ThreadRowMetrics.connectorWidth, height: ThreadRowMetrics.helperHeight)
             Button {
-                model.selectedThreadID = thread.id
+                model.openThread(thread.id)
             } label: {
                 HStack(spacing: 6) {
                     // A head keeps its glyph, so the team reads at a glance under its lead,
@@ -1515,7 +1517,7 @@ private struct HeadCardsRow: View {
                         ForEach(row, id: \.id) { head in
                             if let info = head.hydra {
                                 Button {
-                                    model.selectedThreadID = head.id
+                                    model.openThread(head.id)
                                 } label: {
                                     HydraGlyph(persona: info.persona, size: ThreadRowMetrics.headGlyphSize, isRunning: info.status == .running, status: info.status)
                                         .background {
@@ -1776,7 +1778,7 @@ private struct SidebarThreadRow: View, Equatable {
         let mergeStage = Self.mergeStage(of: model.existingRuntime(for: thread.id))
         let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
         Button {
-            model.selectedThreadID = thread.id
+            model.openThread(thread.id)
         } label: {
             ThreadRowFace(
                 thread: thread,

@@ -379,6 +379,7 @@ struct ChatView: View {
                 }
             },
             popOut: { id in
+                model.markRead(id, revision: model.thread(id)?.unreadRevision)
                 // The head's own panel opens docked across the column from the team
                 // panel, so the two sit apart.
                 withAnimation(Chrome.panelSlide) {
@@ -446,6 +447,7 @@ struct ChatView: View {
             },
             dismiss: {
                 // Back into the team panel, and onto its stage.
+                model.markRead(popped.id, revision: popped.unreadRevision)
                 withAnimation(Chrome.panelSlide) {
                     runtime.hydraSelectedHeadID = popped.id
                     runtime.hydraPoppedHeadID = nil

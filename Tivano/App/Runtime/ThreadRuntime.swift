@@ -1609,11 +1609,11 @@ final class ThreadRuntime {
         let signature = SessionSignature(
             provider: thread.provider,
             directory: directory,
-            launchRuntimeMode: thread.provider == .cursor || thread.provider == .grok || thread.provider == .devin || thread.provider == .antigravity ? thread.runtimeMode : copilotLaunchMode,
+            launchRuntimeMode: thread.provider == .cursor || thread.provider == .grok || thread.provider == .devin || thread.provider == .antigravity || thread.provider == .omp ? thread.runtimeMode : copilotLaunchMode,
             launchEffort: thread.provider == .claude || thread.provider == .antigravity ? thread.effort : nil,
             launchFast: thread.provider == .claude ? thread.fastMode : nil,
             launchModel: thread.provider == .antigravity ? thread.model : nil,
-            launchInteraction: thread.provider == .antigravity ? thread.interactionMode : nil,
+            launchInteraction: thread.provider == .antigravity || thread.provider == .omp ? thread.interactionMode : nil,
             hydra: hydra,
             hydraPairID: hydra == nil ? nil : thread.hydraPairID,
             antiSlopEnabled: app.settings.antiSlopEnabled
@@ -1737,6 +1737,7 @@ final class ThreadRuntime {
             case .copilot: CopilotSession(configuration: configuration)
             case .commandcode: CommandCodeSession(configuration: configuration)
             case .pi: PiSession(configuration: configuration)
+            case .omp: OmpSession(configuration: configuration)
             case .cursor, .opencode, .opencodeGo, .grok, .devin, .kimi: ACPSession(configuration: configuration)
             case .deepseek: DeepSeekSession(configuration: configuration)
             case .meta: MetaSession(configuration: configuration)
@@ -2318,6 +2319,22 @@ final class ThreadRuntime {
                 stopSession()
                 app.updateThread(threadID) { $0.providerResumeAt = anchor }
             }
+        case .omp:
+            if index == 0 {
+                releaseSession(stop: true)
+                app.updateThread(threadID) {
+                    $0.providerSessionID = nil
+                    $0.providerResumeAt = nil
+                }
+            } else {
+                guard thread.providerSessionID != nil,
+                      let omp = try await ensureSession(directory: directory, allowNewSession: false) as? OmpSession else {
+                    throw ProviderError.failed(Chrome.localized("The original omp conversation is unavailable."))
+                }
+                let file = try await omp.rollback(removing: removed.map(userText(of:)))
+                app.updateThread(threadID) { $0.providerSessionID = file }
+                stopSession()
+            }
         default:
             // A provider that cannot rewind a conversation of its own starts a new one:
             // the files, the timeline and the draft are put back all the same, and the
@@ -2738,6 +2755,7 @@ final class ThreadRuntime {
             if let error, finishTurnUpdatingCLI(error, status: status, turnID: turnID) { break }
             if let error { appendNotice(.error, error) }
             Task { await finishTurn(status: status, turnID: turnID) }
+            if status == .completed { requestProviderTitle() }
         case .exited(let error):
             let backgroundStopped = !backgroundTasks.isEmpty
             backgroundTasks = []
@@ -2767,6 +2785,17 @@ final class ThreadRuntime {
             // off: heads are Tivano-run threads, never mirrored from inside a session.
             break
         }
+    }
+
+    private func userText(of turn: TurnRecord) -> String {
+        guard let itemID = turn.userItemID, let entry = entryIndex[itemID], case .user(let message) = entry.item.content else { return "" }
+        return message.text
+    }
+
+    private func requestProviderTitle() {
+        guard turns.count == 1, let app, let thread, thread.provider == .omp, !thread.hasCustomTitle,
+              app.textEngine(preferring: .omp) == nil, let omp = session as? OmpSession else { return }
+        Task { await omp.requestTitle() }
     }
 
     /// A model newer than the installed CLI fails with the CLI's own "version X or newer
