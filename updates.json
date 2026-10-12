@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.1.7",
-      "name": "Tivano 1.1.7",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.1.7/Tivano-1.1.7.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Keep Hydra tasks in linked worktrees under an existing repository's sidebar project, while preserving their execution and merge checkout. Stop invalid project routes instead of starting in another folder.\n- Keep built-in file reads, writes, edits and searches inside the project after resolving symbolic links, and avoid following directory links while searching.\n- Ask for approval in Pi Auto mode when a shell command uses redirection, command substitution or unrecognized arguments that may change files.\n- Reject out-of-range JSON numbers without crashing the app, including request IDs and numeric tool arguments.\n- Share MCP startup between concurrent requests and route server requests separately from replies, discarding duplicate and late replies after cancellation or timeout.\n- Preserve unreadable or damaged MCP configuration files, pause changes and offer Retry after the file is repaired.\n- Restore only the selected Git paths, including filenames containing wildcard characters, quotes or newlines.\n- Keep an old turn's completion from ending a newer turn, and save its final checkpoint in the checkout where it ran.\n- Let Diff panels close cleanly through AppKit, and keep a delayed close from clearing a newly opened panel.\n- Resume interrupted release preparation and reuse matching release refs and pull requests. Stop publishing when contributor queries fail, read every PR page and match acknowledgements exactly.\n\n## Refinements\n\n- Fade only the main conversation timeline beneath the top controls, keeping the composer glass outside the timeline mask.\n- Increase the font size of the conversation title at the top of the chat by 1 pt.\n- Show the files a command changes after it moves into another checkout first (`cd ~/other-worktree && …`) on that command's row, with full paths, without counting them toward this chat's revert or Hydra merge. Edits other running chats made there are left out.\n- Allow Interface, Content and Code font sizes up to 18, 18 and 17 pt (2 pt higher), and set their defaults to 14, 15 and 13 pt.\n- Remove the README statement that rules out remote access, mobile apps, cloud sync, telemetry and a web client.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-11T14:11:01Z",
+      "tag_name": "v1.1.13",
+      "name": "Tivano 1.1.13",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.1.13/Tivano-1.1.13.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Keep conversation text still during viewport refreshes and window reactivation instead of briefly shifting it down and back.\n- Clear a finished chat's green dot as soon as you open it, instead of waiting for its history to finish loading.\n\n## Refinements\n\n- Reorder Hydra pairs by dragging them in Settings, and keep the same order in the model picker. Simplify each pair's model, effort and head limit summary, and rename the cookbook to Pair presets (搭配方案).\n- Brighten the Breeze themes' accent to the app icon's own green, the same on dark and light grounds.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-12T07:15:52Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.1.7.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.1.7/Tivano-1.1.7.dmg",
-          "size": 6615403,
-          "sha256": "58ea21c2f2231495aed32d8b527ab09764d46c4af09f2ef9ab2e929be3e4a0bd"
+          "name": "Tivano-1.1.13.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.1.13/Tivano-1.1.13.dmg",
+          "size": 6608671,
+          "sha256": "0f11738d7108e1e585ff569af873262a215548dcfcfe9318f998fd40d739488c"
         }
       ]
     }
