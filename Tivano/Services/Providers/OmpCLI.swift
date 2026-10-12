@@ -158,7 +158,7 @@ enum OmpCLI {
     /// OMP runs in yolo; this pre-execution hook independently enforces App permissions.
     /// `allowTask` must be false with Hydra, and true only without Hydra in Full access.
     /// Missing or invalid state denies all tools; the registered command is the readiness handshake.
-    /// Hook semantics: https://github.com/can1357/oh-my-pi/blob/main/docs/extensions.md
+    /// Protocol: oh-my-pi v18.8.0, extensions/model-api.ts, extensions/wrapper.ts and tools/xd-url.ts.
     private static let extensionSource = #"""
     import fs from "node:fs";
     import { Type } from "typebox";
@@ -179,10 +179,11 @@ enum OmpCLI {
       }
     }
 
-    // `write` to `xd://<tool>` is how omp calls a tool an extension registered: that tool is the call.
+    // v18.8.0 parseXdUrl accepts only a bare device, not topics, queries or fragments.
+    // Use a conservative canonical spelling; special router devices do not use the tool wrapper.
     function deviceOf(path) {
-      if (typeof path !== "string" || !path.startsWith("xd://")) return undefined;
-      return path.slice("xd://".length).split(/[?/#]/)[0] || undefined;
+      if (typeof path !== "string" || !/^xd:\/\/[A-Za-z0-9_-]+$/.test(path)) return undefined;
+      return path.slice("xd://".length);
     }
 
     export default async function (pi) {
@@ -209,6 +210,13 @@ enum OmpCLI {
         console.error("tivano mcp: " + (error instanceof Error ? error.message : String(error)));
       }
 
+      pi.on("session_start", async (_event, ctx) => {
+        let model;
+        try { model = ctx.models.resolve("@default"); } catch {}
+        ctx.ui.notify("tivano-default-model " + JSON.stringify(model
+          ? { provider: model.provider, id: model.id } : null), "info");
+      });
+
       // Also covers eval agent() and workpool spawns, which do not use the task tool.
       pi.on("before_subagent_spawn", async () => {
         const gate = readGate();
@@ -227,9 +235,24 @@ enum OmpCLI {
         if (name === "task" && (gate.allowTask !== true || gate.runtimeMode !== "fullAccess")) {
           return { block: true, reason: "Declined: OMP subagents require Full access with Hydra off." };
         }
+        const deviceWrite = event.toolName === "write" && typeof event.input?.path === "string"
+          && event.input.path.trim().toLowerCase().startsWith("xd://");
+        if (deviceWrite && (!device || !pi.getAllTools().some(tool => tool.name === device))) {
+          return { block: true, reason: "Declined: unknown or invalid OMP tool device." };
+        }
         if (readOnly.has(name)) return;
         if (gate.interactionMode === "plan") return { block: true, reason: "Declined: plan mode is read-only." };
         if (gate.runtimeMode === "fullAccess") return;
+        // sdk.ts stores ExtensionToolWrapper instances in the canonical registry. Only
+        // dispatchable JSON-object calls defer approval to that inner pre-execution hook.
+        if (device) {
+          let args;
+          try { args = JSON.parse(event.input.content); } catch {}
+          if (!args || typeof args !== "object" || Array.isArray(args)) {
+            return { block: true, reason: "Declined: invalid OMP tool device arguments." };
+          }
+          return;
+        }
         const kind = name === "bash" || name === "eval" ? "command"
           : !device && ["write", "edit", "ast_edit", "notebook"].includes(event.toolName) ? "fileChange" : "tool";
         if (kind === "fileChange" && gate.runtimeMode === "autoAcceptEdits") return;

@@ -1327,7 +1327,7 @@ private struct ComposerSurface: ViewModifier {
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "local"
+    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "upstream"
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)

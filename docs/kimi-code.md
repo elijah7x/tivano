@@ -24,7 +24,7 @@ Rewind and subscription-limit reporting are not exposed. `/compact` is forwarded
 
 ## Icon provenance
 
-`Tivano/Resources/Assets.xcassets/provider-kimi.imageset/` uses the official “K Only” SVGs from the [Kimi Brand Guidelines](https://moonshotai.github.io/Branding-Guide/): [light](https://moonshotai.github.io/Branding-Guide/scenarios/04-k-only/k-only-light.svg) and [dark](https://moonshotai.github.io/Branding-Guide/scenarios/04-k-only/k-only-dark.svg). Both source files are unmodified, use a transparent background, retain the blue accent, and contain vector paths rather than embedded raster images. The asset catalog preserves vector representation and renders the mark as a template, inheriting the same foreground color and enabled/hidden contrast as the other monochrome providers. `ProviderIcon` scales Kimi's artwork to 92% inside the unchanged icon slot for optical balance. These replace the original 48×48 favicon; converting that favicon to PNG did not restore its resolution.
+`Tivano/Resources/Assets.xcassets/provider-kimi.imageset/` uses the official “K Only” SVGs from the [Kimi Brand Guidelines](https://moonshotai.github.io/Branding-Guide/): [light](https://moonshotai.github.io/Branding-Guide/scenarios/04-k-only/k-only-light.svg) and [dark](https://moonshotai.github.io/Branding-Guide/scenarios/04-k-only/k-only-dark.svg). Both source files are unmodified, use a transparent background, retain the blue accent, and contain vector paths rather than embedded raster images. The asset catalog preserves vector representation and renders the mark in its original colors; enabled/hidden opacity follows the shared provider controls. `ProviderIcon` scales Kimi's artwork to 92% inside the unchanged icon slot for optical balance. These replace the original 48×48 favicon; converting that favicon to PNG did not restore its resolution.
 
 ## Verification
 
@@ -34,7 +34,7 @@ Verified against Kimi Code CLI **0.39.1**:
 - Live authentication, catalog discovery and all four native modes.
 - Actual `ACPSession` + stdio transport: streamed reply with native file reading, process restart, restored context and suppressed replay. Temporary probe sessions were deleted.
 - Actual adapter with an in-memory RPC fixture: question/plan auto-approval guards, multi-question/multi-select response encoding, Skip, interrupt cancellation, edit-only approvals and retry after rejected configuration.
-- Installed Dev UI: signed-in status and four live catalog models.
+- Installed Dev UI: authentication-status and model-catalog presentation; private account contents are omitted.
 - SVG icon revision: successful Debug build; native rendering from the compiled asset catalog at 14, 22 and 96 pt, in both light and dark appearances. The SVG revision was installed and visually checked in Dev.
 - Optical/state alignment: successful Debug build; offscreen rendering of `ProviderIcon` in the shared `ChromeVisualTile`, comparing enabled and hidden Kimi, Codex and Grok in light and dark appearances. Installed Dev's provider selection popover was also visually checked after the owner-requested relaunch.
 

@@ -6,7 +6,7 @@ struct RootView: View {
 
     var body: some View {
         let sidebar = model.sidebar
-        let settingsShown = SettingsNavigation.shared.isPresented
+        let settingsShown = WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented
         let settingsSidebarWidth = max(sidebar.width, 212)
         HStack(spacing: 0) {
             ZStack(alignment: .leading) {
@@ -29,6 +29,7 @@ struct RootView: View {
                         .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
                     }
                     .opacity(settingsShown ? 0 : 1)
+                    .disabled(settingsShown)
                     .allowsHitTesting(!settingsShown)
                     .accessibilityHidden(settingsShown)
                 if settingsShown {
@@ -50,6 +51,7 @@ struct RootView: View {
                     // sidebar or off the window's edge until they landed.
                     .clipped()
                     .opacity(settingsShown ? 0 : 1)
+                    .disabled(settingsShown)
                     .allowsHitTesting(!settingsShown)
                     .accessibilityHidden(settingsShown)
                 if settingsShown {
@@ -151,7 +153,7 @@ struct DetailView: View {
     var body: some View {
         if let threadID = model.selectedThreadID, model.thread(threadID) != nil {
             let running = Set(model.threads.compactMap { model.existingRuntime(for: $0.id)?.isRunning == true ? $0.id : nil })
-            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, isCovered: SettingsNavigation.shared.isPresented, model: model, liveResize: liveResize)
+            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, isCovered: WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented, model: model, liveResize: liveResize)
                 .onChange(of: threadID) { _, _ in prebuilt = [] }
                 .task(id: threadID) {
                     // The neighbours, and at launch the sidebar's top rows, one at a time, once
@@ -219,7 +221,7 @@ private struct ThreadColumns: NSViewRepresentable {
 
     func updateNSView(_ pane: NSView, context: Context) {
         let columns = context.coordinator
-        columns.cover(pane, isCovered)
+        columns.cover(pane, isCovered, model: model, liveResize: liveResize)
         columns.show(threadID, in: pane, model: model, liveResize: liveResize)
         columns.dropHidden(where: { running.contains($0) || model.thread($0) == nil || model.existingRuntime(for: $0) == nil })
         columns.prebuild(prebuilt.filter { model.thread($0) != nil && !running.contains($0) }, in: pane, model: model, liveResize: liveResize)
@@ -250,8 +252,18 @@ private struct ThreadColumns: NSViewRepresentable {
         private var retirement: Task<Void, Never>?
         private var covering: Task<Void, Never>?
 
-        // Hide after the transition so covered chat buttons cannot answer page shortcuts.
-        func cover(_ pane: NSView, _ isCovered: Bool) {
+        private var isCovered = false
+
+        // Block input now; delayed hiding only finishes the visible transition.
+        func cover(_ pane: NSView, _ isCovered: Bool, model: AppModel, liveResize: WindowLiveResize) {
+            if self.isCovered != isCovered {
+                self.isCovered = isCovered
+                for (id, column) in columns {
+                    let isInteractive = id == shown && !isCovered
+                    column.acceptsInteraction = isInteractive
+                    column.rootView = Self.root(id, isShown: isInteractive, model: model, liveResize: liveResize)
+                }
+            }
             guard isCovered else {
                 covering?.cancel()
                 covering = nil
@@ -269,12 +281,14 @@ private struct ThreadColumns: NSViewRepresentable {
         func show(_ id: UUID, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) {
             guard id != shown else { return }
             if let shown, let previous = columns[shown] {
+                previous.acceptsInteraction = false
                 previous.isHidden = true
                 previous.autoresizingMask = []
                 previous.rootView = Self.root(shown, isShown: false, model: model, liveResize: liveResize)
             }
             if let kept = columns[id] {
-                kept.rootView = Self.root(id, isShown: true, model: model, liveResize: liveResize)
+                kept.acceptsInteraction = !isCovered
+                kept.rootView = Self.root(id, isShown: !isCovered, model: model, liveResize: liveResize)
                 kept.frame = pane.bounds
                 kept.autoresizingMask = [.width, .height]
                 kept.isHidden = false
@@ -309,7 +323,8 @@ private struct ThreadColumns: NSViewRepresentable {
 
         @discardableResult
         private func make(_ id: UUID, isShown: Bool, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) -> FrameHostingView {
-            let column = FrameHostingView(rootView: Self.root(id, isShown: isShown, model: model, liveResize: liveResize))
+            let column = FrameHostingView(rootView: Self.root(id, isShown: isShown && !isCovered, model: model, liveResize: liveResize))
+            column.acceptsInteraction = isShown && !isCovered
             column.frame = pane.bounds
             column.isHidden = !isShown
             column.autoresizingMask = isShown ? [.width, .height] : []
@@ -322,6 +337,8 @@ private struct ThreadColumns: NSViewRepresentable {
             AnyView(
                 ChatView(runtime: model.runtime(for: id))
                     .environment(\.chatColumnIsShown, isShown)
+                    .disabled(!isShown)
+                    .allowsHitTesting(isShown)
                     .modifier(HostedEnvironment(model: model, liveResize: liveResize))
             )
         }

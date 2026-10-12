@@ -44,6 +44,7 @@ final class StdioProcess: @unchecked Sendable {
     private let stdout = Pipe()
     private let stderr = Pipe()
     private let writeQueue = DispatchQueue(label: "tivano.stdio.write")
+    private let descendants = DescendantTracker()
 
     private struct State {
         var framer: StdioFramer
@@ -114,10 +115,12 @@ final class StdioProcess: @unchecked Sendable {
             self.appendError(data)
         }
         process.terminationHandler = { [weak self] process in
+            self?.descendants.terminate()
             self?.didExit(process.terminationStatus)
         }
         do {
             try process.run()
+            descendants.start(process.processIdentifier)
         } catch {
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
@@ -168,49 +171,136 @@ final class StdioProcess: @unchecked Sendable {
         writeQueue.async { try? handle.close() }
     }
 
-    private struct ProcessIdentity: Sendable {
+    fileprivate struct ProcessIdentity: Sendable {
         let pid: pid_t
         let parent: pid_t
         let seconds: UInt64
         let microseconds: UInt64
     }
 
-    private static func identity(_ pid: pid_t) -> ProcessIdentity? {
-        guard pid > 0 else { return nil }
+    fileprivate static func identity(_ pid: pid_t) -> ProcessIdentity? {
+        guard pid > 1, pid != getpid() else { return nil }
         var info = proc_bsdinfo()
         let size = MemoryLayout<proc_bsdinfo>.size
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(size)) == Int32(size) else { return nil }
         return ProcessIdentity(pid: pid, parent: pid_t(info.pbi_ppid), seconds: info.pbi_start_tvsec, microseconds: info.pbi_start_tvusec)
     }
 
-    private static func processTree(_ root: pid_t) -> [ProcessIdentity] {
+    private static func matches(_ member: ProcessIdentity) -> Bool {
+        guard let current = identity(member.pid) else { return false }
+        return current.seconds == member.seconds && current.microseconds == member.microseconds
+    }
+
+    private static func processTree(_ roots: [ProcessIdentity], limit: Int) -> [ProcessIdentity] {
         var collected: [ProcessIdentity] = []
         var visited = Set<pid_t>()
-        func collect(_ pid: pid_t, parent: pid_t? = nil) {
-            guard visited.insert(pid).inserted, let identity = identity(pid),
-                  parent == nil || identity.parent == parent else { return }
-            collected.append(identity)
-            let count = proc_listchildpids(pid, nil, 0)
-            guard count > 0 else { return }
-            var children = [pid_t](repeating: 0, count: Int(count) / MemoryLayout<pid_t>.size + 32)
-            let found = children.withUnsafeMutableBytes { bytes in
-                proc_listchildpids(pid, bytes.baseAddress, Int32(bytes.count))
+        func collect(_ member: ProcessIdentity, parent: ProcessIdentity? = nil) {
+            guard visited.count < limit, !visited.contains(member.pid), matches(member) else { return }
+            if let parent {
+                guard matches(parent), let current = identity(member.pid), current.parent == parent.pid else { return }
             }
-            guard found > 0 else { return }
-            // The listing call counts pids, not bytes: dividing again dropped every child of
-            // a process with fewer than four, so a stopped agent left its MCP servers behind.
-            for child in children.prefix(min(Int(found), children.count)) where child > 0 { collect(child, parent: pid) }
+            visited.insert(member.pid)
+            // libproc.c returns PID counts; proc_info.c's nil-buffer result is the
+            // system-wide nprocs + 20 estimate, not this parent's child count.
+            // https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c
+            var capacity = min(limit, min(64, max(32, Int(proc_listchildpids(member.pid, nil, 0)))))
+            var children: [pid_t] = []
+            for _ in 0..<4 {
+                var buffer = [pid_t](repeating: 0, count: capacity)
+                let found = buffer.withUnsafeMutableBytes { bytes in
+                    proc_listchildpids(member.pid, bytes.baseAddress, Int32(bytes.count))
+                }
+                children = Array(buffer.prefix(max(0, min(Int(found), capacity))))
+                guard Int(found) >= capacity, capacity < limit else { break }
+                capacity = min(limit, capacity * 2)
+            }
+            for pid in children where visited.count < limit {
+                guard let child = identity(pid) else { continue }
+                collect(child, parent: member)
+            }
+            collected.append(member)
         }
-        collect(root)
-        return collected.reversed()
+        for root in roots { collect(root) }
+        return collected
     }
 
     private static func signal(_ tree: [ProcessIdentity], _ signal: Int32) {
         for member in tree {
-            guard let current = identity(member.pid), current.seconds == member.seconds,
-                  current.microseconds == member.microseconds else { continue }
+            guard matches(member) else { continue }
             kill(member.pid, signal)
         }
+    }
+
+    /// Only observed identities remain attributable after reparenting. An unseen
+    /// process that has already detached cannot safely be recovered from a PID scan.
+    final class DescendantTracker: @unchecked Sendable {
+        private static let limit = 256
+        private let queue = DispatchQueue(label: "tivano.process.descendants", qos: .utility)
+        private var timer: DispatchSourceTimer?
+        private var members: [pid_t: ProcessIdentity] = [:]
+        private var terminating = false
+
+        func start(_ pid: pid_t) {
+            guard let root = StdioProcess.identity(pid) else { return }
+            queue.async { [self] in
+                members[root.pid] = root
+                observe()
+                // Exit/cancellation can enqueue termination before start's work.
+                guard !terminating else {
+                    StdioProcess.signal(postorder(), SIGTERM)
+                    return
+                }
+                let timer = DispatchSource.makeTimerSource(queue: queue)
+                timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
+                timer.setEventHandler { [weak self] in
+                    guard let self, !self.terminating else { return }
+                    self.observe()
+                }
+                self.timer = timer
+                timer.resume()
+            }
+        }
+
+        private func observe() {
+            members = members.filter { StdioProcess.matches($0.value) }
+            let roots = members.values.sorted { $0.pid < $1.pid }
+            let tree = StdioProcess.processTree(roots, limit: Self.limit)
+            for member in tree where members.count < Self.limit || members[member.pid] != nil {
+                // Preserve the observed parent for postorder after it exits.
+                if members[member.pid] == nil { members[member.pid] = member }
+            }
+        }
+
+        private func postorder() -> [ProcessIdentity] {
+            var visited = Set<pid_t>()
+            var result: [ProcessIdentity] = []
+            let children = Dictionary(grouping: members.values, by: \.parent)
+            func visit(_ member: ProcessIdentity) {
+                guard visited.insert(member.pid).inserted else { return }
+                for child in children[member.pid] ?? [] { visit(child) }
+                result.append(member)
+            }
+            for member in members.values { visit(member) }
+            return result
+        }
+
+        func terminate() {
+            queue.async { [self] in
+                guard !terminating else { return }
+                terminating = true
+                timer?.cancel()
+                timer = nil
+                observe()
+                StdioProcess.signal(postorder(), SIGTERM)
+                queue.asyncAfter(deadline: .now() + 3) { [self] in
+                    observe()
+                    StdioProcess.signal(postorder(), SIGKILL)
+                    members.removeAll()
+                }
+            }
+        }
+
+        deinit { timer?.cancel() }
     }
 
     func terminate() {
@@ -220,13 +310,9 @@ final class StdioProcess: @unchecked Sendable {
             return true
         }
         guard shouldTerminate else { return }
-        let tree = process.isRunning ? Self.processTree(process.processIdentifier) : []
         let handle = stdin.fileHandleForWriting
         writeQueue.async { try? handle.close() }
-        Self.signal(tree, SIGTERM)
-        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-            Self.signal(tree, SIGKILL)
-        }
+        descendants.terminate()
     }
 
     func terminateAndWait(timeout: TimeInterval) async {

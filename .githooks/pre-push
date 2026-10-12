@@ -1,0 +1,65 @@
+#!/bin/sh
+# Tivano publishes main only; dev remains local.
+set -eu
+fail() { echo "$1" >&2; exit 1; }
+remote_url=${2:-}
+case "$remote_url" in
+  https://github.com/elijah7x/tivano|https://github.com/elijah7x/tivano.git|git@github.com:elijah7x/tivano.git|ssh://git@github.com/elijah7x/tivano.git) ;;
+  *) fail "Refusing push: this guard requires the canonical elijah7x/tivano GitHub remote." ;;
+esac
+# Only the reviewed, tool-generated migration batch may replace history.
+if [ -n "${TIVANO_HISTORY_MANIFEST:-}" ]; then
+  guard_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+  migration_script="$guard_dir/../scripts/sanitize_public_history.py"
+  [ -f "$migration_script" ] || fail "Migration validator missing beside installed hook."
+  exec python3 "$migration_script" --check-push \
+    --manifest "$TIVANO_HISTORY_MANIFEST" --remote-url "$remote_url"
+fi
+# Query the push destination, not a potentially stale or redirected origin/main.
+main_sha=$(git ls-remote --exit-code "$remote_url" refs/heads/main | awk '
+  $2 == "refs/heads/main" { n++; sha = $1 } END { if (n == 1) print sha }')
+[ -n "$main_sha" ] || fail "Cannot determine trusted remote main; no refs may be pushed."
+git cat-file -e "$main_sha^{commit}" 2>/dev/null \
+  || fail "Remote main is not available locally. Fetch the canonical origin and retry."
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_ref" != refs/heads/dev ] || fail "Refusing to push local dev; releases must go through reviewed main."
+  if [ "$local_sha" = 0000000000000000000000000000000000000000 ]; then
+    [ "$remote_ref" = "${TIVANO_CLEANUP_REF:-}" ] &&
+    [ "$remote_sha" = "${TIVANO_CLEANUP_SHA:-}" ] &&
+    printf '%s\n' "$remote_ref" | grep -Eq '^refs/heads/release/v[0-9]+\.[0-9]+\.[0-9]+$' \
+      || fail "Refusing deletion of $remote_ref without its reviewed release SHA."
+    continue
+  fi
+  case "$remote_ref" in
+    refs/heads/main)
+      [ "$local_ref" = refs/heads/main ] || fail "Push main from the reviewed local main branch only."
+      [ "$remote_sha" = "$main_sha" ] || fail "Remote main changed during push; fetch and review it again."
+      git merge-base --is-ancestor "$main_sha" "$local_sha" \
+        || fail "Refusing main history rewrite; only a fast-forward is permitted."
+      ;;
+    refs/tags/v1.0.1) expected=73219c3ed8d0b5434d446a98242dc853d7b04ada ;;
+    refs/tags/v1.0.0) expected=b559cfcba99014e92929f566d52e8e6cbd3eb272 ;;
+    refs/tags/v0.2.7) expected=4fe5d33cb4ad97fc66b9838249d10714829ee5b0 ;;
+    refs/tags/v[0-9]*)
+      printf '%s\n' "${remote_ref#refs/tags/}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+        || fail "Refusing invalid version tag $remote_ref."
+      expected=$main_sha
+      ;;
+    *) fail "Refusing to push $remote_ref. Only main and reviewed version tags are published." ;;
+  esac
+  case "$remote_ref" in
+    refs/tags/*)
+      release_commit=$(git rev-parse "$local_sha^{commit}") || exit 1
+      [ "$release_commit" = "$expected" ] \
+        || fail "Refusing ${remote_ref#refs/tags/}: it does not point to its reviewed public revision."
+      ;;
+  esac
+  roots=$(git rev-list --max-parents=0 "$local_sha") || exit 1
+  [ -n "$roots" ] || fail "Cannot determine ancestry for $remote_ref."
+  for root in $roots; do
+    case "$root" in
+      1ace4966d82d98cc9681b3484c7a3710fc0a508a|8a94bcdbfc1aa6a9ac9f892e4f28da8f0f0d2f9d) ;;
+      *) fail "Refusing pre-migration ancestry. Recreate this task from sanitized main/dev." ;;
+    esac
+  done
+done

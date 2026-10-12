@@ -125,9 +125,9 @@ extension ProviderRegistry {
     /// Asks for an install. Callers that share an install await the one already running.
     /// A custom binary path, an unknown channel, and a provider that is off or unmonitored do not install.
     func updateCLI(_ provider: ProviderKind, recovery: Bool = false) async -> Bool {
-        guard !CaptureRun.isEnabled, !provider.isAPIKeyBased else { return false }
+        guard !recovery, !CaptureRun.isEnabled, !provider.isAPIKeyBased else { return false }
         guard let executable = executable(for: provider) else { return false }
-        guard settings.isEnabled(provider), (recovery || monitorsCLIUpdates(provider)), settings.binaryPath(for: provider).isEmpty else { return false }
+        guard settings.isEnabled(provider), monitorsCLIUpdates(provider), settings.binaryPath(for: provider).isEmpty else { return false }
         let lock = cliInstallLock(for: executable)
         if let existing = cliUpdateTasks[lock] {
             return await existing.task.value
@@ -140,7 +140,6 @@ extension ProviderRegistry {
         markCLIWaiting(sharers)
         let id = UUID()
         cliUpdateRequesters[lock] = provider
-        if recovery { cliRecoveryLocks.insert(lock) }
         let task = Task { @MainActor [weak self] in
             guard let self else { return false }
             defer {
@@ -200,7 +199,7 @@ extension ProviderRegistry {
         await LoginEnvironment.load()
         guard cliCheckGeneration[provider] == generation, !Task.isCancelled else { return }
         guard let executable = executable(for: provider) else { return }
-        let environment = environment(for: provider)
+        let environment = CLIInstallEnvironment.current
         var channel: CLIInstallChannel?
         do {
             channel = try await CLIUpdates.channel(for: provider, executable: executable, environment: environment, probe: cliProbe)
@@ -316,7 +315,7 @@ extension ProviderRegistry {
     /// decides which feed `CLIUpdates` reads, so the cache has to name it too.
     private func cliReleaseIdentity(for provider: ProviderKind) -> String {
         guard provider == .claude else { return "none" }
-        let config = environment(for: provider)["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+        let config = CLIInstallEnvironment.current["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
             ?? (cliProbe.home() as NSString).appendingPathComponent(".claude")
         let path = cliProbe.standardize((config as NSString).appendingPathComponent("settings.json"))
         guard let data = cliProbe.readFile(path) else { return "claude:latest" }
@@ -397,7 +396,7 @@ extension ProviderRegistry {
             endCLIUpdateWait(requester, lock: lock, sharers: sharers, snapshot: snapshot)
             return false
         }
-        let environment = environment(for: requester)
+        let environment = CLIInstallEnvironment.current
         var resolvedChannel: CLIInstallChannel?
         do {
             resolvedChannel = try await CLIUpdates.channel(for: requester, executable: executable, environment: environment, probe: cliProbe)
@@ -431,7 +430,7 @@ extension ProviderRegistry {
         }
         let verifiedChannel: CLIInstallChannel?
         do {
-            verifiedChannel = try await CLIUpdates.channel(for: requester, executable: executable, environment: self.environment(for: requester), probe: cliProbe)
+            verifiedChannel = try await CLIUpdates.channel(for: requester, executable: executable, environment: CLIInstallEnvironment.current, probe: cliProbe)
         } catch {
             restoreCLIWait(sharers, snapshot: snapshot, requester: requester, failure: cliUpdateRefusal(requester, error.localizedDescription, channel: nil, keeping: snapshot[requester]))
             return false
@@ -459,10 +458,7 @@ extension ProviderRegistry {
             return true
         }
         let invocation = channel.invocation
-        var updateEnvironment = environment
-        for (key, value) in invocation.environment where key != "PATH" {
-            updateEnvironment[key] = value
-        }
+        let updateEnvironment = CLIInstallEnvironment.applying(invocation.environment, to: environment)
         let outcome: Result<ShellResult, Error>
         do {
             outcome = .success(try await cliCommandRunner.runUpdate(invocation.tool, invocation.arguments, updateEnvironment))
@@ -470,7 +466,7 @@ extension ProviderRegistry {
             outcome = .failure(error)
         }
         let afterURL = executable
-        let afterEnvironment = self.environment(for: requester)
+        let afterEnvironment = CLIInstallEnvironment.current
         let readAfter = Self.readableCLIVersion(await cliCommandRunner.readVersion(afterURL, afterEnvironment))
         let commandFailure: String?
         switch outcome {

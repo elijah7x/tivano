@@ -5,6 +5,8 @@ import UserNotifications
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var model: AppModel?
+    private var quitPending = false
+    private var mcpShutdownCompleted = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Nothing the app fetches is worth keeping on disk (API calls, the MCP proxy's
@@ -41,20 +43,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// two of git and one model call, and losing it half-way leaves the work unmerged
     /// until the user's next message. Capped, so a stuck merge never holds the quit.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model else { return .terminateNow }
-        if model.isLibraryLoaded, !model.isAnyHydraMergeRunning {
-            return model.saveBeforeQuit() ? .terminateNow : .terminateCancel
+        if quitPending { return .terminateLater }
+        if let model, model.isLibraryLoaded, !model.isAnyHydraMergeRunning {
+            guard model.saveBeforeQuit() else { return .terminateCancel }
+            if !MCPHub.hasLiveProcesses { return .terminateNow }
+        } else if model == nil, !MCPHub.hasLiveProcesses {
+            return .terminateNow
         }
+        quitPending = true
         Task { @MainActor in
-            if !model.isLibraryLoaded { await model.bootstrap() }
-            while !model.isLibraryLoaded {
-                try? await Task.sleep(for: .milliseconds(25))
+            if let model {
+                if !model.isLibraryLoaded { await model.bootstrap() }
+                while !model.isLibraryLoaded {
+                    try? await Task.sleep(for: .milliseconds(25))
+                }
+                let deadline = Date.now.addingTimeInterval(4 * 60)
+                while model.isAnyHydraMergeRunning, Date.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+                guard model.saveBeforeQuit() else {
+                    quitPending = false
+                    sender.reply(toApplicationShouldTerminate: false)
+                    return
+                }
             }
-            let deadline = Date.now.addingTimeInterval(4 * 60)
-            while model.isAnyHydraMergeRunning, Date.now < deadline {
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-            sender.reply(toApplicationShouldTerminate: model.saveBeforeQuit())
+            await MCPHub.shared.shutdown()
+            mcpShutdownCompleted = true
+            sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
     }
@@ -63,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         model?.saveBeforeQuit()
         TokenLedger.shared.flushLiveSpend()
         // The MCP servers the hub started go with the app.
-        MCPHub.terminateAll()
+        if !mcpShutdownCompleted { MCPHub.terminateAll() }
     }
 
     nonisolated func userNotificationCenter(

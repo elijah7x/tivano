@@ -141,6 +141,7 @@ final class AppSettings {
         static let appTheme = "appTheme"
         static let backdropOpacity = "backdropOpacity"
         static let appearance = "appearance"
+        static let clearerBackdrop = "clearerBackdrop"
         static let performanceMode = "performanceMode"
         static let autoHideTopControls = "autoHideTopControls"
         static let binaryPaths = "providerBinaryPaths"
@@ -367,9 +368,17 @@ final class AppSettings {
         }
     }
 
+    /// Uses Liquid Glass to show more of the desktop instead of a lighter system blur.
+    var clearerBackdrop: Bool {
+        didSet { defaults.set(clearerBackdrop, forKey: Key.clearerBackdrop) }
+    }
+
     /// Disables window transparency, blurs, glows and background effects for lowest GPU usage.
     var performanceMode: Bool {
-        didSet { defaults.set(performanceMode, forKey: Key.performanceMode) }
+        didSet {
+            defaults.set(performanceMode, forKey: Key.performanceMode)
+            if performanceMode { clearerBackdrop = false }
+        }
     }
 
     var autoHideTopControls: Bool {
@@ -788,7 +797,13 @@ final class AppSettings {
         sidebarActivityView = defaults.bool(forKey: Key.sidebarActivityView)
         settledCollapsed = defaults.object(forKey: Key.settledCollapsed) as? Bool ?? true
         backdropOpacity = defaults.object(forKey: Key.backdropOpacity) as? Double ?? Self.defaultBackdropOpacity
-        performanceMode = defaults.bool(forKey: Key.performanceMode)
+        clearerBackdrop = defaults.object(forKey: Key.clearerBackdrop) as? Bool ?? true
+        let initialPerformanceMode = defaults.bool(forKey: Key.performanceMode)
+        performanceMode = initialPerformanceMode
+        if initialPerformanceMode {
+            clearerBackdrop = false
+            defaults.set(false, forKey: Key.clearerBackdrop)
+        }
         autoHideTopControls = defaults.bool(forKey: Key.autoHideTopControls)
         // The old System/Light/Dark choice maps straight onto the same themes.
         let initialTheme = AppTheme(rawValue: defaults.string(forKey: Key.appTheme) ?? "")

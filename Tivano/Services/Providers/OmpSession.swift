@@ -15,6 +15,9 @@ final class OmpSession: ProviderSession {
     private let runtimeMode: RuntimeMode
     private let interactionMode: InteractionMode
     private var model: String?
+    /// Resolved from OMP's settings-backed @default role, never the resumed session model.
+    private var defaultModel: String?
+    private var activeModel: String?
     private var effort: String?
     /// This session's settings overlay (see `OmpCLI.writeLaunchSettings`) and gate file (see
     /// `writeGate`), removed on stop.
@@ -210,6 +213,15 @@ final class OmpSession: ProviderSession {
             self.sessionID = id
         }
         contextWindow = data["model"]?["contextWindow"]?.int
+        if let provider = data["model"]?["provider"]?.string, let id = data["model"]?["id"]?.string {
+            activeModel = "\(provider)/\(id)"
+        }
+        do {
+            try await selectModel(model)
+        } catch {
+            stop()
+            throw error
+        }
         onEvent?(.sessionReady(sessionID: self.sessionID ?? ""))
 
         emitCommands(commandsResponse["data"] ?? commandsResponse)
@@ -231,6 +243,34 @@ final class OmpSession: ProviderSession {
         }
     }
 
+    private func selectModel(_ selection: String?) async throws {
+        let wanted = selection.flatMap { $0.isEmpty ? nil : $0 } ?? "default"
+        let selector: String
+        if wanted == "default" {
+            guard let defaultModel else {
+                throw ProviderError.failed(String(localized: "omp could not resolve its configured default model. Select a specific model and try again."))
+            }
+            selector = defaultModel
+        } else {
+            selector = wanted
+        }
+        guard selector != activeModel else { model = wanted; return }
+        guard let slash = selector.firstIndex(of: "/") else {
+            throw ProviderError.failed(String(format: String(localized: "omp could not switch to %@. %@"), wanted, "").trimmed)
+        }
+        let response = await request([
+            "type": .string("set_model"),
+            "provider": .string(String(selector[..<slash])),
+            "modelId": .string(String(selector[selector.index(after: slash)...])),
+        ])
+        guard !response.isNull, response["success"]?.bool != false else {
+            throw ProviderError.failed(String(format: String(localized: "omp could not switch to %@. %@"), wanted, response["error"]?.string ?? "").trimmed)
+        }
+        activeModel = selector
+        model = wanted
+        contextWindow = (response["data"] ?? response)["contextWindow"]?.int
+    }
+
     func send(_ input: TurnInput) async throws {
         guard isRunning, let process else { throw ProviderError.notRunning }
         try validateSelection(model: input.model, effort: input.effort)
@@ -238,22 +278,7 @@ final class OmpSession: ProviderSession {
         guard input.runtimeMode == runtimeMode, input.interactionMode == interactionMode else {
             throw ProviderError.failed(String(localized: "Restart the omp session to change its permission or interaction mode."))
         }
-        if let wanted = input.model, !wanted.isEmpty, wanted != model, let slash = wanted.firstIndex(of: "/") {
-            let response = await request([
-                "type": .string("set_model"),
-                "provider": .string(String(wanted[..<slash])),
-                "modelId": .string(String(wanted[wanted.index(after: slash)...])),
-            ])
-            if response.isNull || response["success"]?.bool == false {
-                throw ProviderError.failed(String(format: String(localized: "omp could not switch to %@. %@"), wanted, response["error"]?.string ?? "").trimmed)
-            } else {
-                model = wanted
-                // The context window was read with the model omp started on; the usage panel's
-                // fraction wants the one it runs on now.
-                let state = await request(["type": .string("get_state")])
-                if let window = (state["data"] ?? state)["model"]?["contextWindow"]?.int { contextWindow = window }
-            }
-        }
+        try await selectModel(input.model)
         if let wanted = input.effort, !wanted.isEmpty, wanted != effort, OmpCLI.thinkingLevels.contains(wanted) {
             let response = await request(["type": .string("set_thinking_level"), "level": .string(wanted)])
             guard !response.isNull, response["success"]?.bool != false else {
@@ -560,7 +585,7 @@ final class OmpSession: ProviderSession {
 
     /// The context meter: what the model was just given and said, against its window.
     private func reportContext(_ usage: JSONValue?) {
-        guard let used = usage?["totalTokens"]?.int, used > 0 else { return }
+        guard let used = usage?["contextTokens"]?.int ?? usage?["totalTokens"]?.int, used > 0 else { return }
         onEvent?(.usage(ContextUsage(usedTokens: used, windowTokens: contextWindow)))
     }
 
@@ -595,7 +620,7 @@ final class OmpSession: ProviderSession {
         reportContext(usage)
         if let spent = usage["totalTokens"]?.int, spent > 0 {
             TokenLedger.shared.record(spend: spent)
-            // Subagent frames are ignored, so this is only this session's model spend.
+            // subagent_event wrappers are ignored; ordinary message usage is recorded per message.
             onEvent?(.tokenSpend(TokenSpend(
                 provider: .omp,
                 totalTokens: spent,
@@ -711,11 +736,21 @@ final class OmpSession: ProviderSession {
         input?.firstMatch(of: #/\[([^\]#]+)#[0-9A-Za-z]+\]/#).map { String($0.1) }
     }
 
-    /// `xd://<tool>` names `<tool>`; any other path is a file.
+    /// Conservative canonical subset of v18.8.0 parseXdUrl; topics/query/fragment are not devices.
     private static func toolDevice(_ path: String) -> String? {
-        guard path.hasPrefix("xd://") else { return nil }
-        let name = path.dropFirst("xd://".count).prefix { $0 != "?" && $0 != "/" && $0 != "#" }
-        return name.isEmpty ? nil : String(name)
+        guard path.wholeMatch(of: #/xd:\/\/([A-Za-z0-9_-]+)/#) != nil else { return nil }
+        return String(path.dropFirst("xd://".count))
+    }
+
+    private static func approvalKind(toolName: String, args: JSONValue, path: String? = nil) -> ApprovalRequest.Kind {
+        let devicePath = path ?? args["path"]?.string
+        let device = toolName == "write" ? devicePath.flatMap(toolDevice) : nil
+        let name = device ?? toolName
+        if name == "bash" || name == "eval" { return .command }
+        // Even malformed device writes cannot inherit file-change auto acceptance.
+        if device != nil { return ["write", "edit", "ast_edit", "notebook"].contains(name) ? .fileChange : .tool }
+        if toolName == "write", devicePath?.trimmed.lowercased().hasPrefix("xd://") == true { return .tool }
+        return ["write", "edit", "ast_edit", "notebook"].contains(name) ? .fileChange : .tool
     }
 
     private func absolute(_ path: String) -> String {
@@ -857,6 +892,16 @@ final class OmpSession: ProviderSession {
             toolsAwaitingAnswer = toolsAwaitingAnswer.filter { $0.value != target }
             if hadApproval || hadQuestion { onEvent?(.requestResolved(id: target)) }
         case "notify":
+            let text = params["message"]?.string ?? ""
+            let prefix = "tivano-default-model "
+            if !started, text.hasPrefix(prefix) {
+                if let value = JSONValue.parse(String(text.dropFirst(prefix.count))),
+                   let provider = value["provider"]?.string, !provider.isEmpty,
+                   let id = value["id"]?.string, !id.isEmpty {
+                    defaultModel = "\(provider)/\(id)"
+                }
+                return
+            }
             let level: Notice.Level = switch params["notifyType"]?.string {
             case "warning": .warning
             case "error": .error
@@ -873,16 +918,27 @@ final class OmpSession: ProviderSession {
     private func handleSelect(id: String, params: JSONValue) {
         let title = params["title"]?.string ?? ""
         // The gate extension names the call it asks about exactly: its tool, arguments and id.
-        if title.hasPrefix(Self.gatePrefix), let payload = JSONValue.parse(String(title.dropFirst(Self.gatePrefix.count))) {
-            let args = payload["input"] ?? .null
-
-            let toolID = payload["toolCallId"]?.string
-            if let toolID { toolsAwaitingAnswer[toolID] = id }
+        if title.hasPrefix(Self.gatePrefix) {
+            guard let payload = JSONValue.parse(String(title.dropFirst(Self.gatePrefix.count))),
+                  let name = payload["toolName"]?.string, !name.isEmpty,
+                  let args = payload["input"], args.object != nil,
+                  let toolID = payload["toolCallId"]?.string, !toolID.isEmpty,
+                  payload["kind"]?.string == Self.approvalKind(toolName: name, args: args).grantKey else {
+                answer(id, "Deny")
+                return
+            }
+            // The payload's kind must agree with the actual tool/device; it cannot widen a grant.
+            if let actualName = toolNames[toolID], let actualArgs = toolInputs[toolID] {
+                let device = actualName == "write" ? actualArgs["path"]?.string.flatMap(Self.toolDevice) : nil
+                guard (actualName == name || device == name),
+                      Self.approvalKind(toolName: actualName, args: actualArgs) == Self.approvalKind(toolName: name, args: args) else {
+                    answer(id, "Deny")
+                    return
+                }
+            }
+            toolsAwaitingAnswer[toolID] = id
             decide(
-                id: id,
-                toolName: payload["toolName"]?.string ?? "tool",
-                args: args,
-                toolID: toolID,
+                id: id, toolName: name, args: args, toolID: toolID,
                 promptDetail: args["path"]?.string.map { String(format: String(localized: "Path: %@"), $0) },
                 promptCommand: args["command"]?.string
             )
@@ -926,12 +982,7 @@ final class OmpSession: ProviderSession {
     private func decide(id: String, toolName: String, args: JSONValue, toolID: String?, promptDetail: String?, promptCommand: String?) {
         let path = args["path"]?.string ?? Self.promptPath(promptDetail)
         let device = toolName == "write" ? path.flatMap(Self.toolDevice) : nil
-        let kind: ApprovalRequest.Kind = switch toolName {
-        case _ where device != nil: .tool
-        case "bash", "eval": .command
-        case "write", "edit", "ast_edit", "notebook": .fileChange
-        default: .tool
-        }
+        let kind = Self.approvalKind(toolName: toolName, args: args, path: path)
 
         // task subagents never ask about their own tools, so only unrestricted sessions allow them.
         if toolName == "task" || device == "task" {
@@ -952,14 +1003,15 @@ final class OmpSession: ProviderSession {
             return
         }
 
-        let described = device.map { describe(name: $0, args: JSONValue.parse(args["content"]?.string ?? "") ?? .null) }
-            ?? describe(name: toolName, args: args)
+        let effectiveArgs = device.flatMap { _ in JSONValue.parse(args["content"]?.string ?? "") } ?? args
+        let described = describe(name: device ?? toolName, args: effectiveArgs)
+        let effectiveCommand = effectiveArgs["command"]?.string ?? promptCommand
         let callTitle: String
         let callDetail: String?
         switch kind {
         case .command:
-            callTitle = ToolTitles.unwrapShell(promptCommand ?? described.title)
-            callDetail = promptCommand
+            callTitle = ToolTitles.unwrapShell(effectiveCommand ?? described.title)
+            callDetail = effectiveCommand ?? described.detail
         case .fileChange:
             callTitle = described.title
             callDetail = promptDetail

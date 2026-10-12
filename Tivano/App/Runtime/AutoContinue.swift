@@ -55,6 +55,7 @@ final class AutoContinue {
         guard let app, app.settings.autoContinueAfterLimit, status == .failed, !continues,
               let thread = app.thread(threadID), !thread.isHydraHead else { return false }
         waits[threadID]?.cancel()
+        resumesAt[threadID] = nil
         outcomes[threadID] = nil
         let turnID = app.existingRuntime(for: threadID)?.turns.last?.id
         let token = UUID()
@@ -87,24 +88,34 @@ final class AutoContinue {
     }
 
     private func wait(_ threadID: UUID, turnID: UUID?, resetsAt: Date?, provider: ProviderKind, token: UUID) async {
+        defer {
+            if waitTokens[threadID] == token {
+                resumesAt[threadID] = nil
+                waits[threadID] = nil
+                waitTokens[threadID] = nil
+            }
+        }
         guard let app else { return }
-        var resetsAt = resetsAt
-        // Without a time from the turn itself, the account's limits say when the spent window resets.
-        if resetsAt == nil { resetsAt = await readResetTime(provider) }
+        var schedule = resetsAt.flatMap { Self.schedule(resetTime: $0) }
+        // Missing or invalid message times fall back to the account's spent window.
+        if schedule == nil {
+            let accountReset = await readResetTime(provider)
+            schedule = accountReset.flatMap { Self.schedule(resetTime: $0) }
+        }
         guard !Task.isCancelled, waitTokens[threadID] == token else { return }
-        guard let resetsAt else {
+        guard let schedule else {
             notice(threadID, .warning, "Usage limit reached, and the provider did not say when it resets. Send a message to continue.")
             notify(threadID, "Usage limit reached. Send a message to continue.")
             waits[threadID] = nil
             waitTokens[threadID] = nil
             return
         }
-        let resumeAt = max(resetsAt.addingTimeInterval(Self.margin), Date.now.addingTimeInterval(5))
+        let resumeAt = schedule.date
         resumesAt[threadID] = resumeAt
         let when = Self.format(resumeAt)
         notice(threadID, .info, "Usage limit reached. Continuing automatically at \(when).", limitMark: true)
         notify(threadID, "Usage limit reached. Continuing at \(when).")
-        try? await Task.sleep(for: .seconds(resumeAt.timeIntervalSinceNow))
+        try? await Task.sleep(for: .seconds(schedule.seconds))
         // A wait that was cancelled or replaced while it slept leaves the countdown and
         // the task alone: they belong to whatever took its place.
         guard !Task.isCancelled, waitTokens[threadID] == token else { return }
@@ -122,6 +133,15 @@ final class AutoContinue {
         }
     }
 
+    private static func schedule(resetTime: Date, now: Date = .now) -> (date: Date, seconds: TimeInterval)? {
+        guard UsageLimitSignal.supportsResetTime(resetTime, now: now) else { return nil }
+        let seconds = max(resetTime.timeIntervalSince(now) + margin, 5)
+        guard UsageLimitSignal.supportsWait(seconds) else { return nil }
+        let date = now.addingTimeInterval(seconds)
+        guard UsageLimitSignal.supportsResetTime(date, now: now) else { return nil }
+        return (date, seconds)
+    }
+
     /// The reset time of the account's most-spent window, read fresh.
     private func readResetTime(_ provider: ProviderKind) async -> Date? {
         guard let app, PlanLimitsReader.exposesLimits(provider) else { return nil }
@@ -135,8 +155,10 @@ final class AutoContinue {
             limits = await PlanLimitsReader.read(provider, executable: executable, environment: app.providers.environment(for: provider))
         }
         var spent: PlanLimits.Window?
+        let now = Date.now
         for window in limits?.windows ?? [] {
-            guard let resetsAt = window.resetsAt, resetsAt > Date.now else { continue }
+            guard let resetsAt = window.resetsAt,
+                  Self.schedule(resetTime: resetsAt, now: now) != nil else { continue }
             if spent == nil || window.percent > spent!.percent { spent = window }
         }
         guard let spent, spent.percent >= 95 else { return nil }

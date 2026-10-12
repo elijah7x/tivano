@@ -525,8 +525,8 @@ final class ProviderRegistry {
     /// sessions. Tivano runs both headless, so a Mac that uses them only through the
     /// app stays on the version it was installed with, and a new model then fails
     /// outright: Opus 5.5 answers Claude Code 2.1.270 with "does not support this model;
-    /// version 2.1.280 or newer is required". Recovery for that error goes through the
-    /// same installer as a manual update. Nothing here installs on a timer.
+    /// version 2.1.280 or newer is required". That error prompts a manual update;
+    /// recovery never installs a CLI.
     /// The providers whose reply can ask for a newer CLI (`claude`, `codex`).
     static func updatesOwnCLI(_ provider: ProviderKind) -> Bool {
         provider == .claude || provider == .codex
@@ -543,19 +543,17 @@ final class ProviderRegistry {
             || text.contains("update codex")
     }
 
-    /// Without `force`, does nothing: version checks are read-only and installs are not on a timer.
-    /// `force` is the old Claude/Codex recovery path and runs the same update as the Update button.
+    /// Retained for error-recovery callers. Recovery never authorizes an installation.
     @discardableResult
     func updateCLIIfDue(_ provider: ProviderKind, force: Bool = false) async -> Bool {
-        guard force, Self.updatesOwnCLI(provider) else { return false }
-        return await updateCLI(provider, recovery: true)
+        return false
     }
 
     /// The version the installed CLI reports, or nil when it cannot be read.
     func installedCLIVersion(_ provider: ProviderKind) async -> String? {
         await LoginEnvironment.load()
         guard let executable = executable(for: provider) else { return nil }
-        let raw = await cliCommandRunner.readVersion(executable, environment(for: provider))
+        let raw = await cliCommandRunner.readVersion(executable, CLIInstallEnvironment.current)
         return Self.readableCLIVersion(raw)
     }
 

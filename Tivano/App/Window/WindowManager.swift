@@ -14,11 +14,12 @@ final class WindowManager {
 
     private var mainWindow: NSWindow?
     private var settingsWindow: NSWindow?
-    private weak var responderBeforeSettings: NSResponder?
+    private weak var responderBeforeSettings: NSView?
+    private var threadBeforeSettings: UUID?
 
-    private var usesFullWindowSettings: Bool {
+    var usesFullWindowSettings: Bool {
         let defaults = CaptureRun.defaults ?? .standard
-        return defaults.string(forKey: "settingsPresentation") == "fullWindow"
+        return defaults.string(forKey: "settingsPresentation") != "window"
     }
 
     private enum Size {
@@ -43,7 +44,14 @@ final class WindowManager {
             mainWindow = window
             if !navigation.isPresented {
                 // The chat stays mounted behind Settings and must not keep keyboard focus.
-                responderBeforeSettings = window.firstResponder
+                let responder = window.firstResponder
+                // A shared field editor outlives its control; restore the control instead.
+                if let editor = responder as? NSTextView, editor.isFieldEditor {
+                    responderBeforeSettings = editor.delegate as? NSView
+                } else {
+                    responderBeforeSettings = responder as? NSView
+                }
+                threadBeforeSettings = model.selectedThreadID
                 window.makeFirstResponder(nil)
             }
             model.isCommandPalettePresented = false
@@ -64,12 +72,23 @@ final class WindowManager {
         guard navigation.isPresented else { return }
         navigation.dismiss()
         guard let window = mainWindow else { return }
-        if let view = responderBeforeSettings as? NSView, view.window === window {
-            window.makeFirstResponder(view)
-        } else {
-            window.makeFirstResponder(nil)
-        }
+        window.makeFirstResponder(nil)
+        let responder = responderBeforeSettings
+        let threadID = threadBeforeSettings
         responderBeforeSettings = nil
+        threadBeforeSettings = nil
+        // Let the mounted chat become interactive again before restoring AppKit focus.
+        DispatchQueue.main.async { [weak self, weak window, weak responder] in
+            guard let self, let window, !SettingsNavigation.shared.isPresented,
+                  window.firstResponder == nil || window.firstResponder === window else { return }
+            guard model.selectedThreadID == threadID,
+                  let responder, responder.window === window,
+                  !responder.isHiddenOrHasHiddenAncestor, responder.acceptsFirstResponder,
+                  window.makeFirstResponder(responder) else {
+                window.makeFirstResponder(nil)
+                return
+            }
+        }
     }
 
     func toggleSettings() {
@@ -257,12 +276,18 @@ final class FrameHostingView: NSHostingView<AnyView> {
     /// answer is always yes. SwiftUI's own answer searches the whole view tree for a
     /// navigable item, and AppKit asks on every display cycle while content scrolls
     /// under the title bar to work out the window's drag region.
-    override var acceptsFirstResponder: Bool { true }
+    var acceptsInteraction = true
+
+    override var acceptsFirstResponder: Bool { acceptsInteraction }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        acceptsInteraction ? super.hitTest(point) : nil
+    }
 
     /// A hidden chat column keeps its buttons' shortcuts to itself: AppKit offers a chord to
     /// hidden views too, and a Return meant for the shown column's card must not land on
     /// one behind it.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        !isHiddenOrHasHiddenAncestor && super.performKeyEquivalent(with: event)
+        acceptsInteraction && !isHiddenOrHasHiddenAncestor && super.performKeyEquivalent(with: event)
     }
 }

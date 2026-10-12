@@ -20,7 +20,7 @@ Tivano 是一阵风——科莫湖上清晨的微风。图标里，它吹起一�
 
 ## 功能
 
-Tivano 驱动你本机已安装并登录的编码 Agent，用你自己的订阅：Codex、Claude、Cursor、OpenCode、Grok、Antigravity、Copilot、Command Code、Pi、DeepSeek、Z.ai、Meta 与 Devin。
+Tivano 驱动你本机已安装并登录的编码 Agent，使用你自己的提供商订阅或 API 凭证：Codex、Claude、Cursor、OpenCode Zen、OpenCode Go、Grok、Antigravity、Copilot、Command Code、Pi、omp、Kimi Code、DeepSeek、Z.ai、Meta 与 Devin。
 
 - 玻璃质感侧栏管理项目与线程，支持搜索、置顶与归档沉降。
 - 流式对话，完整呈现推理过程、工具调用、计划与行内审批。
@@ -32,7 +32,7 @@ Tivano 驱动你本机已安装并登录的编码 Agent，用你自己的订阅�
 - Hydra：一个对话，多个头脑——主 Agent 为助手团队撰写任务简报，各自在项目副本中并行工作，成果合并回你的检出。
 - 发送按钮旁的额度环，展示每个已接入计划的用量上限与余额。
 
-远程访问、移动端、云同步、遥测与 Web 客户端，是刻意不做的。
+Tivano 将对话库保存在本机。提供商请求、CLI 更新及应用更新检查会访问相应服务；这些服务有各自的数据政策。可选的本地诊断保存在指定输出目录。
 
 ## 环境要求
 

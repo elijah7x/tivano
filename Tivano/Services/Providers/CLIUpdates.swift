@@ -1,5 +1,41 @@
 import Foundation
 
+/// Installers get shell paths and transport settings, never provider or account overlays.
+enum CLIInstallEnvironment {
+    private static let loginKeys: Set<String> = [
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+        "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_COLLATE", "LC_MESSAGES",
+        "LC_MONETARY", "LC_NUMERIC", "LC_TIME",
+        "TMPDIR", "TMP", "TEMP",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
+        "REQUESTS_CA_BUNDLE",
+        "BUN_INSTALL", "BUN_INSTALL_GLOBAL_DIR", "BUN_INSTALL_BIN", "PNPM_HOME",
+        "npm_config_prefix", "NPM_CONFIG_PREFIX", "CODEX_INSTALL_DIR", "CLAUDE_CONFIG_DIR",
+        "DISABLE_UPDATES", "DISABLE_AUTOUPDATER",
+    ]
+
+    private static let invocationKeys: Set<String> = [
+        "HOMEBREW_NO_ASK", "HOMEBREW_NO_ANALYTICS", "HOMEBREW_NO_EMOJI", "HOMEBREW_NO_ENV_HINTS",
+        "npm_config_fund", "npm_config_audit",
+        "BUN_INSTALL_GLOBAL_DIR", "BUN_INSTALL_BIN", "PNPM_HOME", "CODEX_INSTALL_DIR",
+    ]
+
+    static var current: [String: String] {
+        LoginEnvironment.current.filter { loginKeys.contains($0.key) }
+    }
+
+    /// Only the channel's declared installer policy can extend the whitelist; PATH stays intact.
+    static func applying(_ policy: [String: String], to base: [String: String]) -> [String: String] {
+        var environment = base.filter { loginKeys.contains($0.key) }
+        for (key, value) in policy where invocationKeys.contains(key) {
+            environment[key] = value
+        }
+        return environment
+    }
+}
+
 /// Who owns an installed provider CLI, read from the binary's real path. An update goes
 /// through that owner: `brew upgrade` for the cask or formula, `npm install -g --prefix`
 /// for that npm prefix, `bun`/`pnpm` with the global directory the files already use.
@@ -28,8 +64,7 @@ enum CLIInstallChannel: Equatable, Sendable {
         }.joined(separator: " ")
     }
 
-    /// Extra environment keys are merged onto the login environment by the registry.
-    /// Replacing the environment with only these keys would drop `PATH`.
+    /// Installer policy is merged onto the isolated installation environment by the registry.
     var invocation: (tool: String, arguments: [String], environment: [String: String]) {
         switch self {
         case .homebrew(let brew, let token, let cask):
@@ -44,6 +79,8 @@ enum CLIInstallChannel: Equatable, Sendable {
         case .npm(let tool, let package, let prefix, let tag):
             // `--prefix` is the prefix the files already use, so another npm on PATH
             // cannot write a second global copy. https://docs.npmjs.com/cli/v11/using-npm/config
+            // Keep lifecycle scripts: Claude's postinstall links its native optional dependency.
+            // https://code.claude.com/docs/en/setup#install-with-npm
             return (tool, ["install", "-g", "--prefix", prefix, "\(package)@\(tag)"], [
                 "npm_config_fund": "false",
                 "npm_config_audit": "false",

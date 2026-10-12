@@ -78,7 +78,7 @@ struct ApprovalCard: View {
 
 private struct RequestCardSurface: ViewModifier {
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "local"
+    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "upstream"
     @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {

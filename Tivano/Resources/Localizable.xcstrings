@@ -1,6 +1,721 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%d failed" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d 个失败"
+          }
+        }
+      }
+    },
+    "Called %d tools" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "调用了 %d 个工具"
+          }
+        }
+      }
+    },
+    "Called 1 tool" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "调用了 1 个工具"
+          }
+        }
+      }
+    },
+    "Clearer glass" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更通透的玻璃"
+          }
+        }
+      }
+    },
+    "Fetched %d pages" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "抓取了 %d 个网页"
+          }
+        }
+      }
+    },
+    "Fetched 1 page" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "抓取了 1 个网页"
+          }
+        }
+      }
+    },
+    "Hide the thinking" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隐藏思考过程"
+          }
+        }
+      }
+    },
+    "Hides these steps" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隐藏这些步骤"
+          }
+        }
+      }
+    },
+    "Ran %d commands" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运行了 %d 条命令"
+          }
+        }
+      }
+    },
+    "Ran 1 command" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运行了 1 条命令"
+          }
+        }
+      }
+    },
+    "Read %d files" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取了 %d 个文件"
+          }
+        }
+      }
+    },
+    "Read 1 file" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取了 1 个文件"
+          }
+        }
+      }
+    },
+    "Searched %d times" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索了 %d 次"
+          }
+        }
+      }
+    },
+    "Searched once" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索了 1 次"
+          }
+        }
+      }
+    },
+    "Show the thinking" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示思考过程"
+          }
+        }
+      }
+    },
+    "Shows more of the desktop through the window with Liquid Glass. Uses more GPU while the window's content changes; off uses a lighter system blur." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用 Liquid Glass，让桌面透出得更清楚。窗口内容变化时会占用更多 GPU；关闭后改用更轻量的系统模糊。"
+          }
+        }
+      }
+    },
+    "Shows these steps" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示这些步骤"
+          }
+        }
+      }
+    },
+    "Thought %d times" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "思考了 %d 次"
+          }
+        }
+      }
+    },
+    "Thought process" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "思考过程"
+          }
+        }
+      }
+    },
+    "Unavailable in Performance Mode" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "性能模式下不可用"
+          }
+        }
+      }
+    },
+    "Unavailable while a wallpaper is set" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用壁纸时不可用"
+          }
+        }
+      }
+    },
+    "Remove project" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除项目"
+          }
+        }
+      }
+    },
+    "Unknown reset time" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置时间未知"
+          }
+        }
+      }
+    },
+    "Remove this project?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除这个项目？"
+          }
+        }
+      }
+    },
+    "This permanently deletes %lld chats, including linked heads and helpers in other projects. Project source files will not be deleted." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这将永久删除 %lld 个对话，包括关联到其他项目的 head 和助手。项目源文件不会被删除。"
+          }
+        }
+      }
+    },
+    "Could not remove worktree" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法移除 worktree"
+          }
+        }
+      }
+    },
+    "The head's unfinished work could not be preserved. Its copy was kept so you can retry." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保全这个 head 尚未完成的工作。已保留其副本，便于重试。"
+          }
+        }
+      }
+    },
+    "This model needs a newer %@ CLI. Open Settings and click Update, then send your message again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个模型需要较新的 %@ CLI。请打开设置并点击更新，然后重新发送消息。"
+          }
+        }
+      }
+    },
+    "Unknown tool: %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知工具：%@。"
+          }
+        }
+      }
+    },
+    "The server quit (exit %d)." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器已退出（退出码 %d）。"
+          }
+        }
+      }
+    },
+    "The server quit." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器已退出。"
+          }
+        }
+      }
+    },
+    "The server didn't answer in time." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器未及时响应。"
+          }
+        }
+      }
+    },
+    "%@ isn't installed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未安装 %@。"
+          }
+        }
+      }
+    },
+    "The server address is invalid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址无效。"
+          }
+        }
+      }
+    },
+    "The server answered %lld." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回了 %lld。"
+          }
+        }
+      }
+    },
+    "The server sent something unexpected: missing result." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器回复异常：缺少结果。"
+          }
+        }
+      }
+    },
+    "The server sent something unexpected: invalid reply." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器回复异常：回复无效。"
+          }
+        }
+      }
+    },
+    "The server sent something unexpected: empty reply." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器回复异常：回复为空。"
+          }
+        }
+      }
+    },
+    "The server returned an error without a message." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回了错误，但没有说明。"
+          }
+        }
+      }
+    },
+    "The MCP response exceeded 16 MiB." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 响应超过了 16 MiB。"
+          }
+        }
+      }
+    },
+    "The MCP event exceeded 16 MiB." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 事件超过了 16 MiB。"
+          }
+        }
+      }
+    },
+    "The server sent an invalid tool list." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回了无效的工具列表。"
+          }
+        }
+      }
+    },
+    "The server sent an invalid tool result." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回了无效的工具结果。"
+          }
+        }
+      }
+    },
+    "omp could not resolve its configured default model. Select a specific model and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "omp 无法确定已配置的默认模型。请选择具体模型后重试。"
+          }
+        }
+      }
+    },
+    "Declined: unknown or invalid OMP tool device." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已拒绝：OMP 工具设备未知或无效。"
+          }
+        }
+      }
+    },
+    "Declined: invalid OMP tool device arguments." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已拒绝：OMP 工具设备参数无效。"
+          }
+        }
+      }
+    },
+    "Search stopped because a line exceeds 1 MiB. Results are incomplete." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一行内容超过了 1 MiB，搜索已停止。结果不完整。"
+          }
+        }
+      }
+    },
+    "Project is busy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目正忙"
+          }
+        }
+      }
+    },
+    "Wait for Hydra to finish merging before removing this project." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请等待 Hydra 合并完成后再移除这个项目。"
+          }
+        }
+      }
+    },
+    "The worktree has changes or could not be inspected. Its files were kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "worktree 有改动或无法检查。已保留其中的文件。"
+          }
+        }
+      }
+    },
+    "invalid MCP response" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 响应无效"
+          }
+        }
+      }
+    },
+    "invalid MCP error response" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 错误响应无效"
+          }
+        }
+      }
+    },
+    "invalid MCP tool result" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 工具结果无效"
+          }
+        }
+      }
+    },
+    "invalid MCP response JSON" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 响应 JSON 无效"
+          }
+        }
+      }
+    },
+    "invalid MCP tools list" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 工具列表无效"
+          }
+        }
+      }
+    },
+    "invalid MCP response content type" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 响应内容类型无效"
+          }
+        }
+      }
+    },
+    "MCP response ID or envelope mismatch" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 响应 ID 或消息结构不匹配"
+          }
+        }
+      }
+    },
+    "empty MCP response" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 响应为空"
+          }
+        }
+      }
+    },
+    "MCP response exceeds 16 MiB" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 响应超过了 16 MiB"
+          }
+        }
+      }
+    },
+    "MCP request timed out" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP 请求超时"
+          }
+        }
+      }
+    },
+    "process output closed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进程输出已关闭"
+          }
+        }
+      }
+    },
+    "cancelled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消"
+          }
+        }
+      }
+    },
+    "timed out" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已超时"
+          }
+        }
+      }
+    },
+    "process exited" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进程已退出"
+          }
+        }
+      }
+    },
+    "MCP HTTP error (status %lld)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MCP HTTP 错误（状态码 %lld）"
+          }
+        }
+      }
+    },
     "Hydra: no project named %@ is in the sidebar, so %@ did not start.": {
       "extractionState": "manual",
       "localizations": {

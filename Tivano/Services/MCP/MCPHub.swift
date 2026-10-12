@@ -8,7 +8,7 @@ enum MCPHubError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .unknownTool(let name):
-            return "Unknown tool: \(name)."
+            return String(format: String(localized: "Unknown tool: %@."), name)
         case .server(let message):
             return message
         }
@@ -29,6 +29,17 @@ actor MCPHub {
     /// nothing asynchronous would get to run.
     nonisolated static func terminateAll() { liveProcesses.terminateAll() }
 
+    nonisolated static var hasLiveProcesses: Bool { liveProcesses.hasLiveProcesses }
+
+    func shutdown() async {
+        shuttingDown = true
+        generation = UUID()
+        let existing = clients
+        clients = [:]
+        for client in existing.values { await client.stop() }
+        await Self.liveProcesses.terminateAndWait()
+    }
+
     struct Tool: Sendable, Hashable {
         let server: String
         let name: String
@@ -48,8 +59,10 @@ actor MCPHub {
     private var toolCache: [String: [Tool]] = [:]
     private var failed: Set<String> = []
     private var generation = UUID()
+    private var shuttingDown = false
 
     func tools() async -> [Tool] {
+        guard !shuttingDown else { return [] }
         if specs == nil { specs = Self.readSpecs() }
         guard let current = specs else { return [] }
         let generation = self.generation
@@ -82,6 +95,8 @@ actor MCPHub {
     }
 
     func call(_ callName: String, arguments: JSONValue) async throws -> Result {
+        guard !shuttingDown else { throw CancellationError() }
+        let epoch = generation
         if specs == nil { specs = Self.readSpecs() }
         guard let parsed = Self.parse(callName: callName),
               let spec = specs?[parsed.server]
@@ -92,17 +107,22 @@ actor MCPHub {
         }
         let client = self.client(for: parsed.server, spec: spec)
         do {
-            return try await client.callTool(name: parsed.tool, arguments: arguments)
+            let result = try await client.callTool(name: parsed.tool, arguments: arguments)
+            guard generation == epoch, !shuttingDown else { throw CancellationError() }
+            return result
         } catch let error as MCPHubError {
+            guard generation == epoch, !shuttingDown else { throw CancellationError() }
             throw error
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            guard generation == epoch, !shuttingDown else { throw CancellationError() }
             throw MCPHubError.server(error.localizedDescription)
         }
     }
 
     func reload() {
+        guard !shuttingDown else { return }
         generation = UUID()
         let existing = clients
         clients = [:]
@@ -174,6 +194,7 @@ private actor MCPClient {
     private var stopped = false
     private var stdioInitialization: Task<MCPStdioConnection, Error>?
     private var httpInitialization: Task<String?, Error>?
+    private var httpRequests: [UUID: Task<MCPHTTPReply, Error>] = [:]
 
     /// Cancels only this waiter, leaving the shared initialization owned by the client.
     private final class InitializationWaiter<Value: Sendable>: Sendable {
@@ -230,6 +251,8 @@ private actor MCPClient {
         stdioInitialization = nil
         httpInitialization?.cancel()
         httpInitialization = nil
+        for request in httpRequests.values { request.cancel() }
+        httpRequests.removeAll()
         stdio?.stop()
         stdio = nil
         initialized = false
@@ -265,21 +288,48 @@ private actor MCPClient {
             params: .object(["name": .string(name), "arguments": args]),
             timeout: 120
         )
-        let result = reply["result"]
+        guard let result = reply["result"]?.object,
+              let content = result["content"]?.array,
+              result["isError"] == nil || result["isError"]?.bool != nil,
+              result["structuredContent"] == nil || result["structuredContent"]?.object != nil else {
+            throw MCPResponseError.invalidToolResult
+        }
         var lines: [String] = []
-        for item in result?["content"]?.array ?? [] {
-            if let text = item["text"]?.string {
+        for item in content {
+            guard item.object != nil, let type = item["type"]?.string else {
+                throw MCPResponseError.invalidToolResult
+            }
+            switch type {
+            case "text":
+                guard let text = item["text"]?.string else { throw MCPResponseError.invalidToolResult }
                 lines.append(text)
-            } else if item["type"]?.string == "image" {
-                lines.append("[image]")
-            } else if item["type"]?.string == "resource" {
-                lines.append("[resource: \(item["resource"]?["uri"]?.string ?? "")]")
+            case "image", "audio":
+                guard item["data"]?.string != nil, item["mimeType"]?.string != nil else {
+                    throw MCPResponseError.invalidToolResult
+                }
+                lines.append(type == "image" ? "[image]" : "[audio]")
+            case "resource_link":
+                guard let uri = item["uri"]?.string, item["name"]?.string != nil else {
+                    throw MCPResponseError.invalidToolResult
+                }
+                lines.append("[resource: \(uri)]")
+            case "resource":
+                guard let resource = item["resource"]?.object, let uri = resource["uri"]?.string,
+                      resource["mimeType"] == nil || resource["mimeType"]?.string != nil else {
+                    throw MCPResponseError.invalidToolResult
+                }
+                if let text = resource["text"] {
+                    guard let text = text.string else { throw MCPResponseError.invalidToolResult }
+                    lines.append(text)
+                } else {
+                    guard resource["blob"]?.string != nil else { throw MCPResponseError.invalidToolResult }
+                    lines.append("[resource: \(uri)]")
+                }
+            default:
+                throw MCPResponseError.invalidToolResult
             }
         }
-        return MCPHub.Result(
-            text: lines.joined(separator: "\n"),
-            isError: result?["isError"]?.bool ?? false
-        )
+        return MCPHub.Result(text: lines.joined(separator: "\n"), isError: result["isError"]?.bool ?? false)
     }
 
     private func rpc(method: String, params: JSONValue?, timeout: TimeInterval) async throws -> JSONValue {
@@ -312,9 +362,9 @@ private actor MCPClient {
         } catch let error as MCPWireError {
             switch error {
             case .exited(let code):
-                throw MCPHubError.server(code.map { "The server quit (exit \($0))." } ?? "The server quit.")
+                throw MCPHubError.server(code.map { String(format: String(localized: "The server quit (exit %d)."), $0) } ?? String(localized: "The server quit."))
             case .timedOut:
-                throw MCPHubError.server("The server didn't answer in time.")
+                throw MCPHubError.server(String(localized: "The server didn't answer in time."))
             }
         }
     }
@@ -322,7 +372,7 @@ private actor MCPClient {
     private func ensureStdio(command: String, args: [String], env: [String: String]) async throws -> MCPStdioConnection {
         try Task.checkCancellation()
         if stopped { throw CancellationError() }
-        if dead { throw MCPHubError.server("The server quit.") }
+        if dead { throw MCPHubError.server(String(localized: "The server quit.")) }
         let task: Task<MCPStdioConnection, Error>
         let epoch: UUID
         if let existing = stdioInitialization {
@@ -336,7 +386,7 @@ private actor MCPClient {
                     if didRestart {
                         dead = true
                         connection.stop()
-                        throw MCPHubError.server("The server quit.")
+                        throw MCPHubError.server(String(localized: "The server quit."))
                     }
                     didRestart = true
                 }
@@ -344,7 +394,7 @@ private actor MCPClient {
                 stdio = nil
             }
             guard let executable = LoginEnvironment.which(command, in: LoginEnvironment.current) else {
-                throw MCPHubError.server("\(command) isn't installed.")
+                throw MCPHubError.server(String(format: String(localized: "%@ isn't installed."), command))
             }
             var environment = LoginEnvironment.current
             for (key, value) in env { environment[key] = value }
@@ -394,11 +444,11 @@ private actor MCPClient {
 
     private func checkInitialization(_ reply: JSONValue) throws {
         guard reply["result"]?.object != nil else {
-            throw MCPHubError.server("The server sent something unexpected: missing result.")
+            throw MCPHubError.server(String(localized: "The server sent something unexpected: missing result."))
         }
         // We advertise only 2025-06-18 and no optional client capabilities.
         guard reply["result"]?["protocolVersion"]?.string == MCPWire.protocolVersion else {
-            throw MCPHubError.server("The server sent something unexpected: invalid reply.")
+            throw MCPHubError.server(String(localized: "The server sent something unexpected: invalid reply."))
         }
     }
 
@@ -406,16 +456,19 @@ private actor MCPClient {
 
     private func httpRPC(urlString: String, headers: [String: String], method: String, params: JSONValue?, timeout: TimeInterval) async throws -> JSONValue {
         guard let url = URL(string: urlString) else {
-            throw MCPHubError.server("The server address is invalid.")
+            throw MCPHubError.server(String(localized: "The server address is invalid."))
         }
         let session = try await ensureHTTP(url: url, headers: headers)
         try Task.checkCancellation()
         guard !stopped else { throw CancellationError() }
+        let epoch = generation
         let id = nextID
         nextID += 1
         let posted = try await post(url: url, headers: headers, sessionID: session, payload: MCPWire.request(id: id, method: method, params: params), id: id, timeout: timeout)
+        try Task.checkCancellation()
+        guard !stopped, generation == epoch else { throw CancellationError() }
         guard let body = posted.body else {
-            throw MCPHubError.server("The server sent something unexpected: empty reply.")
+            throw MCPHubError.server(String(localized: "The server sent something unexpected: empty reply."))
         }
         try checkReply(body)
         return body
@@ -450,7 +503,7 @@ private actor MCPClient {
             nextID += 1
             let posted = try await post(url: url, headers: headers, sessionID: nil, payload: MCPWire.request(id: id, method: "initialize", params: MCPWire.initializeParams()), id: id, timeout: 60)
             guard let body = posted.body else {
-                throw MCPHubError.server("The server sent something unexpected: empty reply.")
+                throw MCPHubError.server(String(localized: "The server sent something unexpected: empty reply."))
             }
             try checkReply(body)
             try checkInitialization(body)
@@ -475,15 +528,39 @@ private actor MCPClient {
     }
 
     private func post(url: URL, headers: [String: String], sessionID: String?, payload: JSONValue, id: Int?, timeout: TimeInterval) async throws -> MCPHTTPReply {
+        try Task.checkCancellation()
+        guard !stopped else { throw CancellationError() }
+        let epoch = generation
+        let token = UUID()
+        let task = Task {
+            try await MCPWire.post(to: url, headers: headers, sessionID: sessionID, payload: payload, id: id, timeout: timeout)
+        }
+        httpRequests[token] = task
+        defer { httpRequests.removeValue(forKey: token) }
         do {
-            return try await MCPWire.post(to: url, headers: headers, sessionID: sessionID, payload: payload, id: id, timeout: timeout)
-        } catch let error as MCPHTTPError {
-            guard let status = error.status else {
-                throw MCPHubError.server("The server sent something unexpected: invalid reply.")
+            let reply = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
             }
-            throw MCPHubError.server("The server answered \(status).")
+            try Task.checkCancellation()
+            guard !stopped, generation == epoch else { throw CancellationError() }
+            return reply
+        } catch {
+            if Task.isCancelled || stopped || generation != epoch { throw CancellationError() }
+            if let error = error as? MCPHTTPError {
+                guard let status = error.status else {
+                    throw MCPHubError.server(String(localized: "The server sent something unexpected: invalid reply."))
+                }
+                throw MCPHubError.server(String(format: String(localized: "The server answered %lld."), Int64(status)))
+            }
+            if let error = error as? MCPWireError, case .timedOut = error {
+                throw MCPHubError.server(String(localized: "The server didn't answer in time."))
+            }
+            throw error
         }
     }
+
 }
 
 /// The server processes alive this run, behind a lock so the quit path can reach them
@@ -493,8 +570,29 @@ private final class MCPLiveProcesses: Sendable {
 
     func add(_ process: StdioProcess) {
         state.withLock { processes in
-            processes.removeAll { !$0.isRunning }
+            // Retain exited roots too: their descendants may still be in TERM grace.
             processes.append(process)
+        }
+    }
+
+    var hasLiveProcesses: Bool { state.withLock { $0.contains(where: \.isRunning) } }
+
+    func terminateAndWait() async {
+        let running = state.withLock { $0 }
+        guard !running.isEmpty else { return }
+        for process in running { process.terminate() }
+        // Wait the full grace even if the root exits before its descendants.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { continuation.resume() }
+        }
+        await withTaskGroup(of: Void.self) { group in
+            for process in running {
+                group.addTask { await process.terminateAndWait(timeout: 0.5) }
+            }
+        }
+        for process in running where process.isRunning {
+            let pid = process.processIdentifier
+            kill(getpgid(pid) == pid ? -pid : pid, SIGKILL)
         }
     }
 

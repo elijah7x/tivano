@@ -2,6 +2,61 @@ import AppKit
 import Foundation
 import SwiftUI
 
+/// Completion notifications let a stopped turn stop waiting without cancelling its diffs.
+@MainActor
+private final class CommandDiffCompletion {
+    var isFinished = false
+    var observers: [UUID: () -> Void] = [:]
+
+    func finish() {
+        guard !isFinished else { return }
+        isFinished = true
+        let callbacks = Array(observers.values)
+        observers.removeAll()
+        for callback in callbacks { callback() }
+    }
+}
+
+@MainActor
+private final class CommandDiffWait {
+    private let id = UUID()
+    private var pending: [CommandDiffCompletion] = []
+    private var remaining = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var timer: Task<Void, Never>?
+
+    func wait(for completions: [CommandDiffCompletion]) async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            pending = completions.filter { !$0.isFinished }
+            remaining = pending.count
+            guard remaining > 0 else { finish(); return }
+            for completion in pending {
+                completion.observers[id] = { [weak self] in
+                    guard let self, self.continuation != nil else { return }
+                    self.remaining -= 1
+                    if self.remaining == 0 { self.finish() }
+                }
+            }
+            timer = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(3)) }
+                catch { return }
+                self?.finish()
+            }
+        }
+    }
+
+    private func finish() {
+        guard let continuation else { return }
+        self.continuation = nil
+        for completion in pending { completion.observers.removeValue(forKey: id) }
+        pending.removeAll()
+        timer?.cancel()
+        timer = nil
+        continuation.resume()
+    }
+}
+
 /// One timeline row. A class, so a streaming row redraws without re-diffing the whole thread.
 @MainActor
 @Observable
@@ -552,15 +607,12 @@ final class ThreadRuntime {
     @ObservationIgnored private var currentProviderDiff: String?
     @ObservationIgnored private var currentProviderAnchor: String?
     @ObservationIgnored private var interruptWatchdog: Task<Void, Never>?
-    /// The CLI version a message was last sent again at after the CLI said it was too old
-    /// for the model, per provider: one resend per version, so a CLI that is still too old
-    /// after its update says so rather than trying again forever.
-    @ObservationIgnored private var cliResendVersions: [ProviderKind: String] = [:]
     /// The tree each running command tool is diffed from, by tool id, and
     /// the diffs being settled as they finish (see `watchCommand`).
     @ObservationIgnored private var commandTrees: [String: Task<String?, Never>] = [:]
     @ObservationIgnored private var commandStarts: [String: Date] = [:]
     @ObservationIgnored private var commandSettles: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var commandDiffCompletions: [String: CommandDiffCompletion] = [:]
     /// Commands that `cd` into another checkout first (an agent's own worktree, a sibling
     /// repository): what each is diffed from, by tool id (see `watchForeignCommand`).
     @ObservationIgnored private var foreignCommandBases: [String: Task<ForeignBase?, Never>] = [:]
@@ -1532,7 +1584,7 @@ final class ThreadRuntime {
             if let command { app.providers.recordCommand(command.name, for: thread.provider) }
         } catch {
             guard currentTurnID == turn.id else { return }
-            if finishTurnUpdatingCLI(error.localizedDescription, status: .failed, turnID: turn.id) { return }
+            if finishTurnWithCLIUpdateHint(error.localizedDescription, turnID: turn.id) { return }
             appendNotice(.error, error.localizedDescription)
             await finishTurn(status: .failed, turnID: turn.id)
         }
@@ -2752,7 +2804,7 @@ final class ThreadRuntime {
         case .turnCompleted(let status, let error):
             flushDeltas()
             let turnID = currentTurnID
-            if let error, finishTurnUpdatingCLI(error, status: status, turnID: turnID) { break }
+            if let error, finishTurnWithCLIUpdateHint(error, turnID: turnID) { break }
             if let error { appendNotice(.error, error) }
             Task { await finishTurn(status: status, turnID: turnID) }
             if status == .completed { requestProviderTitle() }
@@ -2772,7 +2824,7 @@ final class ThreadRuntime {
             if currentTurnID != nil {
                 let name = thread?.provider.displayName ?? "The agent"
                 let turnID = currentTurnID
-                if let error, finishTurnUpdatingCLI(error, status: .failed, turnID: turnID) { break }
+                if let error, finishTurnWithCLIUpdateHint(error, turnID: turnID) { break }
                 appendNotice(.error, error ?? "\(name) stopped unexpectedly.")
                 Task { await finishTurn(status: .failed, turnID: turnID) }
             }
@@ -2798,56 +2850,16 @@ final class ThreadRuntime {
         Task { await omp.requestTitle() }
     }
 
-    /// A model newer than the installed CLI fails with the CLI's own "version X or newer
-    /// is required". That is not left to the user: the turn ends, the CLI runs its own
-    /// updater, and the message goes out again on the new version. Returns whether the
-    /// error was taken that way; the caller then neither posts it nor ends the turn.
-    private func finishTurnUpdatingCLI(_ error: String, status: TurnStatus, turnID: UUID?) -> Bool {
-        guard let turnID, let provider = thread?.provider, ProviderRegistry.updatesOwnCLI(provider),
+    /// Preserve the failed attempt; updating and retrying are explicit user actions.
+    private func finishTurnWithCLIUpdateHint(_ error: String, turnID: UUID?) -> Bool {
+        guard let turnID, currentTurnID == turnID,
+              finishingTurnID == nil,
+              let provider = thread?.provider, ProviderRegistry.updatesOwnCLI(provider),
               ProviderRegistry.needsNewerCLI(error) else { return false }
-        // Part of the turn, so the resend's rewind takes it away with the failed attempt.
-        appendNotice(.info, String(format: String(localized: "This model needs a newer %@. Updating it, then sending your message again."), provider.displayName))
-        Task { [weak self] in
-            guard let self else { return }
-            await finishTurn(status: status, turnID: turnID)
-            await resendAfterCLIUpdate(turnID, provider: provider, error: error)
-        }
+        appendNotice(.error, error)
+        appendNotice(.info, String(format: String(localized: "This model needs a newer %@ CLI. Open Settings and click Update, then send your message again."), provider.displayName))
+        Task { await finishTurn(status: .failed, turnID: turnID) }
         return true
-    }
-
-    private func resendAfterCLIUpdate(_ turnID: UUID, provider: ProviderKind, error: String) async {
-        guard let app else { return }
-        let updated = await app.providers.updateCLIIfDue(provider, force: true)
-        guard !Task.isCancelled else { return }
-        guard updated else {
-            appendNotice(.error, cliUpdateFailureNotice(provider, error: error))
-            return
-        }
-        guard let version = await app.providers.installedCLIVersion(provider), cliResendVersions[provider] != version else {
-            appendNotice(.error, cliUpdateFailureNotice(provider, error: error))
-            return
-        }
-        cliResendVersions[provider] = version
-        // The session still runs the binary that refused: the next one starts the new one.
-        releaseSession(stop: true)
-        guard phase == .idle, let turn = turns.first(where: { $0.id == turnID }), let itemID = turn.userItemID,
-              let entry = entryIndex[itemID], case .user(let message) = entry.item.content, !message.isFromHydra else {
-            appendNotice(.error, String(format: String(localized: "%1$@\n\n%2$@ was updated to %3$@. Send the message again."), error, provider.displayName, version))
-            return
-        }
-        do {
-            try await resend(turnID, text: message.text, attachments: message.attachments, restoreFiles: false)
-        } catch {
-            appendNotice(.error, String(format: String(localized: "%1$@ was updated to %2$@, but the message could not be sent again: %3$@ Send it again."), provider.displayName, version, error.localizedDescription))
-        }
-    }
-
-    /// The install command the provider's real channel would run, or a manual hint when that channel is unknown.
-    private func cliUpdateFailureNotice(_ provider: ProviderKind, error: String) -> String {
-        if let command = app?.providers.cliUpdates[provider]?.channel?.command, !command.isEmpty {
-            return String(format: String(localized: "%1$@\n\nTivano could not bring %2$@ up to date. Run `%3$@` in Terminal, then send the message again."), error, provider.displayName, command)
-        }
-        return String(format: String(localized: "%1$@\n\nTivano could not bring %2$@ up to date. Install the newer version the way you installed it, then send the message again."), error, provider.displayName)
     }
 
     private func recordTokenSpend(_ spend: TokenSpend) {
@@ -2869,13 +2881,24 @@ final class ThreadRuntime {
     /// it out of `currentTurnID`, as a stop during the start of a turn does, so that the
     /// message on its way can no longer be sent.
     private func ownsTurnFinalization(_ turnID: UUID, generation: UUID, runtimeGeneration: UInt64) -> Bool {
-        finishingTurnID == turnID && finishingGeneration == generation
+        !Task.isCancelled && finishingTurnID == turnID && finishingGeneration == generation
             && runtimeTurnGeneration == runtimeGeneration
             && runtimeOwnerTurnID == turnID
             && (currentTurnID == nil || currentTurnID == turnID)
     }
 
     private func finishTurn(status: TurnStatus, turnID: UUID?) async {
+        let runtimeGeneration = runtimeTurnGeneration
+        // The watchdog is cancelled by finalization itself. Its cancellation must not
+        // propagate into the checkpoint and persistence work that it requested.
+        let finalizer = Task { @MainActor [self] in
+            guard runtimeTurnGeneration == runtimeGeneration, runtimeOwnerTurnID == turnID else { return }
+            await finalizeTurn(status: status, turnID: turnID)
+        }
+        await finalizer.value
+    }
+
+    private func finalizeTurn(status: TurnStatus, turnID: UUID?) async {
         // An explicit nil is the caller's snapshot, never a later turn's identity.
         // Neither a stale completion nor an empty fallback may release another owner.
         guard finishingTurnID == nil, finishingGeneration == nil,
@@ -2927,19 +2950,16 @@ final class ThreadRuntime {
         // A finished turn waits for its diffs; a stopped or failed one gives them three
         // seconds and lets the rest land on their own, so Stop never hangs on git.
         let settles = Array(commandSettles.values)
+        let completions = Array(commandDiffCompletions.values)
         commandSettles.removeAll()
+        commandDiffCompletions.removeAll()
         if status == .completed {
             for task in settles {
                 await task.value
                 guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
             }
         } else {
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { for task in settles { await task.value } }
-                group.addTask { try? await Task.sleep(for: .seconds(3)) }
-                await group.next()
-                group.cancelAll()
-            }
+            await CommandDiffWait().wait(for: completions)
         }
         guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
         currentTurnID = nil
@@ -3909,7 +3929,10 @@ final class ThreadRuntime {
         let owner = claimOwner
         guard let before = commandTrees.removeValue(forKey: id), let git = repositoryGit else { return }
         let epoch = treeEpoch
+        let completion = CommandDiffCompletion()
+        commandDiffCompletions[id] = completion
         commandSettles[id] = Task { [weak self] in
+            defer { completion.finish() }
             guard let base = await before.value, let self else { return }
             guard let after = await captureTree(git).value else { return }
             latestTree = after
@@ -4009,7 +4032,10 @@ final class ThreadRuntime {
         let turnStart = turns.first(where: { $0.id == currentTurnID })?.startedAt ?? .distantPast
         let owner = claimOwner
         guard let pending = foreignCommandBases.removeValue(forKey: id) else { return }
+        let completion = CommandDiffCompletion()
+        commandDiffCompletions[id] = completion
         commandSettles[id] = Task { [weak self] in
+            defer { completion.finish() }
             guard let base = await pending.value, let self else { return }
             let git = Git(base.root.path)
             let capture = captureTree(git)

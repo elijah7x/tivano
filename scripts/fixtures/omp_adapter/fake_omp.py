@@ -25,10 +25,12 @@ def approval(n):
 for line in sys.stdin:
  m=json.loads(line);kind=m['type'];mode=os.environ.get('T08_START','')
  if kind=='get_available_commands':
+  if mode!='missing-gate':
+   emit(type='extension_ui_request',id='default-model',method='notify',message='tivano-default-model '+json.dumps({'provider':'fixture','id':'default'}),notifyType='info')
   response(m,data={'commands':[] if mode=='missing-gate' else [{'name':'tivano-gate'}]})
  elif kind=='get_state':
   if mode=='waiting-state':continue
-  response(m,ok=mode!='bad-state',data={'sessionFile':str(session),'model':{'contextWindow':100000}})
+  response(m,ok=mode!='bad-state',data={'sessionFile':str(session),'model':{'provider':'fixture','id':'default','contextWindow':100000}})
  elif kind=='get_branch_messages':response(m,data={'messages':[{'entryId':'a','text':'first prompt'},{'entryId':'b','text':'remove target'}]})
  elif kind=='branch':
   if os.environ.get('T08_BRANCH')=='deny':response(m,ok=False)

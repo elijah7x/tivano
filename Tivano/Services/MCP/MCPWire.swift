@@ -30,7 +30,7 @@ enum MCPWire {
 
     nonisolated static func errorMessage(in value: JSONValue) -> String? {
         guard let error = value["error"], error.object != nil else { return nil }
-        return error["message"]?.string ?? "unknown error"
+        return error["message"]?.string ?? String(localized: "The server returned an error without a message.")
     }
 
     /// Paging for `tools/list`: ten pages at most, each cursor fed back until the server
@@ -42,9 +42,19 @@ enum MCPWire {
             var params: [String: JSONValue] = [:]
             if let cursor { params["cursor"] = .string(cursor) }
             let reply = try await page(.object(params))
-            let list = reply["result"]
-            tools += list?["tools"]?.array ?? []
-            guard let next = list?["nextCursor"]?.string, !next.isEmpty else { break }
+            guard let list = reply["result"]?.object,
+                  let items = list["tools"]?.array else { throw MCPResponseError.invalidToolList }
+            for item in items {
+                guard item.object != nil, item["name"]?.string != nil,
+                      item["inputSchema"]?.object != nil,
+                      item["description"] == nil || item["description"]?.string != nil else {
+                    throw MCPResponseError.invalidToolList
+                }
+            }
+            tools += items
+            guard let next = list["nextCursor"] else { break }
+            guard let next = next.string else { throw MCPResponseError.invalidToolList }
+            if next.isEmpty { break }
             cursor = next
         }
         return tools
@@ -69,43 +79,131 @@ enum MCPWire {
         request.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
         if let sessionID { request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw MCPHTTPError(status: nil, body: "")
-        }
-        let session = http.value(forHTTPHeaderField: "Mcp-Session-Id")
-        guard (200..<300).contains(http.statusCode) else {
-            var data = Data()
-            for try await byte in bytes {
-                data.append(byte)
-                if data.count >= 2_000 { break }
+        // A dedicated session gives cancellation ownership even before headers arrive.
+        let postRequest = request
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        return try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: MCPHTTPReply.self) { group in
+                group.addTask { try await readPost(postRequest, session: session, id: id) }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeout))
+                    session.invalidateAndCancel()
+                    throw MCPWireError.timedOut
+                }
+                defer { group.cancelAll() }
+                guard let reply = try await group.next() else { throw CancellationError() }
+                try Task.checkCancellation()
+                return reply
             }
-            throw MCPHTTPError(status: http.statusCode, body: String(decoding: data, as: UTF8.self).trimmed)
+        } onCancel: {
+            session.invalidateAndCancel()
         }
-        let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? ""
-        guard contentType.contains("text/event-stream") else {
-            var data = Data()
-            for try await byte in bytes { data.append(byte) }
-            guard !data.isEmpty else { return MCPHTTPReply(sessionID: session, body: nil) }
-            let body = JSONValue.parse(data)
-            if let id {
-                guard let body, isReply(body, to: id) else {
-                    throw MCPHTTPError(status: nil, body: "")
+    }
+
+    nonisolated private static let responseLimit = 16 * 1024 * 1024
+
+    nonisolated private static func readPost(_ request: URLRequest, session: URLSession, id: Int?) async throws -> MCPHTTPReply {
+        let (bytes, response) = try await session.bytes(for: request)
+        // AsyncBytes.task owns the transfer; cancel also on early SSE success or error.
+        defer { bytes.task.cancel() }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            guard let http = response as? HTTPURLResponse else {
+                throw MCPHTTPError(status: nil, body: "")
+            }
+            let sessionID = http.value(forHTTPHeaderField: "Mcp-Session-Id")
+            guard (200..<300).contains(http.statusCode) else {
+                var data = Data()
+                for try await byte in bytes {
+                    try Task.checkCancellation()
+                    data.append(byte)
+                    if data.count >= 2_000 { break }
+                }
+                throw MCPHTTPError(status: http.statusCode, body: String(decoding: data, as: UTF8.self).trimmed)
+            }
+            let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? ""
+            guard contentType.lowercased().contains("text/event-stream") else {
+                var data = Data()
+                for try await byte in bytes {
+                    try Task.checkCancellation()
+                    guard data.count < responseLimit else {
+                        bytes.task.cancel()
+                        throw MCPResponseError.responseTooLarge
+                    }
+                    data.append(byte)
+                }
+                guard !data.isEmpty else { return MCPHTTPReply(sessionID: sessionID, body: nil) }
+                let body = JSONValue.parse(data)
+                if let id {
+                    guard let body, isReply(body, to: id) else {
+                        throw MCPHTTPError(status: nil, body: "")
+                    }
+                }
+                return MCPHTTPReply(sessionID: sessionID, body: body)
+            }
+            guard let id else { return MCPHTTPReply(sessionID: sessionID, body: nil) }
+            var event = SSEEvent()
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                if let text = try event.append(byte),
+                   let value = JSONValue.parse(text), isReply(value, to: id) {
+                    return MCPHTTPReply(sessionID: sessionID, body: value)
                 }
             }
-            return MCPHTTPReply(sessionID: session, body: body)
+            return MCPHTTPReply(sessionID: sessionID, body: nil)
+        } onCancel: {
+            bytes.task.cancel()
         }
-        guard let id else { return MCPHTTPReply(sessionID: session, body: nil) }
-        for try await line in bytes.lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("data:") else { continue }
-            let text = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
-            guard let value = JSONValue.parse(String(text)),
-                  isReply(value, to: id)
-            else { continue }
-            return MCPHTTPReply(sessionID: session, body: value)
+    }
+
+    /// Limits raw event bytes, including ignored fields and an unterminated line.
+    private struct SSEEvent {
+        var line = Data()
+        var data = Data()
+        var size = 0
+        var afterCR = false
+        var firstLine = true
+
+        mutating func append(_ byte: UInt8) throws -> String? {
+            if afterCR {
+                afterCR = false
+                if byte == 0x0A {
+                    if size > 0 {
+                        guard size < MCPWire.responseLimit else { throw MCPResponseError.eventTooLarge }
+                        size += 1
+                    }
+                    return nil
+                }
+            }
+            guard size < MCPWire.responseLimit else { throw MCPResponseError.eventTooLarge }
+            size += 1
+            if byte != 0x0A && byte != 0x0D {
+                line.append(byte)
+                return nil
+            }
+            afterCR = byte == 0x0D
+            if firstLine {
+                firstLine = false
+                if line.starts(with: [0xEF, 0xBB, 0xBF]) { line.removeFirst(3) }
+            }
+            defer { line.removeAll(keepingCapacity: true) }
+            if line.isEmpty {
+                size = 0
+                guard !data.isEmpty else { return nil }
+                data.removeLast() // SSE removes the final newline after joining data fields.
+                let text = String(decoding: data, as: UTF8.self)
+                data.removeAll(keepingCapacity: true)
+                return text
+            }
+            let colon = line.firstIndex(of: 0x3A) ?? line.endIndex
+            guard line[..<colon].elementsEqual("data".utf8) else { return nil }
+            var value = colon == line.endIndex ? line.endIndex : line.index(after: colon)
+            if value < line.endIndex, line[value] == 0x20 { value = line.index(after: value) }
+            data.append(contentsOf: line[value...])
+            data.append(0x0A)
+            return nil
         }
-        return MCPHTTPReply(sessionID: session, body: nil)
     }
 
     nonisolated private static func isReply(_ value: JSONValue, to id: Int) -> Bool {
@@ -123,6 +221,22 @@ struct MCPHTTPReply: Sendable {
 struct MCPHTTPError: Error, Sendable {
     let status: Int?
     let body: String
+}
+
+enum MCPResponseError: LocalizedError, Sendable {
+    case responseTooLarge
+    case eventTooLarge
+    case invalidToolList
+    case invalidToolResult
+
+    var errorDescription: String? {
+        switch self {
+        case .responseTooLarge: String(localized: "The MCP response exceeded 16 MiB.")
+        case .eventTooLarge: String(localized: "The MCP event exceeded 16 MiB.")
+        case .invalidToolList: String(localized: "The server sent an invalid tool list.")
+        case .invalidToolResult: String(localized: "The server sent an invalid tool result.")
+        }
+    }
 }
 
 enum MCPWireError: Error, Sendable {

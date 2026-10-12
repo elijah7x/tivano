@@ -6,6 +6,30 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.2.6] - 2026-10-12
+
+### Bug fixes
+
+- Confirm project removal, include linked chats across projects, and preserve unfinished or modified worktrees.
+- Reject invalid usage-limit reset times without crashing, while retaining valid multi-day waits.
+- Keep stopped turns' end checkpoints and bound command-diff waits; track observed child processes after their parent exits.
+- Cancel obsolete MCP requests, validate tool results, and limit response and search-line sizes.
+- Preserve timeline windows and expanded rows during layout changes, and reopen Review after its close animation.
+- Approve OMP device calls once, apply the configured Default model, and block hidden chat actions while full-window Settings is open.
+
+### Refinements
+
+- Keep CLI installation environments separate from account credentials and require manual updates after version errors.
+- Remove private infrastructure and account details from public documentation and acceptance fixtures, and include OMP icon attribution.
+- Resume matching release publications safely and provide a tracked, explicitly installed push guard.
+- Settings now opens in the main window, with its pages in the sidebar and the chat kept as it was behind it. The composer, its tabs and approval cards share one floating glass with a theme wash and a thin rim.
+- Add a Clearer glass switch to Appearance, on by default. Turning it off swaps the window's Liquid Glass for a lighter system blur that uses less GPU. Performance Mode turns it off, and it is unavailable while a wallpaper is set.
+- Preview an activity tree for a turn's steps behind a hidden `workGroupStyle` switch (`tree`; `list` stays the default): a count summary, a thin branch per step that draws in as it arrives, and older steps paged past 60.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.2.2] - 2026-10-12
 
 ### New features

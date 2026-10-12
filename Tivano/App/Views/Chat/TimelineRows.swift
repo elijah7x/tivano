@@ -1516,21 +1516,40 @@ struct WorkGroup: View {
     let runtime: ThreadRuntime
     var workingDirectory: String?
     var startsCollapsed = false
-    @State private var isCollapsed: Bool
-    @State private var showsAll = false
+    @State private var fallbackCollapsed: Bool
+    @State private var fallbackShowsAll = false
+    @AppStorage("workGroupStyle", store: CaptureRun.defaults ?? .standard) private var workGroupStyle = "list"
     @Environment(\.revealTimelineEnd) private var revealBox
+    @Environment(\.timelineBlockID) private var blockID
+    private var disclosureID: String { blockID + "/work/" + (entries.first.map { "\($0.id)" } ?? "") }
+    private var isCollapsed: Bool {
+        get { revealBox?.presentation.disclosures[disclosureID + "/collapsed"] ?? fallbackCollapsed }
+        nonmutating set {
+            if let revealBox { revealBox.presentation.disclosures[disclosureID + "/collapsed"] = newValue }
+            else { fallbackCollapsed = newValue }
+        }
+    }
+    private var showsAll: Bool {
+        get { revealBox?.presentation.disclosures[disclosureID + "/all"] ?? fallbackShowsAll }
+        nonmutating set {
+            if let revealBox { revealBox.presentation.disclosures[disclosureID + "/all"] = newValue }
+            else { fallbackShowsAll = newValue }
+        }
+    }
 
     init(entries: [TimelineEntry], runtime: ThreadRuntime, workingDirectory: String? = nil, startsCollapsed: Bool = false) {
         self.entries = entries
         self.runtime = runtime
         self.workingDirectory = workingDirectory
         self.startsCollapsed = startsCollapsed
-        _isCollapsed = State(initialValue: startsCollapsed)
+        _fallbackCollapsed = State(initialValue: startsCollapsed)
     }
 
     var body: some View {
         if entries.count == 1, let only = entries.first {
             ToolRow(entry: only, runtime: runtime, workingDirectory: workingDirectory)
+        } else if workGroupStyle == "tree" {
+            ActivityTreeGroup(entries: entries, runtime: runtime, workingDirectory: workingDirectory, startsCollapsed: startsCollapsed)
         } else {
             VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
                 Button {
@@ -1565,13 +1584,15 @@ struct WorkGroup: View {
                 .help(Text(verbatim: Chrome.localized(isCollapsed ? "Show these steps" : "Hide these steps")))
                 .accessibilityLabel(Text(verbatim: Chrome.localized(isCollapsed ? "Show these steps" : "Hide these steps")))
                 if !isCollapsed {
-                    WorkSteps(entries: entries, runtime: runtime, workingDirectory: workingDirectory, showsAll: $showsAll)
+                    WorkSteps(entries: entries, runtime: runtime, workingDirectory: workingDirectory, showsAll: Binding(get: { showsAll }, set: { showsAll = $0 }))
                 }
             }
             .onChange(of: startsCollapsed) { _, collapsed in
                 // One-way: arriving reply text collapses the group, but a group
                 // the reader opened never snaps shut on its own.
-                if collapsed { isCollapsed = true }
+                if collapsed, revealBox?.presentation.disclosures[disclosureID + "/collapsed"] == nil {
+                    isCollapsed = true
+                }
             }
         }
     }
@@ -1706,7 +1727,16 @@ struct ToolRow: View {
     let entry: TimelineEntry
     let runtime: ThreadRuntime
     var workingDirectory: String?
-    @State private var isExpanded = false
+    @State private var fallbackExpanded = false
+    @Environment(\.timelineBlockID) private var blockID
+    private var disclosureID: String { blockID + "/tool/\(entry.id)" }
+    private var isExpanded: Bool {
+        get { revealBox?.presentation.disclosures[disclosureID] ?? fallbackExpanded }
+        nonmutating set {
+            if let revealBox { revealBox.presentation.disclosures[disclosureID] = newValue }
+            else { fallbackExpanded = newValue }
+        }
+    }
     /// The row's label (icon through chevron), so the changes popover hangs from the
     /// text that was tapped, and the panel that shows an image the agent looked at.
     /// Both are made on first use: a thread holds hundreds of tool rows, and building a
@@ -1721,6 +1751,7 @@ struct ToolRow: View {
     /// Whether the steps popover of the head this row sent out is open.
     @State private var isShowingHead = false
     @Environment(\.revealTimelineEnd) private var revealBox
+    @Environment(\.activityTreeStyle) private var treeStyle
 
     var body: some View {
         if case .tool(let call) = entry.item.content {
@@ -1752,7 +1783,7 @@ struct ToolRow: View {
             VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
                 if isTappable {
                     Button {
-                        [weak slot, weak rt, revealBox, presented = $isShowingHead, expanded = $isExpanded] in
+                        [weak slot, weak rt, revealBox, presented = $isShowingHead, expanded = Binding(get: { isExpanded }, set: { isExpanded = $0 })] in
                         if opensHead {
                             presented.wrappedValue.toggle()
                         } else if opensDiff {
@@ -1776,7 +1807,7 @@ struct ToolRow: View {
                     line(call: call, imagePath: imagePath, opensPopover: opensPopover, opensHead: opensHead, showsOutput: showsOutput)
                 }
                 if isExpanded, showsOutput, !opensImage {
-                    ToolDetailView(call: call, workingDirectory: workingDirectory)
+                    ToolDetailView(call: call, disclosureID: disclosureID, workingDirectory: workingDirectory)
                         .padding(.trailing, 12)
                 }
             }
@@ -1843,12 +1874,12 @@ struct ToolRow: View {
         HStack(spacing: TimelineMetrics.iconSpacing) {
             HStack(spacing: isBadge ? 8 : TimelineMetrics.iconSpacing) {
                 if let head {
-                    HydraGlyph(persona: head.persona, size: 18, isRunning: call.status == .running && head.status == .running, status: head.status)
+                    HydraGlyph(persona: head.persona, size: treeStyle ? TimelineMetrics.iconWidth : 18, isRunning: call.status == .running && head.status == .running, status: head.status)
                 } else if let departing {
-                    HydraGlyph(persona: departing.persona, size: 18, isRunning: call.status == .running, status: Self.departureStatus(for: call))
+                    HydraGlyph(persona: departing.persona, size: treeStyle ? TimelineMetrics.iconWidth : 18, isRunning: call.status == .running, status: Self.departureStatus(for: call))
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 } else if let mcp {
-                    MCPGlyph(entry: mcp.entry, size: 18, isRunning: call.status == .running, status: call.status)
+                    MCPGlyph(entry: mcp.entry, size: treeStyle ? TimelineMetrics.iconWidth : 18, isRunning: call.status == .running, status: call.status)
                 } else {
                     ToolStatusIcon(call: call, symbol: imagePath != nil && call.kind == .read ? "photo" : nil)
                 }
@@ -1878,9 +1909,9 @@ struct ToolRow: View {
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
             }
-            .padding(.leading, isBadge ? TimelineMetrics.pillLeading : 0)
+            .padding(.leading, isBadge && !treeStyle ? TimelineMetrics.pillLeading : 0)
             .padding(.trailing, isBadge ? TimelineMetrics.pillTrailing : 0)
-            .padding(.vertical, isBadge ? TimelineMetrics.pillVertical : 0)
+            .padding(.vertical, isBadge && !treeStyle ? TimelineMetrics.pillVertical : 0)
             .background {
                 if isBadge {
                     RoundedRectangle(cornerRadius: TimelineMetrics.pillRadius, style: .continuous)
@@ -2162,9 +2193,17 @@ private struct ToolStatusIcon: View {
 
 private struct ToolDetailView: View {
     let call: ToolCall
+    let disclosureID: String
     var workingDirectory: String?
-
-    @State private var showsFullOutput = false
+    @Environment(\.revealTimelineEnd) private var revealBox
+    @State private var fallbackFullOutput = false
+    private var showsFullOutput: Bool {
+        get { revealBox?.presentation.disclosures[disclosureID + "/output"] ?? fallbackFullOutput }
+        nonmutating set {
+            if let revealBox { revealBox.presentation.disclosures[disclosureID + "/output"] = newValue }
+            else { fallbackFullOutput = newValue }
+        }
+    }
 
     /// Tool output renders inline and collapsed: a nested scroll view inside the
     /// timeline's scroll view fights gestures and hitches, and materializing tens of

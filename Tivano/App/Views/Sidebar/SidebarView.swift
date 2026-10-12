@@ -15,6 +15,9 @@ struct SidebarView: View {
     @State private var renameText = ""
     /// The thread whose delete popover is open, by id: the popover's binding compares two
     /// UUIDs and never reaches into a thread snapshot that may since have changed hands.
+    @State private var pendingProjectDeletionID: UUID?
+    @State private var confirmedProjectDeletion: ConfirmedProjectDeletion?
+    @State private var isProjectDeletePopoverShown = false
     @State private var pendingDeletionID: UUID?
     /// The thread whose archive question is open, by id, the same way.
     @State private var pendingArchiveID: UUID?
@@ -209,6 +212,30 @@ struct SidebarView: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background { if !inPopover { WindowDragArea() } }
+        .popover(isPresented: Binding(
+            get: { pendingProjectDeletionID != nil },
+            set: { if !$0 { pendingProjectDeletionID = nil } }
+        ), arrowEdge: .trailing) {
+            if let id = pendingProjectDeletionID, let project = model.project(id) {
+                let removedIDs = Set(model.threadsRemovedWithProject(project).map(\.id))
+                RemoveProjectPopover(count: removedIDs.count, onRemove: {
+                    confirmedProjectDeletion = ConfirmedProjectDeletion(projectID: id, threadIDs: removedIDs)
+                    pendingProjectDeletionID = nil
+                    if !isProjectDeletePopoverShown { carryOutConfirmedProjectDeletion() }
+                }, onCancel: { pendingProjectDeletionID = nil })
+                .onAppear { isProjectDeletePopoverShown = true }
+                .onDisappear {
+                    isProjectDeletePopoverShown = false
+                    carryOutConfirmedProjectDeletion()
+                }
+            }
+        }
+        .onChange(of: model.projectDeletionRequest) { _, id in
+            guard let id else { return }
+            model.projectDeletionRequest = nil
+            guard model.project(id) != nil else { return }
+            pendingProjectDeletionID = id
+        }
         // Read only in the popover: the list itself has no reason to re-render on selection.
         .onChange(of: inPopover ? model.selectedThreadID : nil) { if inPopover { dismiss?() } }
         .onChange(of: menuRequests.rename) { _, thread in
@@ -335,6 +362,53 @@ struct SidebarView: View {
         }
     }
 
+    private struct ConfirmedProjectDeletion {
+        let projectID: UUID
+        let threadIDs: Set<UUID>
+    }
+
+    private func carryOutConfirmedProjectDeletion() {
+        guard let confirmed = confirmedProjectDeletion else { return }
+        confirmedProjectDeletion = nil
+        let model = model
+        Task { @MainActor in
+            guard let project = model.project(confirmed.projectID) else { return }
+            let currentIDs = Set(model.threadsRemovedWithProject(project).map(\.id))
+            guard currentIDs.isSubset(of: confirmed.threadIDs) else {
+                model.requestProjectDeletion(project)
+                return
+            }
+            model.removeProject(project)
+        }
+    }
+
+    private func headCards(parent: ChatThread, heads: [ChatThread]) -> some View {
+        let ids = Set(heads.map(\.id))
+        return HeadCardsRow(parentSnapshot: parent, headSnapshots: heads, menuRequests: menuRequests, onFold: { fold(parent.id) })
+            .popover(isPresented: Binding(
+                get: { renaming.map { ids.contains($0.id) } ?? false },
+                set: { if !$0 { renaming = nil } }
+            ), arrowEdge: .bottom) {
+                if let thread = renaming {
+                    RenameThreadPopover(title: renameText, onRename: { model.rename(thread.id, to: $0); renaming = nil }, onCancel: { renaming = nil })
+                        .presentedChrome()
+                }
+            }
+            .popover(isPresented: Binding(
+                get: { pendingDeletionID.map { ids.contains($0) } ?? false },
+                set: { if !$0 { pendingDeletionID = nil } }
+            ), arrowEdge: .trailing) {
+                if let id = pendingDeletionID, let thread = model.thread(id) {
+                    DeleteThreadPopover(thread: thread) { confirmDeletion(of: id, removeWorktree: $0) }
+                        .onAppear { isDeletePopoverShown = true }
+                        .onDisappear {
+                            isDeletePopoverShown = false
+                            carryOutConfirmedDeletion()
+                        }
+                }
+            }
+    }
+
     private struct ConfirmedDeletion {
         let threadID: UUID
         let removeWorktree: Bool
@@ -377,7 +451,7 @@ struct SidebarView: View {
                 // A row that has left the list (scrolled out, settled, deleted) is not there to grab.
                 .onDisappear { rowFrames.forget(thread.id) }
         case .helper(let thread, let isLast):
-            archivePopover(for: thread, on: deletePopover(for: thread, on: SidebarHelperRow(
+            archivePopover(for: thread, on: renamePopover(for: thread, on: deletePopover(for: thread, on: SidebarHelperRow(
                 snapshot: thread,
                 isLast: isLast,
                 menuRequests: menuRequests,
@@ -395,12 +469,12 @@ struct SidebarView: View {
                         model.delete(thread.id)
                     }
                 }
-            ).equatable()))
+            ).equatable())))
             .padding(.leading, item.isNested ? ThreadRowMetrics.folderIndent : 0)
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { rowHeights.note(item.id, $0) }
             .modifier(RidesWithDraggedParent(parentID: thread.parentThreadID, drag: drag))
         case .headCards(let parent, let heads):
-            HeadCardsRow(parentSnapshot: parent, headSnapshots: heads, menuRequests: menuRequests, onFold: { fold(parent.id) })
+            headCards(parent: parent, heads: heads)
                 .padding(.leading, item.isNested ? ThreadRowMetrics.folderIndent : 0)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { rowHeights.note(item.id, $0) }
                 .modifier(RidesWithDraggedParent(parentID: parent.id, drag: drag))
@@ -931,6 +1005,23 @@ struct SidebarView: View {
     }
 }
 
+struct RemoveProjectPopover: View {
+    let count: Int
+    let onRemove: @MainActor @Sendable () -> Void
+    let onCancel: @MainActor @Sendable () -> Void
+
+    var body: some View {
+        PopoverMenu {
+            PopoverSectionHeader("Remove this project?")
+            PopoverNote(String(format: Chrome.localized("This permanently deletes %lld chats, including linked heads and helpers in other projects. Project source files will not be deleted."), Int64(count)))
+            PopoverDivider()
+            PopoverItem("Remove project", symbol: "trash", isDestructive: true, action: onRemove)
+            PopoverItem("Cancel", symbol: "xmark", action: onCancel)
+        }
+        .frame(width: 280)
+    }
+}
+
 struct SidebarToggleButton: View {
     @Environment(AppModel.self) private var model
 
@@ -1020,7 +1111,7 @@ private struct DeleteThreadPopover: View {
             PopoverNote("“\(thread.title)” and its history will be removed. Files in your project stay as they are.")
             PopoverDivider()
             PopoverItem("Delete thread", symbol: "trash", isDestructive: true) { onDelete(false) }
-            if thread.worktreePath != nil {
+            if thread.worktreePath != nil, !thread.isHelper || thread.hydra?.hasOwnCopy == true {
                 PopoverItem("Delete thread and worktree", symbol: "trash", isDestructive: true) { onDelete(true) }
             }
         }
@@ -1229,7 +1320,7 @@ private struct ProjectRow: View {
             },
             RowAction(title: "Remove project", symbol: "trash", isDestructive: true, startsGroup: true) { [weak model, project] in
                 guard let model else { return }
-                model.removeProject(project)
+                model.requestProjectDeletion(project)
             },
         ]
         items.append(RowAction(
@@ -1257,7 +1348,7 @@ private struct ProjectRow: View {
             },
             RowAction(title: "Reveal in Finder", symbol: "folder", startsGroup: true) { Workspace.revealInFinder(project.path) },
             RowAction(title: "Remove project", symbol: "trash", isDestructive: true, startsGroup: true) {
-                model.removeProject(project)
+                model.requestProjectDeletion(project)
             },
         ]
         items.append(RowAction(

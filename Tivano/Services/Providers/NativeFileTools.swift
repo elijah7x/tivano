@@ -376,12 +376,20 @@ struct NativeFileTools: Sendable {
                 try readChunks(fd) { chunk in
                     try checkSearch()
                     if chunk.contains(0) { binary = true; return false }
-                    pending.append(chunk)
-                    while let newline = pending.firstIndex(of: 10) {
+                    var start = chunk.startIndex
+                    while start < chunk.endIndex {
                         try checkSearch()
-                        line(Data(pending[..<newline]))
-                        pending.removeSubrange(...newline)
+                        let newline = chunk[start...].firstIndex(of: 10)
+                        let end = newline ?? chunk.endIndex
+                        guard pending.count + chunk.distance(from: start, to: end) <= 1_048_576 else {
+                            throw ProviderError.failed(localized("Search stopped because a line exceeds 1 MiB. Results are incomplete."))
+                        }
+                        pending.append(contentsOf: chunk[start..<end])
+                        guard let newline else { break }
+                        line(pending)
+                        pending.removeAll(keepingCapacity: true)
                         if full { return false }
+                        start = chunk.index(after: newline)
                     }
                     return true
                 }

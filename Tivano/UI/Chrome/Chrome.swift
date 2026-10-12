@@ -195,7 +195,7 @@ extension Chrome {
 }
 
 private struct FloatingGlassContainer: ViewModifier {
-    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "local"
+    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "upstream"
 
     func body(content: Content) -> some View {
         if floatingGlassStyle == "upstream" {
@@ -297,7 +297,7 @@ struct WindowBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @AppStorage("windowBackdropStyle", store: CaptureRun.defaults ?? .standard) private var windowBackdropStyle = "glass"
+    @AppStorage("clearerBackdrop", store: CaptureRun.defaults ?? .standard) private var clearerBackdrop = true
     /// The backdrop setting, 0 for bare glass and 1 for a solid base.
     let opacity: Double
     /// The user's wallpaper, painted edge to edge at the transparency setting's own opacity; nil for the stock glass.
@@ -351,13 +351,13 @@ struct WindowBackdrop: View {
                         .transition(.opacity)
                 } else {
                     Group {
-                        if windowBackdropStyle == "blur" {
-                            BehindWindowBlur()
-                                .clipShape(shape)
-                        } else {
+                        if clearerBackdrop {
                             shape
                                 .fill(.clear)
                                 .glassEffect(in: shape)
+                        } else {
+                            BehindWindowBlur()
+                                .clipShape(shape)
                         }
                     }
                     .overlay {

@@ -339,7 +339,17 @@ struct DiffLinesView: View, Equatable {
         "\(file.id)|\(file.revision)|\(file.hunks.count)|\(file.additions)|\(file.deletions)|\(totalLines)"
     }
 
-    @State private var showsAll = false
+    @Environment(\.revealTimelineEnd) private var revealBox
+    @Environment(\.timelineBlockID) private var blockID
+    @State private var fallbackShowsAll = false
+    private var disclosureID: String { blockID + "/diff/\(file.id)" }
+    private var showsAll: Bool {
+        get { revealBox?.presentation.disclosures[disclosureID] ?? fallbackShowsAll }
+        nonmutating set {
+            if let revealBox { revealBox.presentation.disclosures[disclosureID] = newValue }
+            else { fallbackShowsAll = newValue }
+        }
+    }
     // Sections are built once per state change, not on every body pass.
     @State private var sections: [Section] = []
     @State private var preparedKey: String?
@@ -635,10 +645,14 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
     private struct ClosingPresentation {
         let session: Int
         let runtime: ThreadRuntime?
-        let preservesVisibility: Bool
     }
     private var closingPresentations: [ClosingPresentation] = []
-    private var reopeningSession: Int?
+    private struct ReopenRequest {
+        let session: Int
+        let runtime: ThreadRuntime
+        let request: Int
+    }
+    private var pendingReopen: ReopenRequest?
 
     override init() {
         super.init()
@@ -682,7 +696,8 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
     func close() {
         stopMonitors()
         desiredVisible = false
-        if popover.isShown { popover.performClose(nil) }
+        pendingReopen = nil
+        if closingPresentations.isEmpty, popover.isShown { popover.performClose(nil) }
     }
 
     /// The composer area itself, for when the changes tab is not on screen (the
@@ -708,14 +723,18 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
         guard runtime.diffOpenRequest != seenOpenRequest else { return }
         seenOpenRequest = runtime.diffOpenRequest
         desiredVisible = true
-        if popover.isShown {
+        if let shownSession {
+            // isShown can remain true through the close animation, including on the same anchor.
+            if !closingPresentations.isEmpty {
+                pendingReopen = ReopenRequest(session: shownSession, runtime: runtime, request: seenOpenRequest)
+                return
+            }
             if shownOn === resolvedAnchor()?.view { return }
+            pendingReopen = ReopenRequest(session: shownSession, runtime: runtime, request: seenOpenRequest)
             stopMonitors()
-            reopeningSession = shownSession
             popover.close()
-            reopeningSession = nil
+            return
         }
-        desiredVisible = true
         show()
     }
 
@@ -733,7 +752,12 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
     }
 
     private func show() {
-        guard !popover.isShown, let runtime, let target = resolvedAnchor() else { return }
+        guard desiredVisible, let runtime else { return }
+        if let shownSession, !closingPresentations.isEmpty {
+            pendingReopen = ReopenRequest(session: shownSession, runtime: runtime, request: runtime.diffOpenRequest)
+            return
+        }
+        guard shownSession == nil, !popover.isShown, let target = resolvedAnchor() else { return }
         session += 1
         stopMonitors()
         popover.setFixedContent(DiffInspector(runtime: runtime), size: NSSize(width: Self.width, height: Self.height))
@@ -752,26 +776,36 @@ final class DiffPopoverCoordinator: NSObject, NSPopoverDelegate {
         guard let shownSession else { return }
         closingPresentations.append(ClosingPresentation(
             session: shownSession,
-            runtime: shownRuntime,
-            preservesVisibility: reopeningSession == shownSession
+            runtime: shownRuntime
         ))
     }
 
     func popoverDidClose(_ notification: Notification) {
         guard !closingPresentations.isEmpty else { return }
         let closing = closingPresentations.removeFirst()
-        // A newer presentation of the same runtime owns its visible flag now.
-        if !closing.preservesVisibility,
-           shownSession == closing.session || shownRuntime !== closing.runtime {
-            if let runtime = closing.runtime, runtime.isDiffVisible { runtime.isDiffVisible = false }
-        }
         guard shownSession == closing.session else { return }
+        let queued = pendingReopen.flatMap { request -> ReopenRequest? in
+            guard request.session == closing.session, request.runtime === runtime,
+                  request.request == request.runtime.diffOpenRequest, desiredVisible,
+                  request.runtime.isDiffVisible else { return nil }
+            return request
+        }
+        pendingReopen = nil
         stopMonitors()
-        if !closing.preservesVisibility { desiredVisible = false }
+        // DidClose is sent after the offscreen animation finishes, so only now may a
+        // queued request show again. Source: developer.apple.com/documentation/appkit/nspopover/didclosenotification
         popover.contentViewController = nil
         shownRuntime = nil
         shownOn = nil
         shownSession = nil
+        if queued != nil {
+            show()
+        } else {
+            desiredVisible = false
+            if let closedRuntime = closing.runtime, closedRuntime.isDiffVisible {
+                closedRuntime.isDiffVisible = false
+            }
+        }
     }
 
     /// Clicks inside the panel pass through; any other click dismisses first

@@ -28,13 +28,38 @@ private enum HydraProjectMerge {
     case deferred
 }
 
+@MainActor
+private enum HydraMergeActivity {
+    enum Phase { case resuming, queued, running }
+    struct Entry {
+        let leadID: UUID?
+        var phase: Phase
+    }
+    // Runtime eviction must not hide an async merge that still holds repository locks.
+    static var owners: [ObjectIdentifier: [UUID: Entry]] = [:]
+}
+
 extension AppModel {
     /// One project's share of a job: the paths this merge takes, the turns and heads they
     /// settle, the paths that lie under no checkout, and the heads' files.
     typealias HydraWork = (paths: [String], turnIDs: [UUID], headIDs: [UUID], outside: [String], heads: [HydraMergeHead])
 
     /// Whether any chat's team work is on its way to the remote right now.
-    var isAnyHydraMergeRunning: Bool { liveRuntimes.contains { $0.isHydraMerging } }
+    var isAnyHydraMergeRunning: Bool {
+        !(HydraMergeActivity.owners[ObjectIdentifier(self)] ?? [:]).isEmpty
+    }
+
+    private var hasActiveHydraMerge: Bool {
+        HydraMergeActivity.owners[ObjectIdentifier(self)]?.values.contains { $0.phase == .running } ?? false
+    }
+
+    private func unregisterHydraMergeActivity(_ id: UUID) {
+        let owner = ObjectIdentifier(self)
+        HydraMergeActivity.owners[owner]?.removeValue(forKey: id)
+        if HydraMergeActivity.owners[owner]?.isEmpty == true {
+            HydraMergeActivity.owners.removeValue(forKey: owner)
+        }
+    }
 
     /// How long after its last message a lead is still one the auto-merge visits. It is
     /// the window `resumeHydraMerges` sweeps, and so also how long a head's claim on its
@@ -48,7 +73,12 @@ extension AppModel {
     /// every turn reads as spent. The merge itself finds the files and lets a job that
     /// changed nothing be.
     func resumeHydraMerges() async {
-        guard settings.hydraAutoMerge else { return }
+        guard persistenceEnabled, settings.hydraAutoMerge else { return }
+        let owner = ObjectIdentifier(self)
+        guard HydraMergeActivity.owners[owner]?.values.contains(where: { $0.phase == .resuming }) != true else { return }
+        let recoveryID = UUID()
+        HydraMergeActivity.owners[owner, default: [:]][recoveryID] = .init(leadID: nil, phase: .resuming)
+        defer { unregisterHydraMergeActivity(recoveryID) }
         let cutoff = Date.now.addingTimeInterval(-Self.hydraMergeWindow)
         let leads = threads.filter { !$0.isArchived && hydraIsOn($0) && $0.updatedAt > cutoff }
             .sorted { $0.id.uuidString < $1.id.uuidString }
@@ -56,6 +86,7 @@ extension AppModel {
         // must not keep a completed job looking unfinished until the next sweep.
         for lead in leads {
             await runtime(for: lead.id).ensureLoaded()
+            guard settings.hydraAutoMerge, !Task.isCancelled else { return }
         }
         for lead in leads {
             guard let runtime = existingRuntime(for: lead.id),
@@ -71,34 +102,44 @@ extension AppModel {
             let hasOwnWork = finished.contains { !($0.touchedPaths ?? []).isEmpty }
                 || hydraTeam(of: lead.id).contains { $0.hydra.map { $0.mergedAt == nil && ($0.landing?.landed ?? false) } ?? false }
             guard hasOwnWork else { continue }
-            await autoMergeHydraWork(of: lead.id)
+            await autoMergeHydraWork(of: lead.id, recovering: true)
         }
     }
 
     /// Lands a lead's finished work, when the setting says so. Runs once per finished job;
     /// what happened lands in the lead's timeline as a note from Hydra.
-    func autoMergeHydraWork(of leadID: UUID) async {
-        guard settings.hydraAutoMerge, let waiting = thread(leadID), hydraIsOn(waiting),
+    func autoMergeHydraWork(of leadID: UUID, recovering: Bool = false) async {
+        guard persistenceEnabled, settings.hydraAutoMerge, let waiting = thread(leadID), hydraIsOn(waiting),
               let queued = existingRuntime(for: leadID), !queued.isHydraMerging, !queued.isHydraMergeQueued,
               queued.isReadyForHydraMerge else { return }
+        let owner = ObjectIdentifier(self)
+        guard HydraMergeActivity.owners[owner]?.values.contains(where: { $0.leadID == leadID }) != true else { return }
+        let activityID = UUID()
+        HydraMergeActivity.owners[owner, default: [:]][activityID] = .init(leadID: leadID, phase: .queued)
+        queued.isHydraMergeQueued = true
+        defer {
+            queued.isHydraMergeQueued = false
+            unregisterHydraMergeActivity(activityID)
+        }
         // One merge goes out at a time: several jobs finishing in the same moment would
         // otherwise snapshot shared files side by side. A job that finishes while another
         // merges waits its turn right here and goes the moment that one is done. It used
         // to step aside for the sweep five minutes later, and a chat that was plainly
         // finished sat there unmerged.
-        if isAnyHydraMergeRunning {
-            queued.isHydraMergeQueued = true
-            defer { queued.isHydraMergeQueued = false }
-            while isAnyHydraMergeRunning {
+        if hasActiveHydraMerge {
+            while hasActiveHydraMerge {
                 try? await Task.sleep(for: .milliseconds(400))
                 guard !Task.isCancelled else { return }
             }
         }
         // Everything is read again after the wait, and the flag below is set with no
         // suspension after this guard, so of several waiters exactly one goes.
-        guard settings.hydraAutoMerge, let lead = thread(leadID), hydraIsOn(lead), let project = project(lead.projectID),
-              let runtime = existingRuntime(for: leadID), !runtime.isHydraMerging, !isAnyHydraMergeRunning,
+        guard persistenceEnabled, settings.hydraAutoMerge, let lead = thread(leadID), hydraIsOn(lead), let project = project(lead.projectID),
+              let runtime = existingRuntime(for: leadID), runtime === queued,
+              !runtime.isHydraMerging, !hasActiveHydraMerge, !Task.isCancelled,
               runtime.isReadyForHydraMerge else { return }
+        HydraMergeActivity.owners[owner]?[activityID]?.phase = .running
+        queued.isHydraMergeQueued = false
         runtime.isHydraMerging = true
         runtime.hydraMergeStartedAt = .now
         runtime.hydraMergeNoteID = UUID().uuidString
@@ -115,7 +156,8 @@ extension AppModel {
         // commit is built from must hold the patch whole or not at all. Landings that have
         // not started yet wait for the merge instead (see `waitForSettledCheckout`).
         await runtime.hydraLanding?.value
-        guard runtime.isReadyForHydraMerge else { return }
+        guard settings.hydraAutoMerge, !Task.isCancelled, existingRuntime(for: leadID) === runtime,
+              runtime.isReadyForHydraMerge else { return }
 
         // What the team touched, and only that, so a sibling's uncommitted work in the
         // same checkout stays behind. The chat's own checkout goes first, then every
@@ -165,6 +207,9 @@ extension AppModel {
         let everyHeadID = groups.flatMap(\.work.headIDs)
         groups.removeAll { $0.work.paths.isEmpty }
         guard !groups.isEmpty else {
+            // Recovery gathered no patch to write. Absence of local changes alone
+            // does not prove that an interrupted merge reached the remote.
+            if recovering, stray.isEmpty { return }
             guard !stray.isEmpty else {
                 // Nothing to send and nothing outside a project: whatever the turns
                 // recorded is already on the branch, ignored, build output, or gone. Mark
@@ -187,6 +232,7 @@ extension AppModel {
             outcomes.append(await mergeHydraProject(of: leadID, lead: lead, project: group.project, checkout: group.checkout, work: group.work, runtime: runtime, several: several, syncsProjectCheckout: group.syncsProjectCheckout))
         }
         guard !outcomes.contains(.failed), !outcomes.contains(.deferred) else { return }
+        if recovering, outcomes.allSatisfy({ $0 == .alreadyOnMain }) { return }
         // Another job that waited on this one, or was put off by it, goes now rather than
         // at the next sweep. Scheduled, so it starts once this merge has let go.
         Task { [weak self] in await self?.resumeHydraMerges() }
@@ -334,7 +380,9 @@ extension AppModel {
                 }
                 // A lead can resume while gathering or capturing files: it has work under
                 // way again, and this job goes out with it once it finishes.
-                guard runtime.isReadyForHydraMerge else { return .deferred }
+                guard settings.hydraAutoMerge, !Task.isCancelled,
+                      existingRuntime(for: leadID) === runtime,
+                      runtime.isReadyForHydraMerge else { return .deferred }
                 // Everything the team did is committed already: taken along by another chat's
                 // merge from the same checkout, or committed by hand. The job is spent either
                 // way, and there is nothing to tell: the work is where it was meant to go.
@@ -365,6 +413,9 @@ extension AppModel {
                     message = await commitMessage(for: lead, files: files, patch: patch, directory: checkout)
                     described = (patch, message)
                 }
+                guard settings.hydraAutoMerge, !Task.isCancelled,
+                      existingRuntime(for: leadID) === runtime,
+                      runtime.isReadyForHydraMerge else { return .deferred }
                 let commit = try await git.commitWork(captured, parent: parent, message: message)
                 // Writing the branch to a commit prepared from `head` drops anything committed
                 // since: HEAD is read again, and a checkout that moved is prepared again.
@@ -379,6 +430,9 @@ extension AppModel {
             let files = prepared.files
             let subject = TextCleanup.singleLine(prepared.message, limit: 72)
 
+            guard settings.hydraAutoMerge, !Task.isCancelled,
+                  existingRuntime(for: leadID) === runtime,
+                  runtime.isReadyForHydraMerge else { return .deferred }
             if ownBranch {
                 // The job's own branch: one per chat, rebuilt on each try, so a retry updates
                 // the request it opened instead of opening another.

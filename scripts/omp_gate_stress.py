@@ -106,6 +106,19 @@ def cases():
         ("device-deny", gate("autoAcceptEdits"), "device", False, "Deny"),
         ("device-approve", gate("supervised"), "device", True, "Approve"),
         ("device-plan", gate(interaction="plan"), "device", False, None),
+        ("device-full", gate(), "device", True, None),
+        ("device-final", gate(final=True), "device", False, None),
+        ("device-missing", None, "device", False, None),
+        ("device-command-approve", gate("supervised"), "device-command", True, "Approve"),
+        ("device-command-deny", gate("autoAcceptEdits"), "device-command", False, "Deny"),
+        ("device-command-plan", gate(interaction="plan"), "device-command", False, None),
+        ("device-task", gate(), "device-task", False, None),
+        ("device-unknown", gate("autoAcceptEdits"), "device-unknown", False, None),
+        ("device-query", gate("autoAcceptEdits"), "device-query", False, None),
+        ("device-topic", gate("autoAcceptEdits"), "device-topic", False, None),
+        ("device-fragment", gate("autoAcceptEdits"), "device-fragment", False, None),
+        ("device-encoded", gate("autoAcceptEdits"), "device-encoded", False, None),
+        ("device-array", gate("supervised"), "device-array", False, None),
     ]
 
 
@@ -121,12 +134,18 @@ def run_case(rpc, directory, gate_path, identity, state, tool, allowed, answer):
         inputs = {"path": str(directory / "read-fixture.txt")}
     elif tool == "bash":
         inputs = {"command": "printf gate-ok > " + shlex.quote(str(marker))}
-    elif tool == "device":
-        inputs = {"path": "xd://gate_probe", "content": json.dumps({"path": str(marker)})}
+    elif tool.startswith("device"):
+        device = {
+            "device-command": "bash", "device-task": "task", "device-unknown": "unknown_gate_probe",
+            "device-query": "mcp__gate__probe?x=1", "device-topic": "mcp__gate__probe/docs",
+            "device-fragment": "mcp__gate__probe#x", "device-encoded": "%6dcp__gate__probe",
+        }.get(tool, "mcp__gate__probe")
+        inner = {"command": "printf gate-ok > " + shlex.quote(str(marker))} if tool == "device-command" else {"path": str(marker)}
+        inputs = {"path": "xd://" + device, "content": json.dumps([] if tool == "device-array" else inner)}
     else:
         inputs = {"path": str(marker), "content": "gate-ok"}
     prompt = rpc.send("prompt", message=PREFIX + json.dumps({"id": identity,
-                      "tool": "write" if tool == "device" else tool, "input": inputs}))
+                      "tool": "write" if tool.startswith("device") else tool, "input": inputs}))
     approvals = []
     completions = []
 
@@ -140,9 +159,10 @@ def run_case(rpc, directory, gate_path, identity, state, tool, allowed, answer):
             if event.get("method") != "select" or not title.startswith("tivano-gate "):
                 raise RuntimeError("Unexpected approval request")
             payload = json.loads(title[len("tivano-gate "):])
-            expected = "command" if tool == "bash" else "tool" if tool == "device" else "fileChange"
-            expected_inputs = json.loads(inputs["content"]) if tool == "device" and approvals else inputs
-            expected_name = "gate_probe" if tool == "device" and approvals else "write" if tool == "device" else tool
+            expected = "command" if tool in ("bash", "device-command") else "tool" if tool.startswith("device") else "fileChange"
+            expected_inputs = json.loads(inputs["content"]) if tool.startswith("device") else inputs
+            expected_name = "bash" if tool == "device-command" else "mcp__gate__probe" if tool.startswith("device") else tool
+            # Only the real inner execution asks; the write wrapper gets no independent grant.
             if payload.get("kind") != expected or payload.get("input") != expected_inputs or payload.get("toolName") != expected_name:
                 raise RuntimeError("Approval payload mismatch")
             approvals.append(event["id"])
@@ -157,7 +177,7 @@ def run_case(rpc, directory, gate_path, identity, state, tool, allowed, answer):
     completion = rpc.until(consume)
     if completion.get("status") != "completed":
         raise RuntimeError("Prompt did not complete: " + json.dumps(completion))
-    expected_approvals = 2 if tool == "device" and answer == "Approve" else 1 if answer is not None else 0
+    expected_approvals = 1 if answer is not None else 0
     if len(approvals) != expected_approvals:
         raise RuntimeError("Approval count mismatch")
     if len(completions) != 1:
@@ -206,7 +226,7 @@ export default function(pi) {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 1048576, maxTokens: 4096 }]
   });
-  pi.registerTool({ name: "gate_probe", label: "Gate probe", description: "Write a test marker",
+  pi.registerTool({ name: "mcp__gate__probe", label: "Gate probe", description: "Write a test marker",
     parameters: Type.Object({ path: Type.String() }),
     async execute(id, params) {
       fs.writeFileSync(params.path, "gate-ok");

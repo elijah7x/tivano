@@ -181,7 +181,8 @@ enum HangWatchdog {
 
     private static func reportsFolder() -> URL {
         let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library")
-        return library.appendingPathComponent("Logs/Tivano", isDirectory: true)
+        return library.appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent(AppInfo.libraryName, isDirectory: true)
     }
 
     private static func trimReports(in folder: URL) {

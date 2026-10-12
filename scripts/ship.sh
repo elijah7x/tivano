@@ -71,7 +71,7 @@ cleanup_preparation() {
 }
 trap cleanup_preparation EXIT
 
-if [ "$(version_in dev release)" = "$VERSION" ] && git show dev:CHANGELOG.md | grep -q "^## \[$VERSION\]"; then
+if [ "$(version_in dev release)" = "$VERSION" ] && git show dev:CHANGELOG.md | grep "^## \[$VERSION\]" > /dev/null; then
   step "dev already prepared for $VERSION"
 else
   step "Preparing $VERSION on dev"
@@ -115,6 +115,11 @@ PY
 fi
 DEV_COMMIT=$(git rev-parse dev)
 DEV_TREE=$(git rev-parse "dev^{tree}")
+# Resolve the public tag to a trusted dev Prepare boundary before any GitHub write.
+CREDIT_BASE=$(cd "$DEV_CHECKOUT" && python3 scripts/release_credits.py --range-base)
+assert_dev_unchanged() {
+  [ "$(git rev-parse dev)" = "$DEV_COMMIT" ] || fail "dev moved during release; refusing to continue."
+}
 
 DMG="$WORK/build.noindex/Tivano-$VERSION.dmg"
 if [ -e "$WORK" ] || [ -L "$WORK" ]; then
@@ -140,6 +145,7 @@ else
   (cd "$WORK" && scripts/release.sh)
 fi
 
+assert_dev_unchanged
 BRANCH="release/$TAG"
 MAIN_COMMIT=$(git rev-parse origin/main)
 # Matching refs returns an array even for absence; transport/auth failures still fail.
@@ -246,18 +252,12 @@ print(m.group(1).strip())' "$VERSION")
   echo "$PR"
   # The squash commit is main's only record of who wrote the release, so carry every
   # outside author and co-author on dev since the previous release as a trailer.
-  PREV_PREP=""
-  [ -z "$LAST" ] || PREV_PREP=$(git log -1 --format=%H --grep="^Prepare Tivano ${LAST#v}\$" "$DEV_COMMIT")
-  COAUTHORS=""
-  if [ -n "$PREV_PREP" ]; then
-    COAUTHORS=$(git log --no-merges --format='%an <%ae>%n%(trailers:key=Co-authored-by,valueonly)' \
-      "$PREV_PREP..$DEV_COMMIT" | awk -v me="<$(git log -1 --format=%ae "$DEV_COMMIT")>" '
-        { gsub(/^[ \t]+|[ \t]+$/, ""); l = tolower($0) }
-        l == "" || index(l, tolower(me)) || l ~ /@(anthropic\.com|localhost)>$/ || seen[l]++ { next }
-        { print "Co-authored-by: " $0 }')
-  else
-    echo "No Prepare commit for $LAST on dev; the release commit carries no co-authors." >&2
-  fi
+  COAUTHORS=$(git log --no-merges --format='%an <%ae>%n%(trailers:key=Co-authored-by,valueonly)' \
+    "$CREDIT_BASE..$DEV_COMMIT" | awk -v me="<$(git log -1 --format=%ae "$DEV_COMMIT")>" '
+      { gsub(/^[ \t]+|[ \t]+$/, ""); l = tolower($0) }
+      l == "" || index(l, tolower(me)) || l ~ /@(anthropic\.com|localhost)>$/ || seen[l]++ { next }
+      { print "Co-authored-by: " $0 }')
+  assert_dev_unchanged
   gh pr merge "$PR" -R "$PROJECT" --squash --match-head-commit "$COMMIT" \
     --subject "Release Tivano $VERSION (#${PR##*/})" --body "$COAUTHORS"
   git fetch origin --prune --quiet
@@ -267,10 +267,33 @@ fi
 step "Fast-forwarding local main"
 git -C "$MAIN_CHECKOUT" merge --ff-only --quiet origin/main
 
+assert_dev_unchanged
 step "Publishing $TAG"
 "$MAIN_CHECKOUT/scripts/publish_release.sh" "$DMG"
 
 step "Cleaning up"
+if [ -n "$COMMIT" ]; then
+  cleanup_release_head() (
+    # Read-only API failures cannot mean absence. A missing exact ref is idempotent.
+    CURRENT=$(gh api "repos/$PROJECT/git/matching-refs/heads/$BRANCH" | \
+      jq -ce --arg ref "refs/heads/$BRANCH" '
+        if type != "array" then error("Invalid cleanup refs") else
+          [.[] | select(.ref == $ref)] |
+          if length > 1 then error("Duplicate cleanup refs") else . end end') || return 1
+    [ "$(jq 'length' <<< "$CURRENT")" != 0 ] || return 0
+    [ "$(jq -r '.[0].object.type' <<< "$CURRENT")" = commit ] &&
+    [ "$(jq -r '.[0].object.sha' <<< "$CURRENT")" = "$COMMIT" ] || {
+      echo "Release head refs/heads/$BRANCH moved; retained without deletion." >&2
+      return 1
+    }
+    # Keep the installed hook; older guards may refuse this optional cleanup.
+    TIVANO_CLEANUP_REF="refs/heads/$BRANCH" TIVANO_CLEANUP_SHA="$COMMIT" \
+      git push origin ":refs/heads/$BRANCH"
+  )
+  if ! cleanup_release_head; then
+    echo "Release $TAG is fully published; cleanup remains for refs/heads/$BRANCH (expected $COMMIT). No moved ref was intentionally deleted." >&2
+  fi
+fi
 if [ "$BUILD_OWNED" = 1 ]; then
   git worktree remove --force "$WORK"
 else

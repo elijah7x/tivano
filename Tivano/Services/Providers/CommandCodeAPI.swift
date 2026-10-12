@@ -440,9 +440,7 @@ enum CommandCodeAPI {
 
     /// Where the mod and each run's approval directory live.
     static var supportDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: LoginEnvironment.homeDirectory).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("\(AppInfo.name)/CommandCode", isDirectory: true)
+        StoragePaths.directory("CommandCode")
     }
 
     /// Writes the mod where the CLI can load it and returns its path. Rewritten only when

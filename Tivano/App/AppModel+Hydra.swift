@@ -722,6 +722,7 @@ extension AppModel {
         if HydraWatchdog.stalledHeadIDs.remove(id) != nil {
             summary = [HydraWatchdog.stalledNote, summary ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
         }
+        if status != .running { hydraHeadRetries[id] = nil }
         let outcome: HydraHeadInfo.Status = switch status {
         case .completed: .completed
         case .failed: .failed
@@ -1123,61 +1124,94 @@ extension AppModel {
     /// `targetCheckout` is that checkout when the head was sent to one, and is not a
     /// copy, so it stays after the copy path and `baseTree` are cleared.
     func releaseHydraCopy(of id: UUID) {
-        // Every caller, including manual panel clearing, must keep the session and
-        // its working directory alive until provider history has finished changing.
+        guard !libraryWritesBlocked, let head = thread(id), let info = head.hydra, info.hasOwnCopy,
+              let copy = head.worktreePath else { return }
+        let runtime = existingRuntime(for: id)
         Task { [weak self] in
             guard let self else { return }
-            await existingRuntime(for: id)?.waitForProviderHistory()
-            releaseHydraCopyAfterHistory(of: id)
+            await runtime?.waitForProviderHistory()
+            guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
+                  existingRuntime(for: id) === runtime else { return }
+            await releaseHydraCopyAfterHistory(of: id, info: info, copy: copy)
         }
     }
 
-    private func releaseHydraCopyAfterHistory(of id: UUID) {
-        guard let head = thread(id), let info = head.hydra, info.hasOwnCopy, let copy = head.worktreePath,
-              let project = project(head.projectID) else { return }
-        // A head back at work keeps its copy: `git worktree remove --force` on the folder
-        // its tools are writing into would take the work with it.
-        guard existingRuntime(for: id)?.isRunning != true else { return }
-        // Work that never landed lives only in the copy, and the head's report points the
-        // lead at it. It is kept as a patch before the folder goes.
-        let unlanded = info.status != .completed || info.landing == nil
-        let base = info.baseTree
-        let name = info.persona.name
-        // The session's tools are rooted in the copy; the next turn starts a fresh one.
-        // Only the copy goes. `targetCheckout` is the checkout the head was sent to.
-        existingRuntime(for: id)?.stopSession()
-        updateThread(id) {
-            $0.worktreePath = nil
-            $0.branch = nil
+    private func releaseHydraCopyAfterHistory(of id: UUID, info: HydraHeadInfo, copy: String) async {
+        guard !libraryWritesBlocked, let head = thread(id), head.hydra == info, head.worktreePath == copy,
+              info.hasOwnCopy, info.isFinished,
+              let project = project(head.projectID),
+              existingRuntime(for: id)?.isRunning != true,
+              existingRuntime(for: id)?.isHydraMerging != true else { return }
+        let copyURL = URL(fileURLWithPath: copy).resolvingSymlinksInPath().standardizedFileURL
+        let managed = Storage.worktreesDirectory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        guard copyURL.path.hasPrefix(managed),
+              !projects.contains(where: {
+                  let path = URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().standardizedFileURL.path
+                  return path == copyURL.path || path.hasPrefix(copyURL.path + "/")
+              }),
+              info.targetCheckout.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL == copyURL }) != true,
+              !threads.contains(where: { $0.id == head.parentThreadID && $0.worktreePath == copy }) else { return }
+        let runtime = existingRuntime(for: id)
+        let directory = head.executionDirectory(projectPath: project.path)
+        let workIsPreserved = info.landing.map { landing in
+            landing.landed || landing.isEmpty
+                || landing.patchPath.map { FileManager.default.fileExists(atPath: $0) } == true
+        } ?? false
+        if info.status != .completed || !workIsPreserved {
+            guard let base = info.baseTree,
+                  await keepHydraCopyAsPatch(id, name: info.persona.name, copy: copy, base: base) else {
+                alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
+                return
+            }
         }
-        updateHydraHead(id) { $0.baseTree = nil }
-        Task {
-            if unlanded, let base { await self.keepHydraCopyAsPatch(id, name: name, copy: copy, base: base) }
-            try? await Git(project.path).removeWorktree(at: copy)
+        guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
+              existingRuntime(for: id) === runtime,
+              runtime?.isRunning != true, runtime?.isHydraMerging != true else { return }
+        runtime?.stopSession()
+        do {
+            let root = try await Git(directory).repositoryRoot()
+            guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
+                  existingRuntime(for: id) === runtime,
+                  runtime?.isRunning != true, runtime?.isHydraMerging != true else { return }
+            try await Git(root.path).removeWorktree(at: copy)
+            // A restarted head may now own another copy, even on the same thread.
+            guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
+                  existingRuntime(for: id) === runtime,
+                  runtime?.isRunning != true, runtime?.isHydraMerging != true else { return }
+            updateThread(id) {
+                $0.worktreePath = nil
+                $0.branch = nil
+                $0.hydra?.baseTree = nil
+            }
+        } catch {
+            alert = AppAlert(title: "Could not remove worktree", message: error.localizedDescription)
         }
     }
 
     /// Writes what a head changed in its copy but never landed to a patch file, and tells
     /// the lead where it went. Nothing to keep where the copy holds no changes of its own.
-    private func keepHydraCopyAsPatch(_ id: UUID, name: String, copy: String, base: String) async {
+    private func keepHydraCopyAsPatch(_ id: UUID, name: String, copy: String, base: String) async -> Bool {
         let copyGit = Git(copy)
         // A copy that differs from its base only by build output, or by the cache the
         // head's own tool wrote there, holds no work of the head's: nothing to keep, and
         // nothing to tell the lead. Sixteen heads cleared together once put sixteen of
         // these notes into the lead's chat over five minutes, for 4 GB of build output.
-        guard let after = try? await copyGit.captureTree(), after != base,
-              let work = try? await Self.hydraWork(in: copyGit, from: base, to: after), !work.paths.isEmpty,
-              let patch = try? await copyGit.diff(from: base, to: after, binary: true, paths: work.paths), !patch.isEmpty else { return }
+        guard let after = try? await copyGit.captureTree() else { return false }
+        if after == base { return true }
+        guard let work = try? await Self.hydraWork(in: copyGit, from: base, to: after) else { return false }
+        if work.paths.isEmpty { return true }
+        guard let patch = try? await copyGit.diff(from: base, to: after, binary: true, paths: work.paths), !patch.isEmpty else { return false }
         let slug = name.replacingOccurrences(of: " ", with: "-").lowercased()
         let url = Storage.patchesDirectory.appendingPathComponent("\(slug)-\(id.uuidString.lowercased().prefix(8))-unlanded.patch")
-        guard (try? patch.write(to: url, atomically: true, encoding: .utf8)) != nil else { return }
-        guard let parentID = thread(id)?.parentThreadID, let leadRuntime = existingRuntime(for: parentID) else { return }
+        guard (try? patch.write(to: url, atomically: true, encoding: .utf8)) != nil else { return false }
+        guard let parentID = thread(id)?.parentThreadID, let leadRuntime = existingRuntime(for: parentID) else { return true }
         leadRuntime.appendHydraNote("""
         \(name)'s unfinished work was kept as a patch before its copy was cleared.
         \(url.path)
 
         Nothing of it had landed in your checkout. Apply it with `git apply --3way \(url.path)` if you still want it.
         """)
+        return true
     }
 
     // MARK: - Watchdog

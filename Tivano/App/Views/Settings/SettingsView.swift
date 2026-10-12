@@ -66,7 +66,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     var keywords: [String] {
         switch self {
         case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "token", "tokens", "activity", "usage", "panel", "limits", "credits", "heatmap", "daily", "weekly", "cumulative", "settle", "settled", "finish", "finished", "done", "sound", "chime", "icon", "icons", "emoji", "symbol", "symbols", "project mark", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies"]
-        case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
+        case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
         case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "meta", "muse", "spark", "zai", "z.ai", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
@@ -568,6 +568,19 @@ private struct AppearanceSettingsPage: View {
                 }
                 .disabled(settings.performanceMode)
                 .opacity(settings.performanceMode ? 0.5 : 1)
+                ChromeRowDivider()
+                ChromeRow(
+                    title: "Clearer glass",
+                    detail: settings.performanceMode
+                        ? "Unavailable in Performance Mode"
+                        : WallpaperStore.shared.hasWallpaper
+                            ? "Unavailable while a wallpaper is set"
+                            : "Shows more of the desktop through the window with Liquid Glass. Uses more GPU while the window's content changes; off uses a lighter system blur."
+                ) {
+                    SettingsSwitch(isOn: $settings.clearerBackdrop)
+                }
+                .disabled(settings.performanceMode || WallpaperStore.shared.hasWallpaper)
+                .opacity(settings.performanceMode || WallpaperStore.shared.hasWallpaper ? 0.5 : 1)
                 ChromeRowDivider()
                 ChromeRow(title: "Performance Mode", detail: "Disable window transparency, blurs, glows and background effects for lowest GPU usage") {
                     SettingsSwitch(isOn: $settings.performanceMode)

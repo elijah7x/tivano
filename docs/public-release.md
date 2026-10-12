@@ -21,22 +21,19 @@ See [GitHub's release documentation](https://docs.github.com/en/repositories/rel
 
 ## Static update feeds and the 1.0.2 transition
 
-Update metadata is separate from the future brand website. Ordinary users do
-not need a GitHub account or token. The new updater tries these sources in order:
+Update metadata is separate from the brand website. Ordinary users do not need a
+GitHub account or token. The current updater requests the configured public mirror,
+[GitHub Pages feed](https://elijah7x.github.io/tivano/updates.json), and
+[raw feed](https://raw.githubusercontent.com/elijah7x/tivano/gh-pages/updates.json)
+concurrently with a bounded response window. It selects the highest successfully
+observed version; a source outside the window remains unknown. Pages and raw
+content share GitHub infrastructure. See [mirror operations](operations/aliyun-update-mirror.md)
+for the trusted installer origins, deadline and retry contract.
 
-1. `https://elijah7x.github.io/tivano/updates.json` (GitHub Pages).
-2. `https://raw.githubusercontent.com/elijah7x/tivano/gh-pages/updates.json`.
-3. The existing GitHub Releases API. This last fallback may reuse the edition's
-   Keychain token or the local GitHub CLI login, including login-shell environment
-   credentials; it respects the user's CLI opt-out and never sends tokens to the
-   static feeds or installer hosts.
-
-Pages and raw content have different hosts but share GitHub infrastructure; they
-are not vendor-independent mirrors. Neither the Aliyun server nor `elijah.ac.cn`
-is configured by this change. Later, mirror the same JSON at a verified HTTPS
-URL on the brand domain and add it to `UpdateChecker.feedURLs`; do not change the
-Pages address or remove the old sources. Installer mirroring needs a separate
-URL/schema change and the same checksum/signature verification.
+When static sources fail or are older than a known cached version, the existing
+GitHub Releases API is the fallback. It may reuse the edition's Keychain token or
+local GitHub CLI login, including login-shell environment credentials; it respects
+the CLI opt-out and never sends tokens to static feeds or installer hosts.
 
 The versioned JSON schema is `{ "schema_version": 1, "releases": [...] }`.
 Release fields match the Releases API, with a `sha256` field on the DMG asset.
@@ -129,8 +126,9 @@ The release build also requires Xcode and XcodeGen.
   so it is already newer than the last release. Do not advance Dev merely to
   publish Release, and never bump Release alone.
 - Add a dated `## [x.y.z]` changelog section with release notes and `### Thanks`.
-  Run `python3 scripts/release_credits.py`; without a reachable prior `v*` tag,
-  the credits script checks the repository's complete retained history.
+  Run `python3 scripts/release_credits.py`. On dev, it maps the previous public
+  tag to an exact-tree Prepare ancestor; a missing or ambiguous boundary stops
+  publication instead of scanning all retained history.
 - Review the local push policy: `publish_release.sh` pushes a version tag,
   and the pre-push hook permits main and `v*` tags that point at
   `origin/main`, preserving the restrictions on Dev and pre-migration ancestry.
@@ -175,12 +173,19 @@ After the owner authorizes publication, `scripts/publish_release.sh` checks
 notes and credits, verifies the stapled DMG, tags the agreed revision, and
 uploads the DMG and release notes. An existing empty, stable draft for the same
 tag is adopted: the DMG is uploaded first, then the draft is published with the
-reviewed notes. Published releases, prereleases, and drafts with assets are
-refused; assets are never overwritten. If upload succeeds but publication
-fails, review the populated draft manually before retrying. API errors stop the
-script rather than being treated as a missing release.
+reviewed notes. A populated draft or published release is reused only when its reviewed commit,
+state and single DMG name, size and SHA-256 match exactly. Matching retries
+resume publication, feed and mirror steps without overwriting assets; mismatches
+and prereleases are refused. API errors stop the script rather than being
+treated as a missing release.
 
 The checkout must be clean and match local main, and an existing version tag
 must point to that exact revision. Review the exact code revision, version,
 notes, and DMG before executing it. Do not treat a local development ZIP as
 an official release artifact.
+
+The optional release-head cleanup retains the installed pre-push hook. The tracked
+guard supports deletion only with the exact reviewed release ref and SHA; an
+older installed guard may refuse it, leaving the branch for explicit cleanup.
+`scripts/install_git_hooks.sh --install` installs the tracked guard on a fresh
+clone and refuses to overwrite a different existing hook.

@@ -77,15 +77,24 @@ struct ThreadTimeline: View, Equatable {
     @State private var anchorsBottomOnGrowth = true
     /// Older history is about to be loaded above the viewport; that growth keeps the
     /// bottom fixed whatever the reader is doing, so the messages in view stay put.
-    @State private var historyLoadPending = false
+    private struct HistoryRequest {
+        let threadID: UUID
+        let navigation: Int
+        let generation: Int
+        let measurementGeneration: Int
+        let ids: Set<String>
+    }
+    @State private var historyRequest: HistoryRequest?
+    @State private var historyGeneration = 0
+    private var historyLoadPending: Bool { historyRequest != nil }
+    @State private var remeasurePending = false
     /// Where the lazy window begins: the id of its oldest block. The window runs from that
     /// block to the end, so a block appended at the end never evicts an older row from the
     /// stack; only loading history or a jump moves the start. Nil until the thread anchors,
     /// when the newest `firstPaint` blocks are the window.
     @State private var windowStartID: String?
     /// The blocks the stack builds, by identity; the rest of the window stands in as exact
-    /// spacers of their measured heights. Nil builds the whole window: before anything is
-    /// measured, after the width changed, and as the last repair of a blank viewport.
+    /// spacers of measured or estimated heights. Nil builds the initial loaded window.
     @State private var mountedWindow: MountedWindow?
     @State private var measurements = TimelineMeasurements()
     /// The runtime's unattended-turn token as this view last saw it (see
@@ -309,17 +318,20 @@ struct ThreadTimeline: View, Equatable {
             if index < firstVisible {
                 windowStartID = blocks[index].id
                 needsExpand = true
-                historyLoadPending = true
             }
             tracking.isPinnedToBottom = (id == blocks.last?.id)
             anchorsBottomOnGrowth = tracking.isPinnedToBottom || needsExpand
         }
         if let index = blocks.firstIndex(where: { $0.id == id }), !tracking.isPinnedToBottom {
-            // Unknown intervening rows must measure before they can become spacers.
+            // Mount the target and nearby rows; distant unknown rows remain estimated spacers.
             mountedWindow = MountedWindow(measurements.window(around: index, in: blocks, start: windowStartIndex(in: blocks), viewport: viewportHeight), in: blocks)
             needsExpand = true
         } else { mountTail(in: blocks) }
         needsExpand = needsExpand || mountedWindow != previousWindow
+        if !tracking.isPinnedToBottom, measurements.frames[id] == nil || !animated {
+            keepAnchor(id, offset: 0, scrollFirst: true)
+            return
+        }
         let generation = tracking.navigationGeneration
         let scroll = { @MainActor in
             guard generation == tracking.navigationGeneration else { return }
@@ -367,7 +379,9 @@ struct ThreadTimeline: View, Equatable {
         // a reason to hide a row that was visible a frame ago.
         let target = count.map { max(0, blocks.count - $0) } ?? max(0, start - TimelineWindow.page)
         guard target < start else { return }
-        historyLoadPending = true
+        historyGeneration += 1
+        historyRequest = HistoryRequest(threadID: runtime.threadID, navigation: tracking.navigationGeneration,
+                                        generation: historyGeneration, measurementGeneration: measurements.generation, ids: Set(blocks[target..<start].map(\.id)))
         anchorsBottomOnGrowth = true
         windowStartID = blocks[target].id
         // The new page has never been measured, so it is built; the blocks the reader is
@@ -375,6 +389,63 @@ struct ThreadTimeline: View, Equatable {
         if let window = mountedWindow {
             mountedWindow = MountedWindow(lowerID: blocks[target].id, upperID: window.upperID)
         }
+        tracking.requestMeasurementPass()
+    }
+
+    private func cancelHistoryRequest() {
+        historyGeneration += 1
+        historyRequest = nil
+        anchorsBottomOnGrowth = tracking.isPinnedToBottom
+    }
+
+    private func settleMeasurements(in blocks: [DisplayBlock]) {
+        if let request = historyRequest {
+            guard request.threadID == runtime.threadID,
+                  request.navigation == tracking.navigationGeneration,
+                  request.generation == historyGeneration,
+                  request.measurementGeneration == measurements.generation else {
+                cancelHistoryRequest()
+                return
+            }
+            let existing = Set(blocks.map(\.id))
+            guard request.ids.intersection(existing).allSatisfy({ measurements.frames[$0] != nil }) else { return }
+            guard tracking.placementToken == nil else { return }
+            historyRequest = nil
+            anchorsBottomOnGrowth = tracking.isPinnedToBottom
+            if tracking.isPinnedToBottom { scheduleBottomSnap() }
+        }
+        guard tracking.placementToken == nil else { return }
+        let remeasured = remeasurePending
+        if remeasurePending {
+            let start = windowStartIndex(in: blocks)
+            guard let range = mountedWindow?.range(in: blocks, start: start),
+                  blocks[range].allSatisfy({ measurements.frames[$0.id] != nil }) else { return }
+            remeasurePending = false
+        }
+        updateMountedWindow(in: blocks, offset: tracking.offset, height: viewportHeight, narrowAfterMeasurement: remeasured)
+    }
+
+    private func invalidateMeasurements(in blocks: [DisplayBlock], width: CGFloat) {
+        guard !blocks.isEmpty else { return }
+        cancelHistoryRequest()
+        let start = windowStartIndex(in: blocks)
+        let current = mountedWindow?.range(in: blocks, start: start) ?? start..<blocks.count
+        let readerAnchor = blocks[current].first { block in
+            measurements.viewportFrame(block.id, offset: tracking.offset).map { $0.maxY > 0 && $0.minY < viewportHeight } ?? false
+        }.flatMap { block in measurements.viewportFrame(block.id, offset: tracking.offset).map { (block.id, $0.minY) } }
+        if mountedWindow == nil {
+            let index = readerAnchor.flatMap { anchor in blocks.firstIndex { $0.id == anchor.0 } }
+            mountedWindow = MountedWindow(index.map { measurements.window(around: $0, in: blocks, start: start, viewport: viewportHeight) }
+                ?? measurements.tail(of: blocks, start: start, viewport: viewportHeight), in: blocks)
+        }
+        measurements.invalidate(width: width)
+        remeasurePending = true
+        // Recreating the finite stack guarantees a callback even if a row's frame stays identical.
+        stackGeneration += 1
+        if !tracking.isPinnedToBottom, let readerAnchor {
+            keepAnchor(readerAnchor.0, offset: readerAnchor.1, scrollFirst: false)
+        }
+        tracking.requestMeasurementPass()
     }
 
     /// Makes the stack reach the conversation's end for a reader being taken there. Close
@@ -452,6 +523,7 @@ struct ThreadTimeline: View, Equatable {
     /// compiler out on the row's modifier chain.
     private func row(_ block: DisplayBlock, rewindable: Set<UUID>) -> some View {
         let canRewind = block.turnID.map { rewindable.contains($0) } ?? false
+        let measurementGeneration = measurements.generation
         let context = RowContext(
             workingDirectory: workingDirectory,
             canRewind: canRewind,
@@ -467,7 +539,9 @@ struct ThreadTimeline: View, Equatable {
             }
             .onDisappear { tracking.setVisible(block.id, false) }
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("timelineContent")) }) { frame in
-                measurements.record(block.id, frame: frame)
+                if measurements.record(block.id, frame: frame, generation: measurementGeneration) {
+                    tracking.requestMeasurementPass()
+                }
             }
             .transition(measurements.liveIDs.contains(block.id) && !measurements.materializedIDs.contains(block.id) ? Self.transition(for: block) : .identity)
             .onAppear { measurements.materializedIDs.insert(block.id) }
@@ -492,6 +566,8 @@ struct ThreadTimeline: View, Equatable {
         revealBox.disclosure = anchorDisclosure
         revealBox.action = revealEnd
         revealBox.follow = followEnd
+        tracking.navigationAction = cancelHistoryRequest
+        tracking.layoutAction = { settleMeasurements(in: blocks) }
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Spacer(minLength: 0)
@@ -578,6 +654,10 @@ struct ThreadTimeline: View, Equatable {
             capturePresentation(threadID: runtime.threadID)
             tracking.placementTask?.cancel()
             tracking.placementToken = nil
+            cancelHistoryRequest()
+            remeasurePending = false
+            tracking.layoutAction = {}
+            tracking.navigationAction = {}
             tracking.endActivity()
         }
         // The thread opens at its end and stays there while its rows measure in.
@@ -601,13 +681,11 @@ struct ThreadTimeline: View, Equatable {
             paneWidth = $0
         }
         .onChange(of: [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code]) {
-            measurements.frames.removeAll()
-            mountedWindow = nil
+            invalidateMeasurements(in: blocks, width: measurements.width)
             tracking.armViewportRefresh("typeScale")
         }
         .onChange(of: layoutWidth ?? min(860, paneWidth)) { _, width in
-            measurements.invalidate(width: width)
-            mountedWindow = nil
+            invalidateMeasurements(in: blocks, width: width)
         }
         // No animation inside the timeline while the window is being dragged; a spring
         // restarted every frame is what made rows lag behind the window and land somewhere else.
@@ -674,6 +752,7 @@ struct ThreadTimeline: View, Equatable {
                 || (!nudging && wheelInput && readerMoved
                     && new.containerHeight == old.containerHeight && !tracking.isCoasting)
             guard tracking.placementToken == nil else { return }
+            settleMeasurements(in: blocks)
             updateMountedWindow(in: blocks, offset: new.offset, height: new.containerHeight)
             let atRest = !tracking.isUserScrolling && !tracking.isCoasting
             if atRest, !scrolled {
@@ -714,19 +793,6 @@ struct ThreadTimeline: View, Equatable {
                 // in the same display pass — an uncapped loop that keeps dirtying the
                 // window until AppKit's display-cycle watchdog kills the app.
                 scheduleBottomSnap()
-            } else if historyLoadPending, new.contentHeight > old.contentHeight {
-                // The history landed above the viewport with the bottom held; growth
-                // anchors by the reader's position again from here.
-                historyLoadPending = false
-                let pinned = tracking.isPinnedToBottom || new.distanceFromBottom < 48
-                if pinned != anchorsBottomOnGrowth { anchorsBottomOnGrowth = pinned }
-                // A thread whose first rows fit the pane had nothing to scroll, and the
-                // bottom anchor has no offset to hold when the history makes it tall:
-                // the viewport stayed at the top of the newly tall content, on the oldest
-                // rows. A reader at the end is put back on the end.
-                if tracking.isPinnedToBottom, new.distanceFromBottom > 1 {
-                    scheduleBottomSnap()
-                }
             } else if scrolled {
                 // Only the reader's own scrolling decides whether the timeline follows new text.
                 // Guarded, so measuring the scroll position never touches anything a body reads.
@@ -753,6 +819,7 @@ struct ThreadTimeline: View, Equatable {
             // Yield past that reset before restoring this timeline.
             await Task.yield()
             guard !Task.isCancelled else { return }
+            cancelHistoryRequest()
             if restorePresentation(in: blocks) {
                 await warmMarkdown()
                 return
@@ -775,6 +842,9 @@ struct ThreadTimeline: View, Equatable {
             try? await Task.sleep(for: .seconds(1.6))
             guard !Task.isCancelled, !tracking.isUserScrolling else { return }
             updateMountedWindow(in: blocks, offset: tracking.offset, height: viewportHeight)
+        }
+        .onChange(of: tracking.measurementRequest) {
+            settleMeasurements(in: blocks)
         }
         .onChange(of: tracking.checkRequest) {
             // A coast whose end phase was never delivered is cleared by the phase watch,
@@ -913,7 +983,9 @@ struct ThreadTimeline: View, Equatable {
             mountedWindow = nil
             measurements = TimelineMeasurements()
             anchorsBottomOnGrowth = true
-            historyLoadPending = false
+            cancelHistoryRequest()
+            remeasurePending = false
+            tracking.navigationGeneration += 1
             tracking.clearVisible()
         }
     }
@@ -950,10 +1022,7 @@ struct ThreadTimeline: View, Equatable {
         let savedStart = entry.windowStartID.flatMap { saved in blocks.firstIndex { $0.id == saved } } ?? index
         let start = min(savedStart, lower)
         windowStartID = blocks[start].id
-        // Unknown heights must lay out before they can stand in for offscreen rows.
-        let unknownBefore = (start..<lower).first { measurements.frames[blocks[$0].id] == nil }
-        let unknownAfter = (upper..<blocks.count).last { measurements.frames[blocks[$0].id] == nil }
-        mountedWindow = MountedWindow((unknownBefore ?? lower)..<(unknownAfter.map { $0 + 1 } ?? upper), in: blocks)
+        mountedWindow = MountedWindow(lower..<upper, in: blocks)
         keepAnchor(id, offset: entry.anchorOffset, scrollFirst: true)
         return true
     }
@@ -971,13 +1040,19 @@ struct ThreadTimeline: View, Equatable {
         tracking.placementTask?.cancel()
         let token = UUID()
         let generation = tracking.navigationGeneration
+        let threadID = runtime.threadID
         tracking.placementToken = token
         tracking.isPinnedToBottom = false
         anchorsBottomOnGrowth = false
-        historyLoadPending = false
         tracking.placementTask = Task { @MainActor in
             defer {
-                if tracking.placementToken == token { tracking.placementToken = nil }
+                if tracking.placementToken == token {
+                    tracking.placementToken = nil
+                    tracking.placementTask = nil
+                    if generation == tracking.navigationGeneration, threadID == runtime.threadID {
+                        tracking.layoutAction()
+                    }
+                }
             }
             await Task.yield()
             guard !Task.isCancelled, generation == tracking.navigationGeneration else { return }
@@ -987,7 +1062,8 @@ struct ThreadTimeline: View, Equatable {
             // Keep the header fixed through the disclosure animation and deferred layout.
             for _ in 0..<24 {
                 try? await Task.sleep(for: .milliseconds(25))
-                guard !Task.isCancelled, generation == tracking.navigationGeneration else { return }
+                guard !Task.isCancelled, generation == tracking.navigationGeneration,
+                      threadID == runtime.threadID, measurements.blockIDs.contains(id) else { return }
                 guard let frame = measurements.viewportFrame(id, offset: tracking.offset),
                       let scroll = tracking.probe?.enclosingScrollView else { continue }
                 let delta = frame.minY - offset
@@ -1028,10 +1104,9 @@ struct ThreadTimeline: View, Equatable {
     /// block crossing a margin, not a pixel of scroll. Positions come from the measured
     /// heights, anchored on the first block the stack holds, whose frame is live: a block
     /// behind a spacer keeps the frame it last laid out at, and loading history above
-    /// makes that stale. A block that has never been measured has no height to stand in
-    /// for, so it is built once it comes near, and nothing past it is placed until it has.
-    private func updateMountedWindow(in blocks: [DisplayBlock], offset: CGFloat, height: CGFloat) {
-        guard height > 0, !blocks.isEmpty else { return }
+    /// makes that stale. Unknown rows use bounded estimates and measure when they come near.
+    private func updateMountedWindow(in blocks: [DisplayBlock], offset: CGFloat, height: CGFloat, narrowAfterMeasurement: Bool = false) {
+        guard height > 0, !blocks.isEmpty, !remeasurePending else { return }
         let start = windowStartIndex(in: blocks)
         guard start < blocks.count else { return }
         let current = mountedWindow?.range(in: blocks, start: start) ?? start..<blocks.count
@@ -1040,8 +1115,7 @@ struct ThreadTimeline: View, Equatable {
         let spacing = TimelineMetrics.rowSpacing
         var y = anchorFrame.minY
         for index in start..<current.lowerBound {
-            guard let rowHeight = measurements.frames[blocks[index].id]?.height else { return }
-            y -= rowHeight + spacing
+            y -= measurements.rowHeight(blocks[index].id) + spacing
         }
         let top = offset - Chrome.contentTopInset
         let bottom = top + height
@@ -1050,16 +1124,7 @@ struct ThreadTimeline: View, Equatable {
         var want: (lower: Int?, upper: Int) = (nil, start)
         var keep: (lower: Int?, upper: Int) = (nil, start)
         for index in start..<blocks.count {
-            guard let rowHeight = measurements.frames[blocks[index].id]?.height else {
-                // Unmeasured: built once its top comes near; nothing below it can be placed.
-                if y <= bottom + mountMargin {
-                    if want.lower == nil { want.lower = index }
-                    if keep.lower == nil { keep.lower = index }
-                    want.upper = index
-                    keep.upper = index
-                }
-                break
-            }
+            let rowHeight = measurements.rowHeight(blocks[index].id)
             let end = y + rowHeight
             if want.lower == nil, end >= top - mountMargin { want.lower = index }
             if keep.lower == nil, end >= top - keepMargin { keep.lower = index }
@@ -1076,7 +1141,7 @@ struct ThreadTimeline: View, Equatable {
         // Nothing leaves while the layout is still settling (a thread opening, history
         // landing above, a placement holding a row in place): only exact spacers keep the
         // content where it is, and those need heights that have stopped moving.
-        if historyLoadPending || tracking.isArriving || tracking.placementToken != nil {
+        if historyLoadPending || (tracking.isArriving && !narrowAfterMeasurement) || tracking.placementToken != nil {
             lower = min(lower, current.lowerBound)
             upper = max(upper, current.upperBound)
         }
@@ -1180,10 +1245,8 @@ struct ThreadTimeline: View, Equatable {
         } else if tracking.showsNothing {
             switch tracking.blankRepairs {
             case 0:
-                // A spacer whose heights went stale can be all the viewport is over: the
-                // whole window is built again, and narrows on the next scrolled frame.
                 tracking.trace("repair", "blank.refresh")
-                if mountedWindow != nil { mountedWindow = nil }
+                tracking.layoutAction()
                 refreshViewport()
             case 1:
                 tracking.trace("repair", "blank.rebuild")
@@ -1361,6 +1424,20 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     @ObservationIgnored var placementToken: UUID?
     @ObservationIgnored var placementTask: Task<Void, Never>?
     @ObservationIgnored var animatedNavigation = false
+    @ObservationIgnored var navigationAction: () -> Void = {}
+    @ObservationIgnored var layoutAction: () -> Void = {}
+    private(set) var measurementRequest = 0
+    @ObservationIgnored private var measurementPassPending = false
+
+    func requestMeasurementPass() {
+        guard !measurementPassPending else { return }
+        measurementPassPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            measurementPassPending = false
+            measurementRequest += 1
+        }
+    }
     @ObservationIgnored private var lastWheelInputAt: CFTimeInterval = -.infinity
 
     /// Wheel scrolling can arrive without a SwiftUI scroll phase. Keep its input long
@@ -1375,6 +1452,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     func noteUserNavigation() {
         guard !isNudging else { return }
         navigationGeneration += 1
+        navigationAction()
         placementTask?.cancel()
         placementToken = nil
         if animatedNavigation, let scrollView {
@@ -3450,7 +3528,14 @@ private struct WorkingIndicator: View {
             else { fallbackExpanded = newValue }
         }
     }
-    @State private var showsAllSteps = false
+    @State private var fallbackAllSteps = false
+    private var showsAllSteps: Bool {
+        get { revealBox?.presentation.disclosures[blockID + "/working/all"] ?? (chronological || fallbackAllSteps) }
+        nonmutating set {
+            if let revealBox { revealBox.presentation.disclosures[blockID + "/working/all"] = newValue }
+            else { fallbackAllSteps = newValue }
+        }
+    }
     @State private var stepLimit = 60
 
     /// The one motion for whatever changes on the line: the words, the chevron.
@@ -3548,7 +3633,7 @@ private struct WorkingIndicator: View {
                         .transition(liveAppearance ? .softAppear : .identity)
                     }
                     if !liveWork.isEmpty {
-                        WorkSteps(entries: visibleWork, runtime: runtime, workingDirectory: workingDirectory, showsAll: $showsAllSteps)
+                        WorkSteps(entries: visibleWork, runtime: runtime, workingDirectory: workingDirectory, showsAll: Binding(get: { showsAllSteps }, set: { showsAllSteps = $0 }))
                             .transition(liveAppearance ? .softAppear : .identity)
                     }
                 }
@@ -3558,7 +3643,7 @@ private struct WorkingIndicator: View {
         .animation(Self.change, value: label)
         .animation(Self.change, value: canExpand)
         .font(.chat(.callout))
-        .onChange(of: chronological, initial: true) { _, chronological in
+        .onChange(of: chronological) { _, chronological in
             showsAllSteps = chronological
         }
         .task(id: FrontMonitor.shared.isVisible && isRunning) {
@@ -3761,6 +3846,7 @@ private struct MountedWindow: Equatable {
 
 @MainActor
 private final class TimelineMeasurements {
+    private(set) var generation = 0
     var width: CGFloat = 0
     var frames: [String: CGRect] = [:]
     /// A row's frame in the viewport, from its content frame and the scroll offset: a
@@ -3785,16 +3871,40 @@ private final class TimelineMeasurements {
         knownQuestions = questionIDs
     }
 
+    private var estimatedHeight: CGFloat = 160
+    private var cachedMean: CGFloat?
+
     func invalidate(width: CGFloat) {
-        guard self.width != width else { return }
+        estimatedHeight = meanHeight
+        generation += 1
         self.width = width
         frames.removeAll()
+        cachedMean = nil
     }
 
-    func record(_ id: String, frame: CGRect) { frames[id] = frame }
+    private var meanHeight: CGFloat {
+        if let cachedMean { return cachedMean }
+        let heights = frames.values.map(\.height).filter { $0.isFinite && $0 > 0 }
+        guard !heights.isEmpty else { return estimatedHeight }
+        let mean = min(1600, max(48, heights.reduce(0, +) / CGFloat(heights.count)))
+        cachedMean = mean
+        return mean
+    }
+
+    // Estimates stay separate from frames: anchor placement only accepts an actual measurement.
+    func rowHeight(_ id: String) -> CGFloat { frames[id]?.height ?? meanHeight }
+
+    @discardableResult
+    func record(_ id: String, frame: CGRect, generation: Int) -> Bool {
+        guard generation == self.generation else { return false }
+        let changed = frames[id]?.height != frame.height
+        frames[id] = frame
+        if changed { cachedMean = nil }
+        return changed
+    }
 
     func height(of blocks: ArraySlice<DisplayBlock>) -> CGFloat {
-        blocks.reduce(0) { $0 + (frames[$1.id]?.height ?? 0) + TimelineMetrics.rowSpacing }
+        blocks.reduce(0) { $0 + rowHeight($1.id) + TimelineMetrics.rowSpacing }
     }
 
     func window(around index: Int, in blocks: [DisplayBlock], start: Int, viewport: CGFloat) -> Range<Int> {
@@ -3803,30 +3913,26 @@ private final class TimelineMeasurements {
         var distance: CGFloat = 0
         while lower > start, distance < viewport {
             lower -= 1
-            distance += (frames[blocks[lower].id]?.height ?? viewport) + TimelineMetrics.rowSpacing
+            distance += rowHeight(blocks[lower].id) + TimelineMetrics.rowSpacing
         }
         distance = 0
         while upper < blocks.count, distance < viewport {
-            distance += (frames[blocks[upper].id]?.height ?? viewport) + TimelineMetrics.rowSpacing
+            distance += rowHeight(blocks[upper].id) + TimelineMetrics.rowSpacing
             upper += 1
         }
-        // An unmeasured row cannot be replaced by an exact spacer.
-        if let unknown = (start..<lower).first(where: { frames[blocks[$0].id] == nil }) { lower = unknown }
-        if let unknown = (upper..<blocks.count).last(where: { frames[blocks[$0].id] == nil }) { upper = unknown + 1 }
         return lower..<upper
     }
 
-    /// The newest blocks that fill a viewport and a margin above it, and every unmeasured
-    /// block before them, which has no height for a spacer to stand in for.
+    /// The newest blocks that fill a viewport and a margin above it, using estimates
+    /// until those rows report their actual heights.
     func tail(of blocks: [DisplayBlock], start: Int, viewport: CGFloat) -> Range<Int> {
         guard start < blocks.count else { return start..<blocks.count }
         var lower = blocks.count
         var distance: CGFloat = 0
         while lower > start, distance < max(600, viewport) * 2 {
             lower -= 1
-            distance += (frames[blocks[lower].id]?.height ?? viewport) + TimelineMetrics.rowSpacing
+            distance += rowHeight(blocks[lower].id) + TimelineMetrics.rowSpacing
         }
-        if let unknown = (start..<lower).first(where: { frames[blocks[$0].id] == nil }) { lower = unknown }
         return lower..<blocks.count
     }
 }
@@ -3849,6 +3955,7 @@ final class TimelinePresentation {
     var working: [UUID: Bool] = [:]
     var prompts: [String: Bool] = [:]
     var stepLimits: [UUID: Int] = [:]
+    var disclosures: [String: Bool] = [:]
     @ObservationIgnored var previews: [String: String] = [:]
     @ObservationIgnored var anchorID: String?
     @ObservationIgnored var anchorOffset: CGFloat = 0

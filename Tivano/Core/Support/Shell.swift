@@ -60,6 +60,7 @@ enum Shell {
         stderr.fileHandleForReading.readabilityHandler = collector.reader(for: .stderr)
 
         let cancelled = Mutex(false)
+        let descendants = StdioProcess.DescendantTracker()
         var deadline: Task<Void, Never>?
         defer {
             deadline?.cancel()
@@ -71,17 +72,19 @@ enum Shell {
             return try await withCheckedThrowingContinuation { continuation in
                 let once = OnceContinuation(continuation)
                 process.terminationHandler = { process in
+                    descendants.terminate()
                     once.resume(returning: process.terminationStatus)
                 }
                 do {
                     try cancelled.withLock { isCancelled in
                         if isCancelled { throw CancellationError() }
                         try process.run()
+                        descendants.start(process.processIdentifier)
                     }
                     deadline = Task {
                         do { try await Task.sleep(for: .seconds(timeout)) }
                         catch { return }
-                        terminate(process)
+                        descendants.terminate()
                     }
                 } catch {
                     once.resume(throwing: error)
@@ -97,7 +100,7 @@ enum Shell {
         } onCancel: {
             cancelled.withLock { isCancelled in
                 isCancelled = true
-                terminate(process)
+                descendants.terminate()
             }
         }
         deadline?.cancel()
@@ -105,16 +108,6 @@ enum Shell {
         let output = await collector.finished(within: 3)
         try Task.checkCancellation()
         return ShellResult(status: status, stdout: output.stdout, stderr: output.stderr)
-    }
-
-    private static func terminate(_ process: Process) {
-        guard process.isRunning else { return }
-        process.terminate()
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
-            guard process.isRunning else { return }
-            let pid = process.processIdentifier
-            kill(getpgid(pid) == pid ? -pid : pid, SIGKILL)
-        }
     }
 
     /// Runs a named tool found on the login PATH.

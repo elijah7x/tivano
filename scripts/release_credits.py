@@ -20,7 +20,7 @@ PROJECT = "elijah7x/tivano"
 MAINTAINER_USERNAMES = {"elijah7x"}
 IGNORED_EMAIL_SUFFIXES = ("@anthropic.com", "@localhost")
 
-COAUTHOR_RE = re.compile(r"(.+?)\s*<([^<>]+)>\s*")
+COAUFIXTURE_RE = re.compile(r"(.+?)\s*<([^<>]+)>\s*")
 VERSION_RE = re.compile(r'^\s*MARKETING_VERSION\s*=\s*(\d+\.\d+\.\d+)\s*$', re.MULTILINE)
 
 
@@ -41,19 +41,63 @@ def project_version():
 
 
 def previous_tag():
-    rev = "HEAD"
     version = project_version()
-    if version:
-        try:
-            tags = run_git(["tag", "--points-at", "HEAD"]).split()
-        except Exception:
-            tags = []
-        if f"v{version}" in tags:
+    public_head = run_git(["rev-parse", "origin/main^{commit}"]).strip()
+    if is_ancestor("HEAD", public_head):
+        rev = "HEAD"
+        if version and f"v{version}" in run_git(["tag", "--points-at", "HEAD"]).split():
             rev = "HEAD^"
-    # A new or rewritten repository has no previous release in its ancestry.
-    if not run_git(["tag", "--merged", rev, "--list", "v*"]).strip():
+        if not run_git(["tag", "--merged", rev, "--list", "v*"]).strip():
+            return None
+        return run_git(["describe", "--tags", "--abbrev=0", "--match", "v*", rev]).strip()
+
+    # dev has a different history: select the public tag first, then map its tree.
+    dev_text = (ROOT / "config/dev.xcconfig").read_text(encoding="utf-8")
+    match = VERSION_RE.search(dev_text)
+    if not match:
+        raise RuntimeError("Cannot determine Dev version for the public release boundary")
+    target = tuple(map(int, match.group(1).split(".")))
+    tags = run_git(["tag", "--merged", "origin/main", "--list", "v*"]).split()
+    versions = [(tuple(map(int, tag[1:].split("."))), tag) for tag in tags
+                if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)]
+    older = [(number, tag) for number, tag in versions if number < target]
+    if not older:
+        raise RuntimeError("No previous public release tag before Dev's version; cannot bound contributor history")
+    return max(older)[1]
+
+
+def range_base(tag, head="HEAD"):
+    if tag is None:
+        if not is_ancestor(head, "origin/main"):
+            raise RuntimeError("No public release boundary for dev; refusing to scan all history")
         return None
-    return run_git(["describe", "--tags", "--abbrev=0", "--match", "v*", rev]).strip()
+    if is_ancestor(tag, head):
+        return tag
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise RuntimeError(f"{tag} is not an ancestor or a public version tag")
+    if not is_ancestor(tag, "origin/main"):
+        raise RuntimeError(f"{tag} is not in public main history")
+    public_tree = run_git(["rev-parse", f"{tag}^{{tree}}"]).strip()
+    subject = f"Prepare Tivano {tag[1:]}"
+    candidates = run_git(["log", "--format=%H%x1f%s", head]).splitlines()
+    matching = []
+    for line in candidates:
+        sha, title = line.split("\x1f", 1)
+        if title != subject:
+            continue
+        if run_git(["rev-parse", f"{sha}^{{tree}}"]).strip() != public_tree:
+            continue
+        valid = True
+        for edition in ("dev", "release"):
+            text = run_git(["show", f"{sha}:config/{edition}.xcconfig"])
+            match = VERSION_RE.search(text)
+            if not match or match.group(1) != tag[1:]:
+                valid = False
+        if valid:
+            matching.append(sha)
+    if len(matching) != 1:
+        raise RuntimeError(f"Expected one {subject} ancestor with {tag}'s exact tree and versions; found {len(matching)}. Cannot bound contributor history")
+    return matching[0]
 
 
 def commits_in_range(tag):
@@ -81,7 +125,7 @@ def commits_in_range(tag):
         )
         coauthors = [
             {"name": m.group(1).strip(), "email": m.group(2).strip()}
-            for m in COAUTHOR_RE.finditer(trailer_field)
+            for m in COAUFIXTURE_RE.finditer(trailer_field)
         ]
         commits.append(
             {
@@ -117,19 +161,19 @@ def is_ancestor(sha, rev):
         return False
 
 
-def merged_in(sha, tag):
-    if is_ancestor(sha, "HEAD") and (tag is None or not is_ancestor(sha, tag)):
+def merged_in(sha, public_tag, local_base):
+    if is_ancestor(sha, "HEAD") and (local_base is None or not is_ancestor(sha, local_base)):
         return True
     try:
-        if is_ancestor(sha, "origin/main") and (tag is None or not is_ancestor(sha, tag)):
+        if is_ancestor(sha, "origin/main") and (public_tag is None or not is_ancestor(sha, public_tag)):
             return True
     except Exception:
         pass
     return False
 
 
-def merged_requests(tag):
-    shas = {c["sha"] for c in commits_in_range(tag)}
+def merged_requests(tag, base):
+    shas = {c["sha"] for c in commits_in_range(base)}
     date = tag_date(tag)
     if tag is not None and not date:
         raise RuntimeError(f"Cannot determine date of previous tag {tag}")
@@ -184,7 +228,7 @@ def merged_requests(tag):
         matched = [s for s in candidates if s in shas]
         if not matched:
             for s in candidates:
-                if merged_in(s, tag):
+                if merged_in(s, tag, base):
                     matched.append(s)
                     break
         if not matched:
@@ -227,8 +271,9 @@ def ignored_email(email):
 
 
 def contributors(tag):
-    mrs = merged_requests(tag)
-    commits = commits_in_range(tag)
+    base = range_base(tag)
+    mrs = merged_requests(tag, base)
+    commits = commits_in_range(base)
     linked = set()
     for mr in mrs:
         linked.update(mr.get("shas", []))
@@ -375,6 +420,7 @@ def main():
     args = sys.argv[1:]
     since = None
     as_json = False
+    print_base = False
     check_file = None
     i = 0
     while i < len(args):
@@ -384,6 +430,9 @@ def main():
             i += 2
         elif arg.startswith("--since="):
             since = arg.split("=", 1)[1]
+            i += 1
+        elif arg == "--range-base":
+            print_base = True
             i += 1
         elif arg == "--json":
             as_json = True
@@ -403,6 +452,12 @@ def main():
         print(f"Cannot determine previous tag: {exc}", file=sys.stderr)
         return 1
     try:
+        if print_base:
+            base = range_base(tag)
+            if base is None:
+                raise RuntimeError("No previous release range base")
+            print(run_git(["rev-parse", f"{base}^{{commit}}"]).strip())
+            return 0
         entries = contributors(tag)
     except Exception as exc:
         print(f"Cannot determine release contributors: {exc}", file=sys.stderr)

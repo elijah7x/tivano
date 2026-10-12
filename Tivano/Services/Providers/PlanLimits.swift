@@ -91,7 +91,7 @@ enum PlanLimitsReader {
     }
 
     nonisolated static func windowTitle(minutes: Int?) -> String {
-        guard let minutes else { return "Usage limit" }
+        guard let minutes, minutes > 0 else { return "Usage limit" }
         switch minutes {
         case 300: return "5-hour limit"
         case 1_440: return "Daily"

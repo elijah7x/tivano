@@ -121,8 +121,8 @@ final class AppModel {
     private(set) var isLibraryLoaded = false
     @ObservationIgnored private var libraryLoad: Task<Result<Library, Error>, Never>?
     @ObservationIgnored private var restoreSelectionAfterLoad = false
-    @ObservationIgnored private var persistenceEnabled = true
-    @ObservationIgnored private var libraryWritesBlocked = false
+    @ObservationIgnored private(set) var persistenceEnabled = true
+    @ObservationIgnored var libraryWritesBlocked = false
     @ObservationIgnored private var libraryRecoveryURL: URL?
     @ObservationIgnored private var librarySaveFailureShown = false
     @ObservationIgnored private var didRequestNotifications = false
@@ -285,6 +285,7 @@ final class AppModel {
         projects = library.projects + projects.filter { !knownProjects.contains($0.id) }
         threads = library.threads + threads.filter { !knownThreads.contains($0.id) }
         isLibraryLoaded = true
+        updateDockBadge()
         libraryLoad = nil
         let permissionsLowered = announceLoweredPermissions()
         if permissionsLowered || threads != originalThreads || projects != library.projects { scheduleSave() }
@@ -656,17 +657,33 @@ final class AppModel {
         scheduleSave()
     }
 
+    var projectDeletionRequest: UUID?
+
+    func requestProjectDeletion(_ project: Project) {
+        projectDeletionRequest = project.id
+    }
+
+    func threadsRemovedWithProject(_ project: Project) -> [ChatThread] {
+        descendantsIncluding(threads.filter { $0.projectID == project.id }.map(\.id))
+    }
+
     func removeProject(_ project: Project) {
-        let removed = threads.filter { $0.projectID == project.id }
+        guard !isAnyHydraMergeRunning else {
+            alert = AppAlert(title: "Project is busy", message: Chrome.localized("Wait for Hydra to finish merging before removing this project."))
+            return
+        }
+        let removed = threadsRemovedWithProject(project)
+        let ids = Set(removed.map(\.id))
+        let cleanup = deletionCleanup(for: removed)
         var library = currentLibrary()
-        library.threads.removeAll { $0.projectID == project.id }
+        library.threads.removeAll { ids.contains($0.id) }
         library.projects.removeAll { $0.id == project.id }
         guard commitLibrary(library) else { return }
-        threads.removeAll { $0.projectID == project.id }
+        completeThreadDeletion(removed, cleanup: cleanup)
         projects.removeAll { $0.id == project.id }
-        for thread in removed { discardThreadState(thread) }
         if settings.lastProjectID == project.id { settings.lastProjectID = nil }
-        if selectedThread == nil { selectedThreadID = nil }
+        updateDockBadge()
+        scheduleSave()
     }
 
     // MARK: - Threads
@@ -1085,34 +1102,79 @@ final class AppModel {
         return threads.filter { ids.contains($0.id) }
     }
 
+    private struct ThreadDeletionCleanup {
+        let directory: String
+        let id: UUID
+        let copy: String?
+    }
+
+    private func deletionCleanup(for removed: [ChatThread], removeWorktree: UUID? = nil) -> [ThreadDeletionCleanup] {
+        removed.compactMap { thread in
+            guard let project = project(thread.projectID) else { return nil }
+            let ownsCopy = thread.hydra?.hasOwnCopy == true
+                || (!thread.isHelper && thread.id == removeWorktree)
+            let copy = ownsCopy ? thread.worktreePath : nil
+            let safeCopy = copy.flatMap { path -> String? in
+                if let info = thread.hydra,
+                   !info.isFinished || !(info.landing?.landed == true || info.landing?.isEmpty == true) {
+                    return nil
+                }
+                let url = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
+                let managed = Storage.worktreesDirectory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+                guard url.path.hasPrefix(managed),
+                      !projects.contains(where: {
+                          let path = URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().standardizedFileURL.path
+                          return path == url.path || path.hasPrefix(url.path + "/")
+                      }),
+                      thread.hydra?.targetCheckout.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL == url }) != true,
+                      !threads.contains(where: { $0.id == thread.parentThreadID && $0.worktreePath == path }) else { return nil }
+                return path
+            }
+            // Capture the actual checkout before its project and runtime disappear.
+            return ThreadDeletionCleanup(directory: thread.executionDirectory(projectPath: project.path), id: thread.id, copy: safeCopy)
+        }
+    }
+
     private func deleteThreads(_ removed: [ChatThread], removeWorktree: UUID? = nil) {
         guard !removed.isEmpty else { return }
         let ids = Set(removed.map(\.id))
+        let cleanup = deletionCleanup(for: removed, removeWorktree: removeWorktree)
         var library = currentLibrary()
         library.threads.removeAll { ids.contains($0.id) }
         guard commitLibrary(library) else { return }
-        if let selectedThreadID, ids.contains(selectedThreadID) { selectNeighbor(of: selectedThreadID) }
+        completeThreadDeletion(removed, cleanup: cleanup)
+        updateDockBadge()
+        scheduleSave()
+    }
+
+    private func completeThreadDeletion(_ removed: [ChatThread], cleanup: [ThreadDeletionCleanup]) {
+        let ids = Set(removed.map(\.id))
         for thread in removed where thread.isHydraHead && thread.hydra?.isFinished == false {
             finishHydraHead(thread.id, status: .interrupted, summary: nil)
         }
-        let cleanup = removed.compactMap { thread -> (String, UUID, String?)? in
-            guard let project = project(thread.projectID) else { return nil }
-            let copy = thread.id == removeWorktree || thread.hydra?.hasOwnCopy == true ? thread.worktreePath : nil
-            return (project.path, thread.id, copy)
-        }
+        if let selectedThreadID, ids.contains(selectedThreadID) { selectNeighbor(of: selectedThreadID) }
         threads.removeAll { ids.contains($0.id) }
         if let selectedThreadID, ids.contains(selectedThreadID) { self.selectedThreadID = nil }
         for thread in removed { discardThreadState(thread, deletingDocument: false) }
         Storage.deleteDocuments(removed.map(\.id))
         Task {
-            for (directory, id, copy) in cleanup {
-                let git = Git(directory)
-                await git.deleteCheckpoints(thread: id)
-                if let copy { try? await git.removeWorktree(at: copy) }
+            // Helpers can share a parent's checkout, so clear every checkpoint before
+            // removing any of the owned worktrees those refs are reached through.
+            for item in cleanup { await Git(item.directory).deleteCheckpoints(thread: item.id) }
+            for item in cleanup {
+                guard let copy = item.copy else { continue }
+                do {
+                    guard let status = await Git(copy).status(), status.changedFiles == 0 else {
+                        alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The worktree has changes or could not be inspected. Its files were kept."))
+                        continue
+                    }
+                    let root = try await Git(item.directory).repositoryRoot()
+                    try await Git(root.path).removeWorktree(at: copy)
+                } catch {
+                    alert = AppAlert(title: "Could not remove worktree", message: error.localizedDescription)
+                }
             }
         }
-        updateDockBadge()
-        scheduleSave()
     }
 
     // MARK: - Subagents
@@ -1191,6 +1253,7 @@ final class AppModel {
     }
 
     private func discardThreadState(_ thread: ChatThread, deletingDocument: Bool = true) {
+        hydraHeadRetries[thread.id] = nil
         idleSessionStops.removeValue(forKey: thread.id)?.cancel()
         runtimes[thread.id]?.cancelPersistence()
         runtimes[thread.id]?.stopSession()
@@ -1321,7 +1384,6 @@ final class AppModel {
         let stillWorking = continues || waitingForLimit || runtime?.isWaitingForLimit == true || runtime?.isRunning == true
             || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true
             || !(runtime?.backgroundTasks.isEmpty ?? true)
-        let duplicate = thread(id)?.lastAttentionTurnID == turnID
         if !isHead && !userStopped && !continues && stillWorking {
             deferredResults[id] = (status, turnID)
         } else if !stillWorking || continues || userStopped {
@@ -1331,7 +1393,6 @@ final class AppModel {
             // A queued successor may already have started: do not replace its running status.
             if runtime?.isRunning != true { $0.lastStatus = status }
             $0.updatedAt = .now
-            guard !duplicate else { return }
             $0.pendingResultTurnID = stillWorking && !userStopped ? turnID : nil
             if !stillWorking { $0.lastAttentionTurnID = turnID }
             $0.unreadRevision = UUID()
@@ -1344,7 +1405,7 @@ final class AppModel {
             if !continues { hydraHeadTurnFinished(head, status: status) }
             return
         }
-        guard !duplicate, !stillWorking, !userStopped else { return }
+        guard !stillWorking, !userStopped else { return }
         let chimed = settings.chimeWhenFinished && status != .interrupted
         if chimed { FinishChime.play() }
         guard !isVisible, settings.notifyWhenFinished, let thread = thread(id) else { return }

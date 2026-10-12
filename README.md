@@ -20,7 +20,7 @@ Tivano is a wind — a gentle morning breeze off Lake Como. In the icon, that wi
 
 ## What it does
 
-Tivano drives the coding agents you already have installed and signed in, on your own subscriptions: Codex, Claude, Cursor, OpenCode, Grok, Antigravity, Copilot, Command Code, Pi, DeepSeek, Z.ai, Meta and Devin.
+Tivano drives the coding agents you already have installed and signed in, using your own provider subscriptions or API credentials: Codex, Claude, Cursor, OpenCode Zen, OpenCode Go, Grok, Antigravity, Copilot, Command Code, Pi, omp, Kimi Code, DeepSeek, Z.ai, Meta and Devin.
 
 - Projects and threads in a glass sidebar, with search, pinning and settling.
 - Streaming conversations with reasoning, tool calls, plans and inline approvals.
@@ -31,6 +31,8 @@ Tivano drives the coding agents you already have installed and signed in, on you
 - Commit, push and pull requests, with generated commit messages and titles.
 - Hydra: one chat, many heads — the lead agent briefs a team of helpers, each working in its own copy of the project, and their work lands back as one merge.
 - Usage limits and credits beside the composer, for every plan that exposes them.
+
+Tivano keeps its conversation library locally. Provider requests, CLI updates and app update checks use their respective services; those services have their own data policies. Optional local diagnostics stay in the selected output directory.
 
 ## Requirements
 
@@ -48,7 +50,7 @@ open Tivano.xcodeproj
 
 SwiftTerm, the only dependency, is fetched by Swift Package Manager.
 
-For local Debug builds, run `scripts/setup_local_signing.sh` once; details live in [docs/local-development.md](docs/local-development.md) and [docs/packaging.md](docs/packaging.md). `scripts/release.sh` archives, signs and notarizes a release build.
+Local builds use Developer ID signing; setup details live in [docs/local-development.md](docs/local-development.md) and [docs/packaging.md](docs/packaging.md). `scripts/release.sh` archives, signs and notarizes a release build.
 
 ## Layout
 
@@ -56,7 +58,7 @@ The sources sit in four layers with a one-way rule. `Tivano/Core` holds models a
 
 ## Acknowledgements
 
-Tivano began as a native Swift rewrite of [T3 Code](https://github.com/pingdotgg/t3code) by T3 Tools Inc., under the MIT License. The terminal is [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) by Miguel de Icaza. The working indicators and their rotating words are ported from [Zeron](https://github.com/zeronsh/zeron) by Wing. Spending a Codex account's banked resets follows [MonoCode](https://github.com/hardbeat920/monocode). The Copilot provider icon comes from GitHub's [Octicons](https://github.com/primer/octicons). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the app carries the same notices under Settings › About › Licenses.
+Tivano began as a native Swift rewrite of [T3 Code](https://github.com/pingdotgg/t3code) by T3 Tools Inc., under the MIT License. The terminal is [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) by Miguel de Icaza. The working indicators and their rotating words are ported from [Zeron](https://github.com/zeronsh/zeron) by Wing. Spending a Codex account's banked resets follows [MonoCode](https://github.com/hardbeat920/monocode). The Copilot provider icon comes from GitHub's [Octicons](https://github.com/primer/octicons); the omp monogram comes from [oh-my-pi](https://github.com/can1357/oh-my-pi). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the app carries the same notices under Settings › About › Licenses.
 
 ## License
 

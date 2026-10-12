@@ -152,9 +152,11 @@ struct CommandPalette: View {
         // has remapped away, and shows nothing at all once a chord is cleared.
         var actions = [
             Item(id: "new-thread", title: Chrome.localized("New thread"), symbol: "plus.bubble", shortcut: ShortcutStore.label(for: .newThread)) {
+                WindowManager.shared.hideSettings()
                 model.newThread()
             },
             Item(id: "new-worktree", title: Chrome.localized("New thread in worktree"), symbol: "arrow.triangle.branch", shortcut: ShortcutStore.label(for: .newWorktreeThread)) {
+                WindowManager.shared.hideSettings()
                 model.newThread(workspace: .worktree)
             },
             Item(id: "add-project", title: Chrome.localized("Add project"), symbol: "folder.badge.plus", shortcut: ShortcutStore.label(for: .addProject)) {
@@ -164,7 +166,8 @@ struct CommandPalette: View {
                 GitHubClonePanel.shared.present(model: model)
             },
         ]
-        if let threadID = model.selectedThreadID {
+        if !(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented),
+           let threadID = model.selectedThreadID {
             let runtime = model.runtime(for: threadID)
             actions.append(Item(id: "terminal", title: Chrome.localized("Toggle terminal"), symbol: "terminal", shortcut: ShortcutStore.label(for: .toggleTerminal)) {
                 runtime.isTerminalVisible.toggle()
@@ -195,6 +198,7 @@ struct CommandPalette: View {
             .filter { $0.name.lowercased().contains(needle) }
             .map { project in
                 Item(id: project.id.uuidString, title: String(format: Chrome.localized("New thread in %@"), project.name), subtitle: project.path, icon: project.icon, symbol: "folder") {
+                    WindowManager.shared.hideSettings()
                     model.newThread(in: project)
                 }
             }
