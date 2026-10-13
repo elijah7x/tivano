@@ -109,15 +109,15 @@ struct AppCommands: Commands {
                     .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
             }
             Divider()
-            Button(Chrome.localized(model.finishActionTitle)) { model.finishSelectedThread() }
-                .keyboardShortcut(shortcuts.keyboardShortcut(for: .finishThread))
+            Button("Archive thread") {
+                guard let id = model.selectedThreadID else { return }
+                withAnimation(Chrome.panelSlide) { model.archive(id) }
+            }
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .archiveThreadDirect))
                 .disabled(chatIsCovered || model.selectedThreadID == nil)
             Button("Archive thread…") { model.askToArchiveSelectedThread() }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .archiveThread))
                 .disabled(chatIsCovered || model.selectedThreadID == nil)
-            Button(Chrome.localized(model.selectedThread?.isSettled == true ? "Reopen thread" : "Settle thread")) { model.settleSelectedThread() }
-                .keyboardShortcut(shortcuts.keyboardShortcut(for: .settleThread))
-                .disabled(chatIsCovered || (model.selectedThread.map { $0.isHelper } ?? true))
         }
     }
 }

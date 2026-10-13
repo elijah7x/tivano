@@ -182,6 +182,9 @@ extension AppModel {
     /// for as long as the chat stays on that pair's provider. A chat with none leads its
     /// heads on its own model and effort; no pair applies to a chat on its own.
     func hydraPair(for thread: ChatThread) -> HydraPair? {
+        if let temporary = thread.temporaryHydraPair, temporary.id == thread.hydraPairID {
+            return temporary.provider == thread.provider ? temporary : nil
+        }
         guard let pair = settings.hydraPair(thread.hydraPairID), pair.provider == thread.provider else { return nil }
         return pair
     }

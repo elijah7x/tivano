@@ -353,7 +353,7 @@ final class ThreadRuntime {
     var hydraAutoPopHeld: Set<UUID> = []
     /// The order the user gave the panels inside their corners by dragging; a panel not
     /// listed comes after the listed ones, in the built-in order: helper, team, popped
-    /// head, usage, heads popped out automatically.
+    /// head, heads popped out automatically.
     var panelStackOrder: [FloatingPanelID] = []
     /// Heads whose automatic panel the user dragged: they keep that corner and count
     /// against its room.
@@ -1404,9 +1404,7 @@ final class ThreadRuntime {
             $0.hasUnread = false
             $0.unreadRevision = UUID()
         }
-        // A settled thread put back to work is open again.
         app.updateDockBadge()
-        app.reopenIfSettled(threadID)
         endDelegationStream()
         hydraCurrentTurnTouchedPaths = []
         // `hydraHeads == nil` marks a turn of the user's own: it starts the request's

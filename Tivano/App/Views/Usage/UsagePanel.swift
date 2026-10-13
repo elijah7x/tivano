@@ -12,15 +12,10 @@ struct UsagePanel: View {
     /// The pair's heads provider, when it differs from the lead's. Nil keeps the panel
     /// to the chat's own provider, exactly as before.
     let headsProvider: ProviderKind?
-    /// Inside a floating panel the content takes the panel's width instead of the
-    /// popover's 360 points.
-    let fillsWidth: Bool
-
-    init(usage: ContextUsage?, provider: ProviderKind, headsProvider: ProviderKind? = nil, fillsWidth: Bool = false) {
+    init(usage: ContextUsage?, provider: ProviderKind, headsProvider: ProviderKind? = nil) {
         self.usage = usage
         self.provider = provider
         self.headsProvider = headsProvider
-        self.fillsWidth = fillsWidth
     }
 
     var body: some View {
@@ -66,8 +61,7 @@ struct UsagePanel: View {
             }
         }
         .padding(16)
-        .frame(width: fillsWidth ? nil : 360)
-        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+        .frame(width: 360)
         .onAppear {
             registry.refreshPlanLimits(provider)
             registry.refreshCredits(provider)

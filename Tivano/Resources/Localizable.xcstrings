@@ -45,6 +45,72 @@
         }
       }
     },
+    "Click a model to set its reasoning effort and fast mode for every new chat. Right-click it to move it to another group." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点击模型可为每个新对话设置其推理强度和快速模式；右键可将其移到其他分组。"
+          }
+        }
+      }
+    },
+    "Delete Group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除分组"
+          }
+        }
+      }
+    },
+    "Delete group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除分组"
+          }
+        }
+      }
+    },
+    "Drag to reorder groups" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖动以调整分组顺序"
+          }
+        }
+      }
+    },
+    "Drag to reorder or into another group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖动以排序，或拖入其他分组"
+          }
+        }
+      }
+    },
+    "Empty. Right-click a model and choose Move to Group." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空分组。右键点击模型，选择「移到分组」。"
+          }
+        }
+      }
+    },
     "Fetched %d pages" : {
       "extractionState": "manual",
       "localizations": {
@@ -67,6 +133,17 @@
         }
       }
     },
+    "Group name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分组名称"
+          }
+        }
+      }
+    },
     "Hide the thinking" : {
       "extractionState": "manual",
       "localizations": {
@@ -85,6 +162,105 @@
           "stringUnit": {
             "state": "translated",
             "value": "隐藏这些步骤"
+          }
+        }
+      }
+    },
+    "Lots of models? Group them, and fold the ones you rarely use in the picker." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型太多？把它们分组，不常用的可以在选择器里折叠起来。"
+          }
+        }
+      }
+    },
+    "Move Down" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下移"
+          }
+        }
+      }
+    },
+    "Move Up" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上移"
+          }
+        }
+      }
+    },
+    "Move to Group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移到分组"
+          }
+        }
+      }
+    },
+    "New group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建分组"
+          }
+        }
+      }
+    },
+    "New temporary pair" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建临时组合"
+          }
+        }
+      }
+    },
+    "No Group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不分组"
+          }
+        }
+      }
+    },
+    "No models match" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的模型"
+          }
+        }
+      }
+    },
+    "Other models · New chats only" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他模型 · 仅新会话"
           }
         }
       }
@@ -129,6 +305,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "读取了 1 个文件"
+          }
+        }
+      }
+    },
+    "Recent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近"
+          }
+        }
+      }
+    },
+    "Rename group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名分组"
           }
         }
       }
@@ -184,6 +382,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "显示这些步骤"
+          }
+        }
+      }
+    },
+    "Temporary" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "临时"
+          }
+        }
+      }
+    },
+    "Temporary pair" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "临时组合"
           }
         }
       }
@@ -470,6 +690,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "服务器返回了无效的工具结果。"
+          }
+        }
+      }
+    },
+    "Used by this chat only, not saved to Settings › Hydra." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅用于此会话，不会保存到设置 › Hydra。"
           }
         }
       }
@@ -3551,17 +3782,6 @@
         }
       }
     },
-    "%lld of %lld. Click a model to set its reasoning effort and fast mode for every new chat." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已选 %lld / %lld。点击模型可为每个新对话设置其推理强度和快速模式。"
-          }
-        }
-      }
-    },
     "%lld tools · %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4079,28 +4299,6 @@
         }
       }
     },
-    "A settled thread drops to the bottom of the sidebar, small and grey, until you reopen it" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搁置的对话会移至侧边栏底部，以较小的灰色文字显示，直到你重新打开它"
-          }
-        }
-      }
-    },
-    "A small note as the thread settles" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搁置对话时播放轻柔的提示音"
-          }
-        }
-      }
-    },
     "A soft chime, whether or not the thread is in view" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4508,17 +4706,6 @@
         }
       }
     },
-    "An archived thread leaves the sidebar for the Archive page" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "归档的对话会从侧边栏移至归档页面"
-          }
-        }
-      }
-    },
     "An emoji or symbol for each project, drawn before the thread's name in the activity list and on the project's own row" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4724,6 +4911,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "归档对话…"
+          }
+        }
+      }
+    },
+    "Archives the selected thread without asking for confirmation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接归档所选对话，无需确认。"
           }
         }
       }
@@ -6961,17 +7159,6 @@
         }
       }
     },
-    "Dismiss the usage panel; the usage popover opens it again" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭用量面板；可在用量弹窗中重新打开"
-          }
-        }
-      }
-    },
     "Dismissed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7001,17 +7188,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "完成"
-          }
-        }
-      }
-    },
-    "Done with a thread" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "完成对话时"
           }
         }
       }
@@ -7225,13 +7401,13 @@
         }
       }
     },
-    "Each head after the first gets a panel of its own beside the chat while there is room, left and right until each side is full; the usage panel keeps its spot." : {
+    "Each head after the first gets a panel of its own beside the chat while there is room, left and right until each side is full." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "除第一个外，每个子智能体在空间允许时都会在对话旁获得独立面板，先左后右，直到两侧排满；用量面板位置保持不变。"
+            "value" : "除第一个外，每个子智能体在空间允许时都会在对话旁获得独立面板，先左后右，直到两侧排满。"
           }
         }
       }
@@ -7819,17 +7995,6 @@
         }
       }
     },
-    "Finish thread" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "完成对话"
-          }
-        }
-      }
-    },
     "Finished" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7837,17 +8002,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已完成"
-          }
-        }
-      }
-    },
-    "Finished threads" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已完成的对话"
           }
         }
       }
@@ -8354,17 +8508,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏助手"
-          }
-        }
-      }
-    },
-    "Hide settled threads" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "隐藏已搁置的对话"
           }
         }
       }
@@ -9953,17 +10096,6 @@
         }
       }
     },
-    "Nothing to show for %@ yet." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暂无 %@ 的内容可显示。"
-          }
-        }
-      }
-    },
     "Nothing — press Connect." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11361,17 +11493,6 @@
         }
       }
     },
-    "Reopen thread" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重新打开对话"
-          }
-        }
-      }
-    },
     "Replied" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12340,72 +12461,6 @@
         }
       }
     },
-    "Settle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搁置"
-          }
-        }
-      }
-    },
-    "Settle thread" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搁置对话"
-          }
-        }
-      }
-    },
-    "Settled" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已搁置"
-          }
-        }
-      }
-    },
-    "Settled, %d threads" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已搁置，%d 个对话"
-          }
-        }
-      }
-    },
-    "Settles the selected thread, or archives it, whichever General chose. Reopens a settled one." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "按“通用”中的设置，搁置或归档所选对话；对已搁置的对话则重新打开。"
-          }
-        }
-      }
-    },
-    "Settles the selected thread. Reopens one that is settled." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搁置所选对话；对已搁置的对话则重新打开。"
-          }
-        }
-      }
-    },
     "Shared" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12494,17 +12549,6 @@
         }
       }
     },
-    "Show a usage panel" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示用量面板"
-          }
-        }
-      }
-    },
     "Show all %d heads" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12589,17 +12633,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "收起"
-          }
-        }
-      }
-    },
-    "Show settled threads" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示已搁置的对话"
           }
         }
       }
@@ -13084,17 +13117,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "其他"
-          }
-        }
-      }
-    },
-    "Sound when settling" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搁置时播放提示音"
           }
         }
       }
@@ -13755,17 +13777,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "选择器最多可容纳 %lld 个模型"
-          }
-        }
-      }
-    },
-    "The plan's limits and credits in a floating panel beside every chat, for the model in use or a pair's two; the usage popover's pop-out button switches it on as well, and it keeps the corner it was last dragged to" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在每个对话旁的浮动面板中，显示当前模型或组合中两个模型的套餐额度和余额。用量弹窗的弹出按钮也可开启此面板；面板会保留上次拖动到的角落位置。"
           }
         }
       }

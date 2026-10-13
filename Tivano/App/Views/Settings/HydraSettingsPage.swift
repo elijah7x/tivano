@@ -89,7 +89,7 @@ struct HydraSettingsPage: View {
                     ChromeRowDivider()
                     ChromeRow(
                         title: "Heads' panels",
-                        detail: settings.hydraAutoPopsHeads ? "Each head after the first gets a panel of its own beside the chat while there is room, left and right until each side is full; the usage panel keeps its spot." : "One panel over the chat lists every head."
+                        detail: settings.hydraAutoPopsHeads ? "Each head after the first gets a panel of its own beside the chat while there is room, left and right until each side is full." : "One panel over the chat lists every head."
                     ) {
                         ChromeVisualPicker(options: [(false, "One panel"), (true, "A panel each")], selection: $settings.hydraAutoPopsHeads) { popped in
                             Image(systemName: popped ? "square.grid.2x2" : "rectangle")
@@ -400,7 +400,7 @@ private struct HydraPairRow: View {
             .buttonStyle(.plain)
             .onHover { isHovering = $0 }
             .popover(isPresented: $isEditing, arrowEdge: .trailing) {
-                HydraPairEditor(pairID: pair.id)
+                HydraPairEditor(pair: pair, update: { change in model.updateHydraPair(pair.id, change) })
                     .frame(width: 360)
                     .presentedChrome()
             }
@@ -491,9 +491,11 @@ private struct HydraPairIcons: View {
 /// effort, and how many heads go out at once. Every choice writes straight to the pair.
 /// The head profiles at the end are the pair's advanced mode: purpose-named overrides
 /// of the shared heads' choices, so an empty list leaves the pair as it always was.
-private struct HydraPairEditor: View {
+struct HydraPairEditor: View {
     @Environment(AppModel.self) private var model
-    let pairID: UUID
+    let pair: HydraPair
+    var showsName = true
+    let update: ((inout HydraPair) -> Void) -> Void
 
     /// The name field: a popover hands its first field the focus as it opens, and the
     /// caret landing there read as a prompt to rename the pair. The field is given back
@@ -501,26 +503,26 @@ private struct HydraPairEditor: View {
     @FocusState private var isNameFocused: Bool
 
     var body: some View {
-        if let pair = model.settings.hydraPair(pairID) {
-            let registry = model.providers
-            let providers = ProviderKind.allCases.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.provider) }
-            let headsProviders = ProviderKind.allCases.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.headsProvider) }
-            let options = registry.models(for: pair.provider)
-            let headsOptions = registry.models(for: pair.headsProvider)
-            let leadOption = registry.model(pair.orchestratorModel, for: pair.provider)
-            let workerOption = registry.model(pair.workerModel, for: pair.headsProvider)
-            // A lead that may be any model offers every effort the provider's models know.
-            let leadEfforts = Self.efforts(of: leadOption, fallback: Self.allEfforts(options))
-            // Heads with no model chosen inherit the chat's, and its efforts; on another
-            // provider they run its default model, so its efforts are the ones on offer.
-            let workerEfforts = Self.efforts(of: workerOption, fallback: pair.sendsHeadsElsewhere ? Self.efforts(of: registry.defaultModel(for: pair.headsProvider), fallback: Self.allEfforts(headsOptions)) : leadEfforts)
-            VStack(alignment: .leading, spacing: 0) {
+        let registry = model.providers
+        let providers = ProviderKind.allCases.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.provider) }
+        let headsProviders = ProviderKind.allCases.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.headsProvider) }
+        let options = registry.models(for: pair.provider)
+        let headsOptions = registry.models(for: pair.headsProvider)
+        let leadOption = registry.model(pair.orchestratorModel, for: pair.provider)
+        let workerOption = registry.model(pair.workerModel, for: pair.headsProvider)
+        // A lead that may be any model offers every effort the provider's models know.
+        let leadEfforts = Self.efforts(of: leadOption, fallback: Self.allEfforts(options))
+        // Heads with no model chosen inherit the chat's, and its efforts; on another
+        // provider they run its default model, so its efforts are the ones on offer.
+        let workerEfforts = Self.efforts(of: workerOption, fallback: pair.sendsHeadsElsewhere ? Self.efforts(of: registry.defaultModel(for: pair.headsProvider), fallback: Self.allEfforts(headsOptions)) : leadEfforts)
+        VStack(alignment: .leading, spacing: 0) {
+            if showsName {
                 // The name is the header: the pair's own word for itself, over what it
                 // stands for in the picker when it has none.
                 VStack(alignment: .leading, spacing: 4) {
                     TextField("", text: Binding(
                         get: { pair.name ?? "" },
-                        set: { text in model.updateHydraPair(pairID) { $0.name = text.isEmpty ? nil : text } }
+                        set: { text in update { $0.name = text.isEmpty ? nil : text } }
                     ), prompt: Text(HydraPairSummary.modelsTitle(pair, registry: registry)))
                     .textFieldStyle(.plain)
                     .focused($isNameFocused)
@@ -537,142 +539,142 @@ private struct HydraPairEditor: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
-                sectionLabel("Lead")
-                editorRow("Provider") {
-                    GlassPickerButton(
-                        options: providers.map { ($0, $0.displayName) },
-                        selection: Binding(
-                            get: { pair.provider },
-                            set: { provider in
-                                model.updateHydraPair(pairID) {
-                                    guard $0.provider != provider else { return }
-                                    $0.provider = provider
-                                    $0.orchestratorModel = nil
-                                    $0.orchestratorEffort = nil
-                                    // Heads on the old lead provider go with it; heads on a
-                                    // provider of their own keep their model and effort, and
-                                    // when that provider is the new lead's, they are simply
-                                    // on the lead's provider again.
-                                    if $0.workerProvider == nil {
-                                        $0.workerModel = nil
-                                        $0.workerEffort = nil
-                                    } else if $0.workerProvider == provider {
-                                        $0.workerProvider = nil
-                                    }
-                                }
-                                Task { await registry.loadCatalog(provider) }
-                            }
-                        ),
-                        asset: { $0.iconName }
-                    )
-                }
-                editorRow("Model") {
-                    GlassPickerButton(
-                        options: [(String?.none, "Any model")] + options.map { (Optional($0.id), $0.shortName) },
-                        selection: Binding(
-                            get: { pair.orchestratorModel },
-                            set: { id in
-                                model.updateHydraPair(pairID) {
-                                    $0.orchestratorModel = id
-                                    if let effort = $0.orchestratorEffort, let option = registry.model(id, for: $0.provider), !option.efforts.contains(effort) {
-                                        $0.orchestratorEffort = nil
-                                    }
-                                }
-                            }
-                        ),
-                        maxWidth: 190
-                    )
-                }
-                if !leadEfforts.isEmpty {
-                    editorRow("Effort") {
-                        effortPicker(
-                            efforts: leadEfforts,
-                            inherit: "Chat's effort",
-                            selection: Binding(
-                                get: { pair.orchestratorEffort },
-                                set: { effort in model.updateHydraPair(pairID) { $0.orchestratorEffort = effort } }
-                            )
-                        )
-                    }
-                }
-                sectionLabel("Heads")
-                editorRow("Provider") {
-                    GlassPickerButton(
-                        options: [(ProviderKind?.none, "Same as the lead")] + headsProviders.filter { $0 != pair.provider }.map { (Optional($0), $0.displayName) },
-                        selection: Binding(
-                            get: { pair.sendsHeadsElsewhere ? pair.workerProvider : nil },
-                            set: { provider in
-                                model.updateHydraPair(pairID) {
-                                    let chosen = provider == $0.provider ? nil : provider
-                                    guard $0.workerProvider != chosen else { return }
-                                    // The heads' model and effort were the old provider's.
-                                    $0.workerProvider = chosen
+            }
+            sectionLabel("Lead")
+            editorRow("Provider") {
+                GlassPickerButton(
+                    options: providers.map { ($0, $0.displayName) },
+                    selection: Binding(
+                        get: { pair.provider },
+                        set: { provider in
+                            update {
+                                guard $0.provider != provider else { return }
+                                $0.provider = provider
+                                $0.orchestratorModel = nil
+                                $0.orchestratorEffort = nil
+                                // Heads on the old lead provider go with it; heads on a
+                                // provider of their own keep their model and effort, and
+                                // when that provider is the new lead's, they are simply
+                                // on the lead's provider again.
+                                if $0.workerProvider == nil {
                                     $0.workerModel = nil
                                     $0.workerEffort = nil
-                                }
-                                if let provider { Task { await registry.loadCatalog(provider) } }
-                            }
-                        ),
-                        asset: { ($0 ?? pair.provider).iconName }
-                    )
-                }
-                editorRow("Model") {
-                    GlassPickerButton(
-                        options: [(String?.none, pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat")] + headsOptions.map { (Optional($0.id), $0.shortName) },
-                        selection: Binding(
-                            get: { pair.workerModel },
-                            set: { id in
-                                model.updateHydraPair(pairID) {
-                                    $0.workerModel = id
-                                    if let effort = $0.workerEffort, let option = registry.model(id, for: $0.headsProvider), !option.efforts.contains(effort) {
-                                        $0.workerEffort = nil
-                                    }
+                                } else if $0.workerProvider == provider {
+                                    $0.workerProvider = nil
                                 }
                             }
-                        ),
-                        maxWidth: 190
-                    )
-                }
-                if !workerEfforts.isEmpty {
-                    editorRow("Effort") {
-                        effortPicker(
-                            efforts: workerEfforts,
-                            inherit: pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat",
-                            selection: Binding(
-                                get: { pair.workerEffort },
-                                set: { effort in model.updateHydraPair(pairID) { $0.workerEffort = effort } }
-                            )
-                        )
-                    }
-                }
-                editorRow("At once") {
-                    GlassPickerButton(
-                        options: [(Int?.none, "As many as it takes")] + HydraPair.maxHeadsRange.map { (Optional($0), String($0)) },
+                            Task { await registry.loadCatalog(provider) }
+                        }
+                    ),
+                    asset: { $0.iconName }
+                )
+            }
+            editorRow("Model") {
+                GlassPickerButton(
+                    options: [(String?.none, "Any model")] + options.map { (Optional($0.id), $0.shortName) },
+                    selection: Binding(
+                        get: { pair.orchestratorModel },
+                        set: { id in
+                            update {
+                                $0.orchestratorModel = id
+                                if let effort = $0.orchestratorEffort, let option = registry.model(id, for: $0.provider), !option.efforts.contains(effort) {
+                                    $0.orchestratorEffort = nil
+                                }
+                            }
+                        }
+                    ),
+                    maxWidth: 190
+                )
+            }
+            if !leadEfforts.isEmpty {
+                editorRow("Effort") {
+                    effortPicker(
+                        efforts: leadEfforts,
+                        inherit: "Chat's effort",
                         selection: Binding(
-                            get: { pair.maxHeads },
-                            set: { count in model.updateHydraPair(pairID) { $0.maxHeads = count } }
+                            get: { pair.orchestratorEffort },
+                            set: { effort in update { $0.orchestratorEffort = effort } }
                         )
                     )
                 }
-                ForEach(Self.catalogProviders(pair), id: \.self) { provider in
-                    if registry.models(for: provider).isEmpty {
-                        Text(verbatim: String(format: Chrome.localized(registry.loadingCatalogs.contains(provider) ? "Loading %@'s models…" : "No models loaded for %@ yet."), provider.displayName))
-                            .font(.ui(.subheadline))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .padding(.horizontal, 14)
-                            .padding(.top, 8)
-                    }
+            }
+            sectionLabel("Heads")
+            editorRow("Provider") {
+                GlassPickerButton(
+                    options: [(ProviderKind?.none, "Same as the lead")] + headsProviders.filter { $0 != pair.provider }.map { (Optional($0), $0.displayName) },
+                    selection: Binding(
+                        get: { pair.sendsHeadsElsewhere ? pair.workerProvider : nil },
+                        set: { provider in
+                            update {
+                                let chosen = provider == $0.provider ? nil : provider
+                                guard $0.workerProvider != chosen else { return }
+                                // The heads' model and effort were the old provider's.
+                                $0.workerProvider = chosen
+                                $0.workerModel = nil
+                                $0.workerEffort = nil
+                            }
+                            if let provider { Task { await registry.loadCatalog(provider) } }
+                        }
+                    ),
+                    asset: { ($0 ?? pair.provider).iconName }
+                )
+            }
+            editorRow("Model") {
+                GlassPickerButton(
+                    options: [(String?.none, pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat")] + headsOptions.map { (Optional($0.id), $0.shortName) },
+                    selection: Binding(
+                        get: { pair.workerModel },
+                        set: { id in
+                            update {
+                                $0.workerModel = id
+                                if let effort = $0.workerEffort, let option = registry.model(id, for: $0.headsProvider), !option.efforts.contains(effort) {
+                                    $0.workerEffort = nil
+                                }
+                            }
+                        }
+                    ),
+                    maxWidth: 190
+                )
+            }
+            if !workerEfforts.isEmpty {
+                editorRow("Effort") {
+                    effortPicker(
+                        efforts: workerEfforts,
+                        inherit: pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat",
+                        selection: Binding(
+                            get: { pair.workerEffort },
+                            set: { effort in update { $0.workerEffort = effort } }
+                        )
+                    )
                 }
             }
-            .padding(.bottom, 14)
-            .onAppear {
-                // After the popover's own first-responder pass, which runs as it shows.
-                DispatchQueue.main.async { isNameFocused = false }
+            editorRow("At once") {
+                GlassPickerButton(
+                    options: [(Int?.none, "As many as it takes")] + HydraPair.maxHeadsRange.map { (Optional($0), String($0)) },
+                    selection: Binding(
+                        get: { pair.maxHeads },
+                        set: { count in update { $0.maxHeads = count } }
+                    )
+                )
             }
-            .task(id: Self.catalogProviders(pair)) {
-                for provider in Self.catalogProviders(pair) {
-                    await registry.loadCatalog(provider)
+            ForEach(Self.catalogProviders(pair), id: \.self) { provider in
+                if registry.models(for: provider).isEmpty {
+                    Text(verbatim: String(format: Chrome.localized(registry.loadingCatalogs.contains(provider) ? "Loading %@'s models…" : "No models loaded for %@ yet."), provider.displayName))
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 8)
                 }
+            }
+        }
+        .padding(.bottom, 14)
+        .onAppear {
+            // After the popover's own first-responder pass, which runs as it shows.
+            DispatchQueue.main.async { isNameFocused = false }
+        }
+        .task(id: Self.catalogProviders(pair)) {
+            for provider in Self.catalogProviders(pair) {
+                await registry.loadCatalog(provider)
             }
         }
     }

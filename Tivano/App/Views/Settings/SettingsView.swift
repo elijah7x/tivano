@@ -65,7 +65,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var keywords: [String] {
         switch self {
-        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "token", "tokens", "activity", "usage", "panel", "limits", "credits", "heatmap", "daily", "weekly", "cumulative", "settle", "settled", "finish", "finished", "done", "sound", "chime", "icon", "icons", "emoji", "symbol", "symbols", "project mark", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies"]
+        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "token", "tokens", "activity", "usage", "panel", "limits", "credits", "heatmap", "daily", "weekly", "cumulative", "finish", "finished", "sound", "chime", "icon", "icons", "emoji", "symbol", "symbols", "project mark", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies"]
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
@@ -492,13 +492,6 @@ private struct GeneralSettingsPage: View {
                 ChromeRow(title: "Continue after a usage limit", detail: "When the provider's limit is spent, the chat waits for the reset and then tells the agent to carry on") {
                     SettingsSwitch(isOn: $settings.autoContinueAfterLimit)
                 }
-                ChromeRowDivider()
-                ChromeRow(
-                    title: "Show a usage panel",
-                    detail: "The plan's limits and credits in a floating panel beside every chat, for the model in use or a pair's two; the usage popover's pop-out button switches it on as well, and it keeps the corner it was last dragged to"
-                ) {
-                    SettingsSwitch(isOn: $settings.showsUsagePanel)
-                }
             }
         }
         ChromeSection(title: "Projects") {
@@ -510,25 +503,6 @@ private struct GeneralSettingsPage: View {
                 ChromeRow(title: "Marks", detail: "An emoji or symbol for each project, drawn before the thread's name in the activity list and on the project's own row") {
                     ProjectMarksRow()
                 }
-            }
-        }
-        ChromeSection(title: "Finished threads") {
-            ChromeCard {
-                ChromeRow(title: "Done with a thread", detail: settings.threadFinishAction.detail) {
-                    ChromeVisualPicker(options: ThreadFinishAction.allCases.map { ($0, $0.title) }, selection: $settings.threadFinishAction) { action in
-                        Image(systemName: action == .settle ? "checkmark" : "archivebox")
-                    }
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Sound when settling", detail: "A small note as the thread settles") {
-                    SettingsSwitch(isOn: $settings.settleSound)
-                }
-                // Switching it on plays the note once, so you hear what you are getting.
-                .onChange(of: settings.settleSound) { _, isOn in
-                    if isOn { SettleChime.play() }
-                }
-                .disabled(settings.threadFinishAction != .settle)
-                .opacity(settings.threadFinishAction == .settle ? 1 : 0.5)
             }
         }
         ChromeSection(title: "Power") {

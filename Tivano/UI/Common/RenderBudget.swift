@@ -77,9 +77,9 @@ protocol ScrollActivityReporter: AnyObject {
 // MARK: - Glass budget
 
 extension EnvironmentValues {
-    /// True for everything inside a floating glass panel: a helper's, the team's, the
-    /// usage panel. Liquid Glass samples what lies behind it on every frame that content
-    /// moves, and a panel already does that for its whole surface; a capsule or a circle
+    /// True for everything inside a helper's or the team's floating glass panel.
+    /// Liquid Glass samples what lies behind it on every frame that content moves,
+    /// and a panel already does that for its whole surface; a capsule or a circle
     /// drawn as glass on top of it is a second sampling pass for the same pixels, and with
     /// a few panels open those added up to twenty-odd passes over a scrolling timeline.
     /// Controls read this and draw as a flat tinted fill on a panel instead.

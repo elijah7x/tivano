@@ -1518,7 +1518,7 @@ struct WorkGroup: View {
     var startsCollapsed = false
     @State private var fallbackCollapsed: Bool
     @State private var fallbackShowsAll = false
-    @AppStorage("workGroupStyle", store: CaptureRun.defaults ?? .standard) private var workGroupStyle = "list"
+    @AppStorage("workGroupStyle", store: CaptureRun.defaults ?? .standard) private var workGroupStyle = "tree"
     @Environment(\.revealTimelineEnd) private var revealBox
     @Environment(\.timelineBlockID) private var blockID
     private var disclosureID: String { blockID + "/work/" + (entries.first.map { "\($0.id)" } ?? "") }

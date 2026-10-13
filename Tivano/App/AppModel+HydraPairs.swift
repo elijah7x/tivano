@@ -22,11 +22,38 @@ extension AppModel {
         hydraIsOn(thread) && thread.hydraPairID == pair.id && thread.provider == pair.provider
     }
 
+    /// The chat's temporary pair while it leads with it.
+    func temporaryHydraPair(for thread: ChatThread) -> HydraPair? {
+        guard let pair = thread.temporaryHydraPair, leadsWithHydraPair(pair, thread: thread) else { return nil }
+        return pair
+    }
+
+    /// Puts a chat in a pair of its own, made in the picker and never saved: it starts on
+    /// the chat's provider, model and effort, and the picker's editor shapes it from there.
+    func startTemporaryHydraPair(for threadID: UUID) {
+        guard let thread = thread(threadID) else { return }
+        var pair = HydraPair(provider: thread.provider)
+        pair.orchestratorModel = thread.model
+        pair.orchestratorEffort = thread.effort
+        enterHydraPair(pair, for: threadID, temporary: true)
+    }
+
+    /// Edits the chat's temporary pair and moves the chat along with it, provider, lead
+    /// model and effort, the way entering it did.
+    func updateTemporaryHydraPair(for threadID: UUID, _ change: (inout HydraPair) -> Void) {
+        guard var pair = thread(threadID)?.temporaryHydraPair else { return }
+        let before = pair
+        change(&pair)
+        guard pair != before else { return }
+        enterHydraPair(pair, for: threadID, temporary: true)
+    }
+
     /// Puts a chat in a pair from the model picker: it switches to the pair's provider and
     /// lead model and effort, pins the pair so it keeps leading with this one, and Hydra
     /// goes on for the app. The session is left to restart itself: the runtime launches the
     /// next turn with the pair's head definitions on its own.
-    func enterHydraPair(_ pair: HydraPair, for threadID: UUID) {
+    /// A temporary pair rides on the chat itself and is not remembered for new chats.
+    func enterHydraPair(_ pair: HydraPair, for threadID: UUID, temporary: Bool = false) {
         guard let thread = thread(threadID) else { return }
         let provider = pair.provider
         let switchesProvider = provider != thread.provider
@@ -40,13 +67,14 @@ extension AppModel {
             thread.effort = lead.effort
             thread.fastMode = lead.fastMode
             thread.hydraPairID = pair.id
+            thread.temporaryHydraPair = temporary ? pair : nil
             thread.hydraEnabled = true
         }
         // A chat that changes provider leaves its old session behind, as a model choice does.
         if switchesProvider { existingRuntime(for: threadID)?.stopSession() }
         settings.remember(model: lead.model, effort: lead.effort, for: provider)
         settings.defaultProvider = provider
-        settings.lastHydraPairID = pair.id
+        settings.lastHydraPairID = temporary ? nil : pair.id
         settings.hydraEnabled = true
         settings.hydraDefaultEnabled = true
     }
@@ -131,7 +159,10 @@ extension AppModel {
     /// no pair's mark on its chip; Hydra stays as Settings has it, its heads on the chat's
     /// own model and effort until a pair is picked again.
     func leaveHydraPair(for threadID: UUID) {
-        updateThread(threadID) { $0.hydraPairID = nil }
+        updateThread(threadID) {
+            $0.hydraPairID = nil
+            $0.temporaryHydraPair = nil
+        }
         settings.lastHydraPairID = nil
     }
 }

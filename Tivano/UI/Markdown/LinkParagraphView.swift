@@ -41,6 +41,8 @@ struct LinkParagraphView: NSViewRepresentable {
         _ = revision
         let coordinator = context.coordinator
         let veiled = context.environment.markdownVeiled
+        let scope = context.environment.veilRenderScope
+        var rendered = false
         if coordinator.lastSource != source || coordinator.lastPointSize != pointSize
             || coordinator.lastCodePointSize != codePointSize
             || coordinator.lastDimmed != dimmed || coordinator.lastStreaming != streaming
@@ -56,8 +58,11 @@ struct LinkParagraphView: NSViewRepresentable {
             coordinator.lastMentions = mentions.map(\.name)
             coordinator.lastTargets = targets
             view.render(Self.attributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: streaming, mentions: mentions, targets: targets))
-            // After the text is in place: the veil reads what the storage holds now.
-            view.streamVeil.update(view, active: veiled)
+            rendered = true
+        }
+        if rendered || coordinator.lastRenderScope !== scope {
+            coordinator.lastRenderScope = scope
+            view.streamVeil.update(view, active: veiled, scope: scope)
         }
         view.mergeTarget = context.environment.mergeRequestTarget
     }
@@ -81,6 +86,7 @@ struct LinkParagraphView: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         // The last inputs built into a string, so repeat updates with nothing new skip it.
+        weak var lastRenderScope: VeilRenderScope?
         var lastSource: String?
         var lastPointSize: CGFloat = 0
         var lastCodePointSize: CGFloat = 0

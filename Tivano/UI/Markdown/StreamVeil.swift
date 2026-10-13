@@ -157,11 +157,13 @@ extension EnvironmentValues {
     }
 }
 
-/// One display-rate clock for every veil on screen. A veiled `Text` reads `now` only
-/// while it dissolves, so each tick re-renders exactly the paragraphs still fading and
-/// nothing else; the link is torn down the moment the last of them has settled. The
-/// `Text` itself stays a bare `Text` in its stack (no `TimelineView` around it), so a list
-/// marker keeps its first-baseline alignment with the paragraph mid-stream.
+/// One display-rate clock for the veils of one render scope: every chat column hosts
+/// its own (see `VeilRenderScope`); markdown outside a column shares `shared`. A veiled
+/// `Text` reads `now` only while it dissolves, so each tick re-renders exactly the
+/// paragraphs still fading and nothing else; the link is torn down the moment the last
+/// of them has settled. The `Text` itself stays a bare `Text` in its stack (no
+/// `TimelineView` around it), so a list marker keeps its first-baseline alignment with
+/// the paragraph mid-stream.
 @MainActor
 @Observable
 final class VeilClock {
@@ -170,11 +172,38 @@ final class VeilClock {
     private(set) var now = Date.now
     @ObservationIgnored private var link: CADisplayLink?
     @ObservationIgnored private var deadline: Date?
+    @ObservationIgnored private var isSuspended = false
 
     /// Keeps the clock ticking until `date`, or later if it already runs past it.
     func run(until date: Date) {
         deadline = max(deadline ?? date, date)
-        guard link == nil, let screen = NSScreen.main else { return }
+        arm()
+    }
+
+    /// Stops the display link outright, deadline and all kept. A scope whose column
+    /// went invisible suspends its clock rather than muting the tick: an early return
+    /// in `tick` would keep the callbacks coming and the deadline from expiring.
+    func suspend() {
+        isSuspended = true
+        link?.invalidate()
+        link = nil
+    }
+
+    /// Picks the tick back up after a suspension, while anything is still dissolving.
+    /// A deadline that passed in the meantime is dropped: that work has settled.
+    func resume() {
+        isSuspended = false
+        now = .now
+        guard let deadline else { return }
+        guard Date.now < deadline else {
+            self.deadline = nil
+            return
+        }
+        arm()
+    }
+
+    private func arm() {
+        guard !isSuspended, link == nil, deadline != nil, let screen = NSScreen.main else { return }
         let link = screen.displayLink(target: self, selector: #selector(tick))
         // A veil is a short opacity ramp, not motion: 18 fps is indistinguishable here
         // and cuts the per-frame `Text` rebuilds for every paragraph of a reply that is still dissolving.
@@ -194,6 +223,47 @@ final class VeilClock {
         link = nil
         self.deadline = nil
     }
+}
+
+/// The veil render scope of one chat column: the column's own clock, and whether the
+/// column's pane is actually drawn. `ThreadColumns` in the App layer hosts each chat
+/// column with its own scope and puts it in the environment; markdown outside any
+/// column keeps the shared clock and always-visible semantics, exactly as before.
+///
+/// A scope that goes invisible tears its clock's display link down (not merely the
+/// tick) and stops its AppKit veils, so nothing repaints for a column the reader cannot
+/// see; arriving text still records its real times. Turning visible again repaints at
+/// the real time before the pane can show, so the first frame back carries the
+/// wall-clock-correct alpha, an unfinished fade keeps dissolving where it stands, and
+/// one that settled unseen stays settled.
+@MainActor
+@Observable
+final class VeilRenderScope {
+    private(set) var isVisible = true
+
+    let clock = VeilClock()
+
+    /// The AppKit veils of this column, held weakly: a paragraph that went away
+    /// unsubscribes at detach, and one that did not is simply gone from here.
+    @ObservationIgnored private var linkVeils = NSHashTable<LinkTextVeil>(options: [.weakMemory, .objectPersonality])
+
+    /// Whether the column's pane is drawn right now. The App layer calls this at the
+    /// moment its column actually hides or right before it shows again, never for a
+    /// mere change of interactivity.
+    func setVisible(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        if visible { clock.resume() } else { clock.suspend() }
+        for veil in linkVeils.allObjects { veil.scopeDidChangeVisibility(visible) }
+    }
+
+    func add(_ veil: LinkTextVeil) { linkVeils.add(veil) }
+    func remove(_ veil: LinkTextVeil) { linkVeils.remove(veil) }
+}
+
+/// The veil render scope of the chat column this markdown sits in.
+extension EnvironmentValues {
+    @Entry var veilRenderScope: VeilRenderScope? = nil
 }
 
 /// A `Text` whose newly streamed characters fade in through a `StreamVeil`. While the
@@ -245,6 +315,7 @@ struct VeiledText: View {
 
     @Environment(\.markdownVeiled) private var veiled
     @Environment(\.markdownDimmed) private var dimmed
+    @Environment(\.veilRenderScope) private var renderScope
     @State private var veil = StreamVeil()
     @State private var mapping = VeilMapping()
 
@@ -313,7 +384,14 @@ struct VeiledText: View {
     /// Reading the clock is what re-renders this text on the next tick; the frame itself
     /// is painted at the real time, so the first frame after a flush is never a stale one.
     private func fadingText() -> Text {
-        let clock = VeilClock.shared
+        // A column whose pane is hidden draws nothing: this paragraph still ingests and
+        // still builds its frame at the real time (so the first frame back is current)
+        // but subscribes to no clock and arms none. Reading `isVisible` is what returns
+        // it to the clock the moment the column shows again.
+        if let renderScope, !renderScope.isVisible {
+            return text(at: .now)
+        }
+        let clock = renderScope?.clock ?? .shared
         if let settlesAt = veil.settlesAt { clock.run(until: settlesAt) }
         _ = clock.now
         return text(at: .now)
@@ -381,9 +459,16 @@ final class LinkTextVeil {
     private var source: String?
     private var utf16Offsets: [Int] = []
 
+    private weak var tickTarget: NSTextView?
+    /// The render scope of the column this paragraph sits in, subscribed for its
+    /// visibility. Weak, so a scope discarded with its column is not held by a view
+    /// that is only retiring.
+    private weak var scope: VeilRenderScope?
+
     /// Feeds the text view's current text. `active` while the reply streams; afterwards
     /// the chunks in flight finish and the veil forgets the text.
-    func update(_ view: NSTextView, active: Bool) {
+    func update(_ view: NSTextView, active: Bool, scope: VeilRenderScope?) {
+        subscribe(to: scope)
         let now = Date.now
         if source != view.string {
             source = view.string
@@ -396,25 +481,58 @@ final class LinkTextVeil {
             if active { veil.advance(view.string, at: now) }
         }
         if veil.isFading(at: now) {
-            paint(view, at: now)
-            if displayLink == nil {
-                let link = view.displayLink(target: self, selector: #selector(tick))
-                link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 24, preferred: 18)
-                link.add(to: .main, forMode: .common)
-                displayLink = link
-            }
             tickTarget = view
+            // A hidden column records its arrivals but paints nothing and arms no
+            // link: the scope repaints at the real time the moment it shows again.
+            guard self.scope?.isVisible != false else { return }
+            paint(view, at: now)
+            if displayLink == nil { arm() }
         } else {
             settle(view, keepText: active)
         }
     }
 
-    /// Stops the clock; the view is leaving its window.
+    /// Stops the clock and leaves the scope; the view is leaving its column.
     func detach(_ view: NSTextView) {
         settle(view, keepText: false)
+        scope?.remove(self)
+        scope = nil
     }
 
-    private weak var tickTarget: NSTextView?
+    private func subscribe(to newScope: VeilRenderScope?) {
+        guard newScope !== scope else { return }
+        scope?.remove(self)
+        scope = newScope
+        newScope?.add(self)
+        if newScope?.isVisible == false { scopeDidChangeVisibility(false) }
+    }
+
+    /// From the scope: the column's pane hid, or is about to show again. Hiding tears
+    /// the link down; showing repaints at the real time before the pane can display, so
+    /// no stale alpha is ever seen — and a fade that settled while hidden, whose paint
+    /// was skipped, is cleared rather than left half-faded.
+    func scopeDidChangeVisibility(_ visible: Bool) {
+        if visible {
+            guard let view = tickTarget else { return }
+            if veil.isFading(at: .now) {
+                paint(view, at: .now)
+                if displayLink == nil { arm() }
+            } else if painted.length > 0 {
+                clear(view)
+            }
+        } else {
+            displayLink?.invalidate()
+            displayLink = nil
+        }
+    }
+
+    private func arm() {
+        guard scope?.isVisible != false, let view = tickTarget else { return }
+        let link = view.displayLink(target: self, selector: #selector(tick))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 24, preferred: 18)
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
 
     @objc private func tick() {
         // The clock holds its last frame through a scroll, so the layout-manager repaint

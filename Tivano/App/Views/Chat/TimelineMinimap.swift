@@ -203,7 +203,11 @@ struct TimelineMinimapRail: View, Equatable {
 
     var body: some View {
         GeometryReader { proxy in
-            let metrics = MinimapRailMetrics(centeringHeight: centerHeight, count: entries.count)
+            let metrics = MinimapRailMetrics(
+                centeringHeight: centerHeight,
+                clickableHeight: proxy.size.height,
+                count: entries.count
+            )
             ZStack(alignment: .leading) {
                 // The pointer only counts over the tick stack itself. The rest of the column is
                 // left to whatever else is there: the window buttons sit over its top with the
@@ -264,6 +268,8 @@ struct TimelineMinimapRail: View, Equatable {
         // and a window resize. Otherwise the tick that lit up animated the whole stack
         // down from the top on every thread opened.
         .animation(nil, value: centerHeight)
+        .animation(nil, value: metrics.spacing)
+        .animation(nil, value: metrics.topInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -378,10 +384,11 @@ struct TimelineMinimapRail: View, Equatable {
 }
 
 /// Pure rail geometry, shared by the gesture and the card so Y always maps
-/// to the same entry. Ticks centre in the full chat-column height — the
-/// composer and queue tab sit outside the rail's own frame, so their growth
-/// never shifts the ticks. Hit testing and the preview card still live in
-/// the rail's frame, so they never reach into the composer.
+/// to the same entry. Ticks stay centred on the full column height while that
+/// strip fits in the clickable rail, so a short thread does not jump when the
+/// composer or the queue tab grows. A strip that would cross the composer
+/// tightens toward `tightestSpacing`, then packs into the clickable band so
+/// the last tick stays above the composer.
 private struct MinimapRailMetrics {
     static let tickHeight: CGFloat = 2
     private static let roomySpacing: CGFloat = 8
@@ -391,21 +398,67 @@ private struct MinimapRailMetrics {
     /// Distance from the rail's top to the first tick.
     let topInset: CGFloat
 
-    init(centeringHeight: CGFloat, count: Int) {
-        let height = centeringHeight
-        guard count > 0, height > 0 else {
+    init(centeringHeight: CGFloat, clickableHeight: CGFloat, count: Int) {
+        let center = centeringHeight
+        guard count > 0, center > 0 else {
             spacing = Self.roomySpacing
             topInset = 0
             return
         }
         let ticks = CGFloat(count) * Self.tickHeight
         let gaps = CGFloat(max(0, count - 1))
-        spacing = ticks + gaps * Self.roomySpacing <= height
-            ? Self.roomySpacing
-            : max(Self.tightestSpacing, (height - ticks) / max(1, gaps))
-        // Always centred: a thread with more ticks than the rail can hold evenly spills
-        // the same amount above and below instead of stacking up against the top.
-        topInset = (height - (ticks + gaps * spacing)) / 2
+        let bandTop = Self.chromeClearance
+        let bandBottom = clickableHeight
+        let band = bandBottom - bandTop
+
+        func content(for gap: CGFloat) -> CGFloat { ticks + gaps * gap }
+        func centeredTop(for gap: CGFloat) -> CGFloat { (center - content(for: gap)) / 2 }
+        func centeredFits(_ gap: CGFloat) -> Bool {
+            let top = centeredTop(for: gap)
+            return top >= bandTop && top + content(for: gap) <= bandBottom
+        }
+        // The rail lays out at height 0 before it has a band. Keep the old
+        // centred placement for that pass so the first real layout is not a slide.
+        guard band > Self.tickHeight else {
+            let gap = ticks + gaps * Self.roomySpacing <= center
+                ? Self.roomySpacing
+                : max(Self.tightestSpacing, (center - ticks) / max(1, gaps))
+            spacing = gap
+            topInset = centeredTop(for: gap)
+            return
+        }
+        if centeredFits(Self.roomySpacing) {
+            spacing = Self.roomySpacing
+            topInset = centeredTop(for: Self.roomySpacing)
+            return
+        }
+        // Largest gap in [tightest, roomy] whose centred strip still sits in the band.
+        let centeredLimit = min(center - 2 * bandTop, 2 * bandBottom - center, band)
+        if gaps > 0, centeredLimit >= ticks {
+            let fitted = (centeredLimit - ticks) / gaps
+            if fitted >= Self.tightestSpacing {
+                let gap = min(Self.roomySpacing, fitted)
+                spacing = gap
+                topInset = centeredTop(for: gap)
+                return
+            }
+        }
+        let tightContent = content(for: Self.tightestSpacing)
+        if tightContent <= band {
+            spacing = Self.tightestSpacing
+            let ideal = centeredTop(for: Self.tightestSpacing)
+            topInset = min(max(ideal, bandTop), bandBottom - tightContent)
+            return
+        }
+        // Still too tall at the spacing floor: overlap ticks so the whole strip,
+        // including the last one, is inside the clickable band.
+        guard gaps > 0 else {
+            spacing = Self.tightestSpacing
+            topInset = min(max(centeredTop(for: Self.tightestSpacing), bandTop), bandBottom - Self.tickHeight)
+            return
+        }
+        spacing = (band - ticks) / gaps
+        topInset = bandTop
     }
 
     private var pitch: CGFloat { Self.tickHeight + spacing }
@@ -416,6 +469,7 @@ private struct MinimapRailMetrics {
 
     func entryID(at y: CGFloat, entries: [TimelineMinimapEntry]) -> String? {
         guard !entries.isEmpty else { return nil }
+        guard pitch > 0.0001 else { return entries[entries.count - 1].id }
         let raw = (y - topInset - Self.tickHeight / 2 + pitch / 2) / pitch
         let clamped = min(max(Int(raw.rounded(.down)), 0), entries.count - 1)
         return entries[clamped].id

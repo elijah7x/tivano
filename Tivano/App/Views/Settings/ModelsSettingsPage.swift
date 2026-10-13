@@ -5,13 +5,26 @@ struct ModelsSettingsPage: View {
     @Environment(AppModel.self) private var model
     var query = ""
 
-    /// The live grip reorder of a chosen model (see `RowDrag`).
-    @State private var drag = RowDrag<ModelPin>()
+    /// The live grip reorder of a chosen model within its card (see `RowDrag`).
+    @State private var drag = RowDrag<ModelListItem>()
     /// Each row's height including its divider: one row's slot in the card.
-    @State private var rowHeights: [ModelPin: CGFloat] = [:]
+    @State private var rowHeights: [ModelListItem: CGFloat] = [:]
+    @State private var sectionToFocus: UUID?
+    /// Each card's frame in the window, so a model dragged out of its card can land in another.
+    @State private var cardFrames: [DropCard: CGRect] = [:]
+    /// Each chosen model's vertical centre in the window: where a drop into a card lands.
+    @State private var rowMids: [ModelPin: CGFloat] = [:]
+    /// The other card a dragged model is over, highlighted until the drop.
+    @State private var dropTarget: DropCard?
+    /// The live grip reorder of a whole group card among the groups.
+    @State private var groupDrag = RowDrag<UUID>()
+    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     /// Each provider section's expansion, keyed on the page so typing in the search
     /// field — which rebuilds the sections — doesn't reset it. Absent means expanded.
     @State private var providerExpansion: [ProviderKind: Bool] = [:]
+
+    /// The stack of model cards, which drag locations and drop frames are measured in.
+    static let cardsSpace = "modelCards"
 
     /// Neighbours sliding out of the grabbed row's way.
     private static let slide = Animation.spring(response: 0.28, dampingFraction: 0.82)
@@ -20,8 +33,11 @@ struct ModelsSettingsPage: View {
         let settings = model.settings
         let registry = model.providers
         let pins = settings.modelList
+        let items = settings.modelListItems
         let trimmed = query.trimmed
-        let visiblePins = self.visiblePins(query: trimmed)
+        let blocks = modelBlocks(query: trimmed)
+        let sections = blocks.groups.map(\.section)
+        let visiblePins = blocks.ungrouped + blocks.groups.flatMap(\.pins)
         let providers = registry.availableProviders.filter { provider in
             trimmed.isEmpty || registry.models(for: provider).contains { Self.matches($0, id: $0.id, provider: provider, query: trimmed) }
         }
@@ -31,49 +47,103 @@ struct ModelsSettingsPage: View {
         // settings scroll view builds and measures every row of an eager stack.
         LazyVStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
             if trimmed.isEmpty || !visiblePins.isEmpty {
-                ChromeSection(title: "Your models") {
-                    ChromeCard {
-                        if pins.isEmpty {
-                            ChromeRow(
-                                title: "No models chosen yet",
-                                detail: "Until you add some below, the picker shows every model from your providers."
-                            ) {
-                                EmptyView()
-                            }
-                        } else if visiblePins.isEmpty, trimmed.isEmpty {
-                            ChromeRow(
-                                title: "No models from active providers",
-                                detail: "Enable a provider to restore its chosen models, or add models below."
-                            ) {
-                                EmptyView()
-                            }
-                        } else {
-                            // A plain stack, not the card's lazy one: a lazy stack
-                            // rebuilds a row that changes slot and animates it in
-                            // from the container's origin, so a reorder sent the
-                            // grabbed row flying to the top; it also ignores
-                            // zIndex, which the lifted row needs to draw on top.
-                            VStack(spacing: 0) {
-                                ForEach(visiblePins, id: \.self) { pin in
-                                    let isDragged = drag.id == pin
-                                    VStack(spacing: 0) {
-                                        ChromeRowDivider().opacity(pin == visiblePins.first || isDragged ? 0 : 1)
-                                        PinnedModelRow(
-                                            pin: pin,
-                                            isDragged: isDragged,
-                                            onDragChanged: { translation in dragChanged(pin, translation: translation) },
-                                            onDragEnded: { dragEnded() }
-                                        )
+                ChromeSection(
+                    title: "Your models",
+                    accessory: AnyView(
+                        Text(verbatim: "\(pins.count) / \(AppSettings.modelListLimit)")
+                            .font(.ui(size: 11))
+                            .foregroundStyle(Chrome.secondaryText)
+                    ),
+                    trailing: trimmed.isEmpty ? AnyView(newGroupButton) : nil
+                ) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if !blocks.ungrouped.isEmpty || blocks.groups.isEmpty {
+                            ChromeCard {
+                                VStack(spacing: 0) {
+                                    if trimmed.isEmpty, blocks.groups.isEmpty, pins.count > 8, !settings.dismissedModelGroupsTip {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "square.stack")
+                                                .font(.ui(size: 12))
+                                            Text("Lots of models? Group them, and fold the ones you rarely use in the picker.")
+                                                .fixedSize(horizontal: false, vertical: true)
+                                            Spacer(minLength: 8)
+                                            newGroupButton
+                                            RowControl(symbol: "xmark", help: "Dismiss", isEnabled: true) {
+                                                settings.dismissedModelGroupsTip = true
+                                            }
+                                        }
+                                        .font(.ui(size: 11))
+                                        .foregroundStyle(Chrome.secondaryText)
+                                        .padding(.leading, 10)
+                                        .padding(.trailing, Chrome.rowControlTrailingPadding)
+                                        .padding(.vertical, 6)
+                                        ChromeRowDivider()
                                     }
-                                    .modifier(PinnedRowHeightReporter(pin: pin, heights: $rowHeights))
-                                    .offset(y: isDragged ? drag.visualOffset : 0)
-                                    .zIndex(isDragged ? 1 : 0)
+                                    if pins.isEmpty {
+                                        ChromeRow(
+                                            title: "No models chosen yet",
+                                            detail: "Until you add some below, the picker shows every model from your providers."
+                                        ) {
+                                            EmptyView()
+                                        }
+                                    } else if visiblePins.isEmpty, trimmed.isEmpty {
+                                        ChromeRow(
+                                            title: "No models from active providers",
+                                            detail: "Enable a provider to restore its chosen models, or add models below."
+                                        ) {
+                                            EmptyView()
+                                        }
+                                    }
+                                    pinnedRows(blocks.ungrouped, in: nil, sections: sections)
                                 }
+                            }
+                            .modifier(DropCardChrome(card: .ungrouped, frames: $cardFrames, isTarget: dropTarget == .ungrouped, holdsDrag: holdsDrag(blocks.ungrouped)))
+                        }
+                        ForEach(blocks.groups) { block in
+                            if trimmed.isEmpty || !block.pins.isEmpty {
+                                let isCollapsed = trimmed.isEmpty && settings.isModelSectionCollapsed(block.section.id)
+                                ChromeCard {
+                                    VStack(spacing: 0) {
+                                        ModelGroupHeader(
+                                            section: block.section,
+                                            pins: block.pins,
+                                            isCollapsed: isCollapsed,
+                                            canMoveUp: block.id != blocks.groups.first?.id,
+                                            canMoveDown: block.id != blocks.groups.last?.id,
+                                            canDrag: trimmed.isEmpty,
+                                            isDragged: groupDrag.id == block.id,
+                                            sectionToFocus: $sectionToFocus,
+                                            onDragChanged: { translation in groupDragChanged(block.id, translation: translation) },
+                                            onDragEnded: { groupDragEnded() }
+                                        )
+                                        if !isCollapsed {
+                                            ChromeRowDivider()
+                                            if block.pins.isEmpty {
+                                                HStack {
+                                                    Text("Empty. Right-click a model and choose Move to Group.")
+                                                        .font(.ui(size: 11))
+                                                        .foregroundStyle(Chrome.secondaryText)
+                                                    Spacer(minLength: 8)
+                                                }
+                                                .padding(.leading, 10)
+                                                .padding(.trailing, Chrome.rowControlTrailingPadding)
+                                                .padding(.vertical, 6)
+                                            } else {
+                                                pinnedRows(block.pins, in: block.id, sections: sections)
+                                            }
+                                        }
+                                    }
+                                }
+                                .modifier(LiftedGroupCard(isLifted: groupDrag.id == block.id, offset: groupDrag.id == block.id ? groupDrag.visualOffset : 0, performanceMode: performanceMode))
+                                .modifier(DropCardChrome(card: .group(block.id), frames: $cardFrames, isTarget: dropTarget == .group(block.id), holdsDrag: holdsDrag(block.pins) || groupDrag.id == block.id))
                             }
                         }
                     }
+                    // Rows and cards measure themselves against this stack rather than the
+                    // window, so scrolling the page does not report new frames every frame.
+                    .coordinateSpace(.named(Self.cardsSpace))
                     if trimmed.isEmpty {
-                        Text(verbatim: String(format: Chrome.localized("%lld of %lld. Click a model to set its reasoning effort and fast mode for every new chat."), pins.count, AppSettings.modelListLimit))
+                        Text("Click a model to set its reasoning effort and fast mode for every new chat. Right-click it to move it to another group.")
                             .font(.ui(size: 11))
                             .foregroundStyle(Chrome.secondaryText)
                             .padding(.horizontal, 4)
@@ -99,43 +169,163 @@ struct ModelsSettingsPage: View {
                     .padding(.horizontal, 4)
             }
         }
-        .onChange(of: pins) { _, pins in
-            // An unpinned model takes its measured height with it.
-            if rowHeights.count > pins.count {
-                let kept = Set(pins)
-                rowHeights = rowHeights.filter { kept.contains($0.key) }
+        .onChange(of: items) { _, items in
+            // Heading values change when renamed or moved; keep measurements by stable ID.
+            let heightsByID = rowHeights.reduce(into: [String: CGFloat]()) { heights, entry in
+                heights[entry.key.id] = entry.value
             }
+            rowHeights = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+                heightsByID[item.id].map { (item, $0) }
+            })
         }
     }
 
     // MARK: - Reorder
 
-    /// The chosen models that match the search, in list order.
-    private func visiblePins(query: String) -> [ModelPin] {
+    private struct ModelGroupBlock: Identifiable {
+        let section: ModelSection
+        var pins: [ModelPin] = []
+        var id: UUID { section.id }
+    }
+
+    private func modelBlocks(query: String) -> (ungrouped: [ModelPin], groups: [ModelGroupBlock]) {
         let registry = model.providers
-        return model.settings.modelList.filter { pin in
-            model.settings.isEnabled(pin.provider)
-                && Self.matches(registry.model(pin.modelID, for: pin.provider), id: pin.modelID, provider: pin.provider, query: query)
+        var ungrouped: [ModelPin] = []
+        var groups: [ModelGroupBlock] = []
+        for item in model.settings.modelListItems {
+            switch item {
+            case .section(let section):
+                groups.append(ModelGroupBlock(section: section))
+            case .pin(let pin):
+                guard model.settings.isEnabled(pin.provider),
+                      Self.matches(registry.model(pin.modelID, for: pin.provider), id: pin.modelID, provider: pin.provider, query: query) else { continue }
+                if groups.isEmpty {
+                    ungrouped.append(pin)
+                } else {
+                    groups[groups.count - 1].pins.append(pin)
+                }
+            }
+        }
+        return (ungrouped, groups)
+    }
+
+    private var newGroupButton: some View {
+        Button {
+            withAnimation(Chrome.panelSlide) {
+                let id = model.settings.addModelSection(named: Chrome.localized("New group"))
+                if model.settings.isModelSectionCollapsed(id) {
+                    model.settings.toggleModelSectionCollapsed(id)
+                }
+                sectionToFocus = id
+            }
+        } label: {
+            Label("New group", systemImage: "plus")
+        }
+        .buttonStyle(.plain)
+        .font(.ui(size: 11))
+        .foregroundStyle(Chrome.secondaryText)
+        .fixedSize()
+    }
+
+    private func pinnedRows(_ pins: [ModelPin], in sectionID: UUID?, sections: [ModelSection]) -> some View {
+        // An eager stack preserves the lifted row's position and zIndex.
+        VStack(spacing: 0) {
+            ForEach(pins, id: \.self) { pin in
+                let item = ModelListItem.pin(pin)
+                let isDragged = drag.id?.id == item.id
+                VStack(spacing: 0) {
+                    ChromeRowDivider().opacity(pin == pins.first || isDragged ? 0 : 1)
+                    PinnedModelRow(
+                        pin: pin,
+                        sectionID: sectionID,
+                        sections: sections,
+                        isDragged: isDragged,
+                        onDragChanged: { translation, pointerY in dragChanged(item, in: sectionID, translation: translation, pointerY: pointerY) },
+                        onDragEnded: { pointerY in dragEnded(item, pointerY: pointerY) }
+                    )
+                }
+                .modifier(PinnedRowHeightReporter(item: item, heights: $rowHeights))
+                .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named(Self.cardsSpace)).midY }) { mid in
+                    if !isDragged, rowMids[pin] != mid { rowMids[pin] = mid }
+                }
+                .offset(y: isDragged ? drag.visualOffset : 0)
+                .zIndex(isDragged ? 1 : 0)
+            }
         }
     }
 
-    /// The grabbed row follows the pointer and swaps past every visible
-    /// neighbour whose centre it has crossed. While a search filters the list
-    /// the swaps still happen against the visible neighbour, so hidden models
-    /// keep their place relative to it. The order is read fresh on every move
-    /// rather than captured by the row's gesture.
-    private func dragChanged(_ pin: ModelPin, translation: CGFloat) {
-        if drag.id != pin {
-            drag = RowDrag(id: pin)
+    /// Read the card's filtered order fresh on each move, keeping hidden pins in place.
+    /// Over another card the row stops reordering its own and marks that card for the drop.
+    private func dragChanged(_ item: ModelListItem, in sectionID: UUID?, translation: CGFloat, pointerY: CGFloat) {
+        let own: DropCard = sectionID.map { .group($0) } ?? .ungrouped
+        let hovered = cardFrames.first { $0.value.minY - 5 <= pointerY && pointerY <= $0.value.maxY + 5 }?.key
+        if let hovered, hovered != own {
+            if drag.id?.id != item.id { drag = RowDrag(id: item) }
+            if dropTarget != hovered {
+                dropTarget = hovered
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { drag.translation = translation }
+            return
+        }
+        dropTarget = nil
+        let blocks = modelBlocks(query: query.trimmed)
+        let pins = sectionID.map { id in blocks.groups.first(where: { $0.id == id })?.pins ?? [] } ?? blocks.ungrouped
+        let order = pins.map { ModelListItem.pin($0) }
+        guard let current = order.first(where: { $0.id == item.id }) else { return }
+        if drag.id?.id != current.id {
+            drag = RowDrag(id: current)
+        } else {
+            drag.id = current
         }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { drag.translation = translation }
 
-        let order = visiblePins(query: query.trimmed)
         let moved = withAnimation(Self.slide) {
-            drag.settle(order: order, heights: rowHeights, fallbackHeight: 54) { neighbour, placeAfter in
-                model.settings.moveModel(pin, to: neighbour, placeAfter: placeAfter)
+            drag.settle(order: order, heights: rowHeights, fallbackHeight: 38) { neighbour, placeAfter in
+                model.settings.moveModelListItem(current, to: neighbour, placeAfter: placeAfter)
+            }
+        }
+        drag.id = model.settings.modelListItems.first(where: { $0.id == current.id })
+        if moved {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
+    }
+
+    private func dragEnded(_ item: ModelListItem, pointerY: CGFloat) {
+        guard let target = dropTarget, case .pin(let pin) = item else { return dragEnded() }
+        let blocks = modelBlocks(query: query.trimmed)
+        let pins = target.sectionID.map { id in blocks.groups.first { $0.id == id }?.pins ?? [] } ?? blocks.ungrouped
+        // A folded group takes the model at its end; an open one where the pointer lets go.
+        let isFolded = target.sectionID.map { query.trimmed.isEmpty && model.settings.isModelSectionCollapsed($0) } ?? false
+        let before = isFolded ? nil : pins.first { $0 != pin && (rowMids[$0] ?? .infinity) > pointerY }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            drag = RowDrag()
+            dropTarget = nil
+        }
+        withAnimation(Chrome.panelSlide) { model.settings.moveModel(pin, toSection: target.sectionID, before: before) }
+    }
+
+    /// A group card follows its grip and swaps past every neighbouring group whose centre
+    /// it crosses; the ungrouped models stay on top.
+    private func groupDragChanged(_ id: UUID, translation: CGFloat) {
+        if groupDrag.id != id { groupDrag = RowDrag(id: id) }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { groupDrag.translation = translation }
+
+        let order = modelBlocks(query: "").groups.map(\.id)
+        // A card's slot is its height plus the gap between cards.
+        let heights = Dictionary(uniqueKeysWithValues: order.compactMap { id in cardFrames[.group(id)].map { (id, $0.height + 10) } })
+        let moved = withAnimation(Self.slide) {
+            groupDrag.settle(order: order, heights: heights, fallbackHeight: 60) { _, placeAfter in
+                model.settings.moveModelSection(id, by: placeAfter ? 1 : -1)
+                return true
             }
         }
         if moved {
@@ -143,18 +333,85 @@ struct ModelsSettingsPage: View {
         }
     }
 
+    private func groupDragEnded() {
+        guard groupDrag.id != nil else { return }
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { groupDrag = RowDrag() }
+    }
+
+    private func holdsDrag(_ pins: [ModelPin]) -> Bool {
+        guard case .pin(let pin) = drag.id else { return false }
+        return pins.contains(pin)
+    }
+
     private func dragEnded() {
         guard drag.id != nil else { return }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { drag = RowDrag() }
     }
 
+    private enum DropCard: Hashable {
+        case ungrouped
+        case group(UUID)
+
+        var sectionID: UUID? {
+            if case .group(let id) = self { id } else { nil }
+        }
+    }
+
+    /// A group card lifted by its grip: it follows the pointer, a touch larger with a shadow.
+    private struct LiftedGroupCard: ViewModifier {
+        let isLifted: Bool
+        let offset: CGFloat
+        let performanceMode: Bool
+
+        func body(content: Content) -> some View {
+            content
+                .background {
+                    if isLifted {
+                        RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
+                            .fill(Chrome.overlay(0.12))
+                            .shadow(color: .black.opacity(performanceMode ? 0 : 0.28), radius: performanceMode ? 0 : 10, y: performanceMode ? 0 : 4)
+                    }
+                }
+                .scaleEffect(isLifted ? 1.01 : 1)
+                .offset(y: offset)
+                .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isLifted)
+        }
+    }
+
+    /// Reports a card's frame, highlights it as a drop target, and lifts the card holding
+    /// the dragged row above its neighbours so the row draws over them.
+    private struct DropCardChrome: ViewModifier {
+        let card: DropCard
+        @Binding var frames: [DropCard: CGRect]
+        let isTarget: Bool
+        let holdsDrag: Bool
+
+        func body(content: Content) -> some View {
+            content
+                .overlay {
+                    if isTarget {
+                        RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
+                            .fill(Chrome.overlay(0.06))
+                            .strokeBorder(Chrome.secondaryText.opacity(0.45), lineWidth: 1.5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: isTarget)
+                .zIndex(holdsDrag ? 1 : 0)
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(ModelsSettingsPage.cardsSpace)) }) { frame in
+                    if frames[card] != frame { frames[card] = frame }
+                }
+                .onDisappear { frames[card] = nil }
+        }
+    }
+
     private struct PinnedRowHeightReporter: ViewModifier {
-        let pin: ModelPin
-        @Binding var heights: [ModelPin: CGFloat]
+        let item: ModelListItem
+        @Binding var heights: [ModelListItem: CGFloat]
 
         func body(content: Content) -> some View {
             content.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
-                if heights[pin] != height { heights[pin] = height }
+                if heights[item] != height { heights[item] = height }
             }
         }
     }
@@ -170,10 +427,12 @@ struct ModelsSettingsPage: View {
 private struct PinnedModelRow: View {
     @Environment(AppModel.self) private var model
     let pin: ModelPin
+    let sectionID: UUID?
+    let sections: [ModelSection]
     /// Lifted and following the pointer.
     let isDragged: Bool
-    let onDragChanged: (CGFloat) -> Void
-    let onDragEnded: () -> Void
+    let onDragChanged: (_ translation: CGFloat, _ pointerY: CGFloat) -> Void
+    let onDragEnded: (_ pointerY: CGFloat) -> Void
 
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var isPresented = false
@@ -194,11 +453,11 @@ private struct PinnedModelRow: View {
                 .onHover { hovering in isHoveringGrip = hovering }
                 .pointerStyle(isDragged ? .grabActive : .grabIdle)
                 .gesture(
-                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                        .onChanged { value in onDragChanged(value.translation.height) }
-                        .onEnded { _ in onDragEnded() }
+                    DragGesture(minimumDistance: 1, coordinateSpace: .named(ModelsSettingsPage.cardsSpace))
+                        .onChanged { value in onDragChanged(value.translation.height, value.location.y) }
+                        .onEnded { value in onDragEnded(value.location.y) }
                 )
-                .help("Drag to reorder")
+                .help("Drag to reorder or into another group")
                 .accessibilityLabel(Text("Drag to reorder"))
             Button {
                 isPresented = true
@@ -207,15 +466,15 @@ private struct PinnedModelRow: View {
                     ProviderIcon(provider: pin.provider, size: 16)
                         .foregroundStyle(Chrome.primaryText)
                         .frame(width: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: option?.shortName ?? pin.modelID)
-                            .font(.ui(size: 13))
-                            .foregroundStyle(Chrome.primaryText)
-                        Text(verbatim: summary(option: option, preference: preference))
-                            .font(.ui(size: 11))
-                            .foregroundStyle(Chrome.secondaryText)
-                    }
+                    Text(verbatim: option?.shortName ?? pin.modelID)
+                        .font(.ui(size: 13))
+                        .foregroundStyle(Chrome.primaryText)
+                        .lineLimit(1)
                     Spacer(minLength: 8)
+                    Text(verbatim: summary(option: option, preference: preference))
+                        .font(.ui(size: 11))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .lineLimit(1)
                     Image(systemName: "slider.horizontal.3")
                         .font(.ui(size: 12))
                         .foregroundStyle(Chrome.secondaryText)
@@ -260,7 +519,27 @@ private struct PinnedModelRow: View {
         }
         .padding(.leading, 10)
         .padding(.trailing, Chrome.rowControlTrailingPadding)
-        .padding(.vertical, 9)
+        .padding(.vertical, 6)
+        .contextMenu {
+            Menu("Move to Group") {
+                if sectionID != nil {
+                    Button("No Group") {
+                        withAnimation(Chrome.panelSlide) { settings.moveModel(pin, toSection: nil) }
+                    }
+                }
+                ForEach(sections.filter { $0.id != sectionID }) { section in
+                    Button {
+                        withAnimation(Chrome.panelSlide) { settings.moveModel(pin, toSection: section.id) }
+                    } label: {
+                        Text(verbatim: section.name)
+                    }
+                }
+            }
+            Divider()
+            Button("Remove from the picker") {
+                withAnimation(Chrome.panelSlide) { settings.removeFromModelList(pin) }
+            }
+        }
         // Lifted: a touch larger with a shadow over an opaque fill, so the rows
         // sliding underneath never show through.
         .background {
@@ -281,6 +560,149 @@ private struct PinnedModelRow: View {
         }
         if preference.fastMode, option?.supportsFast == true { parts.append(Chrome.localized("Fast")) }
         return parts.joined(separator: " · ")
+    }
+}
+
+private struct ModelGroupHeader: View {
+    @Environment(AppModel.self) private var model
+    let section: ModelSection
+    let pins: [ModelPin]
+    let isCollapsed: Bool
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let canDrag: Bool
+    let isDragged: Bool
+    @Binding var sectionToFocus: UUID?
+    let onDragChanged: (CGFloat) -> Void
+    let onDragEnded: () -> Void
+
+    @State private var draft = ""
+    @State private var isEditing = false
+    @State private var isHovering = false
+    @State private var isHoveringGrip = false
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // Lines up with the models' grips below it.
+            Image(systemName: "line.3.horizontal")
+                .font(.ui(size: 11, weight: .medium))
+                .foregroundStyle(Chrome.secondaryText.opacity(isHoveringGrip ? 1 : 0.7))
+                .frame(width: 24, height: 24)
+                .contentShape(.rect)
+                .onHover { hovering in isHoveringGrip = hovering }
+                .pointerStyle(isDragged ? .grabActive : .grabIdle)
+                .gesture(
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { value in onDragChanged(value.translation.height) }
+                        .onEnded { _ in onDragEnded() }
+                )
+                .opacity(canDrag ? 1 : 0)
+                .allowsHitTesting(canDrag)
+                .help("Drag to reorder groups")
+                .accessibilityLabel(Text("Drag to reorder groups"))
+            Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                .font(Chrome.chevronFont)
+                .foregroundStyle(Chrome.secondaryText)
+                .frame(width: 24, height: 24)
+            if isEditing {
+                TextField("New group", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.ui(size: 13, weight: .semibold))
+                    .foregroundStyle(Chrome.primaryText)
+                    .focused($isFocused)
+                    .onAppear { isFocused = true }
+                    .onSubmit { commitName() }
+                    .onChange(of: isFocused) { _, focused in
+                        if !focused { commitName() }
+                    }
+                    .onTapGesture { }
+                    .accessibilityLabel(Text("Group name"))
+            } else {
+                Text(verbatim: section.name)
+                    .font(.ui(size: 13, weight: .semibold))
+                    .foregroundStyle(Chrome.primaryText)
+                    .lineLimit(1)
+                    .gesture(
+                        TapGesture(count: 2).onEnded { beginEditing() }
+                            .exclusively(before: TapGesture().onEnded { toggleCollapse() })
+                    )
+            }
+            Text(verbatim: "\(pins.count)")
+                .font(.ui(size: 11))
+                .foregroundStyle(Chrome.secondaryText)
+            if isCollapsed {
+                HStack(spacing: 4) {
+                    ForEach(Array(pins.prefix(8)), id: \.self) { pin in
+                        ProviderIcon(provider: pin.provider, size: 12)
+                            .foregroundStyle(Chrome.secondaryText)
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 4) {
+                RowControl(symbol: "pencil", help: "Rename group", isEnabled: true) { beginEditing() }
+                RowControl(symbol: "trash", help: "Delete group", isEnabled: true) {
+                    withAnimation(Chrome.panelSlide) { model.settings.removeModelSection(section.id) }
+                }
+            }
+            .opacity(isHovering ? 1 : 0)
+            .allowsHitTesting(isHovering)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, Chrome.rowControlTrailingPadding)
+        .padding(.vertical, 6)
+        .contentShape(.rect)
+        .onTapGesture { toggleCollapse() }
+        .onHover { isHovering = $0 }
+        .contextMenu {
+            Button("Rename") { beginEditing() }
+            Button("Move Up") {
+                withAnimation(Chrome.panelSlide) { model.settings.moveModelSection(section.id, by: -1) }
+            }
+            .disabled(!canMoveUp)
+            Button("Move Down") {
+                withAnimation(Chrome.panelSlide) { model.settings.moveModelSection(section.id, by: 1) }
+            }
+            .disabled(!canMoveDown)
+            Divider()
+            Button("Delete Group") {
+                withAnimation(Chrome.panelSlide) { model.settings.removeModelSection(section.id) }
+            }
+        }
+        .onAppear { focusNewGroup() }
+        .onChange(of: sectionToFocus) { _, _ in focusNewGroup() }
+        .onChange(of: section.name) { _, name in
+            if !isEditing { draft = name }
+        }
+    }
+
+    private func toggleCollapse() {
+        withAnimation(Chrome.panelSlide) { model.settings.toggleModelSectionCollapsed(section.id) }
+    }
+
+    private func beginEditing() {
+        draft = section.name
+        isEditing = true
+        isFocused = true
+    }
+
+    private func focusNewGroup() {
+        guard sectionToFocus == section.id else { return }
+        draft = ""
+        isEditing = true
+        isFocused = true
+        sectionToFocus = nil
+    }
+
+    private func commitName() {
+        let name = draft.trimmed
+        draft = name.isEmpty ? section.name : name
+        if draft != section.name {
+            model.settings.renameModelSection(section.id, to: draft)
+        }
+        isEditing = false
+        isFocused = false
     }
 }
 

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Every floating panel of a chat, for its place in a corner's stack.
 enum FloatingPanelID: Hashable {
-    case subagent, hydra, popped, usage, auto(UUID)
+    case subagent, hydra, popped, auto(UUID)
 }
 
 /// The side of the chat column a docked panel sits on.
@@ -577,9 +577,6 @@ final class PanelResizeState {
     /// The size under the pointer while a grip is held; the layout reads it in place of
     /// the stored size, which is written once when the grip lets go.
     var liveSize: CGSize?
-    /// The usage panel's own height under the pointer, likewise.
-    var liveUsageHeight: CGFloat?
-
     var isActive: Bool { start != nil }
 
     /// The size to measure from: the one remembered from this grab, else `size`, remembered.

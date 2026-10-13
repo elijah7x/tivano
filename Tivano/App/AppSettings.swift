@@ -34,30 +34,6 @@ enum TextGenerationChoice: String, CaseIterable, Identifiable {
     }
 }
 
-/// What the check on a thread row does once you are done with the thread.
-enum ThreadFinishAction: String, CaseIterable, Identifiable {
-    /// The thread stays in the sidebar, small and grey at the bottom of its list.
-    case settle
-    /// The thread leaves the sidebar for the Archive page.
-    case archive
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .settle: "Settle"
-        case .archive: "Archive"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .settle: "A settled thread drops to the bottom of the sidebar, small and grey, until you reopen it"
-        case .archive: "An archived thread leaves the sidebar for the Archive page"
-        }
-    }
-}
-
 enum TimelineHapticStyle: String, CaseIterable, Identifiable {
     case soft
     case strong
@@ -105,6 +81,40 @@ struct ModelPin: Codable, Hashable, Identifiable, Sendable {
     var id: String { "\(provider.rawValue)/\(modelID)" }
 }
 
+/// A user-named heading in the picker's list. It sits before the pin at `position` in
+/// `modelList` (or after the last pin when `position` is the list's count) and holds the
+/// pins down to the next heading.
+struct ModelSection: Codable, Hashable, Identifiable, Sendable {
+    var id = UUID()
+    var name: String
+    var position: Int
+}
+
+/// What a new chat was started on in the picker: a model, or a pair. A pair is kept whole,
+/// so a temporary one, never saved in Settings › Hydra, can be picked again as it was.
+enum NewChatChoice: Codable, Hashable, Sendable {
+    case model(ModelPin)
+    case pair(HydraPair)
+}
+
+/// One row of the picker's list as Settings arranges it: a model or a heading.
+enum ModelListItem: Hashable, Identifiable, Sendable {
+    case pin(ModelPin)
+    case section(ModelSection)
+
+    var id: String {
+        switch self {
+        case .pin(let pin): pin.id
+        case .section(let section): "section/\(section.id.uuidString)"
+        }
+    }
+
+    // Equal by identity: a heading stays the same row while it is renamed or moved,
+    // which the reorder drag and the measured row heights rely on.
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 /// How a model starts in new chats.
 struct ModelPreference: Codable, Hashable, Sendable {
     var effort: String?
@@ -127,8 +137,6 @@ final class AppSettings {
         static let chime = "chimeWhenFinished"
         static let confirmDelete = "confirmBeforeDeleting"
         static let autoContinueAfterLimit = "autoContinueAfterLimit"
-        static let threadFinishAction = "threadFinishAction"
-        static let settleSound = "settleSound"
         static let showReasoning = "showReasoning"
         static let antiSlopEnabled = "antiSlopEnabled"
         static let showsWorkingCard = "showsWorkingCard"
@@ -137,7 +145,6 @@ final class AppSettings {
         static let contentFontSize = "contentFontSize"
         static let codeFontSize = "codeFontSize"
         static let sidebarActivityView = "sidebarActivityView"
-        static let settledCollapsed = "settledSectionCollapsed"
         static let appTheme = "appTheme"
         static let backdropOpacity = "backdropOpacity"
         static let appearance = "appearance"
@@ -157,6 +164,11 @@ final class AppSettings {
         static let terminalHeight = "terminalHeight"
         static let modelList = "modelList"
         static let modelPreferences = "modelPreferences"
+        static let modelSections = "modelSections"
+        static let collapsedModelSections = "collapsedModelSections"
+        static let lastNewChatModel = "lastNewChatModel"
+        static let lastNewChatPair = "lastNewChatPair"
+        static let dismissedModelGroupsTip = "dismissedModelGroupsTip"
         static let recentDownloadsPicker = "recentDownloadsPicker"
         static let lastProjectID = "lastProjectID"
         static let projectsEnabled = "projectsEnabled"
@@ -180,16 +192,13 @@ final class AppSettings {
         static let hydraAutoPopsHeads = "hydraAutoPopsHeads"
         static let hydraTempersHeadEffort = "hydraTempersHeadEffort"
         static let hydraMaxHeads = "hydraMaxHeads"
-        static let showsUsagePanel = "showsUsagePanel"
         static let sidebarPanelOrigin = "sidebarPanelOrigin"
         static let sidebarPanelSize = "sidebarPanelSize"
-        static let usagePanelDock = "usagePanelDock"
-        static let usagePanelHeight = "usagePanelHeight"
         static let hydraPairs = "hydraPairs"
         static let hasSeenHydraIntro = "hasSeenHydraIntro"
     }
 
-    static let modelListLimit = 15
+    static let modelListLimit = 30
 
     @ObservationIgnored private let defaults = CaptureRun.defaults ?? .standard
 
@@ -234,16 +243,6 @@ final class AppSettings {
     /// waits for the limit to reset, then tells the agent to continue where it left off.
     var autoContinueAfterLimit: Bool {
         didSet { defaults.set(autoContinueAfterLimit, forKey: Key.autoContinueAfterLimit) }
-    }
-
-    /// What the check on a thread row, ⇧⌘⌫ and the palette's finish action do.
-    var threadFinishAction: ThreadFinishAction {
-        didSet { defaults.set(threadFinishAction.rawValue, forKey: Key.threadFinishAction) }
-    }
-
-    /// A soft note plays as a thread settles.
-    var settleSound: Bool {
-        didSet { defaults.set(settleSound, forKey: Key.settleSound) }
     }
 
     var showReasoning: Bool {
@@ -333,11 +332,6 @@ final class AppSettings {
 
     /// The activity list always shows the project's name under the thread title.
     let activityThreadStyle: ActivityThreadStyle = .projectName
-
-    /// The sidebar's Settled section is folded away. Expanded by default.
-    var settledCollapsed: Bool {
-        didSet { defaults.set(settledCollapsed, forKey: Key.settledCollapsed) }
-    }
 
     var theme: AppTheme {
         didSet {
@@ -621,6 +615,33 @@ final class AppSettings {
         didSet { store(modelPreferences, forKey: Key.modelPreferences) }
     }
 
+    /// The headings between the pins, kept apart from `modelList` so that list stays what
+    /// it always was. Read them through `modelListItems`.
+    private(set) var modelSections: [ModelSection] {
+        didSet { store(modelSections, forKey: Key.modelSections) }
+    }
+
+    /// The headings folded shut in the composer's picker.
+    private(set) var collapsedModelSections: Set<UUID> {
+        didSet { defaults.set(collapsedModelSections.map(\.uuidString), forKey: Key.collapsedModelSections) }
+    }
+
+    /// The tip in Settings › Models that suggests groups, once closed.
+    var dismissedModelGroupsTip: Bool {
+        didSet { defaults.set(dismissedModelGroupsTip, forKey: Key.dismissedModelGroupsTip) }
+    }
+
+    /// The model and the pair new chats were last started on from the picker, offered
+    /// again as Recent. Kept apart, so going back and forth between a model and a
+    /// temporary pair never loses the pair.
+    private(set) var lastNewChatModel: ModelPin? {
+        didSet { store(lastNewChatModel, forKey: Key.lastNewChatModel) }
+    }
+
+    private(set) var lastNewChatPair: HydraPair? {
+        didSet { store(lastNewChatPair, forKey: Key.lastNewChatPair) }
+    }
+
     /// Hydra is on for the app from the first launch: what the app is for. Switched
     /// off in Settings › Hydra, or per chat from the mark.
     var hydraEnabled: Bool {
@@ -722,14 +743,6 @@ final class AppSettings {
         didSet { defaults.set(hydraTempersHeadEffort, forKey: Key.hydraTempersHeadEffort) }
     }
 
-    /// A floating panel with the chat's usage, the plan's limits and credits, beside
-    /// every chat for as long as it is on: the General setting, the popover's pop-out
-    /// button and the panel's own close button all set it, so it stays across threads
-    /// and relaunches.
-    var showsUsagePanel: Bool {
-        didSet { defaults.set(showsUsagePanel, forKey: Key.showsUsagePanel) }
-    }
-
     /// Where the floating sidebar was last left, from the chat area's top-left.
     var sidebarPanelOrigin: CGPoint? {
         didSet {
@@ -752,23 +765,6 @@ final class AppSettings {
         }
     }
 
-    /// The corner the usage panel is docked in, for every chat; it goes where it was
-    /// last dragged.
-    var usagePanelDock: PanelDockCorner {
-        didSet { defaults.set(usagePanelDock.rawValue, forKey: Key.usagePanelDock) }
-    }
-
-    /// The height the usage panel was dragged to, for every chat; nil fits the panel to its rows.
-    var usagePanelHeight: CGFloat? {
-        didSet {
-            if let usagePanelHeight {
-                defaults.set(Double(usagePanelHeight), forKey: Key.usagePanelHeight)
-            } else {
-                defaults.removeObject(forKey: Key.usagePanelHeight)
-            }
-        }
-    }
-
     /// The lead-and-heads pairings, in the order Settings and the model picker show them.
     /// Reordering writes this array; nothing else stores the order.
     private(set) var hydraPairs: [HydraPair] {
@@ -785,8 +781,6 @@ final class AppSettings {
         preventSleepDuringTasks = defaults.object(forKey: Key.preventSleepDuringTasks) as? Bool ?? true
         confirmBeforeDeleting = defaults.object(forKey: Key.confirmDelete) as? Bool ?? true
         autoContinueAfterLimit = defaults.object(forKey: Key.autoContinueAfterLimit) as? Bool ?? false
-        threadFinishAction = ThreadFinishAction(rawValue: defaults.string(forKey: Key.threadFinishAction) ?? "") ?? .settle
-        settleSound = defaults.object(forKey: Key.settleSound) as? Bool ?? true
         showReasoning = defaults.object(forKey: Key.showReasoning) as? Bool ?? false
         antiSlopEnabled = defaults.object(forKey: Key.antiSlopEnabled) as? Bool ?? true
         showsWorkingCard = defaults.object(forKey: Key.showsWorkingCard) as? Bool ?? true
@@ -795,7 +789,6 @@ final class AppSettings {
         contentFontSize = Self.clampedFontSize(defaults, key: Key.contentFontSize, stock: TypeScale.defaultContent, range: TypeScale.contentRange)
         codeFontSize = Self.clampedFontSize(defaults, key: Key.codeFontSize, stock: TypeScale.defaultCode, range: TypeScale.codeRange)
         sidebarActivityView = defaults.bool(forKey: Key.sidebarActivityView)
-        settledCollapsed = defaults.object(forKey: Key.settledCollapsed) as? Bool ?? true
         backdropOpacity = defaults.object(forKey: Key.backdropOpacity) as? Double ?? Self.defaultBackdropOpacity
         clearerBackdrop = defaults.object(forKey: Key.clearerBackdrop) as? Bool ?? true
         let initialPerformanceMode = defaults.bool(forKey: Key.performanceMode)
@@ -836,6 +829,11 @@ final class AppSettings {
         lastHydraPairID = defaults.string(forKey: Key.lastHydraPair).flatMap(UUID.init(uuidString:))
         modelList = Self.load([ModelPin].self, forKey: Key.modelList) ?? []
         modelPreferences = Self.load([String: ModelPreference].self, forKey: Key.modelPreferences) ?? [:]
+        modelSections = Self.load([ModelSection].self, forKey: Key.modelSections) ?? []
+        collapsedModelSections = Set((defaults.stringArray(forKey: Key.collapsedModelSections) ?? []).compactMap(UUID.init(uuidString:)))
+        lastNewChatModel = Self.load(ModelPin.self, forKey: Key.lastNewChatModel)
+        lastNewChatPair = Self.load(HydraPair.self, forKey: Key.lastNewChatPair)
+        dismissedModelGroupsTip = defaults.bool(forKey: Key.dismissedModelGroupsTip)
         hydraEnabled = defaults.object(forKey: Key.hydraEnabled) as? Bool ?? true
         hydraDefaultEnabled = defaults.object(forKey: Key.hydraDefaultEnabled) as? Bool ?? true
         hasSeenHydraIntro = defaults.object(forKey: Key.hasSeenHydraIntro) as? Bool ?? false
@@ -854,7 +852,6 @@ final class AppSettings {
         hydraShowsHeadDetails = defaults.object(forKey: Key.hydraShowsHeadDetails) as? Bool ?? false
         hydraAutoPopsHeads = defaults.object(forKey: Key.hydraAutoPopsHeads) as? Bool ?? false
         hydraTempersHeadEffort = defaults.object(forKey: Key.hydraTempersHeadEffort) as? Bool ?? true
-        showsUsagePanel = defaults.object(forKey: Key.showsUsagePanel) as? Bool ?? false
         if let stored = defaults.array(forKey: Key.sidebarPanelOrigin) as? [Double], stored.count == 2 {
             sidebarPanelOrigin = CGPoint(x: stored[0], y: stored[1])
         } else {
@@ -865,8 +862,6 @@ final class AppSettings {
         } else {
             sidebarPanelSize = nil
         }
-        usagePanelDock = defaults.string(forKey: Key.usagePanelDock).flatMap(PanelDockCorner.init(rawValue:)) ?? .bottomLeading
-        usagePanelHeight = defaults.object(forKey: Key.usagePanelHeight).flatMap { $0 as? Double }.map { CGFloat($0) }
         hydraPairs = Self.load([Lenient<HydraPair>].self, forKey: Key.hydraPairs)?.compactMap(\.value) ?? []
         // The window zoom is gone. Drop a stored percent instead of turning it into a font size.
         defaults.removeObject(forKey: "appZoom")
@@ -942,21 +937,128 @@ final class AppSettings {
     }
 
     func removeFromModelList(_ pin: ModelPin) {
-        modelList.removeAll { $0 == pin }
+        setModelListItems(modelListItems.filter { $0 != .pin(pin) })
+        if lastNewChatModel == pin { lastNewChatModel = nil }
     }
 
     /// Moves `pin` to sit right before or after `target`; returns whether the list changed.
     @discardableResult
     func moveModel(_ pin: ModelPin, to target: ModelPin, placeAfter: Bool) -> Bool {
-        guard pin != target,
-              let from = modelList.firstIndex(of: pin),
-              let to = modelList.firstIndex(of: target) else { return false }
+        moveModelListItem(.pin(pin), to: .pin(target), placeAfter: placeAfter)
+    }
+
+    /// The pins and headings in the order Settings shows them.
+    var modelListItems: [ModelListItem] {
+        var items: [ModelListItem] = []
+        let sections = modelSections.enumerated().sorted { ($0.element.position, $0.offset) < ($1.element.position, $1.offset) }.map(\.element)
+        var next = sections.makeIterator()
+        var pending = next.next()
+        for (index, pin) in modelList.enumerated() {
+            while let section = pending, section.position <= index {
+                items.append(.section(section))
+                pending = next.next()
+            }
+            items.append(.pin(pin))
+        }
+        while let section = pending {
+            items.append(.section(section))
+            pending = next.next()
+        }
+        return items
+    }
+
+    /// Splits `items` back into `modelList` and the headings' positions.
+    private func setModelListItems(_ items: [ModelListItem]) {
+        var pins: [ModelPin] = []
+        var sections: [ModelSection] = []
+        for item in items {
+            switch item {
+            case .pin(let pin): pins.append(pin)
+            case .section(var section):
+                section.position = pins.count
+                sections.append(section)
+            }
+        }
+        if pins != modelList { modelList = pins }
+        if sections != modelSections { modelSections = sections }
+    }
+
+    /// Moves a pin or a heading to sit right before or after another row; returns whether the list changed.
+    @discardableResult
+    func moveModelListItem(_ item: ModelListItem, to target: ModelListItem, placeAfter: Bool) -> Bool {
+        var items = modelListItems
+        guard item.id != target.id,
+              let from = items.firstIndex(where: { $0.id == item.id }),
+              let to = items.firstIndex(where: { $0.id == target.id }) else { return false }
         var dest = to + (placeAfter ? 1 : 0)
         if from < dest { dest -= 1 }
         guard from != dest else { return false }
-        let moved = modelList.remove(at: from)
-        modelList.insert(moved, at: dest)
+        let moved = items.remove(at: from)
+        items.insert(moved, at: dest)
+        setModelListItems(items)
         return true
+    }
+
+    /// Moves `pin` into the group `sectionID` (nil: the ungrouped models at the top), right
+    /// before `before` when that model is in the group, else at the group's end.
+    func moveModel(_ pin: ModelPin, toSection sectionID: UUID?, before: ModelPin? = nil) {
+        var items = modelListItems.filter { $0 != .pin(pin) }
+        let start = sectionID.flatMap { id in items.firstIndex { if case .section(let s) = $0 { s.id == id } else { false } } }
+        if sectionID != nil, start == nil { return }
+        let afterStart = start.map { $0 + 1 } ?? 0
+        let end = items[afterStart...].firstIndex { if case .section = $0 { true } else { false } } ?? items.count
+        let slot = before.flatMap { target in items[afterStart..<end].firstIndex(of: .pin(target)) } ?? end
+        items.insert(.pin(pin), at: slot)
+        setModelListItems(items)
+    }
+
+    /// Moves the group `id`, with its models, one group up (`offset` -1) or down (+1).
+    /// The ungrouped models always stay on top.
+    func moveModelSection(_ id: UUID, by offset: Int) {
+        let items = modelListItems
+        var head: [ModelListItem] = []
+        var blocks: [[ModelListItem]] = []
+        for item in items {
+            if case .section = item { blocks.append([item]) } else if blocks.isEmpty { head.append(item) } else { blocks[blocks.count - 1].append(item) }
+        }
+        guard let from = blocks.firstIndex(where: { $0.first?.id == "section/\(id.uuidString)" }),
+              blocks.indices.contains(from + offset) else { return }
+        blocks.swapAt(from, from + offset)
+        setModelListItems(head + blocks.flatMap { $0 })
+    }
+
+    /// Adds a heading at the end of the list, where the next models added fall under it.
+    @discardableResult
+    func addModelSection(named name: String) -> UUID {
+        let section = ModelSection(name: name, position: modelList.count)
+        modelSections.append(section)
+        return section.id
+    }
+
+    func renameModelSection(_ id: UUID, to name: String) {
+        guard let index = modelSections.firstIndex(where: { $0.id == id }) else { return }
+        modelSections[index].name = name
+    }
+
+    /// Takes the heading away; its models join the heading above, or the top of the list.
+    func removeModelSection(_ id: UUID) {
+        modelSections.removeAll { $0.id == id }
+        collapsedModelSections.remove(id)
+    }
+
+    func isModelSectionCollapsed(_ id: UUID) -> Bool {
+        collapsedModelSections.contains(id)
+    }
+
+    func toggleModelSectionCollapsed(_ id: UUID) {
+        if collapsedModelSections.remove(id) == nil { collapsedModelSections.insert(id) }
+    }
+
+    func noteNewChatChoice(_ choice: NewChatChoice) {
+        switch choice {
+        case .model(let pin): if lastNewChatModel != pin { lastNewChatModel = pin }
+        case .pair(let pair): if lastNewChatPair != pair { lastNewChatPair = pair }
+        }
     }
 
     func preference(for provider: ProviderKind, model: String?) -> ModelPreference {
@@ -975,15 +1077,19 @@ final class AppSettings {
             for variant in family.variants where variant.id != family.id { owners[variant.id] = (family, variant) }
         }
         guard !owners.isEmpty else { return }
-        var list: [ModelPin] = []
+        var list: [ModelListItem] = []
         var preferences = modelPreferences
-        for pin in modelList {
+        for item in modelListItems {
+            guard case .pin(let pin) = item else {
+                list.append(item)
+                continue
+            }
             guard pin.provider == provider, let owner = owners[pin.modelID] else {
-                if !list.contains(pin) { list.append(pin) }
+                if !list.contains(item) { list.append(item) }
                 continue
             }
             let adopted = ModelPin(provider: provider, modelID: owner.family.id)
-            if !list.contains(adopted) { list.append(adopted) }
+            if !list.contains(.pin(adopted)) { list.append(.pin(adopted)) }
             // The variant's own effort and speed become the row's preference, unless the
             // row already has one; a preference set on the variant wins over its name.
             let old = preferences.removeValue(forKey: pin.id)
@@ -994,7 +1100,7 @@ final class AppSettings {
                 preferences[adopted.id] = preference == ModelPreference() ? nil : preference
             }
         }
-        if list != modelList { modelList = list }
+        setModelListItems(list)
         if preferences != modelPreferences { modelPreferences = preferences }
         if let last = lastModels[provider.rawValue], let owner = owners[last] {
             lastModels[provider.rawValue] = owner.family.id

@@ -91,7 +91,6 @@ struct RootView: View {
         .ignoresSafeArea()
         .coordinateSpace(.named(GenieAnimator.coordinateSpace))
         .overlay { GenieLayer() }
-        .overlay { RowGlideLayer() }
         .overlay {
             if model.isCommandPalettePresented {
                 CommandPalette()
@@ -231,13 +230,27 @@ private struct ThreadColumns: NSViewRepresentable {
         Coordinator()
     }
 
+    static func dismantleNSView(_ pane: NSView, coordinator: Coordinator) {
+        coordinator.stopRendering()
+    }
+
     @MainActor final class Coordinator {
+        func stopRendering() {
+            covering?.cancel()
+            retirement?.cancel()
+            for scope in scopes.values { scope.setVisible(false) }
+        }
+
         /// How many columns stay built behind the shown one.
         private static let keptLimit = 8
         /// Hidden columns keep the size they were built at and take the pane's size only
         /// when shown: resizing every hidden column per frame during a sidebar slide or
         /// live resize is what made them lag.
         private var columns: [UUID: FrameHostingView] = [:]
+        /// Each column's veil render scope: the column's own fade clock and its pane
+        /// visibility, so a column that is not drawn stops veiling. Created with the
+        /// column, paused and resumed as the column hides and shows, dropped with it.
+        private var scopes: [UUID: VeilRenderScope] = [:]
         /// The threads with a column, the one to drop first at the front and the shown one
         /// last. A column built ahead of a click goes in at the front: it is the first to
         /// make room for the columns the reader has been to.
@@ -261,20 +274,28 @@ private struct ThreadColumns: NSViewRepresentable {
                 for (id, column) in columns {
                     let isInteractive = id == shown && !isCovered
                     column.acceptsInteraction = isInteractive
-                    column.rootView = Self.root(id, isShown: isInteractive, model: model, liveResize: liveResize)
+                    column.rootView = Self.root(id, isShown: isInteractive, model: model, liveResize: liveResize, scope: scopes[id])
                 }
             }
             guard isCovered else {
                 covering?.cancel()
                 covering = nil
+                // The column's veils resume — repainting at the real time — before the
+                // pane can show a stale frame.
+                if let shown, pane.isHidden {
+                    scopes[shown]?.setVisible(true)
+                    columns[shown]?.layoutSubtreeIfNeeded()
+                }
                 pane.isHidden = false
                 return
             }
             guard !pane.isHidden, covering == nil else { return }
-            covering = Task { [weak pane] in
+            covering = Task { [weak pane, weak self] in
                 try? await Task.sleep(for: .milliseconds(450))
                 guard !Task.isCancelled else { return }
                 pane?.isHidden = true
+                // The pane is truly hidden now: the column it shows stops veiling.
+                if let self, let shown = self.shown { self.scopes[shown]?.setVisible(false) }
             }
         }
 
@@ -283,14 +304,19 @@ private struct ThreadColumns: NSViewRepresentable {
             if let shown, let previous = columns[shown] {
                 previous.acceptsInteraction = false
                 previous.isHidden = true
+                scopes[shown]?.setVisible(false)
                 previous.autoresizingMask = []
-                previous.rootView = Self.root(shown, isShown: false, model: model, liveResize: liveResize)
+                previous.rootView = Self.root(shown, isShown: false, model: model, liveResize: liveResize, scope: scopes[shown])
             }
             if let kept = columns[id] {
                 kept.acceptsInteraction = !isCovered
-                kept.rootView = Self.root(id, isShown: !isCovered, model: model, liveResize: liveResize)
+                kept.rootView = Self.root(id, isShown: !isCovered, model: model, liveResize: liveResize, scope: scopes[id])
                 kept.frame = pane.bounds
                 kept.autoresizingMask = [.width, .height]
+                // In view before the column shows, so its first frame carries the real
+                // alpha; under a cover that has hidden the pane it stays paused.
+                scopes[id]?.setVisible(!pane.isHidden)
+                kept.layoutSubtreeIfNeeded()
                 kept.isHidden = false
             } else {
                 make(id, isShown: true, in: pane, model: model, liveResize: liveResize)
@@ -323,7 +349,12 @@ private struct ThreadColumns: NSViewRepresentable {
 
         @discardableResult
         private func make(_ id: UUID, isShown: Bool, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) -> FrameHostingView {
-            let column = FrameHostingView(rootView: Self.root(id, isShown: isShown && !isCovered, model: model, liveResize: liveResize))
+            let scope = VeilRenderScope()
+            scopes[id] = scope
+            // A column built hidden (a prebuild, or a switch under a hidden pane) never
+            // runs its fade clock; one the pane is showing starts live.
+            scope.setVisible(isShown && !pane.isHidden)
+            let column = FrameHostingView(rootView: Self.root(id, isShown: isShown && !isCovered, model: model, liveResize: liveResize, scope: scope))
             column.acceptsInteraction = isShown && !isCovered
             column.frame = pane.bounds
             column.isHidden = !isShown
@@ -333,10 +364,11 @@ private struct ThreadColumns: NSViewRepresentable {
             return column
         }
 
-        private static func root(_ id: UUID, isShown: Bool, model: AppModel, liveResize: WindowLiveResize) -> AnyView {
+        private static func root(_ id: UUID, isShown: Bool, model: AppModel, liveResize: WindowLiveResize, scope: VeilRenderScope?) -> AnyView {
             AnyView(
                 ChatView(runtime: model.runtime(for: id))
                     .environment(\.chatColumnIsShown, isShown)
+                    .environment(\.veilRenderScope, scope)
                     .disabled(!isShown)
                     .allowsHitTesting(isShown)
                     .modifier(HostedEnvironment(model: model, liveResize: liveResize))
@@ -345,6 +377,9 @@ private struct ThreadColumns: NSViewRepresentable {
 
         private func drop(_ id: UUID) {
             order.removeAll { $0 == id }
+            // The scope goes with the column: its clock stops, its veils are told, and
+            // the retiring tree's environment is the last reference to it.
+            if let scope = scopes.removeValue(forKey: id) { scope.setVisible(false) }
             guard let column = columns.removeValue(forKey: id) else { return }
             retired.append(column)
             retirement?.cancel()

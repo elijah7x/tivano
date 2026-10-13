@@ -22,15 +22,11 @@ struct ChatView: View {
     @State private var subagentDrag = PanelDragState()
     @State private var hydraDrag = PanelDragState()
     @State private var poppedDrag = PanelDragState()
-    @State private var usageDrag = PanelDragState()
     /// The automatic panels never move (their spot is the layout's), so one resting
     /// drag state serves them all.
     @State private var autoDrag = PanelDragState()
     /// One drag state per head with its own panel, made as they appear.
     @State private var autoDrags: [UUID: PanelDragState] = [:]
-    /// What the usage panel's content asked for, so the panel is no taller than its rows
-    /// (see `usagePanel`).
-    @State private var usageContentHeight: CGFloat?
     /// One grip held at a time, whichever panel it is on.
     @State private var panelResize = PanelResizeState()
     /// Whether a panel is under the pointer right now, on any of the drag states above.
@@ -47,7 +43,7 @@ struct ChatView: View {
     /// so for the length of the drag it does not.
     private var isMovingAPanel: Bool {
         subagentDrag.position != nil || hydraDrag.position != nil
-            || poppedDrag.position != nil || usageDrag.position != nil
+            || poppedDrag.position != nil
             || autoDrags.values.contains { $0.position != nil }
     }
     /// When the team's panel came on screen, and whether it is lingering past its heads.
@@ -87,7 +83,7 @@ struct ChatView: View {
         // Split, so a resize frame recomputes docks and reserves only, never the
         // thread lists.
         let members = PanelMembers(runtime: runtime, model: model)
-        let scene = PanelScene(members: members, runtime: runtime, model: model, paneSize: paneSize, composerAreaHeight: composerAreaHeight, usageContentHeight: usageContentHeight, holdsHydra: hydraLingers, preferredSize: livePreferredSize, usageHeightOverride: panelResize.liveUsageHeight)
+        let scene = PanelScene(members: members, runtime: runtime, model: model, paneSize: paneSize, composerAreaHeight: composerAreaHeight, holdsHydra: hydraLingers, preferredSize: livePreferredSize)
         // The team's panel as the model has it, before the linger below: what decides
         // whether the panel is held on a beat after its heads leave.
         let hydraPresent = !members.heads.isEmpty && scene.isMeasured
@@ -232,14 +228,6 @@ struct ChatView: View {
                 }
                 .animation(switching ? nil : Chrome.panelSlide, value: scene.autoPopped.map(\.id))
             }
-            .overlay(alignment: .topLeading) {
-                ZStack(alignment: .topLeading) {
-                    if let usage = scene.usage, scene.showsUsage {
-                        usagePanel(usage, scene: scene)
-                    }
-                }
-                .animation(switching ? nil : Chrome.panelSlide, value: scene.usage)
-            }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { paneSize = $0 }
             // Free-floating panels are kept inside the pane while it shrinks, with no
             // animation; when the resize ends they land docked exactly (see below).
@@ -250,7 +238,6 @@ struct ChatView: View {
                 subagentDrag.reclamp(in: layout)
                 hydraDrag.reclamp(in: layout)
                 poppedDrag.reclamp(in: layout)
-                usageDrag.reclamp(in: layout)
                 for drag in autoDrags.values { drag.reclamp(in: layout) }
             }
             // A sidebar or terminal-divider drag reshapes the pane per frame the way a
@@ -266,7 +253,6 @@ struct ChatView: View {
                 subagentDrag.reclamp(in: scene.layout)
                 hydraDrag.reclamp(in: scene.layout)
                 poppedDrag.reclamp(in: scene.layout)
-                usageDrag.reclamp(in: scene.layout)
                 for drag in autoDrags.values { drag.reclamp(in: scene.layout) }
             }
             .onChange(of: scene.autoPopped.map(\.id), initial: true) { _, ids in
@@ -313,7 +299,6 @@ struct ChatView: View {
             subagentDrag = PanelDragState()
             hydraDrag = PanelDragState()
             poppedDrag = PanelDragState()
-            usageDrag = PanelDragState()
             autoDrag = PanelDragState()
             autoDrags = [:]
             panelResize = PanelResizeState()
@@ -325,7 +310,7 @@ struct ChatView: View {
 
     /// The helper's panel, in its corner.
     private func subagentPanel(_ subagent: ChatThread, scene: PanelScene, project: Project?) -> some View {
-        let slot = scene.slots[.subagent] ?? PanelScene.PanelSlot(corner: runtime.subagentPanelDock, below: 0, lift: 0)
+        let slot = scene.slots[.subagent] ?? PanelScene.PanelSlot(corner: runtime.subagentPanelDock, below: 0)
         let rest = Self.rest(for: slot, scene: scene)
         return PlacedPanel(drag: subagentDrag, rest: rest, size: scene.layout.panelSize, content: SubagentPanel(
             thread: subagent,
@@ -358,7 +343,7 @@ struct ChatView: View {
 
     /// The team's panel: next to the helper panel when that one is in the same corner.
     private func hydraPanel(scene: PanelScene, workingDirectory: String?, project: Project?) -> some View {
-        let slot = scene.slots[.hydra] ?? PanelScene.PanelSlot(corner: runtime.hydraPanelDock, below: 0, lift: 0)
+        let slot = scene.slots[.hydra] ?? PanelScene.PanelSlot(corner: runtime.hydraPanelDock, below: 0)
         let corner = slot.corner
         let rest = Self.rest(for: slot, scene: scene)
         return PlacedPanel(drag: hydraDrag, rest: rest, size: scene.layout.panelSize, content: HydraPanel(
@@ -424,7 +409,7 @@ struct ChatView: View {
 
     /// The popped-out head's panel: beyond whichever panels are in the same corner.
     private func poppedPanel(_ popped: ChatThread, scene: PanelScene, workingDirectory: String?, project: Project?) -> some View {
-        let slot = scene.slots[.popped] ?? PanelScene.PanelSlot(corner: runtime.hydraPoppedPanelDock, below: 0, lift: 0)
+        let slot = scene.slots[.popped] ?? PanelScene.PanelSlot(corner: runtime.hydraPoppedPanelDock, below: 0)
         let corner = slot.corner
         let rest = Self.rest(for: slot, scene: scene)
         return PlacedPanel(drag: poppedDrag, rest: rest, size: scene.layout.panelSize, content: HydraPanel(
@@ -461,7 +446,7 @@ struct ChatView: View {
     /// A head popped out because there was room; its X sends it back into the team
     /// panel and holds it there.
     private func autoPoppedPanel(_ head: ChatThread, scene: PanelScene, workingDirectory: String?, project: Project?) -> some View {
-        let slot = scene.slots[.auto(head.id)] ?? PanelScene.PanelSlot(corner: runtime.hydraPanelDock.acrossTheColumn, below: 0, lift: 0)
+        let slot = scene.slots[.auto(head.id)] ?? PanelScene.PanelSlot(corner: runtime.hydraPanelDock.acrossTheColumn, below: 0)
         let rest = Self.rest(for: slot, scene: scene)
         let drag = autoDrags[head.id] ?? autoDrag
         return PlacedPanel(drag: drag, rest: rest, size: scene.layout.panelSize, content: HydraPanel(
@@ -493,47 +478,6 @@ struct ChatView: View {
         .id(head.id)
     }
 
-    /// The usage panel: beyond whichever panels are in the same corner, so it is the last
-    /// of a stack. Across the column from the heads by default, at the left.
-    private func usagePanel(_ usage: PanelUsage, scene: PanelScene) -> some View {
-        let slot = scene.slots[.usage] ?? PanelScene.PanelSlot(corner: model.settings.usagePanelDock, below: 0, lift: 0)
-        let corner = slot.corner
-        let rest = Self.rest(for: slot, scene: scene)
-        let full = scene.layout.panelSize
-        let minimum = PanelScene.usageMinimumHeight
-        // The panel's own height, worked out with the scene (see `PanelScene.usageHeight`).
-        let height = scene.usageHeight ?? full.height
-        let size = CGSize(width: full.width, height: height)
-        // A bottom-docked panel keeps its bottom edge where the full-height one would
-        // sit; a top-docked one keeps its top.
-        let origin = corner.isTop ? rest : CGPoint(x: rest.x, y: rest.y + (full.height - height))
-        return PlacedPanel(drag: usageDrag, rest: origin, size: size, content: UsageFloatingPanel(
-            runtime: runtime,
-            provider: usage.provider,
-            headsProvider: usage.headsProvider,
-            size: size,
-            onContentHeight: { wanted in if usageContentHeight != wanted { usageContentHeight = wanted } },
-            onDrag: { translation in
-                let position = usageDrag.move(by: translation, from: origin, in: scene.layout)
-                dockUsage(nearest: position, scene: scene)
-                reorder(.usage, at: position, corner: model.settings.usagePanelDock, scene: scene)
-            },
-            onDragEnd: {
-                if let heading = usageDrag.release() {
-                    dockUsage(nearest: heading, scene: scene)
-                    reorder(.usage, at: heading, corner: model.settings.usagePanelDock, scene: scene)
-                }
-            },
-            dismiss: {
-                // For every chat; the usage popover's pop-out button brings it back.
-                withAnimation(Chrome.panelSlide) {
-                    model.settings.showsUsagePanel = false
-                }
-            }
-        )
-        .transition(Self.panelTransition), resize: usageResizer(for: corner, scene: scene, size: size, minimum: minimum), isResizing: panelsHeld)
-    }
-
     /// The grips of a panel docked in `corner`. A pull on a free edge grows the panel away
     /// from its corner; the size is kept in Settings for every chat's panels, fitted to
     /// this pane's room, so it follows the pointer here and the window's size after.
@@ -558,41 +502,12 @@ struct ChatView: View {
         )
     }
 
-    /// The usage panel's grips: its width is the panels' shared width, its height its own
-    /// (see `AppSettings.usagePanelHeight`); a double-click puts it back to fitting its rows.
-    private func usageResizer(for corner: PanelDockCorner, scene: PanelScene, size: CGSize, minimum: CGFloat) -> PanelResize {
-        PanelResize(
-            corner: corner,
-            onResize: { translation, axes in
-                let start = panelResize.begin(at: size)
-                // The pointer's travel runs right and down; a panel docked at the right
-                // grows leftwards, one docked at the bottom grows upwards.
-                let acrossSign: CGFloat = corner.side == .trailing ? -1 : 1
-                let downSign: CGFloat = corner.isTop ? 1 : -1
-                if axes.contains(.width) {
-                    var next = scene.layout.panelSize
-                    next.width = start.width + translation.width * acrossSign
-                    panelResize.liveSize = scene.layout.fitted(next)
-                }
-                if axes.contains(.height) {
-                    panelResize.liveUsageHeight = max(minimum, start.height + translation.height * downSign)
-                }
-            },
-            onResizeEnd: commitPanelResize,
-            onReset: {
-                withAnimation(Chrome.panelSlide) { model.settings.usagePanelHeight = nil }
-            }
-        )
-    }
-
     /// The grip let go: the size it was pulled to is written to Settings once, exact.
     /// While the grip was held only `panelResize` changed, so the pointer moved the
     /// panel and the room it takes, not every chat's stored size.
     private func commitPanelResize() {
         if let size = panelResize.liveSize { model.settings.panelSize = size }
-        if let height = panelResize.liveUsageHeight { model.settings.usagePanelHeight = height }
         panelResize.liveSize = nil
-        panelResize.liveUsageHeight = nil
         panelResize.end()
     }
 
@@ -621,15 +536,6 @@ struct ChatView: View {
         let next = locked.map { PanelDockCorner.make(side: $0, isTop: wanted.isTop) } ?? wanted
         guard next != runtime[keyPath: corner] else { return }
         runtime[keyPath: corner] = next
-    }
-
-    /// The usage panel's corner is one for every chat (see `AppSettings.usagePanelDock`).
-    private func dockUsage(nearest position: CGPoint, scene: PanelScene) {
-        let wanted = scene.layout.dockCorner(nearest: position, keeping: model.settings.usagePanelDock, docks: scene.docks)
-        let locked = scene.lockedSide(excluding: .usage)
-        let next = locked.map { PanelDockCorner.make(side: $0, isTop: wanted.isTop) } ?? wanted
-        guard next != model.settings.usagePanelDock else { return }
-        model.settings.usagePanelDock = next
     }
 
     private func dockAuto(_ id: UUID, nearest position: CGPoint, scene: PanelScene) {
@@ -704,16 +610,13 @@ struct ChatView: View {
             if runtime.hydraPanelDock != corner { runtime.hydraPanelDock = corner }
         case .popped:
             if runtime.hydraPoppedPanelDock != corner { runtime.hydraPoppedPanelDock = corner }
-        case .usage:
-            if model.settings.usagePanelDock != corner { model.settings.usagePanelDock = corner }
         case .auto(let head):
             if runtime.hydraAutoPanelDocks[head] != corner { runtime.hydraAutoPanelDocks[head] = corner }
         }
     }
 
     private static func rest(for slot: PanelScene.PanelSlot, scene: PanelScene) -> CGPoint {
-        let stacked = scene.docks.stacked(slot.corner, below: slot.below, slots: scene.slotsOnSide[slot.corner.side] ?? 1, layout: scene.layout)
-        return CGPoint(x: stacked.x, y: slot.corner.isTop ? stacked.y + slot.lift : stacked.y - slot.lift)
+        scene.docks.stacked(slot.corner, below: slot.below, slots: scene.slotsOnSide[slot.corner.side] ?? 1, layout: scene.layout)
     }
 }
 
@@ -787,9 +690,6 @@ private struct PanelMembers {
     let heads: [ChatThread]
     let popped: ChatThread?
     let isHydraHidden: Bool
-    /// The usage panel's providers, when this chat shows one: the chat's own, and the
-    /// pair's heads provider when that is another, so both plans' limits stack.
-    let usage: PanelUsage?
 
     init(runtime: ThreadRuntime, model: AppModel) {
         // Both lists come from this chat's own children (see `panelHeads(of:)`), so a head
@@ -801,24 +701,8 @@ private struct PanelMembers {
         let poppedHead = team.count > 1 ? team.first { $0.id == runtime.hydraPoppedHeadID } : nil
         popped = poppedHead
         heads = team.filter { $0.id != poppedHead?.id }
-        if let thread = model.thread(runtime.threadID), model.settings.showsUsagePanel {
-            var headsProvider: ProviderKind?
-            if model.hydraIsOn(thread), let pair = model.hydraPair(for: thread) {
-                let provider = model.hydraHeadsProvider(of: pair)
-                headsProvider = provider == thread.provider ? nil : provider
-            }
-            usage = PanelUsage(provider: thread.provider, headsProvider: headsProvider)
-        } else {
-            usage = nil
-        }
-    }
-}
 
-/// Whose limits the usage panel shows: the chat's provider, and the heads' when a pair
-/// sends them out on another.
-struct PanelUsage: Equatable {
-    let provider: ProviderKind
-    let headsProvider: ProviderKind?
+    }
 }
 
 /// Everything the chat's floating panels need in one place, worked out once per body:
@@ -836,13 +720,10 @@ private struct PanelScene {
     /// list; it only stays out while another head is left behind to keep that panel.
     let heads: [ChatThread]
     let popped: ChatThread?
-    /// A panel's place: its corner, how many panels sit under it in that corner's
-    /// stack, and how much further from the edge it sits when a usage panel taller
-    /// than one slot is under it.
+    /// A panel's place: its corner and how many panels sit under it in that corner's stack.
     struct PanelSlot {
         let corner: PanelDockCorner
         let below: Int
-        let lift: CGFloat
     }
     /// The heads with a panel of their own.
     let autoPopped: [ChatThread]
@@ -862,16 +743,9 @@ private struct PanelScene {
         let trailing = others.count - leading
         return leading >= trailing ? .leading : .trailing
     }
-    /// The usage panel's own height: what it was dragged to, else its rows, capped at the
-    /// room left in its corner under the panels stacked below it (never the heads' compact
-    /// height); nil without a usage panel.
-    let usageHeight: CGFloat?
-    /// The usage panel's providers, when the chat shows one (see `PanelMembers`).
-    let usage: PanelUsage?
     let isMeasured: Bool
     let showsHydra: Bool
     let showsPopped: Bool
-    let showsUsage: Bool
     let isHydraDocked: Bool
     /// The sides with a panel docked on them, in a fixed order, as the key for the slides
     /// that make room: it changes with a dock, never with a measurement.
@@ -881,23 +755,20 @@ private struct PanelScene {
 
     var hasHeads: Bool { !heads.isEmpty }
 
-    /// `preferredSize` and `usageHeightOverride` stand in for the stored sizes while a
-    /// grip is held (see `PanelResizeState.liveSize`); nil reads Settings.
-    init(members: PanelMembers, runtime: ThreadRuntime, model: AppModel, paneSize: CGSize, composerAreaHeight: CGFloat, usageContentHeight: CGFloat?, holdsHydra: Bool = false, preferredSize: CGSize? = nil, usageHeightOverride: CGFloat? = nil) {
-        let geometry = Self.geometry(members: members, runtime: runtime, model: model, paneSize: paneSize, composerAreaHeight: composerAreaHeight, usageContentHeight: usageContentHeight, holdsHydra: holdsHydra, preferredSize: preferredSize, usageHeightOverride: usageHeightOverride)
+    /// `preferredSize` stands in for the stored size while a grip is held
+    /// (see `PanelResizeState.liveSize`); nil reads Settings.
+    init(members: PanelMembers, runtime: ThreadRuntime, model: AppModel, paneSize: CGSize, composerAreaHeight: CGFloat, holdsHydra: Bool = false, preferredSize: CGSize? = nil) {
+        let geometry = Self.geometry(members: members, runtime: runtime, model: model, paneSize: paneSize, composerAreaHeight: composerAreaHeight, holdsHydra: holdsHydra, preferredSize: preferredSize)
         subagent = members.subagent
         isDocked = members.isDocked
         autoPopped = geometry.autoPopped
         slots = geometry.slots
         slotsOnSide = geometry.slotsOnSide
-        usageHeight = geometry.usageHeight
         heads = members.heads.filter { head in !geometry.autoPopped.contains { $0.id == head.id } }
         popped = members.popped
-        usage = members.usage
         isMeasured = geometry.isMeasured
         showsHydra = geometry.showsHydra
         showsPopped = geometry.showsPopped
-        showsUsage = geometry.showsUsage
         isHydraDocked = geometry.isHydraDocked
         dockedSides = geometry.dockedSides
         layout = geometry.layout
@@ -912,53 +783,32 @@ private struct PanelScene {
         let autoPopped: [ChatThread]
         let slots: [FloatingPanelID: PanelSlot]
         let slotsOnSide: [PanelDockSide: Int]
-        let usageHeight: CGFloat?
         let isMeasured: Bool
         let showsHydra: Bool
         let showsPopped: Bool
-        let showsUsage: Bool
         let isHydraDocked: Bool
         let dockedSides: [PanelDockSide]
         let reserve: PanelReserve
         let docks: PanelDocks
     }
 
-    /// The smallest usage panel: its strip and one row.
-    static let usageMinimumHeight = HydraPanel.stripHeight + 44
-
     /// `holdsHydra` keeps the team's panel in the scene after its heads have gone (see
     /// `ChatView.hydraLingers`), so the conversation keeps its room and the panel fades
     /// out over it rather than the column sliding out from under a panel still showing.
-    static func geometry(members: PanelMembers, runtime: ThreadRuntime, model: AppModel, paneSize: CGSize, composerAreaHeight: CGFloat, usageContentHeight: CGFloat?, holdsHydra: Bool = false, preferredSize: CGSize? = nil, usageHeightOverride: CGFloat? = nil) -> Geometry {
+    static func geometry(members: PanelMembers, runtime: ThreadRuntime, model: AppModel, paneSize: CGSize, composerAreaHeight: CGFloat, holdsHydra: Bool = false, preferredSize: CGSize? = nil) -> Geometry {
         let isMeasured = paneSize != .zero
         let preferred = preferredSize ?? model.settings.panelSize
         let showsHydra = (!members.heads.isEmpty || holdsHydra) && isMeasured
         let showsPopped = members.popped != nil && showsHydra
-        let showsUsage = members.usage != nil && isMeasured
         let isHydraDocked = showsHydra
         let helperShowsProgress = members.subagent?.isHydraHead ?? true
         let compact = !model.settings.hydraShowsHeadDetails && helperShowsProgress && (showsHydra || members.subagent != nil)
-        // One panel at its natural height is a slot; the usage panel is measured against
-        // it, since it has a height of its own and may take more than one.
         let single = SubagentPanelLayout(pane: paneSize, composerAreaHeight: composerAreaHeight, stackDepth: 1, preferred: preferred, compact: compact)
-        let slotHeight = single.panelHeight
         let gap = SubagentPanelLayout.gap
         var placed: [(id: FloatingPanelID, corner: PanelDockCorner)] = []
         if members.isDocked { placed.append((.subagent, runtime.subagentPanelDock)) }
         if isHydraDocked { placed.append((.hydra, runtime.hydraPanelDock)) }
         if showsPopped { placed.append((.popped, runtime.hydraPoppedPanelDock)) }
-        if showsUsage { placed.append((.usage, model.settings.usagePanelDock)) }
-        let usageCorner = model.settings.usagePanelDock
-        var usageHeight: CGFloat?
-        if showsUsage {
-            let under = Self.order(placed, by: runtime.panelStackOrder)[.usage]?.below ?? 0
-            let room = single.verticalRoom - CGFloat(under) * (slotHeight + gap)
-            let wanted = usageHeightOverride ?? model.settings.usagePanelHeight ?? usageContentHeight ?? slotHeight
-            usageHeight = min(max(Self.usageMinimumHeight, room), max(Self.usageMinimumHeight, wanted))
-        }
-        // The room the usage panel takes past its slot, which a panel stacked beyond it
-        // steps over.
-        let usageLift = max(0, (usageHeight ?? 0) - slotHeight)
         var autoPopped: [ChatThread] = []
         let layoutFitsBothSides = single.fitsBothSides
         // How many panels a side can hold at the smallest they shrink to, three at most:
@@ -974,13 +824,10 @@ private struct PanelScene {
                 autoPopped.append(candidate)
             }
             candidates.removeAll { runtime.hydraAutoPanelDocks[$0.id] != nil }
-            // Slots the usage panel takes beyond its own: a tall one is worth more than one.
-            let usageExtra = usageLift > 0 ? Int(ceil(usageLift / (slotHeight + gap))) : 0
             // A pane too narrow for panels on both sides keeps the heads on the team's side.
             for corner in (layoutFitsBothSides ? [runtime.hydraPanelDock.acrossTheColumn, runtime.hydraPanelDock] : [runtime.hydraPanelDock]) {
                 let other = Self.flippedVertically(corner)
-                let usageOnSide = showsUsage && (usageCorner == corner || usageCorner == other)
-                let used = placed.count { $0.corner == corner } + placed.count { $0.corner == other } + (usageOnSide ? usageExtra : 0)
+                let used = placed.count { $0.corner == corner } + placed.count { $0.corner == other }
                 let free = max(0, natural - used)
                 for _ in 0..<min(free, candidates.count) {
                     let head = candidates.removeFirst()
@@ -1001,15 +848,8 @@ private struct PanelScene {
         }
         var slotsByID: [FloatingPanelID: PanelSlot] = [:]
         let ordered = Self.order(placed, by: runtime.panelStackOrder)
-        let usageBelow = ordered[.usage]?.below
         for (id, entry) in ordered {
-            let lift: CGFloat
-            if let usageBelow, entry.corner == usageCorner, showsUsage, id != .usage, entry.below > usageBelow {
-                lift = usageLift
-            } else {
-                lift = 0
-            }
-            slotsByID[id] = PanelSlot(corner: entry.corner, below: entry.below, lift: lift)
+            slotsByID[id] = PanelSlot(corner: entry.corner, below: entry.below)
         }
         let corners = placed.map(\.corner)
         let sides = Set(corners.map(\.side))
@@ -1045,11 +885,9 @@ private struct PanelScene {
             autoPopped: autoPopped,
             slots: slotsByID,
             slotsOnSide: slotsOnSide,
-            usageHeight: usageHeight,
             isMeasured: isMeasured,
             showsHydra: showsHydra,
             showsPopped: showsPopped,
-            showsUsage: showsUsage,
             isHydraDocked: isHydraDocked,
             dockedSides: dockedSides,
             reserve: reserve,

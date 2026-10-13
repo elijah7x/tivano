@@ -530,15 +530,18 @@ struct ThreadTimeline: View, Equatable {
             canRewind: canRewind,
             chronological: false
         )
+        // Captured for this mount. A later rebuild uses the next `stackGeneration`, and the
+        // row this one leaves behind must not clear that mount's visibility.
+        let visibilityOwner = stackGeneration
         return DisplayBlockView(block: block, runtime: runtime, context: context)
             .equatable()
             .environment(\.timelineBlockID, block.id)
             .environment(\.timelineLiveAppearance, measurements.liveIDs.contains(block.id) && !measurements.materializedIDs.contains(block.id))
             .id(block.id)
             .onScrollVisibilityChange(threshold: 0.001) { isVisible in
-                tracking.setVisible(block.id, isVisible)
+                tracking.setVisible(block.id, isVisible: isVisible, owner: visibilityOwner)
             }
-            .onDisappear { tracking.setVisible(block.id, false) }
+            .onDisappear { tracking.setVisible(block.id, isVisible: false, owner: visibilityOwner) }
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("timelineContent")) }) { frame in
                 if measurements.record(block.id, frame: frame, generation: measurementGeneration) {
                     tracking.requestMeasurementPass()
@@ -1236,7 +1239,9 @@ struct ThreadTimeline: View, Equatable {
             tracking.trace("repair", "noViewport")
             return
         }
-        guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling else {
+        // A held mouse button counts as scrolling: a selection being dragged is on rows that
+        // are on screen, and a snap or a rebuilt stack under it would end the drag.
+        guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling, !FrontMonitor.isHeld else {
             tracking.repairSkippedWhileScrolling = true
             tracking.trace("repair", "scrolling")
             return
@@ -1342,7 +1347,7 @@ struct ThreadTimeline: View, Equatable {
         }
         #endif
         guard tracking.placementToken == nil, viewportHeight > 0 else { return }
-        guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling else {
+        guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling, !FrontMonitor.isHeld else {
             tracking.refreshSkippedWhileScrolling = true
             return
         }
@@ -1415,6 +1420,48 @@ struct ThreadTimeline: View, Equatable {
 
     private nonisolated static func visibleHeight(_ proxy: GeometryProxy) -> CGFloat {
         max(0, proxy.size.height - proxy.safeAreaInsets.top - proxy.safeAreaInsets.bottom)
+    }
+}
+
+/// Which stack mount last said a block was on screen. A disappear from an older mount
+/// does not remove the mount that has since registered the same block.
+private struct VisibleMounts {
+    private var newestMount: Int?
+    private var owner: [String: Int] = [:]
+    private(set) var ids: Set<String> = []
+
+    enum Update {
+        /// The block was not on screen and this mount put it there.
+        case shown
+        /// The block was already on screen and a newer mount took the registration.
+        case claimed
+        /// This mount's own registration left the screen.
+        case hidden
+        /// A repeat from the same mount, or a disappear from a mount that no longer owns the block.
+        case ignored
+    }
+
+    mutating func note(_ id: String, visible: Bool, owner mount: Int) -> Update {
+        if let newestMount, mount < newestMount { return .ignored }
+        if newestMount != mount {
+            newestMount = mount
+            owner.removeAll(keepingCapacity: true)
+            ids.removeAll(keepingCapacity: true)
+        }
+        if visible {
+            let previous = owner[id]
+            owner[id] = mount
+            if ids.insert(id).inserted { return .shown }
+            return previous == mount ? .ignored : .claimed
+        }
+        guard owner[id] == mount else { return .ignored }
+        owner[id] = nil
+        return ids.remove(id) != nil ? .hidden : .ignored
+    }
+
+    mutating func removeAll() {
+        owner.removeAll()
+        ids.removeAll()
     }
 }
 
@@ -1498,7 +1545,9 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     @ObservationIgnored private var outlineSet: Set<String> = []
     @ObservationIgnored private var userBlockIDs: Set<String> = []
     /// The blocks currently intersecting the viewport, from their own visibility callbacks.
-    @ObservationIgnored private var visibleIDs: Set<String> = []
+    /// Each id remembers which stack mount registered it, so a disappearing older mount
+    /// cannot remove the mount that replaced it.
+    @ObservationIgnored private var visibleRows = VisibleMounts()
     /// The offset, the distance from the end and the travel from the top as last measured,
     /// for a repair to read without waiting for another frame, and when the offset last moved.
     @ObservationIgnored private(set) var offset: CGFloat = 0
@@ -1548,14 +1597,14 @@ final class TimelineScrollTracking: ScrollActivityReporter {
 
     /// Rows to show, and none of them on screen.
     var showsNothing: Bool {
-        !outlineIDs.isEmpty && visibleIDs.isDisjoint(with: outlineSet)
+        !outlineIDs.isEmpty && visibleRows.ids.isDisjoint(with: outlineSet)
     }
 
     /// The last block has never reported itself on screen: the end of the conversation,
     /// with older rows possibly still showing above it, has not been drawn.
     var endUnseen: Bool {
         guard let last = outlineIDs.last else { return false }
-        return !visibleIDs.contains(last)
+        return !visibleRows.ids.contains(last)
     }
 
     /// Returns whether the outline changed.
@@ -1570,32 +1619,32 @@ final class TimelineScrollTracking: ScrollActivityReporter {
         return true
     }
 
-    func setVisible(_ id: String, _ isVisible: Bool) {
-        if isVisible {
-            #if DEBUG
-            let traceUrgent = TimelineTrace.isEnabled && (showsNothing || blankRepairs > 0)
-            #endif
-            guard visibleIDs.insert(id).inserted else { return }
-            // Something is on screen: no blank to repair, and the next one starts fresh.
+    func setVisible(_ id: String, isVisible: Bool, owner: Int) {
+        #if DEBUG
+        let traceUrgent = TimelineTrace.isEnabled && (showsNothing || blankRepairs > 0)
+        let wasBlank = TimelineTrace.isEnabled && showsNothing
+        #endif
+        switch visibleRows.note(id, visible: isVisible, owner: owner) {
+        case .shown, .claimed:
+            // This mount is on screen. A blank counted against the previous mount is over.
             blankWatch?.cancel()
             blankWatch = nil
             blankRepairs = 0
             #if DEBUG
             if TimelineTrace.isEnabled { TimelineTrace.noteVisible(self, appeared: true, urgent: traceUrgent) }
             #endif
-        } else {
-            #if DEBUG
-            let wasBlank = TimelineTrace.isEnabled && showsNothing
-            #endif
-            guard visibleIDs.remove(id) != nil else { return }
-            // The last row left the screen. A replacement normally lands within the
-            // frame; the watch catches the case where nothing does.
+        case .hidden:
+            // This mount left the screen. A replacement normally lands within the frame;
+            // the watch catches the case where nothing does. An older mount is ignored
+            // above, so it cannot arm the watch against the mount now showing.
             #if DEBUG
             if TimelineTrace.isEnabled {
                 TimelineTrace.noteVisible(self, appeared: false, urgent: showsNothing != wasBlank)
             }
             #endif
             if showsNothing { armBlankWatch("visibleEmpty") }
+        case .ignored:
+            return
         }
         scheduleResolveActive()
     }
@@ -1615,7 +1664,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     }
 
     func clearVisible() {
-        visibleIDs.removeAll()
+        visibleRows.removeAll()
         if activeBlockID != nil { activeBlockID = nil }
     }
 
@@ -1930,7 +1979,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// Takes the block in the middle of the on-screen run — a reply filling the viewport is
     /// that block on its own — and lights the sent message at or above it.
     private func resolveActive() {
-        let onScreen = outlineIDs.enumerated().filter { visibleIDs.contains($0.element) }
+        let onScreen = outlineIDs.enumerated().filter { visibleRows.ids.contains($0.element) }
         guard !onScreen.isEmpty else { return }
         let middle = onScreen[onScreen.count / 2].offset
         let resolved = outlineIDs[...middle].last { userBlockIDs.contains($0) }
@@ -2365,7 +2414,7 @@ extension TimelineScrollTracking {
             distanceFromBottom: distanceFromBottom,
             travel: travel,
             viewportHeight: height,
-            visible: visibleIDs.count,
+            visible: visibleRows.ids.count,
             outline: outlineIDs.count,
             showsNothing: showsNothing,
             blankRepairs: blankRepairs,
@@ -2732,6 +2781,14 @@ private final class TimelineTopFadeMask: CALayer {
 /// for its own window being uncovered checked itself each time one opened over the chat:
 /// a snap to the end, and its scroll view moved a point and back, under a reader who had
 /// not gone anywhere.
+///
+/// Nothing lands while the reader holds the left mouse button in the active app. An
+/// overlay of another app ordering in mid-drag (a notch drop zone, a screenshot
+/// thumbnail) posts the same activation and occlusion changes as a reader coming back,
+/// and the check the timeline runs on a bump rebuilt the rows under a selection being
+/// dragged. What arrives meanwhile waits for the button to come up and lands as one
+/// bump and one visibility read; a release the app never sees (outside it, or after it
+/// deactivated) is caught by the next activation change.
 @MainActor
 @Observable
 final class FrontMonitor {
@@ -2745,21 +2802,24 @@ final class FrontMonitor {
     @ObservationIgnored private weak var uncovered: NSWindow?
     @ObservationIgnored private var isAppWide = false
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
+    /// The bump held back until the button comes up. The app coming to the front concerns
+    /// every timeline, so it outranks a window being uncovered.
+    @ObservationIgnored private var pendingBump = false
+    @ObservationIgnored private var pendingAppWide = false
+    @ObservationIgnored private weak var pendingWindow: NSWindow?
+    @ObservationIgnored private var releaseMonitor: Any?
 
     private init() {
         let center = NotificationCenter.default
         observers.append(center.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.bump(for: nil)
-                self?.refreshVisibility()
-            }
+            MainActor.assumeIsolated { self?.arrive(bumpFor: nil, bumps: true) }
         })
         observers.append(center.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshVisibility() }
+            MainActor.assumeIsolated { self?.arrive(bumpFor: nil, bumps: false) }
         })
         observers.append(center.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main
@@ -2767,11 +2827,54 @@ final class FrontMonitor {
             // Delivered on the main queue; the window is read on the main actor it belongs to.
             nonisolated(unsafe) let object = note.object
             MainActor.assumeIsolated {
-                self?.refreshVisibility()
-                guard let window = object as? NSWindow, window.occlusionState.contains(.visible) else { return }
-                self?.bump(for: window)
+                let window = (object as? NSWindow).flatMap { $0.occlusionState.contains(.visible) ? $0 : nil }
+                self?.arrive(bumpFor: window, bumps: window != nil)
             }
         })
+    }
+
+    /// Whether the reader holds the left mouse button in the active app: a selection being
+    /// dragged, a scroller held. What the timeline's own repairs wait out too, since a
+    /// rebuilt row or a snap to the end under the pointer ends the drag.
+    static var isHeld: Bool {
+        NSApp.isActive && NSEvent.pressedMouseButtons & 1 != 0
+    }
+
+    /// An activation or occlusion change: `bumps` when it brings the reader back, for
+    /// `window` or, with none, for the app. Applied now unless the button is held.
+    private func arrive(bumpFor window: NSWindow?, bumps: Bool) {
+        // A window "uncovered" under a held button is one the reader is dragging in: they
+        // never left it, and a bump landed on release would rebuild the rows under the
+        // selection just made.
+        if bumps, window == nil || !Self.isHeld {
+            pendingBump = true
+            if window == nil { pendingAppWide = true } else if !pendingAppWide { pendingWindow = window }
+        }
+        guard Self.isHeld else {
+            land()
+            return
+        }
+        guard releaseMonitor == nil else { return }
+        releaseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            self?.land()
+            return event
+        }
+    }
+
+    /// Applies what has arrived: the bump, then the visibility as it is now.
+    private func land() {
+        if let releaseMonitor { NSEvent.removeMonitor(releaseMonitor) }
+        releaseMonitor = nil
+        let window = pendingWindow
+        let bumps = pendingBump
+        let appWide = pendingAppWide
+        pendingBump = false
+        pendingAppWide = false
+        pendingWindow = nil
+        if bumps {
+            if appWide { bump(for: nil) } else if let window { bump(for: window) }
+        }
+        refreshVisibility()
     }
 
     /// Whether the last bump brought the reader back to a timeline in `window`. A timeline

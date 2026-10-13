@@ -6,6 +6,34 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-13
+
+### New features
+
+- The model picker holds up to 30 models. Settings › Models can sort them into named groups: drag models within and between groups, drag a group by its handle to reorder it, and fold groups in Settings and the picker alike.
+- The composer's model picker opens with a search field (Return picks the first match), and folds other providers' models in an ongoing chat under one row. In a new chat, Recent offers the last pair and the last model new chats started on.
+- A new chat can run on a temporary Hydra pair made right in the model picker: it uses Settings › Hydra's pair editor, belongs to that chat alone and is never saved as a pair, but stays in Recent for the next new chat.
+
+### Bug fixes
+
+- Keep the composer and floating controls from whitening when switching back to Tivano, with stable translucent surfaces, clearer contrast and subtle edge highlights.
+- Keep a text selection in a chat from breaking mid-drag when another app's overlay, such as a notch drop zone, appears on screen.
+- Keep the newest tick of a long conversation's minimap above the composer, so it can be clicked again.
+- Stop the activity tree view from blanking the conversation for a moment when a work group is expanded or collapsed.
+
+- Keep the message editor steady by preventing outdated row visibility updates from repeatedly rebuilding the conversation timeline.
+
+### Refinements
+
+- A turn's steps now show as an activity tree by default: a count summary, then a thin branch per step that draws in as it arrives.
+- Remove Settle; previously settled threads return to the regular list. Use Archive to organize finished threads.
+- Remove the floating usage panel; click the circle to view usage.
+- Pause text fade rendering in fully hidden chat columns and resume at the current animation progress when shown, preserving Settings transitions and visible chats.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.2.7] - 2026-10-13
 
 ### Bug fixes

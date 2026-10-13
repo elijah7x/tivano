@@ -741,10 +741,7 @@ private struct ContextMeter: View {
         // A key with credit behind it has something to show from the first turn, before any
         // usage has been reported, so the ring is not waiting on a context window to exist.
         let hasCredits = CreditsReader.exposesCredits(provider) && model.settings.hasAPIKey(for: provider)
-        // Popped out as a floating panel, the usage is already on screen beside the chat:
-        // the ring goes until that panel is dismissed, which brings it back here.
-        let isPoppedOut = model.settings.showsUsagePanel
-        if !isPoppedOut, fraction != nil || PlanLimitsReader.exposesLimits(provider) || hasCredits {
+        if fraction != nil || PlanLimitsReader.exposesLimits(provider) || hasCredits {
             Button {
                 isPresented.toggle()
             } label: {
@@ -770,21 +767,11 @@ private struct ContextMeter: View {
             .accessibilityValue(Text(verbatim: fraction.map { String(format: Chrome.localized("%d%% of the context window used"), Int($0 * 100)) } ?? ""))
             .popover(isPresented: $isPresented, arrowEdge: .bottom) {
                 VStack(spacing: 0) {
-                    // The same limits as a floating panel beside every chat (see
-                    // `UsageFloatingPanel`); the panel then stays until dismissed or
-                    // switched off in Settings, and this button is where it comes back
-                    // from, so it is always here.
                     HStack {
                         Text("Usage")
                             .font(.ui(.callout, weight: .semibold))
                             .foregroundStyle(Chrome.secondaryText)
                         Spacer(minLength: 8)
-                        ChromeCircleButton(symbol: "arrow.up.right", help: "Open as a floating panel beside the chat") {
-                            isPresented = false
-                            withAnimation(Chrome.panelSlide) {
-                                model.settings.showsUsagePanel = true
-                            }
-                        }
                     }
                     .padding(.top, 10)
                     .padding(.horizontal, 16)
@@ -1322,7 +1309,7 @@ final class FileIndex {
 }
 
 /// The chat box's surface: a high-contrast legible base that prevents the scrolled timeline
-/// and blue equalizer activity from bleeding through, with Liquid Glass depth and a hairline edge.
+/// and blue equalizer activity from bleeding through, with a hairline edge.
 private struct ComposerSurface: ViewModifier {
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
@@ -1349,13 +1336,16 @@ private struct ComposerSurface: ViewModifier {
                 }
         } else {
             content
-                .glassEffect(.regular, in: shape)
                 .background {
                     shape
                         .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
                         .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
                 }
                 .clipShape(shape)
+                .overlay {
+                    shape.strokeBorder(Chrome.overlay(isDark ? 0.14 : 0.08), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
         }
     }
 }

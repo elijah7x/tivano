@@ -142,11 +142,6 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var providerResumeAt: String?
     var isPinned: Bool
     var isArchived: Bool
-    /// Finished, as far as the sidebar is concerned: the thread sits at the bottom of its
-    /// list as a small grey row until it is reopened, by hand or by a new turn.
-    var isSettled = false
-    /// When it settled; the latest settled thread sits first among them.
-    var settledAt: Date?
     var hasUnread: Bool
     var unreadStatus: TurnStatus?
     var unreadRevision: UUID?
@@ -188,6 +183,9 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// The pair an old thread picked while Hydra had per-chat switches. Kept for
     /// decoding; new threads use the best fit for their provider and model.
     var hydraPairID: UUID?
+    /// A pair made for this chat alone in the model picker, never saved to Settings › Hydra.
+    /// It leads while `hydraPairID` names it.
+    var temporaryHydraPair: HydraPair?
     /// How many heads this chat has sent out so far: the next one's place in the roster.
     var hydraSpawnCount = 0
     /// Set on a head: the thread is one of its parent's team.
@@ -271,8 +269,6 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         providerResumeAt = container.value(.providerResumeAt, default: nil)
         isPinned = container.value(.isPinned, default: false)
         isArchived = container.value(.isArchived, default: false)
-        isSettled = container.value(.isSettled, default: false)
-        settledAt = container.value(.settledAt, default: nil)
         hasUnread = container.value(.hasUnread, default: false)
         unreadStatus = container.value(.unreadStatus, default: nil)
         unreadRevision = container.value(.unreadRevision, default: nil)
@@ -292,6 +288,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         hydraEnabled = explicit ? container.value(.hydraEnabled, default: true) : true
         hydraEnabledIsExplicit = true
         hydraPairID = container.value(.hydraPairID, default: nil)
+        temporaryHydraPair = container.value(.temporaryHydraPair, default: nil)
         hydraSpawnCount = container.value(.hydraSpawnCount, default: 0)
         hydra = container.value(.hydra, default: nil)
     }

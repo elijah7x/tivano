@@ -17,7 +17,6 @@ struct CommandPalette: View {
         var threads: [ChatThread]
         var projects: [Project]
         var selectedThreadID: UUID?
-        var finishActionTitle: String
     }
 
     private struct Item: Identifiable {
@@ -101,7 +100,7 @@ struct CommandPalette: View {
         .onChange(of: query) { selection = 0 }
         .onChange(of: ResultsKey(
             query: query, threads: model.threads, projects: model.projects,
-            selectedThreadID: model.selectedThreadID, finishActionTitle: model.finishActionTitle
+            selectedThreadID: model.selectedThreadID
         ), initial: true) { _, _ in
             items = results
         }
@@ -175,8 +174,8 @@ struct CommandPalette: View {
             actions.append(Item(id: "changes", title: Chrome.localized("Toggle changes"), symbol: "plusminus", shortcut: ShortcutStore.label(for: .toggleChanges)) {
                 runtime.toggleDiff()
             })
-            actions.append(Item(id: "finish", title: Chrome.localized(model.finishActionTitle), symbol: model.finishActionSymbol, shortcut: ShortcutStore.label(for: .finishThread)) {
-                model.finishSelectedThread()
+            actions.append(Item(id: "archive-thread", title: Chrome.localized("Archive thread"), symbol: "archivebox", shortcut: ShortcutStore.label(for: .archiveThreadDirect)) {
+                withAnimation(Chrome.panelSlide) { model.archive(threadID) }
             })
         }
         actions.append(Item(id: "settings", title: Chrome.localized("Settings"), symbol: "gearshape", shortcut: ShortcutStore.label(for: .openSettings)) {

@@ -353,7 +353,12 @@ struct ActivityTreeGroup: View {
         let animates = liveAppearance && isRunning && motionEnabled
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(motionEnabled ? ActivityMetrics.fold : nil) { isCollapsed.toggle() }
+                // Animating this height (up to a page of steps) while the reader is
+                // pinned to the end leaves the scroll offset past the content for a
+                // few frames, and the timeline draws empty. The height changes at once.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { isCollapsed.toggle() }
                 if !isOpen { revealBox?.action() }
             } label: {
                 ActivityHeaderLabel(title: summary, isOpen: isOpen, isActive: isRunning)
@@ -392,7 +397,7 @@ struct ActivityTreeGroup: View {
                 }
                 .padding(.top, ActivityMetrics.bodyTopPadding)
                 .environment(\.activityTreeStyle, true)
-                .transition(motionEnabled ? .opacity : .identity)
+                .transition(.identity)
             }
         }
         .onChange(of: startsCollapsed) { _, collapsed in
