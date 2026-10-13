@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ThreadTimeline: View, Equatable {
+    @Environment(\.chatColumnIsShown) private var columnIsShown
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
     @Environment(\.reserveSlideLeading) private var reserveSlideLeading
@@ -658,10 +659,17 @@ struct ThreadTimeline: View, Equatable {
             remeasurePending = false
             tracking.layoutAction = {}
             tracking.navigationAction = {}
+            tracking.setColumnShown(false)
             tracking.endActivity()
         }
+        .onChange(of: columnIsShown, initial: true) { _, shown in
+            tracking.setColumnShown(shown)
+        }
         // The thread opens at its end and stays there while its rows measure in.
-        .onAppear { tracking.holdEnd(for: 1.5) }
+        .onAppear {
+            tracking.setColumnShown(columnIsShown)
+            tracking.holdEnd(for: 1.5)
+        }
         .coordinateSpace(name: "timelineViewport")
         .scrollIndicators(.never)
         .scrollPosition($position)
@@ -1014,7 +1022,7 @@ struct ThreadTimeline: View, Equatable {
         let entry = TimelinePresentationStore.entry(for: runtime.threadID)
         guard !entry.pinned, let id = entry.anchorID,
               let index = blocks.firstIndex(where: { $0.id == id }) else { return false }
-        if measurements.width == entry.width, entry.fontSizes == [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code] { measurements.frames = entry.frames }
+        if measurements.width == entry.width, entry.fontSizes == [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code] { measurements.restoreFrames(entry.frames) }
         let savedIDs = Set(entry.mountedIDs)
         let indices = blocks.indices.filter { savedIDs.contains(blocks[$0].id) }
         let lower = min(index, indices.first ?? index)
@@ -1219,6 +1227,7 @@ struct ThreadTimeline: View, Equatable {
     /// stays pinned there. Rows coming back on screen end the sequence wherever it is, and
     /// a fourth blank in a row is left alone.
     private func repairLayout() {
+        guard columnIsShown else { return }
         guard tracking.placementToken == nil else {
             tracking.trace("repair", "placement")
             return
@@ -1323,6 +1332,7 @@ struct ThreadTimeline: View, Equatable {
     /// Eager rows do not need a scroll to discover the viewport. Recreate missing rows
     /// without moving content that is already visible under the reader.
     private func refreshViewport() {
+        guard columnIsShown else { return }
         #if DEBUG
         // Keep the old workaround available only in an isolated stress comparison.
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--timeline-stress"),
@@ -1523,6 +1533,8 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// move (so the stack has built for it), 3 moving back.
     @ObservationIgnored private var nudgePhase = 0
     @ObservationIgnored private var nudgeOrigin = NSPoint.zero
+    @ObservationIgnored private var columnIsShown = false
+    @ObservationIgnored private var viewportRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var refreshPending = false
     /// Refreshes come in bursts (one change sets off a few as rows measure); a burst that
     /// never settles is cut off, so a stack that will not build is left alone.
@@ -1718,15 +1730,32 @@ final class TimelineScrollTracking: ScrollActivityReporter {
         }
     }
 
+    /// Cached columns remain mounted; an offscreen column has no visible rows to repair.
+    func setColumnShown(_ shown: Bool) {
+        guard shown != columnIsShown else { return }
+        columnIsShown = shown
+        if shown {
+            noteReturnToFront("columnShown")
+        } else {
+            blankWatch?.cancel()
+            blankWatch = nil
+            viewportRefreshTask?.cancel()
+            viewportRefreshTask = nil
+            refreshPending = false
+            endActivity()
+        }
+    }
+
     /// Looks a beat from now for any row on screen; none, with rows to show, asks the
     /// timeline to repair its layout. Re-armed by every call; a row reporting itself
     /// visible disarms it.
     func armBlankWatch(_ source: StaticString = "") {
+        guard columnIsShown else { return }
         trace("blank.arm", source)
         blankWatch?.cancel()
         blankWatch = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
-            guard let self, !Task.isCancelled, showsNothing else { return }
+            guard let self, !Task.isCancelled, columnIsShown, showsNothing else { return }
             checkRequest += 1
             trace("blank.fire", source)
             trace("check.bump", "blankWatch")
@@ -1737,6 +1766,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// itself now, with a full run of repairs available, and the stack is told where the
     /// viewport is whatever the rows report.
     func noteReturnToFront(_ source: StaticString = "returnToFront") {
+        guard columnIsShown else { return }
         blankRepairs = 0
         checkRequest += 1
         trace("front.return", source)
@@ -1764,6 +1794,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// once for however many asks land in the meantime, after any nudge under way, and
     /// never more than a handful in a row.
     func armViewportRefresh(_ source: StaticString = "") {
+        guard columnIsShown else { return }
         drift = 0
         guard !refreshPending else {
             trace("refresh.arm", source, disposition: "coalesced")
@@ -1781,13 +1812,14 @@ final class TimelineScrollTracking: ScrollActivityReporter {
         refreshesInBurst += 1
         refreshPending = true
         trace("refresh.arm", source, disposition: "scheduled")
-        Task { @MainActor [weak self] in
+        viewportRefreshTask = Task { @MainActor [weak self] in
             // A nudge under way finishes first; its own measurements are what this one is for.
             for _ in 0..<12 {
-                guard let self, isNudging else { break }
+                guard let self, !Task.isCancelled, isNudging else { break }
                 try? await Task.sleep(for: .milliseconds(17))
             }
-            guard let self else { return }
+            guard let self, !Task.isCancelled, columnIsShown else { return }
+            viewportRefreshTask = nil
             refreshPending = false
             refreshRequest += 1
             trace("refresh.bump", source)
@@ -3503,6 +3535,7 @@ struct TimelineGroupView: View {
 /// breathing, the stave bar filling with the turn's steps, the time in its pill and the
 /// chevron opening the thinking and the run's steps beneath it.
 private struct WorkingIndicator: View {
+    @Environment(\.chatColumnIsShown) private var columnIsShown
     @Environment(\.timelineLiveAppearance) private var liveAppearance
     let runtime: ThreadRuntime
     let startedAt: Date
@@ -3646,11 +3679,12 @@ private struct WorkingIndicator: View {
         .onChange(of: chronological) { _, chronological in
             showsAllSteps = chronological
         }
-        .task(id: FrontMonitor.shared.isVisible && isRunning) {
+        .task(id: columnIsShown && FrontMonitor.shared.isVisible && isRunning) {
             // The elapsed-time label ticks only while someone can see it.
-            guard FrontMonitor.shared.isVisible, isRunning else { return }
+            guard columnIsShown, FrontMonitor.shared.isVisible, isRunning else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
                 now = .now
             }
         }
@@ -3848,7 +3882,7 @@ private struct MountedWindow: Equatable {
 private final class TimelineMeasurements {
     private(set) var generation = 0
     var width: CGFloat = 0
-    var frames: [String: CGRect] = [:]
+    private(set) var frames: [String: CGRect] = [:]
     /// A row's frame in the viewport, from its content frame and the scroll offset: a
     /// geometry callback per row for this fired on every frame of every scroll.
     func viewportFrame(_ id: String, offset: CGFloat) -> CGRect? {
@@ -3872,23 +3906,35 @@ private final class TimelineMeasurements {
     }
 
     private var estimatedHeight: CGFloat = 160
-    private var cachedMean: CGFloat?
+    private var heightTotal: CGFloat = 0
+    private var heightCount = 0
 
     func invalidate(width: CGFloat) {
         estimatedHeight = meanHeight
         generation += 1
         self.width = width
         frames.removeAll()
-        cachedMean = nil
+        heightTotal = 0
+        heightCount = 0
     }
 
     private var meanHeight: CGFloat {
-        if let cachedMean { return cachedMean }
-        let heights = frames.values.map(\.height).filter { $0.isFinite && $0 > 0 }
-        guard !heights.isEmpty else { return estimatedHeight }
-        let mean = min(1600, max(48, heights.reduce(0, +) / CGFloat(heights.count)))
-        cachedMean = mean
-        return mean
+        guard heightCount > 0 else { return estimatedHeight }
+        return min(1600, max(48, heightTotal / CGFloat(heightCount)))
+    }
+
+    func restoreFrames(_ restored: [String: CGRect]) {
+        frames = restored
+        heightTotal = 0
+        heightCount = 0
+        for frame in restored.values { accountHeight(frame.height, adding: true) }
+    }
+
+    private func accountHeight(_ height: CGFloat, adding: Bool) {
+        guard height.isFinite, height > 0 else { return }
+        heightTotal += adding ? height : -height
+        heightCount += adding ? 1 : -1
+        if heightCount == 0 { heightTotal = 0 }
     }
 
     // Estimates stay separate from frames: anchor placement only accepts an actual measurement.
@@ -3897,9 +3943,13 @@ private final class TimelineMeasurements {
     @discardableResult
     func record(_ id: String, frame: CGRect, generation: Int) -> Bool {
         guard generation == self.generation else { return false }
-        let changed = frames[id]?.height != frame.height
+        let previous = frames[id]?.height
+        let changed = previous != frame.height
         frames[id] = frame
-        if changed { cachedMean = nil }
+        if changed {
+            if let previous { accountHeight(previous, adding: false) }
+            accountHeight(frame.height, adding: true)
+        }
         return changed
     }
 

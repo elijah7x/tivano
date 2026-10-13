@@ -6,6 +6,21 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.2.7] - 2026-10-13
+
+### Bug fixes
+
+- Stop hidden chat columns from repeatedly attempting blank-viewport repairs; resume layout checks when the conversation is shown again.
+- Cancel obsolete viewport refreshes and pause elapsed-time updates in hidden chats.
+
+### Refinements
+
+- Update row-height estimates incrementally to reduce repeated history scans during streaming replies.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.2.6] - 2026-10-12
 
 ### Bug fixes
