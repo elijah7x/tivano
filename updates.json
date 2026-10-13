@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.2.6",
-      "name": "Tivano 1.2.6",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.2.6/Tivano-1.2.6.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Confirm project removal, include linked chats across projects, and preserve unfinished or modified worktrees.\n- Reject invalid usage-limit reset times without crashing, while retaining valid multi-day waits.\n- Keep stopped turns' end checkpoints and bound command-diff waits; track observed child processes after their parent exits.\n- Cancel obsolete MCP requests, validate tool results, and limit response and search-line sizes.\n- Preserve timeline windows and expanded rows during layout changes, and reopen Review after its close animation.\n- Approve OMP device calls once, apply the configured Default model, and block hidden chat actions while full-window Settings is open.\n\n## Refinements\n\n- Keep CLI installation environments separate from account credentials and require manual updates after version errors.\n- Remove private infrastructure and account details from public documentation and acceptance fixtures, and include OMP icon attribution.\n- Resume matching release publications safely and provide a tracked, explicitly installed push guard.\n- Settings now opens in the main window, with its pages in the sidebar and the chat kept as it was behind it. The composer, its tabs and approval cards share one floating glass with a theme wash and a thin rim.\n- Add a Clearer glass switch to Appearance, on by default. Turning it off swaps the window's Liquid Glass for a lighter system blur that uses less GPU. Performance Mode turns it off, and it is unavailable while a wallpaper is set.\n- Preview an activity tree for a turn's steps behind a hidden `workGroupStyle` switch (`tree`; `list` stays the default): a count summary, a thin branch per step that draws in as it arrives, and older steps paged past 60.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-12T14:06:44Z",
+      "tag_name": "v1.2.7",
+      "name": "Tivano 1.2.7",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.2.7/Tivano-1.2.7.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Stop hidden chat columns from repeatedly attempting blank-viewport repairs; resume layout checks when the conversation is shown again.\n- Cancel obsolete viewport refreshes and pause elapsed-time updates in hidden chats.\n\n## Refinements\n\n- Update row-height estimates incrementally to reduce repeated history scans during streaming replies.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-13T04:26:41Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.2.6.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.2.6/Tivano-1.2.6.dmg",
-          "size": 6717648,
-          "sha256": "406e005891cc6b7030d0f76b73db06d014efe6375a878677bf55839f117177bb"
+          "name": "Tivano-1.2.7.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.2.7/Tivano-1.2.7.dmg",
+          "size": 6718952,
+          "sha256": "be535ffd380511db102fd992b67a8cb30059394bf7bac901543df766d1519685"
         }
       ]
     }
