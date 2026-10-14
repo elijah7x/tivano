@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.3.0",
-      "name": "Tivano 1.3.0",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.3.0/Tivano-1.3.0.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## New features\n\n- The model picker holds up to 30 models. Settings › Models can sort them into named groups: drag models within and between groups, drag a group by its handle to reorder it, and fold groups in Settings and the picker alike.\n- The composer's model picker opens with a search field (Return picks the first match), and folds other providers' models in an ongoing chat under one row. In a new chat, Recent offers the last pair and the last model new chats started on.\n- A new chat can run on a temporary Hydra pair made right in the model picker: it uses Settings › Hydra's pair editor, belongs to that chat alone and is never saved as a pair, but stays in Recent for the next new chat.\n\n## Bug fixes\n\n- Keep the composer and floating controls from whitening when switching back to Tivano, with stable translucent surfaces, clearer contrast and subtle edge highlights.\n- Keep a text selection in a chat from breaking mid-drag when another app's overlay, such as a notch drop zone, appears on screen.\n- Keep the newest tick of a long conversation's minimap above the composer, so it can be clicked again.\n- Stop the activity tree view from blanking the conversation for a moment when a work group is expanded or collapsed.\n\n- Keep the message editor steady by preventing outdated row visibility updates from repeatedly rebuilding the conversation timeline.\n\n## Refinements\n\n- A turn's steps now show as an activity tree by default: a count summary, then a thin branch per step that draws in as it arrives.\n- Remove Settle; previously settled threads return to the regular list. Use Archive to organize finished threads.\n- Remove the floating usage panel; click the circle to view usage.\n- Pause text fade rendering in fully hidden chat columns and resume at the current animation progress when shown, preserving Settings transitions and visible chats.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-13T14:21:34Z",
+      "tag_name": "v1.3.1",
+      "name": "Tivano 1.3.1",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.3.1/Tivano-1.3.1.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Bring back the composer's and floating controls' Liquid Glass look, now pinned to its active appearance so it no longer whitens when switching back to Tivano.\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-14T02:04:08Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.3.0.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.3.0/Tivano-1.3.0.dmg",
-          "size": 6812809,
-          "sha256": "1ac0f661452d61a252d4b16e623b6bdbf5e3643b4979d3f24d2e99fe7c15b0d2"
+          "name": "Tivano-1.3.1.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.3.1/Tivano-1.3.1.dmg",
+          "size": 6790224,
+          "sha256": "3b21ded89ec9680e23dba265a9f15a122b4b0bc19a64da7639a4e03abacac937"
         }
       ]
     }
