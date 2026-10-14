@@ -57,16 +57,14 @@ private struct ThreadChangesTabSurface: ViewModifier {
             content.floatingGlass(shape, isInteractive: true, hiddenRimBottom: ThreadChangesTab.overlap)
         } else if !performanceMode {
             content
+                .glassEffect(.regular.interactive(), in: shape)
+                .materialActiveAppearance(.active)
                 .background {
                     shape
                         .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
                         .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
                 }
                 .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(Chrome.overlay(isDark ? 0.14 : 0.08), lineWidth: 1)
-                        .allowsHitTesting(false)
-                }
         } else {
             content
                 .background(shape.fill(Color(nsColor: .controlBackgroundColor)))

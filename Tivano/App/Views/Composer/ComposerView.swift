@@ -1309,7 +1309,7 @@ final class FileIndex {
 }
 
 /// The chat box's surface: a high-contrast legible base that prevents the scrolled timeline
-/// and blue equalizer activity from bleeding through, with a hairline edge.
+/// and blue equalizer activity from bleeding through, with Liquid Glass depth and a hairline edge.
 private struct ComposerSurface: ViewModifier {
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
@@ -1336,16 +1336,14 @@ private struct ComposerSurface: ViewModifier {
                 }
         } else {
             content
+                .glassEffect(.regular, in: shape)
+                .materialActiveAppearance(.active)
                 .background {
                     shape
                         .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
                         .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
                 }
                 .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(Chrome.overlay(isDark ? 0.14 : 0.08), lineWidth: 1)
-                        .allowsHitTesting(false)
-                }
         }
     }
 }

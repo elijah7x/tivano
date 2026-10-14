@@ -141,14 +141,17 @@ enum Chrome {
 // MARK: - Surfaces
 
 extension View {
-    /// Capsule buttons use stable material, washed with a tad of the theme. On a glass panel
-    /// they draw flat instead (see `isOnGlassPanel`): material on glass samples the same
+    /// Capsule buttons stay Liquid Glass, washed with a tad of the theme. On a glass panel
+    /// they draw flat instead (see `isOnGlassPanel`): glass on glass samples the same
     /// pixels twice, once for the panel and once for the button.
     func chromeGlassCapsule() -> some View {
         modifier(ChromeGlassSurface(shape: .capsule))
     }
 
-    /// The same material for a field, without hover animation while placing the caret.
+    /// The capsule for a field rather than a button: the same glass, without the press
+    /// response. A field is clicked to place the caret, and interactive glass answered
+    /// the click with its press bounce at the same moment the field took focus, so the
+    /// capsule flickered on every tap.
     func chromeGlassFieldCapsule() -> some View {
         modifier(ChromeGlassSurface(shape: .capsule, isInteractive: false))
     }
@@ -181,33 +184,13 @@ extension View {
 
 extension Chrome {
     static func floatingGlassWash(isDark: Bool) -> Color {
-        glassTint.opacity(isDark ? 0.26 : 0.48)
+        glassTint.opacity(isDark ? 0.15 : 0.35)
     }
 
     static func floatingGlassRim(isDark: Bool) -> Color {
         isDark
             ? Color(hue: 210 / 360, saturation: 0.18, brightness: 0.82).opacity(0.09)
             : Color(hue: 210 / 360, saturation: 0.30, brightness: 0.38).opacity(0.10)
-    }
-
-    static func stableGlassEdge(isDark: Bool, rim: Color? = nil) -> LinearGradient {
-        if let rim {
-            return LinearGradient(colors: [rim, rim], startPoint: .top, endPoint: .bottom)
-        }
-        let side = floatingGlassRim(isDark: isDark)
-        return LinearGradient(
-            stops: [
-                .init(color: Color.white.opacity(isDark ? 0.28 : 0.72), location: 0),
-                .init(color: side, location: 0.35),
-                .init(color: side, location: 0.65),
-                .init(color: Color.black.opacity(isDark ? 0.30 : 0.18), location: 1),
-            ],
-            startPoint: .top, endPoint: .bottom
-        )
-    }
-
-    static func stableGlassHoverFill(isDark: Bool) -> Color {
-        panelControlFill(isDark: isDark, hovered: true).opacity(0.2)
     }
 }
 
@@ -223,27 +206,6 @@ private struct FloatingGlassContainer: ViewModifier {
     }
 }
 
-/// Liquid Glass changes tint on activation; pin only the material, leaving controls active-aware.
-private struct StableGlassBackground<S: Shape>: View {
-    let shape: S
-    let wash: Color
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        shape
-            .fill(Material.ultraThin.materialActiveAppearance(.active))
-            .overlay {
-                shape.fill(
-                    colorScheme == .dark
-                        ? Color(nsColor: .controlBackgroundColor).mix(with: .white, by: 0.18).opacity(0.4)
-                        : Color(nsColor: .controlBackgroundColor).opacity(0.32)
-                )
-            }
-            .overlay { shape.fill(wash) }
-            .allowsHitTesting(false)
-    }
-}
-
 private struct FloatingGlassSurface<S: InsettableShape>: ViewModifier {
     let shape: S
     let tint: Color?
@@ -253,56 +215,43 @@ private struct FloatingGlassSurface<S: InsettableShape>: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @State private var isHovered = false
 
     func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
         let edge = shape
-            .strokeBorder(Chrome.stableGlassEdge(isDark: isDark, rim: rim), lineWidth: 1)
+            .strokeBorder(rim ?? Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1)
             .mask(alignment: .top) { Rectangle().padding(.bottom, hiddenRimBottom) }
-            .allowsHitTesting(false)
         if reduceTransparency || performanceMode {
             content
-                .background {
-                    shape.fill(Color(nsColor: .controlBackgroundColor))
-                        .overlay {
-                            shape.strokeBorder(rim ?? Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1)
-                                .mask(alignment: .top) { Rectangle().padding(.bottom, hiddenRimBottom) }
-                                .allowsHitTesting(false)
-                        }
-                }
+                .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
                 .clipShape(shape)
+                .overlay { edge }
         } else {
-            let surface = content
-                .background {
-                    StableGlassBackground(shape: shape, wash: tint ?? Chrome.floatingGlassWash(isDark: isDark))
-                        .overlay {
-                            shape.fill(isHovered ? Chrome.stableGlassHoverFill(isDark: isDark) : .clear)
-                                .allowsHitTesting(false)
-                        }
-                        .overlay { edge }
-                }
-                .contentShape(shape)
-            if isInteractive {
-                surface
-                    .onHover { isHovered = $0 }
-                    .animation(Chrome.hover, value: isHovered)
-            } else {
-                surface
-            }
+            // An opaque base behind glass becomes its sample and hides the timeline.
+            // Pinned active: switching back to the app otherwise whitens the glass while it
+            // animates from its inactive appearance.
+            content
+                .glassEffect(glass(isDark: isDark), in: shape)
+                .materialActiveAppearance(.active)
+                .overlay { edge }
         }
+    }
+
+    private func glass(isDark: Bool) -> Glass {
+        let wash = tint ?? Chrome.floatingGlassWash(isDark: isDark)
+        return isInteractive ? .regular.tint(wash).interactive() : .regular.tint(wash)
     }
 }
 
-/// A control's stable material surface, or a flat fill inside a glass panel, with a hover lift.
+/// A control's surface: interactive Liquid Glass, or, inside a glass panel, the panel's
+/// flat control fill, a shade brighter under the pointer the way the glass would be.
 private struct ChromeGlassSurface: ViewModifier {
     enum Kind { case capsule, circle }
     let shape: Kind
-    /// Whether the surface responds to hover; off for a field that takes the caret instead.
+    /// Whether the glass answers a press; off for a field that takes the caret instead.
     var isInteractive = true
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var isHovered = false
 
@@ -317,45 +266,18 @@ private struct ChromeGlassSurface: ViewModifier {
 
     @ViewBuilder
     private func surface<S: InsettableShape>(_ content: Content, in shape: S) -> some View {
-        let isDark = colorScheme == .dark
         if isOnGlassPanel || performanceMode {
-            let surface = content
-                .background(shape.fill(Chrome.panelControlFill(isDark: isDark, hovered: isHovered)))
+            content
+                .background(shape.fill(Chrome.panelControlFill(isDark: colorScheme == .dark, hovered: isHovered)))
                 .contentShape(shape)
-            if isInteractive {
-                surface
-                    .onHover { isHovered = $0 }
-                    .animation(performanceMode ? nil : Chrome.hover, value: isHovered)
-            } else {
-                surface
-            }
+                .onHover { isHovered = $0 }
+                .animation(performanceMode ? nil : Chrome.hover, value: isHovered)
+        } else if isInteractive {
+            content.glassEffect(.regular.tint(Chrome.glassTint.opacity(0.3)).interactive(), in: shape)
+                .materialActiveAppearance(.active)
         } else {
-            let surface = content
-                .background {
-                    Group {
-                        if reduceTransparency {
-                            shape.fill(Color(nsColor: .controlBackgroundColor))
-                        } else {
-                            StableGlassBackground(shape: shape, wash: Chrome.floatingGlassWash(isDark: isDark))
-                        }
-                    }
-                    .overlay {
-                        shape.fill(isHovered ? Chrome.stableGlassHoverFill(isDark: isDark) : .clear)
-                            .allowsHitTesting(false)
-                    }
-                    .overlay {
-                        shape.strokeBorder(Chrome.stableGlassEdge(isDark: isDark), lineWidth: 1)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .contentShape(shape)
-            if isInteractive {
-                surface
-                    .onHover { isHovered = $0 }
-                    .animation(Chrome.hover, value: isHovered)
-            } else {
-                surface
-            }
+            content.glassEffect(.regular.tint(Chrome.glassTint.opacity(0.3)), in: shape)
+                .materialActiveAppearance(.active)
         }
     }
 }

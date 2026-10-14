@@ -6,6 +6,16 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-14
+
+### Bug fixes
+
+- Bring back the composer's and floating controls' Liquid Glass look, now pinned to its active appearance so it no longer whitens when switching back to Tivano.
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.3.0] - 2026-10-13
 
 ### New features
