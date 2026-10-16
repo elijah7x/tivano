@@ -1,6 +1,6 @@
 import Foundation
 
-/// Native Z.ai agent: talks to https://api.z.ai/api/coding/paas/v4/chat/completions
+/// Native Z.ai agent: talks to api.z.ai or open.bigmodel.cn by region
 /// directly (OpenAI-compatible, the GLM Coding Plan endpoint) and executes coding
 /// tools locally, so no CLI install is needed — just an API key in Settings → Providers → Z.ai.
 @MainActor
@@ -10,7 +10,7 @@ final class ZaiSession: OpenAICompatibleSession {
         title: "Z.ai",
         agentIdentity: { _ in "Z.ai GLM coding agent" },
         defaultModel: "glm-5.3",
-        chatURL: ZaiAPI.chatURL,
+        chatURL: { ZaiAPI.chatURL },
         contextWindow: ZaiAPI.contextWindow,
         maxOutputTokens: ZaiAPI.maxOutputTokens,
         replaysReasoning: true,

@@ -230,7 +230,7 @@ private struct ModelEffortPanel: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Chrome.secondaryText)
-                .help("Back")
+                .help(Text(verbatim: Chrome.localized("Back")))
                 Text("Temporary pair")
                     .font(.ui(.body))
                     .foregroundStyle(Chrome.secondaryText)
@@ -404,7 +404,7 @@ struct ModelList: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Chrome.secondaryText)
-                .help("Back")
+                .help(Text(verbatim: Chrome.localized("Back")))
                 TextField("Search models", text: $query)
                     .textFieldStyle(.plain)
                     .font(.ui(.body))

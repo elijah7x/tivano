@@ -83,6 +83,53 @@ struct UpdateReleaseNotesDigest: Equatable {
         sections.first { $0.category == category }
     }
 
+    /// Language headings may be promoted from ### to ## when publishing. Category
+    /// headings stay inside their language section; Thanks is shared by both.
+    static func selectedNotes(_ raw: String?, language: String) -> String? {
+        guard let raw else { return nil }
+        var english: [String] = []
+        var chinese: [String] = []
+        var thanks: [String] = []
+        var current: String?
+        var hasLanguageSections = false
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let header: String?
+            if trimmed.hasPrefix("### ") {
+                header = String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("## ") {
+                header = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            } else {
+                header = nil
+            }
+            switch header {
+            case "English", "简体中文":
+                hasLanguageSections = true
+                current = header
+                continue
+            case "Thanks" where hasLanguageSections:
+                current = "Thanks"
+            default:
+                break
+            }
+            switch current {
+            case "English": english.append(String(line))
+            case "简体中文": chinese.append(String(line))
+            case "Thanks": thanks.append(String(line))
+            default: break
+            }
+        }
+        guard hasLanguageSections else { return raw }
+        let hasChineseContent = chinese.contains { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !trimmed.isEmpty && category(forHeader: trimmed) == nil
+        }
+        let selected = language.lowercased().hasPrefix("zh") && hasChineseContent ? chinese : english
+        let body = selected.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let sharedThanks = thanks.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return [body, sharedThanks].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
     private static let bulletMarkers: Set<Character> = ["-", "\u{2010}", "\u{2013}", "\u{2014}", "\u{2212}", "*", "•"]
     /// The last notes parsed: the About page asks on every evaluation for the one release
     /// it shows, and the parse runs three regular expressions per bullet.
@@ -158,9 +205,9 @@ struct UpdateReleaseNotesDigest: Equatable {
         if text.hasSuffix("**") { text.removeLast(2) }
         text = text.trimmingCharacters(in: CharacterSet(charactersIn: " \t:"))
         switch text.lowercased() {
-        case "new features", "new": return .newFeatures
-        case "bug fixes", "fixes", "bugs": return .bugFixes
-        case "refinements", "improvements": return .refinements
+        case "new features", "new", "新功能": return .newFeatures
+        case "bug fixes", "fixes", "bugs", "问题修复": return .bugFixes
+        case "refinements", "improvements", "优化改进": return .refinements
         default: return nil
         }
     }
@@ -713,11 +760,15 @@ struct AboutSoftwareUpdateSection: View {
     private let checker = UpdateChecker.shared
     private let progress = UpdateInstallProgress.shared
     @State private var celebration: Task<Void, Never>?
-    // Parsed once per release: parsing in body re-ran on every evaluation.
+    // Refresh when the selected notes change, including edits to the same release.
     @State private var digest = UpdateReleaseNotesDigest(sections: [])
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let notes = UpdateReleaseNotesDigest.selectedNotes(
+            checker.update?.notes,
+            language: Bundle.main.preferredLocalizations.first ?? "en"
+        )
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
             if progress.phase == .waitingForMerge {
                 ChromeCard {
@@ -730,7 +781,7 @@ struct AboutSoftwareUpdateSection: View {
             // The cards lead the page on their own, as on the About page; the version is
             // on the pill in the chrome and on the cards' popovers.
             if checker.updateAvailable, let update = checker.update {
-                releaseBody(update)
+                releaseBody(update, notes: notes ?? "")
             }
         }
         .task {
@@ -739,8 +790,8 @@ struct AboutSoftwareUpdateSection: View {
             }
             await checker.check()
         }
-        .onChange(of: checker.update?.version, initial: true) {
-            digest = UpdateReleaseNotesDigest.parse(checker.update?.notes)
+        .onChange(of: notes, initial: true) {
+            digest = UpdateReleaseNotesDigest.parse(notes)
         }
         .onDisappear {
             // Leaving mid-sweep lands the pill on Up to date at once; left celebrating, it
@@ -752,14 +803,14 @@ struct AboutSoftwareUpdateSection: View {
     }
 
     @ViewBuilder
-    private func releaseBody(_ update: AvailableUpdate) -> some View {
+    private func releaseBody(_ update: AvailableUpdate, notes: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if !digest.isEmpty {
                 UpdateReleaseSectionCards(digest: digest, version: update.version)
-            } else if !update.notes.isEmpty {
+            } else if !notes.isEmpty {
                 ChromeCard {
                     ScrollView(.vertical) {
-                        MarkdownView(text: update.notes).equatable()
+                        MarkdownView(text: notes).equatable()
                             .environment(\.markdownPointSize, TypeScale.shared.content(12.5))
                             .padding(16)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -780,7 +831,7 @@ struct AboutSoftwareUpdateSection: View {
                         .foregroundStyle(Chrome.accent)
                     }
                     .buttonStyle(.plain)
-                    .help("Open the release on GitHub")
+                    .help(Text(verbatim: Chrome.localized("Open the release on GitHub")))
                 }
             }
         }

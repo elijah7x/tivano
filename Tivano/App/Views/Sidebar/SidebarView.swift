@@ -176,6 +176,7 @@ struct SidebarView: View {
             }
 
             VStack(alignment: .leading, spacing: 1) {
+                VoiceSidebarTrigger()
                 SidebarRow(title: "Add project", action: { isAddingProject.toggle() }) {
                     SidebarIconBadge { SidebarSymbol("plus") }
                 }
@@ -997,14 +998,14 @@ private struct ArchiveThreadPopover: View {
                         Text("Delete").foregroundStyle(.red)
                     }
                     .buttonStyle(.glass)
-                    .help("Remove the thread and its history")
+                    .help(Text(verbatim: Chrome.localized("Remove the thread and its history")))
                     Button("Archive", action: onArchive)
                         .buttonStyle(.glassProminent)
                         .keyboardShortcut(.defaultAction)
                         .focusable()
                         .focused($isFocused)
                         .focusEffectDisabled()
-                        .help("Move it to Archived (Return)")
+                        .help(Text(verbatim: Chrome.localized("Move it to Archived (Return)")))
                 }
                 .controlSize(.small)
             }
@@ -1042,7 +1043,7 @@ private struct DeleteThreadPopover: View {
     var body: some View {
         PopoverMenu {
             PopoverSectionHeader("Delete this thread?")
-            PopoverNote("“\(thread.title)” and its history will be removed. Files in your project stay as they are.")
+            PopoverNote(String(format: Chrome.localized("“%@” and its history will be removed. Files in your project stay as they are."), thread.title))
             PopoverDivider()
             PopoverItem("Delete thread", symbol: "trash", isDestructive: true) { onDelete(false) }
             if thread.worktreePath != nil, !thread.isHelper || thread.hydra?.hasOwnCopy == true {
@@ -1180,7 +1181,7 @@ private struct ProjectRow: View {
                             RowAccessoryIcon("plus")
                         }
                         .buttonStyle(.plain)
-                        .help("New thread in \(project.name)")
+                        .help(Text(verbatim: String(format: Chrome.localized("New thread in %@"), project.name)))
                     }
                 } else if !project.isExpanded, count > 0 {
                     Text(verbatim: "\(count)")
@@ -1685,7 +1686,7 @@ private struct HelperConnector: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .help("Hide helpers")
+        .help(Text(verbatim: Chrome.localized("Hide helpers")))
         .accessibilityLabel(Text("Hide helpers"))
     }
 }
@@ -1787,7 +1788,7 @@ private struct SidebarThreadRow: View, Equatable {
                             RowAccessoryIcon("archivebox")
                         }
                         .buttonStyle(.plain)
-                        .help("Archive thread")
+                        .help(Text(verbatim: Chrome.localized("Archive thread")))
                         RowActionsButton(actions: makeActions(), isPresented: $isMenuPresented)
                     }
                 } else if !isDetailed {

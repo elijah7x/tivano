@@ -1553,13 +1553,15 @@ struct WorkGroup: View {
         } else {
             VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
                 Button {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
                     if isCollapsed {
-                        withAnimation(.snappy(duration: 0.24)) {
+                        withTransaction(transaction) {
                             isCollapsed = false
                         }
                         revealBox?.action()
                     } else {
-                        withAnimation(.snappy(duration: 0.24)) {
+                        withTransaction(transaction) {
                             isCollapsed = true
                         }
                     }
@@ -1792,7 +1794,9 @@ struct ToolRow: View {
                         } else if opensImage, let imagePath {
                             slot?.panel.toggle(PreviewImages.attachment(for: imagePath), over: slot?.anchor.value, edge: .minY)
                         } else {
-                            withAnimation(.snappy(duration: 0.24)) {
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
                                 expanded.wrappedValue.toggle()
                                 if expanded.wrappedValue { revealBox?.action() }
                             }
@@ -2734,7 +2738,10 @@ struct TurnFinishedBlock: View {
             }
             Button {
                 revealBox?.disclosure(blockID, false)
-                withAnimation(.snappy(duration: 0.24)) {
+                // Match the activity tree fold's nonanimated height change.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
                     isExpanded.toggle()
                 }
             } label: {

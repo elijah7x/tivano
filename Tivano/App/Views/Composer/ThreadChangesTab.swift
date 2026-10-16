@@ -18,7 +18,7 @@ struct ThreadChangesTab: View {
                 Image(systemName: "plusminus")
                     .font(Chrome.inlineIconFont)
                     .foregroundStyle(Chrome.secondaryText)
-                Text(verbatim: stats.files.count == 1 ? "1 file" : "\(stats.files.count) files")
+                Text(verbatim: stats.files.count == 1 ? Chrome.localized("1 file") : String(format: Chrome.localized("%lld files"), stats.files.count))
                     .foregroundStyle(Chrome.primaryText.opacity(0.9))
                 // The same hues as every other +/− in the app (see DiffStatLabel), so a
                 // theme recolours the tab with the diffs it stands for.

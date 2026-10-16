@@ -3,10 +3,11 @@ import SwiftUI
 /// A provider's plan usage limits as the registry last read them: a header naming the plan,
 /// a row per rolling window, and a spinner or a note while they load or when none came back.
 /// The composer's usage popover and Settings, Providers both show limits through this view,
-/// so the two can never disagree. Refreshing is the caller's call: this only renders.
+/// so the two can never disagree. Codex can also be refreshed independently of other providers.
 struct PlanLimitsView: View {
     @Environment(AppModel.self) private var model
     let provider: ProviderKind
+    @State private var loginError: String?
 
     var body: some View {
         let registry = model.providers
@@ -20,6 +21,14 @@ struct PlanLimitsView: View {
                 Spacer(minLength: 8)
                 if isLoading {
                     ProgressView().controlSize(.mini)
+                }
+                if provider == .codex {
+                    Button("Refresh") {
+                        registry.refreshPlanLimits(.codex, force: true)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .disabled(isLoading || registry.signingIn == .codex)
                 }
             }
             if let limits {
@@ -37,41 +46,45 @@ struct PlanLimitsView: View {
                     BankedResetsView(provider: provider, credits: credits)
                         .padding(.top, 14)
                 }
-                // A read that filled no windows carries the provider's own words instead of
-                // silence: an expired login must never look like an unchanged number. The note
-                // sits at the foot of the block, small and quiet, with the one tap that fixes
-                // it beside it.
                 if let problem = limits.problem {
-                    if provider.isAPIKeyBased {
-                        HStack(alignment: .center, spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.ui(.footnote, weight: .semibold))
-                                .foregroundStyle(Chrome.warning)
-                            Text(verbatim: Chrome.localized(problem))
-                                .font(.ui(.subheadline))
-                                .foregroundStyle(Chrome.secondaryText)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 8)
-                        }
-                        .padding(.top, 14)
-                    } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(verbatim: Chrome.localized(problem))
+                            .font(.ui(.subheadline))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 8) {
-                            Text("Click here to login again")
-                                .font(.ui(.callout))
-                                .foregroundStyle(Chrome.secondaryText)
-                            Spacer(minLength: 8)
-                            Button("Login") { Workspace.openTerminal(running: provider.loginCommand) }
-                                .buttonStyle(.glass)
-                                .controlSize(.small)
+                            if limits.problemKind == .authentication, !provider.isAPIKeyBased {
+                                Button("Login") {
+                                    loginError = nil
+                                    Task { loginError = await registry.signIn(provider) }
+                                }
+                                .disabled(registry.signingIn != nil || isLoading)
+                            }
+                            Button("Retry") {
+                                loginError = nil
+                                registry.refreshPlanLimits(provider, force: true)
+                            }
+                            .disabled(isLoading || registry.signingIn == provider)
+                            if registry.signingIn == provider {
+                                ProgressView().controlSize(.mini)
+                            }
                         }
-                        .padding(.top, 14)
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
                     }
+                    .padding(.top, 14)
                 }
             } else if !isLoading {
                 Text(verbatim: String(format: Chrome.localized("%@ did not report plan limits."), provider.displayName))
                     .font(.ui(.callout))
                     .foregroundStyle(Chrome.secondaryText)
+                    .padding(.top, 8)
+            }
+            if let loginError {
+                Text(verbatim: loginError)
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.danger)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 8)
             }
         }
@@ -326,10 +339,10 @@ private struct BankedResetRow: View {
                     .font(.ui(.body))
                     .foregroundStyle(Chrome.primaryText)
                     .lineLimit(1)
-                Text(verbatim: row.credit?.detail.map { Chrome.localized($0) } ?? expiryText)
+                Text(verbatim: expiryText)
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
             control
@@ -338,8 +351,8 @@ private struct BankedResetRow: View {
 
     private var expiryText: String {
         guard let expiresAt = row.credit?.expiresAt else { return Chrome.localized("No expiry reported") }
-        if expiresAt <= .now { return Chrome.localized("Expired") }
-        return String(format: Chrome.localized("Expires %@"), LimitRow.resetText(expiresAt))
+        let date = expiresAt.formatted(.dateTime.year().month(.abbreviated).day().hour().minute())
+        return String(format: Chrome.localized(expiresAt <= .now ? "Expired %@" : "Expires %@"), date)
     }
 
     @ViewBuilder private var control: some View {

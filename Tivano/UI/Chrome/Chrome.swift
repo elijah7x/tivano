@@ -889,7 +889,7 @@ struct SidebarSearchField: View {
             Image(systemName: "magnifyingglass")
                 .font(.ui(.callout, weight: .medium))
                 .foregroundStyle(Chrome.secondaryText.opacity(0.85))
-            TextField(prompt, text: $text)
+            TextField(Chrome.localized(prompt), text: $text)
                 .textFieldStyle(.plain)
                 .font(.ui(.body))
                 .frame(maxWidth: .infinity)
@@ -939,7 +939,7 @@ struct ChromeSearchField: View {
                 .font(.ui(.callout, weight: .semibold))
                 .foregroundStyle(Chrome.secondaryText)
                 .accessibilityHidden(true)
-            TextField(prompt, text: $query)
+            TextField(Chrome.localized(prompt), text: $query)
                 .textFieldStyle(.plain)
                 // The capsule is the field's edge; the focus ring flashed around the text
                 // alone as the caret landed.

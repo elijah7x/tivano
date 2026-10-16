@@ -393,7 +393,7 @@ struct RowActionsButton: View {
             RowAccessoryIcon("ellipsis")
         }
         .buttonStyle(.plain)
-        .help("More")
+        .help(Text(verbatim: Chrome.localized("More")))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu { RowActionItems(actions: actions) }
         }

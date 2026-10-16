@@ -26,7 +26,7 @@ struct NewThreadPrompt: View {
                     }
                     .buttonStyle(.plain)
                     .onHover { isHoveringName = $0 }
-                    .help("Choose another project")
+                    .help(Text(verbatim: Chrome.localized("Choose another project")))
                     .popover(isPresented: $isChoosingProject, arrowEdge: .bottom) {
                         projectChoices
                     }

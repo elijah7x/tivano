@@ -203,7 +203,7 @@ private struct MCPConnectedRow: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .help("Server options")
+            .help(Text(verbatim: Chrome.localized("Server options")))
             .popover(isPresented: $showMenu, arrowEdge: .bottom) {
                 PopoverMenu {
                     PopoverItem("Refresh", symbol: "arrow.clockwise") {
@@ -579,7 +579,7 @@ private struct MCPCustomRow: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("Server options")
+        .help(Text(verbatim: Chrome.localized("Server options")))
         .popover(isPresented: $showMenu, arrowEdge: .bottom) {
             PopoverMenu {
                 PopoverItem("Edit", symbol: "pencil") {
@@ -852,7 +852,7 @@ private struct MCPCustomEditor: View {
                             .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
-                    .help("Remove this variable")
+                    .help(Text(verbatim: Chrome.localized("Remove this variable")))
                 }
             }
             Button {
@@ -911,7 +911,7 @@ private struct MCPCustomEditor: View {
             .map { (key: $0.key.trimmingCharacters(in: .whitespaces), value: $0.value, isSecret: $0.isSecret) }
             .filter { !$0.key.isEmpty }
         guard model.mcp.saveCustomValues(keptValues, for: draft.id, replacingFieldsOf: server?.catalogEntry()) else {
-            error = "The Keychain could not save a value. Keep this editor open and try again."
+            error = Chrome.localized("The Keychain could not save a value. Keep this editor open and try again.")
             return
         }
         // An edit that changed a connected server's command, address or variables takes

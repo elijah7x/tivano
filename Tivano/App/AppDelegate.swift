@@ -54,17 +54,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             if let model {
                 if !model.isLibraryLoaded { await model.bootstrap() }
-                while !model.isLibraryLoaded {
+                let loadDeadline = Date.now.addingTimeInterval(30)
+                while !model.isLibraryLoaded, Date.now < loadDeadline {
                     try? await Task.sleep(for: .milliseconds(25))
                 }
-                let deadline = Date.now.addingTimeInterval(4 * 60)
-                while model.isAnyHydraMergeRunning, Date.now < deadline {
-                    try? await Task.sleep(for: .milliseconds(250))
-                }
-                guard model.saveBeforeQuit() else {
-                    quitPending = false
-                    sender.reply(toApplicationShouldTerminate: false)
-                    return
+                if model.isLibraryLoaded {
+                    let deadline = Date.now.addingTimeInterval(4 * 60)
+                    while model.isAnyHydraMergeRunning, Date.now < deadline {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                    guard model.saveBeforeQuit() else {
+                        quitPending = false
+                        sender.reply(toApplicationShouldTerminate: false)
+                        return
+                    }
                 }
             }
             await MCPHub.shared.shutdown()
@@ -75,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        model?.saveBeforeQuit()
+        if let model, model.isLibraryLoaded { model.saveBeforeQuit() }
         TokenLedger.shared.flushLiveSpend()
         // The MCP servers the hub started go with the app.
         if !mcpShutdownCompleted { MCPHub.terminateAll() }

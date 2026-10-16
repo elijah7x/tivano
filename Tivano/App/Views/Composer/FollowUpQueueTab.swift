@@ -361,7 +361,7 @@ private struct FollowUpRow: View {
                         .buttonStyle(.plain)
                         .focusable(false)
                         .contentShape(.rect)
-                        .help("Unlink from the follow-up above")
+                        .help(Text(verbatim: Chrome.localized("Unlink from the follow-up above")))
                         .accessibilityLabel(Text("Unlink"))
                     } else {
                         Image(systemName: "link")
@@ -393,7 +393,7 @@ private struct FollowUpRow: View {
                 .onChange(of: isGrabbing) { _, grabbing in
                     if !grabbing, isDragged { onDragEnded() }
                 }
-                .help("Drag above or below to reorder · drop onto the middle of another to send them together")
+                .help(Text(verbatim: Chrome.localized("Drag above or below to reorder · drop onto the middle of another to send them together")))
                 .accessibilityLabel(Text("Drag to reorder"))
             if !prompt.attachments.isEmpty {
                 // No anchor view under the thumbnails or the strip: nothing in this tab

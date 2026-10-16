@@ -3,18 +3,23 @@ import SwiftUI
 
 enum SettingsPage: String, CaseIterable, Identifiable {
     case general
-    // Second in the sidebar: Hydra is what the app is about, so it sits right under General.
-    case hydra
     case appearance
     case providers
     case models
+    case hydra
     case mcp
     case sourceControl
     case shortcuts
     case archive
+    case alpha
     case about
 
     var id: String { rawValue }
+
+    /// The pages the sidebar lists: Alpha only where `AppSettings.alphaAvailable`.
+    static var listed: [SettingsPage] {
+        allCases.filter { $0 != .alpha || AppSettings.alphaAvailable }
+    }
 
     var title: String {
         switch self {
@@ -23,6 +28,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .providers: "Providers"
         case .mcp: "MCP"
         case .models: "Models"
+        case .alpha: "Alpha"
         case .hydra: "Hydra"
         case .sourceControl: "Source control"
         case .shortcuts: "Shortcuts"
@@ -38,6 +44,8 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .providers: "cpu"
         case .mcp: "puzzlepiece.extension"
         case .models: "slider.horizontal.3"
+        // Never drawn: the sidebar gives the Alpha row its flask mark instead.
+        case .alpha: "flask"
         // Never drawn: the sidebar gives the Hydra row the dragon mark instead. Kept so
         // the switch stays exhaustive and anything else that asks gets a sane symbol.
         case .hydra: "point.3.connected.trianglepath.dotted"
@@ -51,6 +59,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .general: Chrome.gray
+        case .alpha: Color(red: 0.95, green: 0.55, blue: 0.20)
         case .appearance: Color(red: 0.85, green: 0.44, blue: 0.36)
         case .providers: Chrome.blue
         case .mcp: Color(red: 0.95, green: 0.55, blue: 0.20)
@@ -72,15 +81,12 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "meta", "muse", "spark", "zai", "z.ai", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
         case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting"]
         case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "clone", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
+        case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "实验室", "实验", "语音", "麦克风", "通话"]
         case .shortcuts: ["keyboard", "keys"]
         case .archive: ["archived", "restore"]
         case .about: ["version", "license"]
         }
     }
-}
-
-extension SettingsPage {
-    var startsNavGroup: Bool { self == .providers || self == .shortcuts }
 }
 
 @MainActor
@@ -112,8 +118,8 @@ struct SettingsView: View {
 
     private var visiblePages: [SettingsPage] {
         let query = search.trimmed
-        guard !query.isEmpty else { return SettingsPage.allCases }
-        return SettingsPage.allCases.filter { page in
+        guard !query.isEmpty else { return SettingsPage.listed }
+        return SettingsPage.listed.filter { page in
             page.title.localizedCaseInsensitiveContains(query)
                 || page.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
         }
@@ -161,6 +167,9 @@ struct SettingsView: View {
                                     // The Hydra page wears the dragon mark, the same one as the composer button.
                                     HydraMarkImage()
                                         .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
+                                } else if item == .alpha {
+                                    AlphaMarkImage()
+                                        .frame(width: Chrome.symbolSize, height: Chrome.symbolSize)
                                 } else {
                                     SidebarSymbol(item.symbol, scale: item == .general ? 1.15 : 1)
                                 }
@@ -213,8 +222,8 @@ struct SettingsSidebar: View {
 
     private var visiblePages: [SettingsPage] {
         let query = search.trimmed
-        guard !query.isEmpty else { return SettingsPage.allCases }
-        return SettingsPage.allCases.filter { page in
+        guard !query.isEmpty else { return SettingsPage.listed }
+        return SettingsPage.listed.filter { page in
             Chrome.localized(page.title).localizedCaseInsensitiveContains(query)
                 || page.title.localizedCaseInsensitiveContains(query)
                 || page.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
@@ -229,7 +238,7 @@ struct SettingsSidebar: View {
             SidebarRow(title: "Back", action: { WindowManager.shared.hideSettings() }) {
                 SidebarIconBadge { SidebarSymbol("arrow.left") }
             }
-            .help("Back to your threads")
+            .help(Text(verbatim: Chrome.localized("Back to your threads")))
             .padding(.horizontal, Chrome.listInset)
             .padding(.top, 10)
             SidebarSearchField(text: $search) {
@@ -246,6 +255,9 @@ struct SettingsSidebar: View {
                                     // The Hydra page wears the dragon mark, the same one as the composer button.
                                     HydraMarkImage()
                                         .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
+                                } else if item == .alpha {
+                                    AlphaMarkImage()
+                                        .frame(width: Chrome.symbolSize, height: Chrome.symbolSize)
                                 } else {
                                     SidebarSymbol(item.symbol, scale: item == .general ? 1.15 : 1)
                                 }
@@ -256,7 +268,6 @@ struct SettingsSidebar: View {
                                 }
                             }
                         }
-                        .padding(.top, item.startsNavGroup && search.trimmed.isEmpty ? Chrome.sectionHeaderSpacing : 0)
                     }
                     if visiblePages.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
@@ -399,6 +410,7 @@ struct SettingsDetail: View {
         case .models:
             ModelsSettingsPage(query: modelSearch)
         case .hydra: HydraSettingsPage()
+        case .alpha: AlphaSettingsPage()
         case .sourceControl: SourceControlSettingsPage()
         case .shortcuts: ShortcutsSettingsPage()
         case .archive: ArchiveSettingsPage()
@@ -647,14 +659,14 @@ private struct BackdropOpacitySlider: View {
             Image(systemName: "circle.dotted")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
-                .help("Transparent")
+                .help(Text(verbatim: Chrome.localized("Transparent")))
             Slider(value: $value, in: 0...1)
                 .controlSize(.small)
                 .frame(width: 140)
             Image(systemName: "circle.fill")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
-                .help("Solid")
+                .help(Text(verbatim: Chrome.localized("Solid")))
         }
         // The reset takes no room in the row, so the slider ends flush with the card's
         // other controls whether or not it shows; it fades in to the slider's left once
@@ -671,7 +683,7 @@ private struct BackdropOpacitySlider: View {
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .help("Back to the stock look")
+                .help(Text(verbatim: Chrome.localized("Back to the stock look")))
                 .offset(x: -28)
                 .transition(.opacity.combined(with: .offset(x: 6)))
             }
@@ -837,6 +849,15 @@ private struct ProviderSettingsSection: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                     }
+                    if provider == .zai {
+                        ChromeRowDivider()
+                        ChromeRow(title: "Region", detail: "Where your key was issued. Global uses api.z.ai, China uses open.bigmodel.cn.") {
+                            GlassPickerButton(options: ZaiRegion.allCases.map { ($0, $0.title) }, selection: Binding(
+                                get: { model.settings.zaiRegion },
+                                set: { model.settings.zaiRegion = $0 }
+                            ))
+                        }
+                    }
                     if provider.acceptsAPIKey {
                         ChromeRowDivider()
                         ChromeRow(
@@ -938,6 +959,13 @@ private struct ProviderSettingsSection: View {
         .onChange(of: binaryPath) { _, value in
             guard value != model.settings.binaryPath(for: provider) else { return }
             model.settings.setBinaryPath(value, for: provider)
+        }
+        .onChange(of: model.settings.zaiRegion) { _, _ in
+            guard provider == .zai else { return }
+            Task {
+                await model.providers.refresh(provider)
+                await model.providers.loadCatalog(provider, force: true)
+            }
         }
         .onChange(of: model.settings.monitorsUpdates(provider)) { _, _ in
             model.providers.cliMonitoringChanged(provider)
@@ -1238,7 +1266,7 @@ private struct UpstreamAttributionRow: View {
         .onHover { hovering in
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
-        .help("Open getdroppycode.app")
+        .help(Text(verbatim: Chrome.localized("Open getdroppycode.app")))
         .accessibilityLabel(Text("Based on Droppy Code by Jordy Spruit. Open getdroppycode.app"))
     }
 }
@@ -1274,7 +1302,7 @@ private struct ProjectMarksRow: View {
             .buttonStyle(.glass)
             .controlSize(.small)
             .disabled(model.projects.isEmpty)
-            .help("Choose a mark for each project")
+            .help(Text(verbatim: Chrome.localized("Choose a mark for each project")))
             .popover(isPresented: $isPresented, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(model.projects.enumerated()), id: \.element.id) { index, project in

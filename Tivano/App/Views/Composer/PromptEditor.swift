@@ -239,6 +239,7 @@ final class PromptEditorPopover<Content: View>: NSObject {
         guard monitors.isEmpty else { return }
         if let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
             guard event.keyCode == 53 else { return event } // Escape
+            guard NSApp.modalWindow == nil, event.window?.isSheet != true else { return event }
             self?.dismiss()
             return nil
         }) {

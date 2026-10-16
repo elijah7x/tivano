@@ -374,7 +374,7 @@ private struct HydraPairRow: View {
                         .onChanged { value in onDragChanged(value.translation.height) }
                         .onEnded { _ in onDragEnded() }
                 )
-                .help("Drag to reorder")
+                .help(Text(verbatim: Chrome.localized("Drag to reorder")))
                 .accessibilityLabel(Text("Drag to reorder"))
             Button {
                 isEditing = true
@@ -414,7 +414,7 @@ private struct HydraPairRow: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .help("Remove this pair")
+            .help(Text(verbatim: Chrome.localized("Remove this pair")))
             .accessibilityLabel(Text("Remove this pair"))
         }
         .padding(.leading, 10)

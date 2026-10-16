@@ -139,7 +139,7 @@ struct HydraMergePopover: View {
                     // back. The count beside the faces still names every head that landed.
                     ForEach(Array(note.heads.prefix(8))) { head in
                         HydraGlyph(persona: HydraRoster.persona(at: head.index), size: 26)
-                            .help("\(head.name): \(head.task)")
+                            .help(Text(verbatim: "\(head.name): \(head.task)"))
                             .onHover { inside in
                                 if inside { hoveredHead = head } else if hoveredHead == head { hoveredHead = nil }
                             }

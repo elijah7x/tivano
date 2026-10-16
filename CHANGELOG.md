@@ -4,7 +4,75 @@ All notable changes to Tivano are documented here, newest first. The format foll
 
 `scripts/publish_release.sh` reads the section whose heading matches the version in `config/release.xcconfig` (for example `## [1.5.4] - 2026-09-17`) and publishes it as the GitHub release notes, which Settings › About shows as its New features / Bug fixes / Refinements cards. Work that has merged but not shipped sits under `## [Unreleased]`, which publishing skips; the next release renames that heading to its version and date. A `### Thanks` heading under a version names every outside contributor whose pull request shipped in it, in the form `- Name (@github-handle): what they did (#PR).`; `python3 scripts/release_credits.py` prints the block for the changes since the previous tag, and publishing stops until every contributor is named.
 
+New entries use `### English` and `### 简体中文` sections, each with the existing third-level category headings: New features / Bug fixes / Refinements in English, 新功能 / 问题修复 / 优化改进 in Chinese. About selects the app's active language; a missing Chinese section, or one containing only whitespace and category headings, falls back to English. A single shared `### Thanks` section follows both languages.
+
 ## [Unreleased]
+
+## [1.3.8] - 2026-10-16
+
+### English
+
+### New features
+
+- Choose a Z.ai region in Settings, Global or China. China talks to open.bigmodel.cn instead of api.z.ai; existing setups stay on Global.
+
+### Bug fixes
+
+- Show the attachment's flight into the composer, which was drawn outside its window and never appeared.
+- Stop a long reply from stalling for a moment when it finishes streaming; the parse made while it streamed is reused.
+- Keep link-heavy messages scrolling smoothly while their site icons load.
+- Release a closed composer's memory after it has shown slash or @ suggestions.
+- Stop a finished turn's steps, a work group or a tool's output from blanking the conversation for a moment when expanded or collapsed.
+- Keep a reader who scrolled up from being pulled back to the end when content above them shrinks.
+- Keep Tivano responsive while an update's signature is checked.
+- Let Tivano quit even when its library never finishes loading.
+- Let Escape close the file picker opened from the message editor instead of the editor.
+- Focus a new composer reliably when it first appears.
+- Stop quick picks in a question card from skipping a page, and keep the MCP setup panel open when the connection drops right after connecting.
+- Show the Chinese text for context menus, sidebar actions, confirmations, tooltips, search fields and file counts that still appeared in English.
+- Show when each banked Codex reset expires. Codex sometimes lists the count without the resets, so Tivano asks once more and keeps the last known dates.
+- Show the real reason a usage read failed instead of asking to log in again, refresh usage after logging in through Tivano, and word a timed-out read plainly.
+- Recognize Cursor, Kimi and native Grok installs for CLI updates, and point a Devin CLI bundled with the desktop app to that app for updates.
+
+### Refinements
+
+- List the settings pages in one run without group gaps, with Hydra after Models.
+- Show release notes in the app's active language, with English as the fallback when Chinese notes are unavailable.
+- Add a Refresh button for Codex usage alone, and fold each CLI's update details into a version line and a status line.
+
+### 简体中文
+
+### 新功能
+
+- 可在设置中为 Z.ai 选择区域：国际站或中国区。中国区使用 open.bigmodel.cn 而非 api.z.ai；已有配置保持国际站不变。
+
+### 问题修复
+
+- 修复附件飞入输入框的动画因绘制在窗口外而无法显示的问题。
+- 复用流式输出期间已完成的解析，避免长回复结束流式输出时短暂卡顿。
+- 在网站图标加载期间，保持包含大量链接的消息滚动流畅。
+- 关闭输入框后，释放因显示斜杠命令或 @ 建议菜单而占用的内存。
+- 修复展开或收起已完成轮次的步骤、工作组或工具输出时，对话短暂空白的问题。
+- 向上阅读时，上方内容收起不再将阅读位置拉回对话末尾。
+- 检查更新包签名时，保持 Tivano 正常响应。
+- 即使资料库始终未能完成加载，也能退出 Tivano。
+- 从消息编辑器打开文件选择器后，按 Escape 关闭文件选择器，不再关闭编辑器。
+- 新输入框首次出现时可靠地获得焦点。
+- 修复问题卡片中的快捷选项跳过一页的问题，并在连接刚建立就断开时保持 MCP 设置面板打开。
+- 补齐上下文菜单、侧栏操作、确认提示、工具提示、搜索框和文件数量中仍显示为英文的中文文案。
+- 显示每个 Codex 储备重置的到期时间。Codex 有时只返回数量而不列出明细，Tivano 会再查询一次，并保留上次获取的日期。
+- 用量查询失败时显示真实原因，不再一律提示重新登录；通过 Tivano 登录后会刷新用量，查询超时也改为易懂的提示。
+- CLI 更新可识别 Cursor、Kimi 和原生安装的 Grok；随桌面应用安装的 Devin CLI 会提示通过该应用更新。
+
+### 优化改进
+
+- 设置页列表不再分组留空，Hydra 移至模型之后。
+- 按应用当前生效的语言显示更新日志；没有可用的中文日志时回退到英文。
+- 新增仅刷新 Codex 用量的按钮；每个 CLI 的更新信息合并为版本和状态两行。
+
+### Thanks
+
+- No outside contributors.
 
 ## [1.3.1] - 2026-10-14
 

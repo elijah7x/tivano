@@ -1103,7 +1103,7 @@ private struct ChatChromeTitle: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("Thread title — click to copy or rename")
+        .help(Text(verbatim: Chrome.localized("Thread title — click to copy or rename")))
         .accessibilityLabel(Text("Thread title"))
         .accessibilityAddTraits(.isButton)
         // The popover hangs off the title's own width, so it opens under the words;

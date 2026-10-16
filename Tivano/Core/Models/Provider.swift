@@ -96,7 +96,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .grok: URL(string: "https://x.ai/cli")!
         case .deepseek: URL(string: "https://platform.deepseek.com/api_keys")!
         case .meta: URL(string: "https://dev.meta.ai/")!
-        case .zai: URL(string: "https://z.ai/manage-apikey/apikey-list")!
+        case .zai: ZaiRegion.current.keyPageURL
         case .devin: URL(string: "https://cli.devin.ai")!
         case .antigravity: URL(string: "https://antigravity.google/docs/cli/overview")!
         case .copilot: URL(string: "https://github.com/github/copilot-cli")!
@@ -123,7 +123,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .deepseek: "api.deepseek.com"
         case .meta: "api.meta.ai/v1"
-        case .zai: "api.z.ai/api/coding/paas/v4"
+        case .zai: ZaiRegion.current.apiHost
         default: nil
         }
     }
@@ -133,7 +133,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .deepseek: "platform.deepseek.com"
         case .meta: "dev.meta.ai"
-        case .zai: "z.ai/manage-apikey/apikey-list"
+        case .zai: ZaiRegion.current.apiKeySource
         case .commandcode: "commandcode.ai/studio"
         default: nil
         }

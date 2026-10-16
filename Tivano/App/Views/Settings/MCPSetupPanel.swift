@@ -61,6 +61,7 @@ struct MCPSetupPanelView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var checkedOnce = false
     @State private var successPopped = false
+    @State private var closeAfterConnect: Task<Void, Never>?
 
     private var state: MCPConnectionState { model.mcp.state(for: entry.id) }
 
@@ -133,9 +134,12 @@ struct MCPSetupPanelView: View {
             MCPSetupPanel.shared.fit(height: height)
         }
         .onChange(of: state.isConnected) { _, isConnected in
+            closeAfterConnect?.cancel()
+            closeAfterConnect = nil
             if isConnected {
-                Task { @MainActor in
+                closeAfterConnect = Task { @MainActor in
                     try? await Task.sleep(for: .seconds(1.2))
+                    guard !Task.isCancelled, state.isConnected else { return }
                     onDone()
                 }
             }

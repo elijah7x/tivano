@@ -3,6 +3,9 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var voiceReveal: CGFloat = 0
+    @State private var voiceStageShown = false
 
     var body: some View {
         let sidebar = model.sidebar
@@ -44,6 +47,9 @@ struct RootView: View {
                 // The chat stays built underneath, including the streaming runtime and draft.
                 DetailView()
                     .frame(minWidth: 0, maxWidth: .infinity)
+                    .opacity(1 - voiceReveal)
+                    .allowsHitTesting(!model.voice.stageOpen)
+                    .accessibilityHidden(model.voice.stageOpen)
                     // The sheet keeps to its own bounds. A conversation gliding sideways to make
                     // room for a panel (`ReserveSlide` carries it on an offset), a panel settling
                     // into a corner of a pane that just changed size, and rows re-wrapping in a
@@ -54,6 +60,13 @@ struct RootView: View {
                     .disabled(settingsShown)
                     .allowsHitTesting(!settingsShown)
                     .accessibilityHidden(settingsShown)
+                if voiceStageShown {
+                    VoiceStage(reveal: voiceReveal)
+                        .disabled(settingsShown || !model.voice.stageOpen)
+                        .allowsHitTesting(model.voice.stageOpen && !settingsShown)
+                        .opacity(settingsShown ? 0 : 1)
+                        .accessibilityHidden(settingsShown || !model.voice.stageOpen)
+                }
                 if settingsShown {
                     SettingsDetail(page: SettingsNavigation.shared.page)
                         .transition(.offset(x: 24).combined(with: .opacity))
@@ -85,6 +98,7 @@ struct RootView: View {
         // Initial library restoration must not dismiss an About deep link after relaunch.
         .onChange(of: model.selectedThreadID) { old, _ in
             if old != nil { WindowManager.shared.hideSettings() }
+            model.voice.setStageOpen(false)
         }
         .background { WindowBackdrop(opacity: model.settings.backdropOpacity, wallpaper: WallpaperStore.shared.image) }
         .background { WindowChromeConfigurator(sidebarVisible: settingsShown || sidebar.holdsTrafficLights, sidebarDragging: sidebar.isDragging && !settingsShown, performanceMode: model.settings.performanceMode) }
@@ -94,6 +108,19 @@ struct RootView: View {
         .overlay {
             if model.isCommandPalettePresented {
                 CommandPalette()
+            }
+        }
+        .onChange(of: model.voice.stageOpen, initial: true) { _, open in
+            if open {
+                voiceStageShown = true
+                withAnimation(reduceMotion ? nil : VoiceStageMetrics.enter) { voiceReveal = 1 }
+            } else if reduceMotion {
+                voiceReveal = 0
+                voiceStageShown = false
+            } else {
+                withAnimation(VoiceStageMetrics.exit) { voiceReveal = 0 } completion: {
+                    if !model.voice.stageOpen { voiceStageShown = false }
+                }
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -152,7 +179,7 @@ struct DetailView: View {
     var body: some View {
         if let threadID = model.selectedThreadID, model.thread(threadID) != nil {
             let running = Set(model.threads.compactMap { model.existingRuntime(for: $0.id)?.isRunning == true ? $0.id : nil })
-            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, isCovered: WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented, model: model, liveResize: liveResize)
+            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, isCovered: (WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented) || model.voice.stageOpen, model: model, liveResize: liveResize)
                 .onChange(of: threadID) { _, _ in prebuilt = [] }
                 .task(id: threadID) {
                     // The neighbours, and at launch the sidebar's top rows, one at a time, once
@@ -517,7 +544,7 @@ private struct OpenProvidersSettingsButton: View {
             WindowManager.shared.showSettings(page: .providers)
         }
         .buttonStyle(.glass)
-        .help("Open Settings > Providers")
+        .help(Text(verbatim: Chrome.localized("Open Settings > Providers")))
     }
 }
 

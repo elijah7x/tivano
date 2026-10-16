@@ -7,23 +7,23 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0C5E1AD4E1B130D7F6AC8A14 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = AE8B6A92FB544EA3A8C2FF3A /* LICENSE */; };
-		5E7A412B75FC1E7F98E7345E /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = F27C3C109E48B14D114F56CA /* THIRD_PARTY_NOTICES.md */; };
-		5F2F518CEF30ADDE0C59C38D /* TRADEMARK.md in Resources */ = {isa = PBXBuildFile; fileRef = 407374162B673FE1CFDB0507 /* TRADEMARK.md */; };
-		60662C7E8940020A2244EB93 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 46198FD9B910732AD71A6686 /* SwiftTerm */; };
+		66150B032B0A2F63128D32DE /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 7EF5D7A5F2BCB1B4A7CE9FDC /* THIRD_PARTY_NOTICES.md */; };
+		915BC9D74CE232FBDABFBB8E /* TRADEMARK.md in Resources */ = {isa = PBXBuildFile; fileRef = 1848AA624F0711C172CFCD75 /* TRADEMARK.md */; };
+		BB209BEC93886291B34DD10E /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 82D4543374B57973BE9D85C8 /* LICENSE */; };
+		FD12D8348E4FEC49B311BFA4 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 72A50E21088ED8B1A8BF1CFC /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		AA0000000000000000000001 /* dev.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = config/dev.xcconfig; sourceTree = "<group>"; };
-		AA0000000000000000000002 /* release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = config/release.xcconfig; sourceTree = "<group>"; };
-		407374162B673FE1CFDB0507 /* TRADEMARK.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TRADEMARK.md; sourceTree = "<group>"; };
-		AE8B6A92FB544EA3A8C2FF3A /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
-		BF08528FE4987FB150391D97 /* Tivano.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tivano.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		F27C3C109E48B14D114F56CA /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
+		10147330396E8517DCC9E0AE /* release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = release.xcconfig; sourceTree = "<group>"; };
+		1848AA624F0711C172CFCD75 /* TRADEMARK.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TRADEMARK.md; sourceTree = "<group>"; };
+		400B8D67EB14EE2781F1C2A1 /* Tivano.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tivano.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7EF5D7A5F2BCB1B4A7CE9FDC /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
+		82D4543374B57973BE9D85C8 /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
+		84A7141984F863F1549E43ED /* dev.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = dev.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		D316607E993AEB4CB4FF2F06 /* Tivano */ = {
+		1A7E243D5B9026283601666B /* Tivano */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			explicitFileTypes = {
 			};
@@ -35,115 +35,124 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		0FEDA1B3D9EF0C27157128ED /* Frameworks */ = {
+		C21842E57545D6E01FA7EB0B /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				60662C7E8940020A2244EB93 /* SwiftTerm in Frameworks */,
+				FD12D8348E4FEC49B311BFA4 /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		D704310475EAFAAE7FA6AD13 /* Products */ = {
+		5FFF308050810B53DE146987 /* config */ = {
 			isa = PBXGroup;
 			children = (
-				BF08528FE4987FB150391D97 /* Tivano.app */,
+				84A7141984F863F1549E43ED /* dev.xcconfig */,
+				10147330396E8517DCC9E0AE /* release.xcconfig */,
 			);
-			name = Products;
+			path = config;
 			sourceTree = "<group>";
 		};
-		E79E0F24BD6C0E578BFB5406 = {
+		76B56C591C26030E8DC61439 = {
 			isa = PBXGroup;
 			children = (
-				AA0000000000000000000001 /* dev.xcconfig */,
-				AA0000000000000000000002 /* release.xcconfig */,
-				AE8B6A92FB544EA3A8C2FF3A /* LICENSE */,
-				F27C3C109E48B14D114F56CA /* THIRD_PARTY_NOTICES.md */,
-				407374162B673FE1CFDB0507 /* TRADEMARK.md */,
-				D316607E993AEB4CB4FF2F06 /* Tivano */,
-				D704310475EAFAAE7FA6AD13 /* Products */,
+				82D4543374B57973BE9D85C8 /* LICENSE */,
+				7EF5D7A5F2BCB1B4A7CE9FDC /* THIRD_PARTY_NOTICES.md */,
+				1848AA624F0711C172CFCD75 /* TRADEMARK.md */,
+				5FFF308050810B53DE146987 /* config */,
+				1A7E243D5B9026283601666B /* Tivano */,
+				877473FDF3CE87A538BC50D9 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		877473FDF3CE87A538BC50D9 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				400B8D67EB14EE2781F1C2A1 /* Tivano.app */,
+			);
+			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		D15F2F8750A508AD043EC141 /* Tivano */ = {
+		1AA8F9F74D86EEC5CF76ED63 /* Tivano */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 45C29B052842130283C38DF5 /* Build configuration list for PBXNativeTarget "Tivano" */;
+			buildConfigurationList = C8B981E37F6E5349A3F0AC06 /* Build configuration list for PBXNativeTarget "Tivano" */;
 			buildPhases = (
-				6FB0B0F54C3B5B2B02EA0E7E /* Sources */,
-				BE9E6EB86C22850C1861BB64 /* Resources */,
-				0FEDA1B3D9EF0C27157128ED /* Frameworks */,
+				D3BAF714771E031E72CC36E7 /* Sources */,
+				5088E591E6AB7532B09AFE4A /* Resources */,
+				C21842E57545D6E01FA7EB0B /* Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				D316607E993AEB4CB4FF2F06 /* Tivano */,
+				1A7E243D5B9026283601666B /* Tivano */,
 			);
 			name = Tivano;
 			packageProductDependencies = (
-				46198FD9B910732AD71A6686 /* SwiftTerm */,
+				72A50E21088ED8B1A8BF1CFC /* SwiftTerm */,
 			);
 			productName = Tivano;
-			productReference = BF08528FE4987FB150391D97 /* Tivano.app */;
+			productReference = 400B8D67EB14EE2781F1C2A1 /* Tivano.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		32D783F101A2C316C4AD2D96 /* Project object */ = {
+		6A6DD5A08D75A78AA31268E3 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
-					D15F2F8750A508AD043EC141 = {
+					1AA8F9F74D86EEC5CF76ED63 = {
+						DevelopmentTeam = 5WF7HRPLRX;
+						ProvisioningStyle = Manual;
 					};
 				};
 			};
-			buildConfigurationList = 6E93EAC4B95FA531E37D24A6 /* Build configuration list for PBXProject "Tivano" */;
+			buildConfigurationList = E50AE59C9A33A80439C5BE9F /* Build configuration list for PBXProject "Tivano" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				Base,
 				en,
-				"zh-Hans",
 			);
-			mainGroup = E79E0F24BD6C0E578BFB5406;
+			mainGroup = 76B56C591C26030E8DC61439;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				DA7BAC145AD453FC5EB71BFD /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				4390588BCA7150418DF2330F /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 			);
 			preferredProjectObjectVersion = 77;
-			productRefGroup = D704310475EAFAAE7FA6AD13 /* Products */;
+			productRefGroup = 877473FDF3CE87A538BC50D9 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				D15F2F8750A508AD043EC141 /* Tivano */,
+				1AA8F9F74D86EEC5CF76ED63 /* Tivano */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		BE9E6EB86C22850C1861BB64 /* Resources */ = {
+		5088E591E6AB7532B09AFE4A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0C5E1AD4E1B130D7F6AC8A14 /* LICENSE in Resources */,
-				5E7A412B75FC1E7F98E7345E /* THIRD_PARTY_NOTICES.md in Resources */,
-				5F2F518CEF30ADDE0C59C38D /* TRADEMARK.md in Resources */,
+				BB209BEC93886291B34DD10E /* LICENSE in Resources */,
+				66150B032B0A2F63128D32DE /* THIRD_PARTY_NOTICES.md in Resources */,
+				915BC9D74CE232FBDABFBB8E /* TRADEMARK.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		6FB0B0F54C3B5B2B02EA0E7E /* Sources */ = {
+		D3BAF714771E031E72CC36E7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -153,7 +162,124 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		159D9F131CCC81DDCD5A09EA /* Debug */ = {
+		916E3A67362CC1268FB82C2B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				EXCLUDED_ARCHS = x86_64;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		D685DCB10ED0C6DA5B6E76F9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 84A7141984F863F1549E43ED /* dev.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Tivano Dev";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Jordy Spruit (Droppy). Tivano is based on Droppy Code by Jordy Spruit (Droppy), https://getdroppycode.app. GNU AGPL v3.0 with additional attribution terms.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Tivano uses your microphone only when you start a voice session. Your audio is sent to OpenAI through your own ChatGPT-signed-in Codex.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.tivano.Tivano.dev;
+				PRODUCT_MODULE_NAME = Tivano;
+				PRODUCT_NAME = "Tivano Dev";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "Tivano/App/Window/Tivano-Bridging-Header.h";
+			};
+			name = Debug;
+		};
+		E074E9F55BFD108B38487573 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 10147330396E8517DCC9E0AE /* release.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Tivano;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Jordy Spruit (Droppy). Tivano is based on Droppy Code by Jordy Spruit (Droppy), https://getdroppycode.app. GNU AGPL v3.0 with additional attribution terms.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Tivano uses your microphone only when you start a voice session. Your audio is sent to OpenAI through your own ChatGPT-signed-in Codex.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.tivano.Tivano;
+				PRODUCT_MODULE_NAME = Tivano;
+				PRODUCT_NAME = Tivano;
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "Tivano/App/Window/Tivano-Bridging-Header.h";
+			};
+			name = Release;
+		};
+		E69DBA3DEFBA93D9EEE4685A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -219,136 +345,23 @@
 			};
 			name = Debug;
 		};
-		1A191CE045894F543A4BC4B6 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				ARCHS = arm64;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
-				CLANG_CXX_LIBRARY = "libc++";
-				CLANG_ENABLE_MODULES = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
-				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
-				CLANG_WARN_BOOL_CONVERSION = YES;
-				CLANG_WARN_COMMA = YES;
-				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
-				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				CLANG_WARN_EMPTY_BODY = YES;
-				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
-				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
-				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
-				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
-				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				ENABLE_NS_ASSERTIONS = NO;
-				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				EXCLUDED_ARCHS = x86_64;
-				GCC_C_LANGUAGE_STANDARD = gnu11;
-				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
-				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				GCC_WARN_UNUSED_FUNCTION = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MTL_ENABLE_DEBUG_INFO = NO;
-				MTL_FAST_MATH = YES;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 6.0;
-			};
-			name = Release;
-		};
-		20740E6438C47C1B239165BE /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = AA0000000000000000000002 /* release.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
-				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				OTHER_CODE_SIGN_FLAGS = "--timestamp";
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Tivano";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Jordy Spruit (Droppy). Tivano is based on Droppy Code by Jordy Spruit (Droppy), https://getdroppycode.app. GNU AGPL v3.0 with additional attribution terms.";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.tivano.Tivano;
-				PRODUCT_MODULE_NAME = Tivano;
-				PRODUCT_NAME = "Tivano";
-				SDKROOT = macosx;
-				SWIFT_OBJC_BRIDGING_HEADER = "Tivano/App/Window/Tivano-Bridging-Header.h";
-			};
-			name = Release;
-		};
-		E1E513E524E933F3C8C16C09 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = AA0000000000000000000001 /* dev.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev;
-				CODE_SIGN_IDENTITY = "Developer ID Application";
-				CODE_SIGN_STYLE = Manual;
-				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				OTHER_CODE_SIGN_FLAGS = "--timestamp";
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Tivano Dev";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Jordy Spruit (Droppy). Tivano is based on Droppy Code by Jordy Spruit (Droppy), https://getdroppycode.app. GNU AGPL v3.0 with additional attribution terms.";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.tivano.Tivano.dev;
-				PRODUCT_MODULE_NAME = Tivano;
-				PRODUCT_NAME = "Tivano Dev";
-				SDKROOT = macosx;
-				SWIFT_OBJC_BRIDGING_HEADER = "Tivano/App/Window/Tivano-Bridging-Header.h";
-			};
-			name = Debug;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		45C29B052842130283C38DF5 /* Build configuration list for PBXNativeTarget "Tivano" */ = {
+		C8B981E37F6E5349A3F0AC06 /* Build configuration list for PBXNativeTarget "Tivano" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				E1E513E524E933F3C8C16C09 /* Debug */,
-				20740E6438C47C1B239165BE /* Release */,
+				D685DCB10ED0C6DA5B6E76F9 /* Debug */,
+				E074E9F55BFD108B38487573 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		6E93EAC4B95FA531E37D24A6 /* Build configuration list for PBXProject "Tivano" */ = {
+		E50AE59C9A33A80439C5BE9F /* Build configuration list for PBXProject "Tivano" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				159D9F131CCC81DDCD5A09EA /* Debug */,
-				1A191CE045894F543A4BC4B6 /* Release */,
+				E69DBA3DEFBA93D9EEE4685A /* Debug */,
+				916E3A67362CC1268FB82C2B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
@@ -356,7 +369,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		DA7BAC145AD453FC5EB71BFD /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+		4390588BCA7150418DF2330F /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
 			requirement = {
@@ -367,12 +380,12 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		46198FD9B910732AD71A6686 /* SwiftTerm */ = {
+		72A50E21088ED8B1A8BF1CFC /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = DA7BAC145AD453FC5EB71BFD /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			package = 4390588BCA7150418DF2330F /* XCRemoteSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
-	rootObject = 32D783F101A2C316C4AD2D96 /* Project object */;
+	rootObject = 6A6DD5A08D75A78AA31268E3 /* Project object */;
 }

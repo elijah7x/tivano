@@ -304,7 +304,7 @@ struct SubagentPanel: View {
                 PanelDragHandle(onDrag: onDrag, onDragEnd: onDragEnd)
                     .frame(maxWidth: .infinity)
                     .frame(height: Self.handleHeight)
-                    .help("Drag to move")
+                    .help(Text(verbatim: Chrome.localized("Drag to move")))
                     .accessibilityLabel(Text("Drag to move"))
                 // The working status box at the strip's right end: the sending pulse
                 // first, then who is working, in the one capsule.
@@ -426,7 +426,7 @@ private struct ClosePanelPopover: View {
     var body: some View {
         PopoverMenu {
             PopoverSectionHeader("Stop this helper?")
-            PopoverNote("“\(title)” is still working. Closing the panel stops its turn. What it has done so far stays, and its chat moves to the sidebar under this one.")
+            PopoverNote(String(format: Chrome.localized("“%@” is still working. Closing the panel stops its turn. What it has done so far stays, and its chat moves to the sidebar under this one."), title))
             PopoverDivider()
             PopoverItem("Close and stop", symbol: "stop.circle", isDestructive: true) { onClose() }
             PopoverItem("Keep it working", symbol: "arrow.uturn.backward") {}
@@ -623,7 +623,7 @@ private struct PanelResizeGrips: View {
             dragCursor: .frameResize(position: position, directions: .all),
             onDoubleClick: resize.onReset
         )
-        .help("Drag to resize · Double-click for the automatic size")
+        .help(Text(verbatim: Chrome.localized("Drag to resize · Double-click for the automatic size")))
         .accessibilityLabel(Text("Drag to resize"))
     }
 

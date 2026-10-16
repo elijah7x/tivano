@@ -41,6 +41,7 @@ struct QuestionSheet: View {
     @State private var selections: [String: [String]]
     @State private var written: [String: String] = [:]
     @State private var page = 0
+    @State private var pendingAdvance: Task<Void, Never>?
     /// The popover's own close (see `BadgePopoverCoordinator`): the sheet closes it before
     /// it answers, so the popover leaves on its own animation from the badge, rather than
     /// hanging over the badge's departure and being torn down after it.
@@ -170,6 +171,8 @@ struct QuestionSheet: View {
     }
 
     private func advance(after delay: Double = 0) {
+        pendingAdvance?.cancel()
+        pendingAdvance = nil
         let count = request.questions.count
         guard page < count - 1 else {
             let answers = QuestionAnswers.collect(request, selections: selections, written: written)
@@ -177,8 +180,9 @@ struct QuestionSheet: View {
             return
         }
         if delay > 0 {
-            Task { @MainActor in
+            pendingAdvance = Task { @MainActor in
                 try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, page < request.questions.count - 1 else { return }
                 withAnimation(Chrome.panelSlide) { page += 1 }
             }
         } else {

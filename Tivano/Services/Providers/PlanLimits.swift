@@ -15,6 +15,8 @@ struct PlanLimits: Sendable, Equatable {
     var resetCredits: ResetCredits? = nil
     /// Why the read filled no windows, in the provider's own words; shown in place of the bars so an expired login never reads as an unchanged number.
     var problem: String? = nil
+    enum ProblemKind: Sendable, Equatable { case authentication, unavailable, noWindows }
+    var problemKind: ProblemKind? = nil
 
     /// One reset Codex has banked for the account. `title` and `detail` are the app-server's own words when it gives any.
     struct ResetCredit: Sendable, Equatable, Identifiable {
@@ -70,24 +72,51 @@ enum PlanLimitsReader {
     }
 
     static func read(_ provider: ProviderKind, executable: URL, environment: [String: String]) async -> PlanLimits? {
-        switch provider {
-        case .codex: try? await CodexSession.readPlanLimits(executable: executable, environment: environment)
-        case .claude: await readClaude(executable: executable, environment: environment)
-        case .antigravity: try? await AntigravitySession.readPlanLimits(executable: executable, environment: environment)
-        case .copilot: try? await CopilotSession.readPlanLimits(executable: executable, environment: environment)
-        case .commandcode: await CommandCodeAPI.planLimits(environment: environment)
-        case .pi: await PiPlanLimits.read(environment: environment)
-        case .omp: await OmpPlanLimits.read(executable: executable, environment: environment)
-        case .cursor, .opencode, .opencodeGo, .grok, .deepseek, .meta, .zai, .devin, .kimi: nil
+        do {
+            let limits: PlanLimits? = switch provider {
+            case .codex: try await CodexSession.readPlanLimits(executable: executable, environment: environment)
+            case .claude: await readClaude(executable: executable, environment: environment)
+            case .antigravity: try await AntigravitySession.readPlanLimits(executable: executable, environment: environment)
+            case .copilot: try await CopilotSession.readPlanLimits(executable: executable, environment: environment)
+            case .commandcode: await CommandCodeAPI.planLimits(environment: environment)
+            case .pi: await PiPlanLimits.read(environment: environment)
+            case .omp: await OmpPlanLimits.read(executable: executable, environment: environment)
+            case .cursor, .opencode, .opencodeGo, .grok, .deepseek, .meta, .zai, .devin, .kimi: nil
+            }
+            return classified(limits)
+        } catch {
+            return failure(error.localizedDescription)
         }
     }
 
     /// API-key subscriptions read their windows from the API instead of a CLI.
     static func read(_ provider: ProviderKind, apiKey: String) async -> PlanLimits? {
         switch provider {
-        case .zai: await ZaiAPI.planLimits(apiKey: apiKey)
+        case .zai: classified(await ZaiAPI.planLimits(apiKey: apiKey))
         default: nil
         }
+    }
+
+    static func failure(_ message: String, kind: PlanLimits.ProblemKind? = nil) -> PlanLimits {
+        let text = message.lowercased()
+        // Legacy readers return prose, not a typed error. Only explicit authentication
+        // failures warrant login; forbidden, unavailable and empty results do not.
+        let authentication = ["not logged in", "not signed in", "authentication required", "unauthorized", "token expired", "token has expired", "login has expired", "token_expired", "invalid access token"].contains { text.contains($0) }
+        return PlanLimits(planName: nil, windows: [], problem: message,
+                          problemKind: kind ?? (authentication ? .authentication : .unavailable))
+    }
+
+    private static func classified(_ limits: PlanLimits?) -> PlanLimits {
+        guard var limits else {
+            return failure("The provider did not return usage data. The usage request may have failed or may be unsupported.")
+        }
+        if let problem = limits.problem, limits.problemKind == nil {
+            limits.problemKind = problem == "Codex reported no usage windows for this account." ? .noWindows : failure(problem).problemKind
+        } else if limits.problem == nil, limits.windows.isEmpty {
+            limits.problem = "The provider reported no usage windows for this account."
+            limits.problemKind = .noWindows
+        }
+        return limits
     }
 
     nonisolated static func windowTitle(minutes: Int?) -> String {
@@ -166,17 +195,29 @@ enum PlanLimitsReader {
             guard let refreshed = await claudeLogin(environment: environment) else { return nil }
             login = refreshed
         }
-        var response = await fetchClaudeUsage(token: login.accessToken)
-        if response?.status == 401 || response?.status == 403 {
-            await refreshClaudeLogin(executable: executable, environment: environment)
-            guard let refreshed = await claudeLogin(environment: environment), refreshed.accessToken != login.accessToken else {
-                return nil
+        do {
+            var response = try await fetchClaudeUsage(token: login.accessToken)
+            if response.status == 401 {
+                await refreshClaudeLogin(executable: executable, environment: environment)
+                if let refreshed = await claudeLogin(environment: environment), refreshed.accessToken != login.accessToken {
+                    login = refreshed
+                    response = try await fetchClaudeUsage(token: login.accessToken)
+                }
             }
-            login = refreshed
-            response = await fetchClaudeUsage(token: login.accessToken)
+            guard response.status == 200 else {
+                let detail = JSONValue.parse(response.data)?["error"]?["message"]?.string
+                    ?? HTTPURLResponse.localizedString(forStatusCode: response.status)
+                return failure(String(format: AppText.localized("Claude usage request failed (HTTP %lld): %@"), response.status, detail),
+                               kind: response.status == 401 ? .authentication : .unavailable)
+            }
+            guard let json = JSONValue.parse(response.data), json.object != nil else {
+                return failure("Claude returned an invalid usage response.")
+            }
+            return parseClaudeUsage(json, limits: json["limits"]?.array ?? [], planName: login.planName)
+                ?? failure("The provider reported no usage windows for this account.", kind: .noWindows)
+        } catch {
+            return failure(error.localizedDescription, kind: .unavailable)
         }
-        guard let response, response.status == 200, let json = JSONValue.parse(response.data) else { return nil }
-        return parseClaudeUsage(json, limits: json["limits"]?.array ?? [], planName: login.planName)
     }
 
     /// The stored Claude Code login: `.credentials.json`, or the macOS Keychain item the CLI writes.
@@ -240,13 +281,13 @@ enum PlanLimitsReader {
         _ = try? await Shell.run(executable, ["auth", "status"], environment: environment, timeout: 20)
     }
 
-    private static func fetchClaudeUsage(token: String) async -> (status: Int, data: Data)? {
+    private static func fetchClaudeUsage(token: String) async throws -> (status: Int, data: Data) {
         var request = URLRequest(url: usageURL, timeoutInterval: 15)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else { return nil }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         return (http.statusCode, data)
     }
 
@@ -261,11 +302,11 @@ enum PlanLimitsReader {
         do {
             try process.start()
         } catch {
-            return nil
+            return failure(error.localizedDescription)
         }
         // Ending the process finishes the message stream, which is what bounds a request that never answers.
         let watchdog = Task {
-            try? await Task.sleep(for: .seconds(20))
+            do { try await Task.sleep(for: .seconds(20)) } catch { return }
             process.terminate()
         }
         defer {
@@ -276,18 +317,23 @@ enum PlanLimitsReader {
         for await message in process.messages {
             guard message["type"]?.string == "control_response" else { continue }
             let response = message["response"] ?? .null
+            if response["subtype"]?.string == "error" {
+                return failure(response["error"]?.string ?? "Claude CLI rejected the usage request.")
+            }
             switch response["request_id"]?.string {
             case "tivano-init":
                 process.send(["type": "control_request", "request_id": "tivano-usage", "request": ["subtype": "get_usage"]])
             case "tivano-usage":
                 let usage = response["response"] ?? .null
                 let rateLimits = usage["rate_limits"] ?? .null
+                guard !rateLimits.isNull else { return failure("Claude CLI did not provide usage data. This CLI may not support the usage request.") }
                 return parseClaudeUsage(rateLimits, limits: rateLimits["limits"]?.array ?? [], planName: planName(usage["subscription_type"]?.string))
+                    ?? failure("The provider reported no usage windows for this account.", kind: .noWindows)
             default:
                 continue
             }
         }
-        return nil
+        return failure("Claude CLI ended without a usage response or the request timed out.")
     }
 
     /// The `limits` rows (session, weekly, weekly per model), falling back to the top-level

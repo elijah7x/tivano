@@ -129,7 +129,7 @@ struct WallpaperCard: View {
                 Image(systemName: "drop")
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
-                    .help("Sharp")
+                    .help(Text(verbatim: Chrome.localized("Sharp")))
                 Slider(
                     value: Binding(get: { store.softness }, set: { store.softness = $0 }),
                     in: 0...1,
@@ -140,7 +140,7 @@ struct WallpaperCard: View {
                 Image(systemName: "drop.fill")
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
-                    .help("Blurred")
+                    .help(Text(verbatim: Chrome.localized("Blurred")))
             }
             .overlay(alignment: .leading) {
                 if isOffStock {
@@ -154,7 +154,7 @@ struct WallpaperCard: View {
                             .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
-                    .help("Back to sharp")
+                    .help(Text(verbatim: Chrome.localized("Back to sharp")))
                     .offset(x: -28)
                     .transition(.opacity.combined(with: .offset(x: 6)))
                 }

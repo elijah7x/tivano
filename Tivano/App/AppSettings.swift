@@ -145,6 +145,9 @@ final class AppSettings {
         static let contentFontSize = "contentFontSize"
         static let codeFontSize = "codeFontSize"
         static let sidebarActivityView = "sidebarActivityView"
+        static let codexVoice = "codexVoice"
+        static let alphaEnabled = "alphaEnabled"
+        static let alphaVoiceEnabled = "alphaVoiceEnabled"
         static let appTheme = "appTheme"
         static let backdropOpacity = "backdropOpacity"
         static let appearance = "appearance"
@@ -176,6 +179,7 @@ final class AppSettings {
         static let deepseekAPIKey = "deepseekAPIKey"
         static let metaAPIKey = "metaAPIKey"
         static let zaiAPIKey = "zaiAPIKey"
+        static let zaiRegion = ZaiRegion.defaultsKey
         static let commandcodeAPIKey = "commandcodeAPIKey"
         static let hydraEnabled = "hydraEnabled"
         static let panelSize = "floatingPanelSize"
@@ -325,6 +329,33 @@ final class AppSettings {
         }
     }
 
+    /// Voice style for the next call; nil uses Codex's default.
+    var codexVoice: String? {
+        didSet { defaults.set(codexVoice, forKey: Key.codexVoice) }
+    }
+
+    /// Alpha's master switch: off hides every experimental feature, whatever its own switch.
+    var alphaEnabled: Bool {
+        didSet { defaults.set(alphaEnabled, forKey: Key.alphaEnabled) }
+    }
+
+    /// Codex realtime voice, an Alpha feature.
+    var alphaVoiceEnabled: Bool {
+        didSet { defaults.set(alphaVoiceEnabled, forKey: Key.alphaVoiceEnabled) }
+    }
+
+    /// Alpha is a Dev-edition feature for now: Release has no page to switch it on, and a
+    /// stored preference cannot turn it on either. Shipping it means making this `true`.
+    nonisolated static let alphaAvailable: Bool = {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }()
+
+    var isVoiceEnabled: Bool { Self.alphaAvailable && alphaEnabled && alphaVoiceEnabled }
+
     /// The sidebar lists every thread by when it was last active, instead of by project.
     var sidebarActivityView: Bool {
         didSet { defaults.set(sidebarActivityView, forKey: Key.sidebarActivityView) }
@@ -460,7 +491,11 @@ final class AppSettings {
         }
     }
 
-    /// Z.ai's GLM Coding Plan talks to https://api.z.ai/api/coding/paas/v4 directly,
+    var zaiRegion: ZaiRegion {
+        didSet { defaults.set(zaiRegion.rawValue, forKey: Key.zaiRegion) }
+    }
+
+    /// Z.ai's GLM Coding Plan talks to api.z.ai or open.bigmodel.cn by region,
     /// so it needs a ZAI_API_KEY instead of a CLI login.
     /// Stored in the Keychain when available, with a UserDefaults fallback for migration.
     /// Read once, on the first ask, and cached: a Keychain query on every render made
@@ -785,10 +820,14 @@ final class AppSettings {
         antiSlopEnabled = defaults.object(forKey: Key.antiSlopEnabled) as? Bool ?? true
         showsWorkingCard = defaults.object(forKey: Key.showsWorkingCard) as? Bool ?? true
         timelineHapticStyle = TimelineHapticStyle(rawValue: defaults.string(forKey: Key.timelineHapticStyle) ?? "") ?? .soft
+        zaiRegion = ZaiRegion(rawValue: defaults.string(forKey: Key.zaiRegion) ?? "") ?? .global
         uiFontSize = Self.clampedFontSize(defaults, key: Key.uiFontSize, stock: TypeScale.defaultUI, range: TypeScale.uiRange)
         contentFontSize = Self.clampedFontSize(defaults, key: Key.contentFontSize, stock: TypeScale.defaultContent, range: TypeScale.contentRange)
         codeFontSize = Self.clampedFontSize(defaults, key: Key.codeFontSize, stock: TypeScale.defaultCode, range: TypeScale.codeRange)
         sidebarActivityView = defaults.bool(forKey: Key.sidebarActivityView)
+        codexVoice = defaults.string(forKey: Key.codexVoice)
+        alphaEnabled = defaults.bool(forKey: Key.alphaEnabled)
+        alphaVoiceEnabled = defaults.bool(forKey: Key.alphaVoiceEnabled)
         backdropOpacity = defaults.object(forKey: Key.backdropOpacity) as? Double ?? Self.defaultBackdropOpacity
         clearerBackdrop = defaults.object(forKey: Key.clearerBackdrop) as? Bool ?? true
         let initialPerformanceMode = defaults.bool(forKey: Key.performanceMode)

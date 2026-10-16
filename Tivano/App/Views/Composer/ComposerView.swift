@@ -32,6 +32,7 @@ struct ComposerArea: View {
 
     private var areaContent: some View {
         VStack(spacing: 12) {
+            VoiceComposerOrb(threadID: runtime.threadID)
             ForEach(runtime.approvals) { request in
                 ApprovalCard(request: request, runtime: runtime)
             }
@@ -202,7 +203,7 @@ struct ComposerView: View {
                 controller.hideSuggestions()
             }
         }
-        .onDisappear { controller.hideSuggestions() }
+        .onDisappear { controller.tearDownSuggestions() }
         .onChange(of: runtime.threadID) { _, _ in controller.hideSuggestions() }
         // The column shown again takes the keyboard back, as it did when it first appeared;
         // one going behind another drops its list.
@@ -645,7 +646,7 @@ private struct ComposerControls: View {
             }
             .buttonStyle(.chip(active: showingRecents))
             .focusable(false)
-            .help("Attach files")
+            .help(Text(verbatim: Chrome.localized("Attach files")))
             .accessibilityLabel(Text("Attach files"))
             .popover(isPresented: $showingRecents, arrowEdge: .bottom) {
                 DownloadsPopover(
@@ -667,6 +668,7 @@ private struct ComposerControls: View {
             if !compact {
                 ContextMeter(runtime: runtime, provider: thread.provider, headsProvider: headsProvider)
             }
+            VoiceComposerButton(thread: thread)
             SendButton(runtime: runtime, goesToHead: goesToHead, queueGoesToHead: queueGoesToHead, send: onSend)
         }
         .frame(maxWidth: .infinity)
@@ -919,7 +921,7 @@ private struct DraftChips: View {
                             }
                             .buttonStyle(.plain)
                             .focusable(false)
-                            .help("Remove command")
+                            .help(Text(verbatim: Chrome.localized("Remove command")))
                             .accessibilityLabel(Text("Remove command"))
                         }
                         .modifier(ChipChrome())
@@ -948,7 +950,7 @@ private struct DraftChips: View {
                             }
                             .buttonStyle(.plain)
                             .focusable(false)
-                            .help("Remove quote")
+                            .help(Text(verbatim: Chrome.localized("Remove quote")))
                             .accessibilityLabel(Text("Remove quote"))
                         }
                         .modifier(ChipChrome())

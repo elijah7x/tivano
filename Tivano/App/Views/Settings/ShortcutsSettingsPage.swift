@@ -93,7 +93,7 @@ private struct FixedShortcutsCard: View {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(Chrome.overlay(0.07))
                             )
-                            .help("Built in")
+                            .help(Text(verbatim: Chrome.localized("Built in")))
                     }
                 }
             }

@@ -457,7 +457,7 @@ private struct PinnedModelRow: View {
                         .onChanged { value in onDragChanged(value.translation.height, value.location.y) }
                         .onEnded { value in onDragEnded(value.location.y) }
                 )
-                .help("Drag to reorder or into another group")
+                .help(Text(verbatim: Chrome.localized("Drag to reorder or into another group")))
                 .accessibilityLabel(Text("Drag to reorder"))
             Button {
                 isPresented = true
@@ -599,7 +599,7 @@ private struct ModelGroupHeader: View {
                 )
                 .opacity(canDrag ? 1 : 0)
                 .allowsHitTesting(canDrag)
-                .help("Drag to reorder groups")
+                .help(Text(verbatim: Chrome.localized("Drag to reorder groups")))
                 .accessibilityLabel(Text("Drag to reorder groups"))
             Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
                 .font(Chrome.chevronFont)
@@ -870,7 +870,7 @@ private struct ProviderModelsSection: View {
                     Image(systemName: "bolt")
                         .font(.ui(size: 11))
                         .foregroundStyle(Chrome.secondaryText)
-                        .help("Supports fast mode")
+                        .help(Text(verbatim: Chrome.localized("Supports fast mode")))
                 }
                 Button {
                     // Re-filtering mid-search is instant, like the

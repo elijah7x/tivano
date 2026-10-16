@@ -509,6 +509,12 @@ final class ThreadRuntime {
     @ObservationIgnored private var providerHistoryOperation: Task<Void, Never>?
     /// A session being started ahead of the first message (`warmSession`).
     @ObservationIgnored private var warmup: Task<Void, Never>?
+    @ObservationIgnored var isVoiceOrchestrator = false {
+        didSet {
+            noteSessionEvent()
+            app?.updateTaskSleepPrevention()
+        }
+    }
     // User messages wait behind the brief while the head's route and copy are prepared.
     @ObservationIgnored var hydraStartupPending = false
     /// The session's ID while no message has gone through it. The provider has nothing
@@ -659,6 +665,7 @@ final class ThreadRuntime {
         /// The anti-slop policy travels with the session, so flipping the setting
         /// restarts it and the policy in force is the one the session was made with.
         var antiSlopEnabled: Bool
+        var voiceContext: VoiceOrchestratorContext?
     }
 
     enum DeltaKind {
@@ -1666,7 +1673,8 @@ final class ThreadRuntime {
             launchInteraction: thread.provider == .antigravity || thread.provider == .omp ? thread.interactionMode : nil,
             hydra: hydra,
             hydraPairID: hydra == nil ? nil : thread.hydraPairID,
-            antiSlopEnabled: app.settings.antiSlopEnabled
+            antiSlopEnabled: app.settings.antiSlopEnabled,
+            voiceContext: app.voiceContext(for: threadID)
         )
         if !thread.provider.isAPIKeyBased {
             await app.providers.waitWhileCLIUpdating(thread.provider)
@@ -1778,6 +1786,7 @@ final class ThreadRuntime {
                 codexHistoryArchived: thread.hydra?.ownedCodexSessionID == resumeID && thread.hydra?.codexHistoryArchived == true,
                 codexHistoryDirectory: thread.hydra?.ownedCodexWorkingDirectory,
                 antiSlopEnabled: signature.antiSlopEnabled,
+                voiceContext: signature.voiceContext,
                 modelCatalog: thread.provider.namesModelVariants ? app.providers.models(for: thread.provider) : []
             )
             let created: any ProviderSession = switch thread.provider {
@@ -2147,7 +2156,7 @@ final class ThreadRuntime {
         guard phase == .running, thread?.isHydraHead != true else { return }
         // Waiting on the reader, on a usage limit, on a merge or on heads still at work is
         // not the session gone quiet. The clock starts over once that ends.
-        if !approvals.isEmpty || !questions.isEmpty || isWaitingForLimit || isHydraMerging || hasWorkingHeads {
+        if isVoiceOrchestrator || !approvals.isEmpty || !questions.isEmpty || isWaitingForLimit || isHydraMerging || hasWorkingHeads {
             noteSessionEvent()
             return
         }
@@ -2605,6 +2614,7 @@ final class ThreadRuntime {
         antiSlopFallbackSent = false
         continuationSent = false
         guard let old = session else { return }
+        app?.voice.sessionEnded(for: threadID)
         session = nil
         if stop {
             sessionsAwaitingReplacement.append(old)
@@ -2696,6 +2706,7 @@ final class ThreadRuntime {
 
     private func openBackgroundTurn() {
         rehearseTurn(nil)
+        if isVoiceOrchestrator { return }
         let name = thread?.provider.displayName ?? Chrome.localized("The agent")
         appendNotice(.info, String(format: Chrome.localized("%@ picked the work back up after a background task finished."), name))
     }
@@ -4449,6 +4460,41 @@ private extension TimelineItem.Content {
             return false
         }
         return true
+    }
+}
+
+// MARK: - Voice
+
+extension ThreadRuntime {
+    func codexSessionForVoice() async throws -> CodexSession {
+        guard let app, let thread = app.thread(threadID), thread.provider == .codex else { throw VoiceRejection.wrongProvider }
+        guard let project = app.project(thread.projectID) else { throw VoiceRejection.noProject }
+        if let warmup { await warmup.value }
+        await ensureLoaded()
+        guard !Task.isCancelled else { throw CancellationError() }
+        await ensureModel(thread)
+        let session = try await ensureSession(directory: thread.executionDirectory(projectPath: project.path))
+        guard let codex = session as? CodexSession else { throw VoiceRejection.wrongProvider }
+        return codex
+    }
+
+    /// Canonical segment identities replace repeated finals instead of duplicating them.
+    func recordVoiceTranscript(itemID: String, role: VoiceRole, text: String) {
+        let text = role == .assistant ? TextCleanup.withoutEmDashes(text.trimmed) : text.trimmed
+        guard !text.isEmpty else { return }
+        let id = "voice-" + itemID
+        let content: TimelineItem.Content = switch role {
+        case .user: .user(UserMessage(text: text))
+        case .assistant: .assistant(AssistantMessage(text: text))
+        }
+        if let entry = entryIndex[id] {
+            entry.item.content = content
+            saveRevision += 1
+        } else {
+            append(TimelineItem(id: id, turnID: turnIDForNewRows, content: content))
+        }
+        app?.updateThread(threadID) { $0.updatedAt = .now }
+        scheduleSave()
     }
 }
 

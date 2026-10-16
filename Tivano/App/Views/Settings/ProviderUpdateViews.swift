@@ -40,17 +40,17 @@ struct ProviderUpdateSubtitle: View {
     }
 
     private var lines: [String] {
-        var lines = [versionLine]
-        if !state.monitoringEnabled {
-            lines.append(Chrome.localized("Update monitoring is off."))
-        }
+        var status: [String] = []
         if let phaseLine {
-            lines.append(phaseLine)
+            status.append(phaseLine)
+        }
+        if !state.monitoringEnabled {
+            status.append(Chrome.localized("Update monitoring is off."))
         }
         if let protectionLine {
-            lines.append(protectionLine)
+            status.append(protectionLine)
         }
-        return lines
+        return status.isEmpty ? [versionLine] : [versionLine, status.joined(separator: " ")]
     }
 
     /// The installed version, or an explicit unknown. A current result with no latest
@@ -68,11 +68,12 @@ struct ProviderUpdateSubtitle: View {
             return Chrome.localized("Checking for updates…")
         case .current:
             guard state.monitoringEnabled else { return nil }
+            if let error = providerUpdateText(state.error) { return error }
             guard providerUpdateText(state.latest) != nil else {
-                return Chrome.localized("No verified version source is available for this installation.")
+                return Chrome.localized("The latest version could not be verified.")
             }
             guard providerUpdateText(state.installed) != nil else { return nil }
-            return Chrome.localized("Up to date")
+            return Chrome.localized("Up to date.")
         case .available:
             return availableLine
         case .waiting:
@@ -83,8 +84,8 @@ struct ProviderUpdateSubtitle: View {
             }
             return Chrome.localized("Updating…")
         case .updated:
-            if let installed = providerUpdateText(state.installed) {
-                return String(format: Chrome.localized("Updated. Now at version %@."), installed)
+            if providerUpdateText(state.installed) != nil {
+                return Chrome.localized("Updated.")
             }
             return Chrome.localized("The installed version could not be confirmed after updating.")
         case .failed:
@@ -103,33 +104,19 @@ struct ProviderUpdateSubtitle: View {
     }
 
     private var availableLine: String {
-        let latest = providerUpdateText(state.latest)
-        if state.customBinaryPath {
-            if let latest {
-                return String(format: Chrome.localized("%@ is available. A custom binary path is set, so Tivano will not update it."), latest)
-            }
-            return Chrome.localized("An update is available. A custom binary path is set, so Tivano will not update it.")
-        }
-        if !state.channelKnown {
-            if let latest {
-                return String(format: Chrome.localized("%@ is available. Its install channel is unknown, so update it the way it was installed."), latest)
-            }
-            return Chrome.localized("An update is available. Its install channel is unknown, so update it the way it was installed.")
-        }
-        if let latest {
+        if let latest = providerUpdateText(state.latest) {
             return String(format: Chrome.localized("%@ is available."), latest)
         }
         return Chrome.localized("An update is available.")
     }
 
-    /// Available copy already includes the protection. A check has not resolved the
-    /// channel yet; a custom path is already known.
+    /// A check has not resolved the channel yet; a custom path is already known.
     private var protectionLine: String? {
-        if state.phase == .available { return nil }
         if state.customBinaryPath {
             return Chrome.localized("A custom binary path is set, so Tivano will not update it.")
         }
         if state.phase == .checking || state.channelKnown { return nil }
+        if providerUpdateText(state.error) != nil { return nil }
         return Chrome.localized("The install channel is unknown, so Tivano will not update it.")
     }
 

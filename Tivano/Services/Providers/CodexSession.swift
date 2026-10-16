@@ -73,6 +73,20 @@ final class CodexSession: ProviderSession {
 
     private var workingDirectory: String { configuration.workingDirectory.path }
 
+    // Realtime attaches to this chat's own app-server, independent of chat selection.
+    var onVoiceNotification: ((String, JSONValue) -> Void)?
+    var onVoiceClosed: (() -> Void)?
+    var executableURL: URL? { configuration.executable }
+    var voiceThreadID: String? { threadID }
+    var voiceInstructions: String? {
+        configuration.voiceContext.map { VoiceCatalog.orchestratorInstructions(context: $0) }
+    }
+
+    func voiceRequest(_ method: String, _ params: JSONValue = .null, seconds: Int = 30) async throws -> JSONValue {
+        guard let connection, !connection.isClosed else { throw ProviderError.notRunning }
+        return try await Self.deadlineRequest(connection, method, params, seconds: seconds)
+    }
+
     func start() async throws -> String {
         guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
         let connection = try await Self.connect(
@@ -258,6 +272,10 @@ final class CodexSession: ProviderSession {
             // ran its heads inside its own session, out of the app's sight.
             config["features"] = ["multi_agent": .bool(false), "multi_agent_v2": .bool(false)]
             params["developerInstructions"] = .string(HydraPrompts.fallbackPolicy(hydra))
+        }
+        if let instructions = voiceInstructions {
+            config["features"] = ["multi_agent": false, "multi_agent_v2": false]
+            params["developerInstructions"] = .string(instructions)
         }
         if !config.isEmpty { params["config"] = .object(config) }
         // Anti-slop guidance rides along for every thread, Hydra or not, and combines with
@@ -581,6 +599,15 @@ final class CodexSession: ProviderSession {
                 problem: Self.plainProblem(error)
             )
         }
+        var resetCredits = parseResetCredits(result["rateLimitResetCredits"] ?? result["rate_limit_reset_credits"])
+        // The app-server sometimes answers with the banked count but none of the credits behind it
+        // (about one read in four); a second read on the same connection nearly always lists them.
+        if let partial = resetCredits, partial.credits.count < partial.availableCount,
+           let again = try? await Self.deadlineRequest(connection, "account/rateLimits/read", seconds: 15),
+           let retried = parseResetCredits(again["rateLimitResetCredits"] ?? again["rate_limit_reset_credits"]),
+           retried.credits.count > partial.credits.count {
+            resetCredits = retried
+        }
         var snapshots: [JSONValue] = []
         if let byID = result["rateLimitsByLimitId"]?.object, !byID.isEmpty {
             snapshots = byID.keys.sorted().compactMap { byID[$0] }
@@ -608,14 +635,16 @@ final class CodexSession: ProviderSession {
             return PlanLimits(
                 planName: PlanLimitsReader.codexPlanName(plan),
                 windows: [],
-                problem: "Codex reported no usage windows for this account."
+                resetCredits: resetCredits,
+                problem: "Codex reported no usage windows for this account.",
+                problemKind: .noWindows
             )
         }
-        return PlanLimits(planName: PlanLimitsReader.codexPlanName(plan), windows: windows, resetCredits: parseResetCredits(result["rateLimitResetCredits"] ?? result["rate_limit_reset_credits"]))
+        return PlanLimits(planName: PlanLimitsReader.codexPlanName(plan), windows: windows, resetCredits: resetCredits)
     }
 
     private static func plainProblem(_ error: Error) -> String {
-        let text = TextCleanup.singleLine(String(describing: error), limit: 300)
+        let text = TextCleanup.singleLine(error.localizedDescription, limit: 300)
         if text.contains("token_expired") || text.contains("401") {
             return "Codex's stored login has expired. Run `codex login` in a terminal, then check again."
         }
@@ -708,6 +737,10 @@ final class CodexSession: ProviderSession {
     // MARK: - Notifications
 
     private func handleNotification(_ method: String, _ params: JSONValue) {
+        if method.hasPrefix("thread/realtime/") || method == "account/updated" {
+            onVoiceNotification?(method, params)
+            return
+        }
         if method == "thread/archived", params["threadId"]?.string == threadID {
             archiveConfirmed = true
         }
@@ -1265,6 +1298,7 @@ final class CodexSession: ProviderSession {
     }
 
     private func handleClose(_ tail: String) {
+        onVoiceClosed?()
         completionFallback?.cancel()
         completionFallback = nil
         finalErrors.removeAll()

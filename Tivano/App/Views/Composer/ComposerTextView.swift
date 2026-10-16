@@ -87,6 +87,15 @@ final class ComposerController {
         suggestionPopover?.performClose(nil)
     }
 
+    func tearDownSuggestions() {
+        suggestionRefresh?.cancel()
+        suggestionRefresh = nil
+        suggestionPopover?.close()
+        suggestionPopover?.contentViewController = nil
+        suggestionHost = nil
+        suggestionPopover = nil
+    }
+
     /// True when the current click landed inside the suggestions popover,
     /// so losing text focus to pick a row must not dismiss the list first.
     func isClickInsideSuggestions() -> Bool {
@@ -282,11 +291,17 @@ struct ComposerTextView: NSViewRepresentable {
             Task { @MainActor in coordinator?.parent.onBlur() }
         }
         Task { @MainActor in
+            coordinator.updateHeight()
+            guard takesFocusOnAppear else { return }
+            for _ in 0..<10 {
+                guard !Task.isCancelled, textView.window == nil else { break }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            guard !Task.isCancelled else { return }
             // And never from another box the user is typing in, whichever one this is.
-            if takesFocusOnAppear, let window = textView.window, !(window.firstResponder is ComposerNSTextView) {
+            if let window = textView.window, !(window.firstResponder is ComposerNSTextView) {
                 window.makeFirstResponder(textView)
             }
-            coordinator.updateHeight()
         }
         return scrollView
     }

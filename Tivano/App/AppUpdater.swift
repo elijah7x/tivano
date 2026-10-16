@@ -392,7 +392,9 @@ final class AppUpdater {
         guard copy.succeeded else {
             throw UpdateInstallError("The update could not be copied. \(copy.failureMessage)")
         }
-        try Self.verifySignature(of: staged)
+        try await Task.detached(priority: .userInitiated) {
+            try Self.verifySignature(of: staged)
+        }.value
         let bundle = Bundle(url: staged)
         let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         guard let version, let actual = AppVersion(version), let expected = AppVersion(expectedVersion), actual == expected else {

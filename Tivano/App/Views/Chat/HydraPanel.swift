@@ -177,7 +177,7 @@ struct HydraPanel: View {
             PanelDragHandle(onDrag: onDrag, onDragEnd: onDragEnd)
                 .frame(maxWidth: .infinity)
                 .frame(height: Self.stripHeight)
-                .help("Drag to move")
+                .help(Text(verbatim: Chrome.localized("Drag to move")))
                 .accessibilityLabel(Text("Drag to move"))
             HStack(spacing: 8) {
                 if isPoppedOut {

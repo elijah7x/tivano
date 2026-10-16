@@ -42,7 +42,7 @@ struct ProjectIconButton: View {
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
-        .help("Choose this project's icon")
+        .help(Text(verbatim: Chrome.localized("Choose this project's icon")))
         .accessibilityLabel(Text("Project icon"))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             ProjectIconPicker(icon: $icon)

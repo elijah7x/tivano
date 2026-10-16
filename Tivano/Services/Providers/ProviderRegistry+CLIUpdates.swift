@@ -229,6 +229,14 @@ extension ProviderRegistry {
             publishCLICheckFailure(provider, generation: generation, epoch: epoch, snapshot: snapshot, message: cliText("The installed version could not be read."))
             return
         }
+        guard channel != nil else {
+            var status = CLIUpdateStatus(phase: .current, installed: installed)
+            status.error = CLIUpdates.unmanagedReason(provider, executable: executable)
+            status.checkedAt = .now
+            cliUpdates[provider] = status
+            cliCheckCache[provider] = nil
+            return
+        }
         var latest: String?
         do {
             latest = try await CLIUpdates.latestVersion(provider, installed: installed, channel: channel, executable: executable, environment: environment, probe: cliProbe)
@@ -261,8 +269,6 @@ extension ProviderRegistry {
                 return
             }
         } else {
-            // No verified feed. `.current` here is only the idle phase: `latest` stays nil,
-            // so nothing may treat it as confirmation that the install is up to date.
             phase = .current
         }
         var status = cliUpdates[provider] ?? CLIUpdateStatus(phase: phase)
@@ -270,12 +276,12 @@ extension ProviderRegistry {
         status.installed = installed
         status.latest = latest
         status.channel = channel
-        status.error = nil
+        status.error = latest == nil ? cliText("No verified release feed is available for this installation. Its update status is unknown.") : nil
         status.updateFailed = false
         status.checkedAt = key.checkedAt
         guard cliCheckStillCurrent(provider, generation: generation, epoch: epoch) else { return }
         cliUpdates[provider] = status
-        cliCheckCache[provider] = key
+        cliCheckCache[provider] = latest == nil ? nil : key
     }
 
     private func cliCheckAllowed(_ provider: ProviderKind) -> Bool {
@@ -386,7 +392,7 @@ extension ProviderRegistry {
         sharers: [ProviderKind],
         snapshot: [ProviderKind: CLIUpdateStatus]
     ) async -> Bool {
-        let target = snapshot[requester]?.latest
+        var target: String?
         while providersSharingCLIInstall(lock).contains(where: { isProviderBusy($0) }) {
             if stopCLIUpdateWait(requester, lock: lock, sharers: sharers, snapshot: snapshot) { return false }
             try? await Task.sleep(for: .milliseconds(200))
@@ -412,7 +418,7 @@ extension ProviderRegistry {
             return false
         }
         guard let channel = resolvedChannel else {
-            restoreCLIWait(sharers, snapshot: snapshot, requester: requester, failure: cliUpdateRefusal(requester, cliText("No install channel was found, so Tivano did not update it."), channel: nil, keeping: snapshot[requester]))
+            restoreCLIWait(sharers, snapshot: snapshot, requester: requester, failure: cliUpdateRefusal(requester, CLIUpdates.unmanagedReason(requester, executable: executable), channel: nil, keeping: snapshot[requester]))
             return false
         }
         guard let versionURL = preparedCLIExecutable(requester, lock: lock) else {
@@ -426,6 +432,14 @@ extension ProviderRegistry {
         }
         guard let before = readBefore else {
             restoreCLIWait(sharers, snapshot: snapshot, requester: requester, failure: cliUpdateRefusal(requester, cliText("The installed version could not be read, so Tivano did not run the update."), channel: channel, keeping: snapshot[requester]))
+            return false
+        }
+        // Read the current feed before executing: an old cached target must not hide
+        // a failed or malformed release document.
+        do {
+            target = try await CLIUpdates.latestVersion(requester, installed: before, channel: channel, executable: executable, environment: environment, probe: cliProbe)
+        } catch {
+            restoreCLIWait(sharers, snapshot: snapshot, requester: requester, failure: cliUpdateRefusal(requester, error.localizedDescription, channel: channel, keeping: snapshot[requester]))
             return false
         }
         let verifiedChannel: CLIInstallChannel?
@@ -445,6 +459,26 @@ extension ProviderRegistry {
         }
         guard preparedCLIExecutable(requester, lock: lock) != nil else {
             endCLIUpdateWait(requester, lock: lock, sharers: sharers, snapshot: snapshot)
+            return false
+        }
+        // Waiting can outlive a login-environment refresh or an external installer.
+        // Recheck against the exact environment that will be passed to the command.
+        do {
+            guard CLIInstallEnvironment.current == environment,
+                  try await CLIUpdates.channel(for: requester, executable: executable, environment: environment, probe: cliProbe) == channel else {
+                restoreCLIWait(sharers, snapshot: snapshot, requester: requester, failure: cliUpdateRefusal(requester, cliText("The binary changed before the update ran, so Tivano did not update it."), channel: nil, keeping: snapshot[requester]))
+                return false
+            }
+        } catch {
+            restoreCLIWait(sharers, snapshot: snapshot, requester: requester, failure: cliUpdateRefusal(requester, error.localizedDescription, channel: nil, keeping: snapshot[requester]))
+            return false
+        }
+        guard preparedCLIExecutable(requester, lock: lock) != nil else {
+            endCLIUpdateWait(requester, lock: lock, sharers: sharers, snapshot: snapshot)
+            return false
+        }
+        if let target, CLIUpdates.compare(target, with: before) == .older {
+            restoreCLIWait(sharers, snapshot: snapshot, requester: requester, failure: cliUpdateRefusal(requester, cliText("The release feed offers an older version, so Tivano did not run the update."), channel: channel, keeping: snapshot[requester]))
             return false
         }
         markCLIUpdating(sharers, channel: channel, installed: before, latest: target)
@@ -708,6 +742,15 @@ extension ProviderRegistry {
 
     private func normalizedCLIInstallLock(_ path: String) -> String {
         if let claude = claudeInstallLock(path) { return claude }
+        let home = cliProbe.standardize(cliProbe.home())
+        let dataHome = CLIInstallEnvironment.current["XDG_DATA_HOME"].flatMap { $0.isEmpty ? nil : cliProbe.standardize($0) } ?? home + "/.local/share"
+        for (name, root, launchers) in [
+            ("cursor", home + "/.local/share/cursor-agent", [home + "/.local/bin/cursor-agent", home + "/.local/bin/agent"]),
+            ("grok", home + "/.grok", [home + "/.grok/bin/grok"]),
+            ("devin", dataHome + "/devin/cli", [home + "/.local/bin/devin"]),
+        ] {
+            if path.hasPrefix(root + "/") || launchers.contains(path) { return name + ":" + root }
+        }
         if let pnpm = pnpmInstallLock(path) { return pnpm }
         let parts = (path as NSString).pathComponents
         if let modules = parts.firstIndex(of: "node_modules"), modules + 2 < parts.count {

@@ -10,7 +10,7 @@ final class DeepSeekSession: OpenAICompatibleSession {
         title: "DeepSeek",
         agentIdentity: { _ in "DeepSeek coding agent" },
         defaultModel: "deepseek-v4-pro",
-        chatURL: DeepSeekAPI.chatURL,
+        chatURL: { DeepSeekAPI.chatURL },
         contextWindow: DeepSeekAPI.contextWindow,
         maxOutputTokens: nil,
         replaysReasoning: true,

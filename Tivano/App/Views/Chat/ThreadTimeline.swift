@@ -810,15 +810,15 @@ struct ThreadTimeline: View, Equatable {
                 let pinned = new.distanceFromBottom < 48
                 if pinned != tracking.isPinnedToBottom { tracking.isPinnedToBottom = pinned }
                 if pinned != anchorsBottomOnGrowth { anchorsBottomOnGrowth = pinned }
-            } else if (tracking.isPinnedToBottom || old.distanceFromBottom < 48), atRest, abs(new.distanceFromBottom) > 1 {
+            } else if (tracking.isPinnedToBottom || old.distanceFromBottom <= 1), atRest, abs(new.distanceFromBottom) > 1 {
                 // Pinned, at rest, and not at the end: the content grew or reflowed to a new
                 // width, the chat box took height, or the scroll view lost its place (rows
                 // measured after it anchored, a thread opened mid-animation) and is showing
                 // empty space past the conversation. The end is where the reader is; the
                 // timeline snaps back to it, never slides, so a new row lands in place and
                 // fades in on its own. (Mid-resize this waits for the settle below: the
-                // anchor already holds the bottom edge each frame.) A reader at the end whose pin
-                // flag went stale is caught by the end they held last frame.
+                // anchor already holds the bottom edge each frame.) A stale pin flag is revived
+                // only if the reader was within one point of the end last frame.
                 guard !liveResize.isActive else { return }
                 tracking.isPinnedToBottom = true
                 anchorsBottomOnGrowth = true

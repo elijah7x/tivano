@@ -19,7 +19,7 @@ class OpenAICompatibleSession: ProviderSession {
         /// Meta's names the model: "Meta coding agent (Muse Spark muse-spark-1.3)".
         let agentIdentity: (String) -> String
         let defaultModel: String
-        let chatURL: URL
+        let chatURL: @Sendable () -> URL
         let contextWindow: Int
         /// The response cap Z.ai asks for explicitly; nil where the provider needs none.
         let maxOutputTokens: Int?
@@ -598,7 +598,7 @@ class OpenAICompatibleSession: ProviderSession {
     }
 
     private func performStream(payload: [String: JSONValue]) async throws -> StreamRound {
-        var request = URLRequest(url: config.chatURL, timeoutInterval: 300)
+        var request = URLRequest(url: config.chatURL(), timeoutInterval: 300)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")

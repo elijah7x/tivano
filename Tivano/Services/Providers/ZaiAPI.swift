@@ -1,15 +1,15 @@
 import Foundation
 
-/// Minimal OpenAI-compatible HTTP client for api.z.ai (GLM Coding Plan).
+/// Minimal OpenAI-compatible HTTP client for api.z.ai or open.bigmodel.cn by region (GLM Coding Plan).
 /// Chat streaming itself lives in ZaiSession; this covers the
 /// lightweight calls (key validation, model catalog, plan limits) the registry needs.
 enum ZaiAPI {
-    static let baseURL = URL(string: "https://api.z.ai/api/coding/paas/v4")!
-    static let chatURL = baseURL.appendingPathComponent("chat/completions")
-    static let modelsURL = baseURL.appendingPathComponent("models")
-    static let quotaURL = URL(string: "https://api.z.ai/api/monitor/usage/quota/limit")!
-    static let resetListURL = URL(string: "https://api.z.ai/api/biz/customer-package-reset/list?targetType=PERSONAL")!
-    static let resetUseURL = URL(string: "https://api.z.ai/api/biz/customer-package-reset/use")!
+    static var baseURL: URL { URL(string: "https://\(ZaiRegion.current.host)/api/coding/paas/v4")! }
+    static var chatURL: URL { baseURL.appendingPathComponent("chat/completions") }
+    static var modelsURL: URL { baseURL.appendingPathComponent("models") }
+    static var quotaURL: URL { URL(string: "https://\(ZaiRegion.current.host)/api/monitor/usage/quota/limit")! }
+    static var resetListURL: URL { URL(string: "https://\(ZaiRegion.current.host)/api/biz/customer-package-reset/list?targetType=PERSONAL")! }
+    static var resetUseURL: URL { URL(string: "https://\(ZaiRegion.current.host)/api/biz/customer-package-reset/use")! }
 
     static let zaiEfforts = ["low", "high", "max"]
 

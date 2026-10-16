@@ -17,7 +17,7 @@ final class MetaSession: OpenAICompatibleSession {
         title: "Meta",
         agentIdentity: { model in "Meta coding agent (Muse Spark \(model))" },
         defaultModel: "muse-spark-1.3",
-        chatURL: MetaAPI.chatURL,
+        chatURL: { MetaAPI.chatURL },
         contextWindow: MetaAPI.contextWindow,
         maxOutputTokens: nil,
         replaysReasoning: false,

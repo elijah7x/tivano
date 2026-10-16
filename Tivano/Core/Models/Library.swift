@@ -162,6 +162,8 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// Whether the helper is showing in its parent's floating panel. While it is, it is kept
     /// out of the sidebar, the palette, the recent picks and the unread count.
     var isInPanel = false
+    /// A voice orchestrator keeps its brief and disables native Codex sub-agents on resume.
+    var isVoiceSession = false
     /// Whether this thread's helpers are shown one by one under it in the sidebar. Off
     /// until the user opens them: folded, one line under the chat names the team, and a
     /// click on it unfolds them. Saved under its own key, so chats from before the fold
@@ -281,6 +283,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         lastStatus = container.value(.lastStatus, default: nil)
         parentThreadID = container.value(.parentThreadID, default: nil)
         isInPanel = container.value(.isInPanel, default: false)
+        isVoiceSession = container.value(.isVoiceSession, default: false)
         expandsHelpers = container.value(.expandsHelpers, default: false)
         // Threads saved while Hydra was app-wide only carry an ignored false and no
         // explicit flag: they come back on. A save that wrote the flag holds a real choice.

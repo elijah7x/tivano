@@ -39,7 +39,7 @@ struct TerminalPanel: View {
                         .font(Chrome.iconFont)
                 }
                 .buttonStyle(.chip)
-                .help("New terminal")
+                .help(Text(verbatim: Chrome.localized("New terminal")))
                 .accessibilityLabel(Text("New terminal"))
                 Spacer(minLength: 0)
                 Button {
@@ -153,7 +153,7 @@ private struct TerminalTab: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Chrome.secondaryText)
-                .help("Start a new shell in this tab")
+                .help(Text(verbatim: Chrome.localized("Start a new shell in this tab")))
                 .accessibilityLabel(Text("Restart \(session.title)"))
             }
             Button(action: close) {
@@ -163,7 +163,7 @@ private struct TerminalTab: View {
             .buttonStyle(.plain)
             .foregroundStyle(Chrome.secondaryText)
             .opacity(isHovering || isSelected ? 1 : 0)
-            .help("Close terminal")
+            .help(Text(verbatim: Chrome.localized("Close terminal")))
             .accessibilityLabel(Text("Close \(session.title)"))
             // Hidden means unclickable, so a tab that shows no cross takes no tap
             // where its cross would be and selects like the rest of the tab.

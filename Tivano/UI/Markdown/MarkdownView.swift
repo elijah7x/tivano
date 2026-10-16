@@ -24,7 +24,9 @@ private final class StreamingParseCoordinator {
             let tailSize = text.utf8.count - (result?.parse.restart ?? 0)
             if tailSize <= 4096 {
                 pending = nil
-                result = (text, MarkdownParser.parse(text, extending: result))
+                let parsed = MarkdownParser.parse(text, extending: result)
+                result = (text, parsed)
+                MarkdownView.rememberStreamingParse(text, parsed)
             } else {
                 pending = text
                 startNext()
@@ -46,6 +48,7 @@ private final class StreamingParseCoordinator {
             self.running = false
             if self.requested == text {
                 self.result = (text, parsed)
+                MarkdownView.rememberStreamingParse(text, parsed)
                 self.landed &+= 1
             }
             self.startNext()
@@ -156,36 +159,28 @@ struct MarkdownView: View, Equatable {
     /// Parsed blocks by source. Rows are rebuilt as they scroll into view, but a finished
     /// message parses to the same blocks, so each distinct text parses once.
     @MainActor private static var blockCache = RecentCache<String, [MarkdownBlock]>(limit: 800, costLimit: 24 * 1024 * 1024, entryCostLimit: 3 * 1024 * 1024)
-    /// The latest parse of each message still streaming, newest last: re-renders between
-    /// flushes never parse, and a flush parses only the block the new text extends. A few
-    /// slots, so a lead and the heads in its panel streaming together keep theirs.
+    /// Latest parses supplied by streaming coordinators, newest last, for reuse when
+    /// streaming ends. Slots let a lead and its heads retain their parses together.
     @MainActor private static var streamingParses: [(text: String, parse: MarkdownParser.Parse)] = []
     /// Enough for a lead and a whole team of heads streaming in its panel at once. With
     /// four slots, twenty heads evicted each other's parse on every flush and every
     /// render parsed its reply from the start again, on the main thread.
     nonisolated fileprivate static let streamingSlots = 48
 
-    /// The parse of a streaming text together with how many of its leading blocks are
-    /// final: the parser decides each line from that line and the next, so a block that
-    /// starts two lines or more above the still-being-written last line cannot change as
-    /// more text arrives (see `MarkdownParser.Parse.stable`). The views for those blocks
-    /// are equal by that count alone, which is what keeps a flush from deep-comparing
-    /// every earlier block of a long reply.
     @MainActor
-    static func streamingParse(for text: String) -> (blocks: [MarkdownBlock], stable: Int) {
-        if let parse = streamingParses.last(where: { $0.text.utf8.count == text.utf8.count && $0.text == text }) {
-            return (parse.parse.blocks, parse.parse.stable)
+    fileprivate static func rememberStreamingParse(_ text: String, _ parse: MarkdownParser.Parse) {
+        if let slot = streamingParses.lastIndex(where: { $0.text == text }) {
+            streamingParses[slot] = (text, parse)
+            return
         }
         let slot = streamingParses.lastIndex { extends($0.text, to: text) }
-        let parsed = MarkdownParser.parse(text, extending: slot.map { streamingParses[$0] })
         if let slot { streamingParses.remove(at: slot) } else if streamingParses.count == streamingSlots { streamingParses.removeFirst() }
-        streamingParses.append((text, parsed))
-        return (parsed.blocks, parsed.stable)
+        streamingParses.append((text, parse))
     }
 
+    /// Reuses a coordinator's completed streaming parse before caching finished blocks.
     @MainActor
-    static func blocks(for text: String, streaming: Bool = false) -> [MarkdownBlock] {
-        if streaming { return streamingParse(for: text).blocks }
+    static func blocks(for text: String) -> [MarkdownBlock] {
         if let cached = blockCache.value(for: text) { return cached }
         // A message that just finished streaming is already parsed; keep that parse.
         let parsed: [MarkdownBlock]
@@ -945,8 +940,13 @@ enum FaviconCache {
         }
         if let task = inFlight[key] { return await task.value }
         let task = Task { () -> NSImage? in
-            guard let data = await iconData(for: key), let clean = cleaned(data) else { return nil }
-            return resizedIcon(clean)
+            guard let data = await iconData(for: key) else { return nil }
+            let processed = await Task.detached(priority: .utility) {
+                processedIconData(data)
+            }.value
+            guard let processed, let image = NSImage(data: processed) else { return nil }
+            image.size = NSSize(width: 14, height: 14)
+            return image
         }
         inFlight[key] = task
         let image = await task.value
@@ -974,7 +974,12 @@ enum FaviconCache {
         return data
     }
 
-    private static func cleaned(_ data: Data) -> NSImage? {
+    nonisolated private static func processedIconData(_ data: Data) -> Data? {
+        guard let clean = cleaned(data) else { return nil }
+        return resizedIcon(clean).tiffRepresentation
+    }
+
+    nonisolated private static func cleaned(_ data: Data) -> NSImage? {
         guard let image = NSImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
         let long = max(image.size.width, image.size.height)
         let scale = long > 64 ? 64 / long : 1
@@ -996,7 +1001,7 @@ enum FaviconCache {
         return out
     }
 
-    private static func removeWhitePlate(in rep: NSBitmapImageRep) {
+    nonisolated private static func removeWhitePlate(in rep: NSBitmapImageRep) {
         let width = rep.pixelsWide
         let height = rep.pixelsHigh
         guard width > 0, height > 0 else { return }
@@ -1103,7 +1108,7 @@ enum FaviconCache {
         }
     }
 
-    private static func resizedIcon(_ image: NSImage) -> NSImage {
+    nonisolated private static func resizedIcon(_ image: NSImage) -> NSImage {
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 28, pixelsHigh: 28,
                                          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                          colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return image }

@@ -13,7 +13,8 @@ enum CLIInstallEnvironment {
         "REQUESTS_CA_BUNDLE",
         "BUN_INSTALL", "BUN_INSTALL_GLOBAL_DIR", "BUN_INSTALL_BIN", "PNPM_HOME",
         "npm_config_prefix", "NPM_CONFIG_PREFIX", "CODEX_INSTALL_DIR", "CLAUDE_CONFIG_DIR",
-        "DISABLE_UPDATES", "DISABLE_AUTOUPDATER",
+        "DISABLE_UPDATES", "DISABLE_AUTOUPDATER", "XDG_DATA_HOME",
+        "GROK_HOME", "GROK_BIN_DIR",
     ]
 
     private static let invocationKeys: Set<String> = [
@@ -247,7 +248,7 @@ enum CLIUpdates {
         environment: [String: String],
         probe: CLIProbe = .live
     ) async throws -> CLIInstallChannel? {
-        if provider.isAPIKeyBased { return nil }
+        if provider.isAPIKeyBased || provider == .omp { return nil }
         let original = probe.standardize(executable.path)
         let resolved = probe.standardize(probe.resolve(executable).path)
         guard !isProtected(resolved) else { return nil }
@@ -257,11 +258,40 @@ enum CLIUpdates {
             if let owned = npmChannel(provider, path: path, environment: environment, probe: probe) { return owned }
             if let owned = bunChannel(provider, path: path, environment: environment, probe: probe) { return owned }
             if let owned = pnpmChannel(provider, path: path, original: original, environment: environment, probe: probe) { return owned }
-            if let owned = homebrewChannel(path: path, probe: probe) { return owned }
+            if let owned = homebrewChannel(path: path, probe: probe) {
+                if provider == .devin {
+                    guard case .homebrew(_, "devin-cli", true) = owned else { continue }
+                }
+                return owned
+            }
         }
         if isProtected(resolved), isProtected(original) { return nil }
         if let native = claudeNativeChannel(provider, original: original, resolved: resolved, probe: probe) { return native }
+        if let native = cursorNativeChannel(provider, original: original, resolved: resolved, probe: probe) { return native }
+        if let native = grokNativeChannel(provider, original: original, resolved: resolved, environment: environment, probe: probe) { return native }
+        if let native = devinNativeChannel(provider, original: original, resolved: resolved, environment: environment, probe: probe) { return native }
         return nil
+    }
+
+    static func unmanagedReason(_ provider: ProviderKind, executable: URL? = nil) -> String {
+        if provider == .devin, let executable {
+            let resolved = executable.resolvingSymlinksInPath()
+            let marker = resolved.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("distribution")
+            if resolved.path.contains(".app/Contents/"), let distribution = try? String(contentsOf: marker, encoding: .utf8),
+               distribution.trimmingCharacters(in: .whitespacesAndNewlines) == "windsurf" {
+                return String(localized: "This Devin CLI is bundled with the desktop app. Update it through that app.")
+            }
+        }
+        switch provider {
+        case .omp:
+            return String(localized: "omp is managed by Tern. Update it in Tern.")
+        case .devin:
+            return String(localized: "Devin's installation source could not be verified. Update it through its original installer or administrator.")
+        case .grok:
+            return String(localized: "Grok's native install path or release metadata could not be verified. Update it through its original installer.")
+        default:
+            return String(localized: "The installation source or required metadata could not be verified. Tivano will not update this CLI.")
+        }
     }
 
     /// The version the channel would install, or the provider's verified read-only feed when
@@ -277,13 +307,24 @@ enum CLIUpdates {
         environment: [String: String],
         probe: CLIProbe = .live
     ) async throws -> String? {
-        _ = (installed, executable)
+        _ = installed
+        if provider == .omp { return nil }
         switch channel {
         case .homebrew(let brew, let token, let cask):
             return try await homebrewVersion(brew: brew, token: token, cask: cask, environment: environment, probe: probe)
         case .npm(_, let package, _, let tag), .bun(_, let package, _, _, let tag), .pnpm(_, let package, _, _, _, let tag):
             return try await registryVersion(package, tag: tag, probe: probe)
         case .selfUpdate:
+            if provider == .grok, let release = grokReleaseChannel(environment: environment, probe: probe) {
+                return try await textVersion(URL(string: "https://storage.googleapis.com/grok-build-public-artifacts/cli/\(release)")!, probe: probe)
+            }
+            if provider == .devin {
+                let json = try feedJSON(try await probe.fetch(URL(string: "https://static.devin.ai/cli/current/manifest.json")!))
+                guard let version = json["version"] as? String, versionToken(exact: version) != nil else {
+                    throw ShellError(String(localized: "The release feed's version could not be read."))
+                }
+                return version.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             return try await unmanagedVersion(provider, environment: environment, probe: probe)
         case nil:
             return try await unmanagedVersion(provider, environment: environment, probe: probe)
@@ -323,7 +364,8 @@ enum CLIUpdates {
         let parts = components(path)
         guard let modules = parts.indices.first(where: { parts[$0] == "node_modules" && $0 >= 1 && parts[$0 - 1] == "lib" }),
               let package = directPackage(parts, modules: modules),
-              knownPackages(provider).contains(package) else { return nil }
+              knownPackages(provider).contains(package),
+              packageMetadataMatches(provider, package: package, parts: parts, modules: modules, probe: probe) else { return nil }
         let prefix = join(Array(parts[..<(modules - 1)]))
         guard components(prefix).count > 1 else { return nil }
         let bundled = (prefix as NSString).appendingPathComponent("bin/npm")
@@ -344,7 +386,8 @@ enum CLIUpdates {
         let parts = components(path)
         guard let modules = parts.lastIndex(of: "node_modules"),
               let package = directPackage(parts, modules: modules),
-              knownPackages(provider).contains(package) else { return nil }
+              knownPackages(provider).contains(package),
+              packageMetadataMatches(provider, package: package, parts: parts, modules: modules, probe: probe) else { return nil }
         let globalDir = join(Array(parts[..<modules]))
         let defaultGlobal = probe.standardize((probe.home() as NSString).appendingPathComponent(".bun/install/global"))
         let defaultBin = probe.standardize((probe.home() as NSString).appendingPathComponent(".bun/bin"))
@@ -379,7 +422,8 @@ enum CLIUpdates {
         guard let modules = parts.indices.last(where: { index in
             index >= 4 && parts[index] == "node_modules" && parts[index - 2] == "v11" && parts[index - 3] == "global"
         }), let package = directPackage(parts, modules: modules),
-              knownPackages(provider).contains(package) else { return nil }
+              knownPackages(provider).contains(package),
+              packageMetadataMatches(provider, package: package, parts: parts, modules: modules, probe: probe) else { return nil }
         let home = join(Array(parts[..<(modules - 3)]))
         let binDir = (home as NSString).appendingPathComponent("bin")
         let globalDir = (home as NSString).appendingPathComponent("global")
@@ -435,6 +479,97 @@ enum CLIUpdates {
         return .selfUpdate(executable: executable, arguments: ["update"], environment: [:])
     }
 
+    /// Official installer layout and updater: https://cursor.com/install
+    /// https://docs.cursor.com/en/cli/installation
+    private static func cursorNativeChannel(_ provider: ProviderKind, original: String, resolved: String, probe: CLIProbe) -> CLIInstallChannel? {
+        guard provider == .cursor else { return nil }
+        let versions = probe.standardize(probe.home() + "/.local/share/cursor-agent/versions")
+        let relative = Array(components(resolved).dropFirst(components(versions).count))
+        guard isWithin(resolved, versions), relative.count == 2, relative[1] == "cursor-agent",
+              versionToken(exact: relative[0]) != nil else { return nil }
+        // A pinned version path would still read the old executable after the updater swaps the launcher.
+        let launchers = ["cursor-agent", "agent"].map { probe.standardize(probe.home() + "/.local/bin/" + $0) }
+        guard launchers.contains(original), probe.isExecutable(original) else { return nil }
+        return .selfUpdate(executable: original, arguments: ["update"], environment: [:])
+    }
+
+    /// The internal updater always swaps GROK_HOME/bin, not an arbitrary executable location.
+    /// https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-update/src/auto_update.rs
+    private static func grokNativeChannel(_ provider: ProviderKind, original: String, resolved: String, environment: [String: String], probe: CLIProbe) -> CLIInstallChannel? {
+        guard provider == .grok, grokReleaseChannel(environment: environment, probe: probe) != nil else { return nil }
+        let root = probe.standardize(probe.home() + "/.grok")
+        guard environment["GROK_HOME"].map({ $0.isEmpty || same(probe.standardize($0), root) }) ?? true,
+              environment["GROK_BIN_DIR"].map({ $0.isEmpty || same(probe.standardize($0), root + "/bin") }) ?? true else { return nil }
+        let launcher = root + "/bin/grok"
+        guard same(original, launcher), probe.isExecutable(launcher),
+              isWithin(resolved, root + "/downloads"),
+              same((resolved as NSString).deletingLastPathComponent, root + "/downloads"),
+              (resolved as NSString).lastPathComponent.hasPrefix("grok-"),
+              same(probe.standardize(probe.resolve(URL(fileURLWithPath: launcher)).path), resolved) else { return nil }
+        return .selfUpdate(executable: launcher, arguments: ["update"], environment: [:])
+    }
+
+    /// Accept only the simple installer-written [cli] metadata. Complex TOML, enterprise
+    /// policy and alpha selection need the CLI's own resolver; never silently treat them as stable.
+    private static func grokReleaseChannel(environment: [String: String], probe: CLIProbe) -> String? {
+        let root = probe.standardize(probe.home() + "/.grok")
+        for path in [root + "/managed_config.toml", root + "/requirements.toml", "/etc/grok/managed_config.toml", "/etc/grok/requirements.toml"] {
+            if probe.readFile(path) != nil { return nil }
+        }
+        guard let data = probe.readFile(root + "/config.toml"), let text = String(data: data, encoding: .utf8) else { return nil }
+        var inCLI = false
+        var seenCLI = false
+        var installer: String?
+        var channel: String?
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            if line.hasPrefix("[") {
+                inCLI = line == "[cli]"
+                if inCLI {
+                    guard !seenCLI else { return nil }
+                    seenCLI = true
+                } else if line.contains("cli") { return nil }
+                continue
+            }
+            if !inCLI {
+                if line.hasPrefix("cli.") { return nil }
+                continue
+            }
+            let pieces = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard pieces.count == 2 else { return nil }
+            switch pieces[0] {
+            case "installer":
+                guard installer == nil, pieces[1] == "\"internal\"" else { return nil }
+                installer = "internal"
+            case "channel":
+                guard channel == nil, pieces[1] == "\"stable\"" else { return nil }
+                channel = "stable"
+            default:
+                // Do not partially parse multiline or inline TOML values.
+                guard ["true", "false"].contains(pieces[1]) else { return nil }
+            }
+        }
+        return installer == "internal" ? (channel ?? "stable") : nil
+    }
+
+    /// The installer writes a per-version distribution marker. Only public curl-bash uses
+    /// this manifest; Desktop, enterprise and unmarked installs must retain their owner.
+    /// https://cli.devin.ai/install.sh https://docs.devin.ai/cli/reference/commands
+    private static func devinNativeChannel(_ provider: ProviderKind, original: String, resolved: String, environment: [String: String], probe: CLIProbe) -> CLIInstallChannel? {
+        guard provider == .devin else { return nil }
+        let dataHome = environment["XDG_DATA_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? probe.home() + "/.local/share"
+        let versions = probe.standardize(dataHome + "/devin/cli/_versions")
+        let relative = Array(components(resolved).dropFirst(components(versions).count))
+        guard isWithin(resolved, versions), relative.count == 3, relative[1] == "bin", relative[2] == "devin",
+              versionToken(exact: relative[0]) != nil,
+              let data = probe.readFile(versions + "/" + relative[0] + "/distribution"),
+              String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "curl-bash" else { return nil }
+        let launcher = probe.standardize(probe.home() + "/.local/bin/devin")
+        guard same(original, launcher), probe.isExecutable(launcher) else { return nil }
+        return .selfUpdate(executable: launcher, arguments: ["update"], environment: [:])
+    }
+
     // MARK: - Feeds
 
     fileprivate static func loadFeed(_ url: URL) async throws -> Data {
@@ -448,6 +583,18 @@ enum CLIUpdates {
             throw ShellError(String(format: String(localized: "The release feed answered %d."), http.statusCode))
         }
         return data
+    }
+
+    private static func textVersion(_ url: URL, probe: CLIProbe) async throws -> String {
+        let data = try await probe.fetch(url)
+        guard let raw = String(data: data, encoding: .utf8) else {
+            throw ShellError(String(localized: "The release feed's version could not be read."))
+        }
+        let version = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard versionToken(exact: version) != nil else {
+            throw ShellError(String(localized: "The release feed's version could not be read."))
+        }
+        return version
     }
 
     /// `GET /{package}/{version}` accepts a version or `latest` and returns the version document.
@@ -481,7 +628,8 @@ enum CLIUpdates {
         case .copilot: return try await registryVersion("@github/copilot", tag: "latest", probe: probe)
         case .opencode, .opencodeGo: return nil
         case .pi: return try await registryVersion("@earendil-works/pi-coding-agent", tag: "latest", probe: probe)
-        case .omp: return try await registryVersion("@oh-my-pi/pi-coding-agent", tag: "latest", probe: probe)
+        case .omp: return nil
+        case .kimi: return try await registryVersion("@moonshot-ai/kimi-code", tag: "latest", probe: probe)
         case .commandcode: return try await registryVersion("command-code", tag: "latest", probe: probe)
         default:
             return nil
@@ -768,10 +916,24 @@ enum CLIUpdates {
         case .copilot: ["@github/copilot"]
         case .opencode, .opencodeGo: ["opencode-ai"]
         case .pi: ["@earendil-works/pi-coding-agent"]
-        case .omp: ["@oh-my-pi/pi-coding-agent"]
+        case .omp: []
+        case .kimi: ["@moonshot-ai/kimi-code"]
         case .commandcode: ["command-code"]
         default: []
         }
+    }
+
+    /// https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html
+    private static func packageMetadataMatches(_ provider: ProviderKind, package: String, parts: [String], modules: Int, probe: CLIProbe) -> Bool {
+        guard provider == .kimi else { return true }
+        let root = join(Array(parts.prefix(modules + 1))) + "/" + package
+        guard let data = probe.readFile(root + "/package.json"),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["name"] as? String == package,
+              let version = json["version"] as? String, versionToken(exact: version) != nil,
+              let bins = json["bin"] as? [String: String], let entry = bins["kimi"],
+              !entry.hasPrefix("/"), !components(entry).contains("..") else { return false }
+        return same(join(parts), (root as NSString).appendingPathComponent(entry))
     }
 
     private static func directPackage(_ parts: [String], modules: Int) -> String? {

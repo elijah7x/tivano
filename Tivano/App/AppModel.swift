@@ -20,6 +20,7 @@ final class AppModel {
     let sidebar: SidebarLayout
     /// Picks chats back up once a spent usage limit resets, with the setting on.
     @ObservationIgnored private(set) var autoContinue: AutoContinue!
+    @ObservationIgnored private(set) var voice: VoiceController!
     /// How often each Tivano-run head has been started again after failing at the door
     /// (see `hydraHeadTurnFinished`); a head gets two more goes.
     @ObservationIgnored var hydraHeadRetries: [UUID: Int] = [:]
@@ -134,6 +135,7 @@ final class AppModel {
         terminals = TerminalStore()
         sidebar = SidebarLayout()
         autoContinue = AutoContinue(app: self)
+        voice = VoiceController(app: self)
         settings.onSleepPreventionChanged = { [weak self] in
             self?.updateTaskSleepPrevention()
         }
@@ -147,7 +149,7 @@ final class AppModel {
     }
 
     private static func hasActiveTasks(_ runtime: ThreadRuntime) -> Bool {
-        runtime.isRunning || runtime.isHydraMerging || runtime.isCLIStarting
+        runtime.isRunning || runtime.isVoiceOrchestrator || runtime.isHydraMerging || runtime.isCLIStarting
             || runtime.hasWorkingHelpers || !runtime.backgroundTasks.isEmpty || runtime.isWaitingForLimit
     }
 
@@ -563,7 +565,7 @@ final class AppModel {
                 try? await Task.sleep(for: .seconds(600))
                 guard !Task.isCancelled, let self, self.selectedThreadID != id, let runtime = self.runtimes[id] else { return }
                 // A turn still working keeps its session; check again after the next interval.
-                guard !runtime.isRunning else { continue }
+                guard !runtime.isRunning, self.voice.threadID != id else { continue }
                 runtime.stopSession()
                 self.idleSessionStops[id] = nil
                 self.releaseIdleRuntime(id)
@@ -576,7 +578,7 @@ final class AppModel {
     /// whether it did; a runtime holding anything the document does not stays.
     @discardableResult
     func releaseIdleRuntime(_ id: UUID) -> Bool {
-        guard let runtime = runtimes[id], selectedThreadID != id, let thread = thread(id),
+        guard let runtime = runtimes[id], selectedThreadID != id, voice.threadID != id, let thread = thread(id),
               // A thread shown beside the selection, in its panel, is on screen.
               thread.parentThreadID == nil || thread.parentThreadID != selectedThreadID,
               !thread.isInPanel, thread.hydra?.status != .running,
@@ -702,6 +704,12 @@ final class AppModel {
                 return lhs.updatedAt < rhs.updatedAt
             }
         selectedThreadID = restored?.id
+    }
+
+    func insertVoiceHomeThread(_ thread: ChatThread) {
+        threads.append(thread)
+        updateProject(thread.projectID) { $0.isExpanded = true }
+        scheduleSave()
     }
 
     @discardableResult
@@ -1019,6 +1027,7 @@ final class AppModel {
 
     private func completeThreadDeletion(_ removed: [ChatThread], cleanup: [ThreadDeletionCleanup]) {
         let ids = Set(removed.map(\.id))
+        if let voiceThreadID = voice.threadID, ids.contains(voiceThreadID) { voice.end() }
         for thread in removed where thread.isHydraHead && thread.hydra?.isFinished == false {
             finishHydraHead(thread.id, status: .interrupted, summary: nil)
         }
@@ -1441,6 +1450,7 @@ final class AppModel {
     @discardableResult
     func saveBeforeQuit() -> Bool {
         guard flushForQuit() else { return false }
+        voice.shutdown()
         persistenceEnabled = false
         saveTask?.cancel()
         saveTask = nil

@@ -57,10 +57,10 @@ final class AttachmentFlight {
             existing.orderOut(nil)
             window = nil
         }
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              let screen = NSScreen.main else { return }
-
         let frame = fromScreen.union(toScreen).insetBy(dx: -2, dy: -2)
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) ?? NSScreen.main else { return }
+
         let flightWindow = FlightWindow(contentRect: frame, screen: screen)
         window = flightWindow
 
@@ -68,8 +68,8 @@ final class AttachmentFlight {
         content.wantsLayer = true
         flightWindow.contentView = content
 
-        // Window coordinates: the screen origin inside the window's own space.
-        let origin = screen.frame.origin
+        // Convert screen rects into the flight window's local space.
+        let origin = frame.origin
         let start = CGRect(
             x: fromScreen.minX - origin.x, y: fromScreen.minY - origin.y,
             width: fromScreen.width, height: fromScreen.height

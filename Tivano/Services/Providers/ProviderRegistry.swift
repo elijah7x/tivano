@@ -94,8 +94,8 @@ final class ProviderRegistry {
     /// The banked reset being spent right now: its credit id, or "codex" for one the app-server listed only by count.
     private(set) var redeemingReset: String?
     @ObservationIgnored private var limitsFetchedAt: [ProviderKind: Date] = [:]
-    // A forced read that arrives while a read is out is remembered, not dropped.
-    @ObservationIgnored private var forcedLimitReads: Set<ProviderKind> = []
+    @ObservationIgnored private var limitReadGenerations: [ProviderKind: UUID] = [:]
+    @ObservationIgnored private var limitReadTasks: [ProviderKind: Task<Void, Never>] = [:]
 
     /// Pay-as-you-go balances (DeepSeek's credit), shown where subscriptions show their windows.
     private(set) var credits: [ProviderKind: ProviderCredits] = [:]
@@ -350,14 +350,20 @@ final class ProviderRegistry {
         }
         // The login command starts with the executable's own name; the rest are its arguments.
         let arguments = provider.loginCommand.split(whereSeparator: \.isWhitespace).dropFirst().map(String.init)
-        let result = try? await Shell.run(executable, arguments, environment: environment(for: provider), timeout: 300)
-        if let result, result.succeeded {
+        let loginEnvironment = environment(for: provider)
+        let result: ShellResult
+        do {
+            result = try await Shell.run(executable, arguments, environment: loginEnvironment, timeout: 300)
+        } catch {
+            return error.localizedDescription
+        }
+        if result.succeeded {
+            refreshPlanLimits(provider, force: true, executable: executable, environment: loginEnvironment)
             await refresh(provider)
-            refreshPlanLimits(provider, force: true)
             await loadCatalog(provider, force: true)
             return nil
         }
-        let output = result.map { TextCleanup.stripANSI($0.output + $0.errorOutput) } ?? ""
+        let output = TextCleanup.stripANSI(result.output + result.errorOutput)
         guard let lastLine = output.split(separator: "\n", omittingEmptySubsequences: true).last, !lastLine.isEmpty else {
             return "\(provider.displayName) did not finish signing in."
         }
@@ -476,6 +482,10 @@ final class ProviderRegistry {
             if valid {
                 refreshPlanLimits(.zai, force: true)
             } else {
+                limitReadGenerations[.zai] = nil
+                limitReadTasks[.zai]?.cancel()
+                limitReadTasks[.zai] = nil
+                loadingLimits.remove(.zai)
                 planLimits[.zai] = nil
                 limitsFetchedAt[.zai] = nil
             }
@@ -707,48 +717,67 @@ final class ProviderRegistry {
 
     /// Reads the provider's plan limits, at most once a minute after a successful read unless forced.
     /// The read runs on its own task, so closing the popover that asked for it cannot cancel it.
-    func refreshPlanLimits(_ provider: ProviderKind, force: Bool = false) {
-        guard !CaptureRun.isEnabled else { return }
-        guard PlanLimitsReader.exposesLimits(provider) else { return }
-        guard !loadingLimits.contains(provider) else { if force { forcedLimitReads.insert(provider) }; return }
+    func refreshPlanLimits(_ provider: ProviderKind, force: Bool = false,
+                           executable suppliedExecutable: URL? = nil,
+                           environment suppliedEnvironment: [String: String]? = nil) {
+        guard !CaptureRun.isEnabled, PlanLimitsReader.exposesLimits(provider) else { return }
+        guard force || !loadingLimits.contains(provider) else { return }
         if !force, let fetched = limitsFetchedAt[provider], Date.now.timeIntervalSince(fetched) < 60 { return }
-        if provider.isAPIKeyBased {
-            let apiKey = settings.apiKey(for: provider)
-            guard !apiKey.isEmpty else {
-                planLimits[provider] = nil
-                return
-            }
-            loadingLimits.insert(provider)
-            let watchdog = Task { try? await Task.sleep(for: .seconds(25)); loadingLimits.remove(provider); drainedForcedRead(provider) }
-            Task {
-                defer { watchdog.cancel(); loadingLimits.remove(provider); drainedForcedRead(provider) }
-                let limits = await PlanLimitsReader.read(provider, apiKey: apiKey)
-                guard let limits else { return }
-                planLimits[provider] = limits
-                limitsFetchedAt[provider] = .now
-            }
-            return
-        }
-        guard PlanLimitsReader.exposesLimits(provider), !loadingLimits.contains(provider) else { return }
+        let generation = UUID()
+        limitReadGenerations[provider] = generation
+        limitReadTasks[provider]?.cancel()
+        limitsFetchedAt[provider] = nil
         loadingLimits.insert(provider)
-        let watchdog = Task { try? await Task.sleep(for: .seconds(25)); loadingLimits.remove(provider); drainedForcedRead(provider) }
-        Task {
-            defer { watchdog.cancel(); loadingLimits.remove(provider); drainedForcedRead(provider) }
-            // A popover opened right after launch waits for the login shell like everything
-            // else; before that read the CLI can only be found on the fallback PATH.
-            await LoginEnvironment.load()
-            guard let executable = executable(for: provider) else { return }
-            let limits = await PlanLimitsReader.read(provider, executable: executable, environment: environment(for: provider))
-            guard let limits else { return }
-            planLimits[provider] = limits
-            limitsFetchedAt[provider] = .now
+        // Cancellation is advisory for the underlying readers. Generation ownership
+        // protects both publication and cleanup when a timed-out request returns late.
+        let watchdog = Task {
+            do { try await Task.sleep(for: .seconds(90)) } catch { return }
+            guard limitReadGenerations[provider] == generation else { return }
+            limitReadTasks[provider]?.cancel()
+            finishPlanLimits(provider, generation: generation,
+                             limits: PlanLimitsReader.failure("The usage request timed out. Try again."))
+        }
+        limitReadTasks[provider] = Task {
+            defer { watchdog.cancel() }
+            let limits: PlanLimits
+            if provider.isAPIKeyBased {
+                let apiKey = settings.apiKey(for: provider)
+                if apiKey.isEmpty {
+                    limits = PlanLimitsReader.failure("No API key is configured.", kind: .authentication)
+                } else {
+                    limits = await PlanLimitsReader.read(provider, apiKey: apiKey)
+                        ?? PlanLimitsReader.failure("The provider did not return usage data. The usage request may have failed or may be unsupported.")
+                }
+            } else {
+                await LoginEnvironment.load()
+                guard limitReadGenerations[provider] == generation, !Task.isCancelled else { return }
+                guard let executable = suppliedExecutable ?? executable(for: provider) else {
+                    finishPlanLimits(provider, generation: generation,
+                                     limits: PlanLimitsReader.failure(String(format: AppText.localized("%@ was not found on your PATH."), provider.displayName)))
+                    return
+                }
+                limits = await PlanLimitsReader.read(provider, executable: executable,
+                                                     environment: suppliedEnvironment ?? environment(for: provider))
+                    ?? PlanLimitsReader.failure("The provider did not return usage data. The usage request may have failed or may be unsupported.")
+            }
+            finishPlanLimits(provider, generation: generation, limits: limits)
         }
     }
 
-    /// Runs a forced read that had to wait because a read was already out for this provider.
-    private func drainedForcedRead(_ provider: ProviderKind) {
-        guard forcedLimitReads.remove(provider) != nil else { return }
-        refreshPlanLimits(provider, force: true)
+    private func finishPlanLimits(_ provider: ProviderKind, generation: UUID, limits: PlanLimits) {
+        guard limitReadGenerations[provider] == generation else { return }
+        limitReadGenerations[provider] = nil
+        limitReadTasks[provider] = nil
+        loadingLimits.remove(provider)
+        var limits = limits
+        // A read that only counted the banked resets keeps the expiries the last read listed, while the count is unchanged.
+        if let fresh = limits.resetCredits, fresh.credits.count < fresh.availableCount,
+           let previous = planLimits[provider]?.resetCredits,
+           previous.availableCount == fresh.availableCount, previous.credits.count > fresh.credits.count {
+            limits.resetCredits = previous
+        }
+        planLimits[provider] = limits
+        limitsFetchedAt[provider] = limits.problem == nil ? .now : nil
     }
 
     /// Spends one of a provider's banked resets and re-reads its limits so the bars show the cleared window. Codex through its app-server, Z.ai through its reset-card endpoint.
@@ -761,19 +790,13 @@ final class ProviderRegistry {
             guard let executable = executable(for: .codex) else { throw ResetCreditError.codexUnavailable }
             let environment = environment(for: .codex)
             let outcome = try await CodexSession.consumeResetCredit(executable: executable, environment: environment, creditID: creditID)
-            if let limits = try? await CodexSession.readPlanLimits(executable: executable, environment: environment) {
-                planLimits[.codex] = limits
-                limitsFetchedAt[.codex] = .now
-            }
+            refreshPlanLimits(.codex, force: true)
             return outcome
         case .zai:
             let apiKey = settings.apiKey(for: .zai)
             guard !apiKey.isEmpty, let creditID else { throw ResetCreditError.unknownOutcome }
             let outcome = try await ZaiAPI.consumeResetCredit(apiKey: apiKey, creditID: creditID)
-            if let limits = await ZaiAPI.planLimits(apiKey: apiKey) {
-                planLimits[.zai] = limits
-                limitsFetchedAt[.zai] = .now
-            }
+            refreshPlanLimits(.zai, force: true)
             return outcome
         default:
             throw ResetCreditError.unknownOutcome
