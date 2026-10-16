@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v1.3.1",
-      "name": "Tivano 1.3.1",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.3.1/Tivano-1.3.1.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## Bug fixes\n\n- Bring back the composer's and floating controls' Liquid Glass look, now pinned to its active appearance so it no longer whitens when switching back to Tivano.\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-14T02:04:08Z",
+      "tag_name": "v1.3.8",
+      "name": "Tivano 1.3.8",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v1.3.8/Tivano-1.3.8.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## New features\n\n- Choose a Z.ai region in Settings, Global or China. China talks to open.bigmodel.cn instead of api.z.ai; existing setups stay on Global.\n\n## Bug fixes\n\n- Show the attachment's flight into the composer, which was drawn outside its window and never appeared.\n- Stop a long reply from stalling for a moment when it finishes streaming; the parse made while it streamed is reused.\n- Keep link-heavy messages scrolling smoothly while their site icons load.\n- Release a closed composer's memory after it has shown slash or @ suggestions.\n- Stop a finished turn's steps, a work group or a tool's output from blanking the conversation for a moment when expanded or collapsed.\n- Keep a reader who scrolled up from being pulled back to the end when content above them shrinks.\n- Keep Tivano responsive while an update's signature is checked.\n- Let Tivano quit even when its library never finishes loading.\n- Let Escape close the file picker opened from the message editor instead of the editor.\n- Focus a new composer reliably when it first appears.\n- Stop quick picks in a question card from skipping a page, and keep the MCP setup panel open when the connection drops right after connecting.\n- Show the Chinese text for context menus, sidebar actions, confirmations, tooltips, search fields and file counts that still appeared in English.\n- Show when each banked Codex reset expires. Codex sometimes lists the count without the resets, so Tivano asks once more and keeps the last known dates.\n- Show the real reason a usage read failed instead of asking to log in again, refresh usage after logging in through Tivano, and word a timed-out read plainly.\n- Recognize Cursor, Kimi and native Grok installs for CLI updates, and point a Devin CLI bundled with the desktop app to that app for updates.\n\n## Refinements\n\n- List the settings pages in one run without group gaps, with Hydra after Models.\n- Show release notes in the app's active language, with English as the fallback when Chinese notes are unavailable.\n- Add a Refresh button for Codex usage alone, and fold each CLI's update details into a version line and a status line.\n\n## 简体中文\n\n## 新功能\n\n- 可在设置中为 Z.ai 选择区域：国际站或中国区。中国区使用 open.bigmodel.cn 而非 api.z.ai；已有配置保持国际站不变。\n\n## 问题修复\n\n- 修复附件飞入输入框的动画因绘制在窗口外而无法显示的问题。\n- 复用流式输出期间已完成的解析，避免长回复结束流式输出时短暂卡顿。\n- 在网站图标加载期间，保持包含大量链接的消息滚动流畅。\n- 关闭输入框后，释放因显示斜杠命令或 @ 建议菜单而占用的内存。\n- 修复展开或收起已完成轮次的步骤、工作组或工具输出时，对话短暂空白的问题。\n- 向上阅读时，上方内容收起不再将阅读位置拉回对话末尾。\n- 检查更新包签名时，保持 Tivano 正常响应。\n- 即使资料库始终未能完成加载，也能退出 Tivano。\n- 从消息编辑器打开文件选择器后，按 Escape 关闭文件选择器，不再关闭编辑器。\n- 新输入框首次出现时可靠地获得焦点。\n- 修复问题卡片中的快捷选项跳过一页的问题，并在连接刚建立就断开时保持 MCP 设置面板打开。\n- 补齐上下文菜单、侧栏操作、确认提示、工具提示、搜索框和文件数量中仍显示为英文的中文文案。\n- 显示每个 Codex 储备重置的到期时间。Codex 有时只返回数量而不列出明细，Tivano 会再查询一次，并保留上次获取的日期。\n- 用量查询失败时显示真实原因，不再一律提示重新登录；通过 Tivano 登录后会刷新用量，查询超时也改为易懂的提示。\n- CLI 更新可识别 Cursor、Kimi 和原生安装的 Grok；随桌面应用安装的 Devin CLI 会提示通过该应用更新。\n\n## 优化改进\n\n- 设置页列表不再分组留空，Hydra 移至模型之后。\n- 按应用当前生效的语言显示更新日志；没有可用的中文日志时回退到英文。\n- 新增仅刷新 Codex 用量的按钮；每个 CLI 的更新信息合并为版本和状态两行。\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-16T08:35:50Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-1.3.1.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.3.1/Tivano-1.3.1.dmg",
-          "size": 6790224,
-          "sha256": "3b21ded89ec9680e23dba265a9f15a122b4b0bc19a64da7639a4e03abacac937"
+          "name": "Tivano-1.3.8.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v1.3.8/Tivano-1.3.8.dmg",
+          "size": 7024908,
+          "sha256": "b02bd98a3b5e69d7289b40121c55bdf1f0f7c84c3570311319449a37bb41de9f"
         }
       ]
     }
