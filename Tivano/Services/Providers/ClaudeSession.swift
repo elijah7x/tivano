@@ -611,11 +611,12 @@ final class ClaudeSession: ProviderSession {
             if Self.hiddenResultTools.contains(name) { continue }
             let isError = block["is_error"]?.bool ?? false
             let output = ToolText.blocks(block["content"])
+            let images = name == "Read" ? [] : ToolImages.blocks(block["content"])
             var status: ToolCall.Status = isError ? .failed : .completed
             if isError, output.localizedCaseInsensitiveContains("declined") || output.localizedCaseInsensitiveContains("doesn't want") {
                 status = .declined
             }
-            sink(.toolUpdated(id: toolID, update: ToolUpdate(output: output, status: status)))
+            sink(.toolUpdated(id: toolID, update: ToolUpdate(output: output, status: status, images: images.isEmpty ? nil : images)))
         }
     }
 

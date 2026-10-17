@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// What a thread asks a provider to do for one turn.
 struct TurnInput: Sendable {
@@ -140,6 +141,8 @@ struct ToolUpdate: Sendable {
     var status: ToolCall.Status?
     var exitCode: Int?
     var edits: [FileEdit]?
+    /// The pictures the call made or returned; the latest non-empty set replaces the row's.
+    var images: [Attachment]?
     var kind: ToolCall.Kind?
 }
 
@@ -240,6 +243,51 @@ enum ToolText {
         if let text = value.string { return text }
         guard let blocks = value.array else { return "" }
         return blocks.compactMap { $0["text"]?.string }.joined(separator: "\n")
+    }
+}
+
+/// Pictures a tool made or returned, turned into attachments the timeline can show.
+enum ToolImages {
+    /// The images among a content-block array (or a single block). Reads Anthropic's
+    /// `source.data` + `source.media_type`, MCP's `data` + `mimeType`, and ACP's
+    /// `{"type": "content", "content": <block>}` wrapper.
+    static func blocks(_ value: JSONValue?) -> [Attachment] {
+        guard let value, !value.isNull else { return [] }
+        return (value.array ?? [value]).compactMap(attachment(block:))
+    }
+
+    static func attachment(block: JSONValue) -> Attachment? {
+        var block = block
+        if block["type"]?.string == "content", let inner = block["content"] { block = inner }
+        guard block["type"]?.string == "image" else { return nil }
+        let source = block["source"] ?? block
+        if let encoded = source["data"]?.string,
+           let mimeType = source["media_type"]?.string ?? source["mimeType"]?.string, mimeType.hasPrefix("image/"),
+           let data = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters), !data.isEmpty {
+            return stored(data, mimeType: mimeType)
+        }
+        if let uri = block["uri"]?.string, uri.hasPrefix("file://"), let path = URL(string: uri)?.path {
+            return file(at: path)
+        }
+        return nil
+    }
+
+    /// An image file the agent saved, copied into app storage so the row keeps it after the
+    /// original moves. Nil when it is missing or not an image.
+    static func file(at path: String) -> Attachment? {
+        let url = URL(fileURLWithPath: path)
+        guard let type = UTType(filenameExtension: url.pathExtension.lowercased()), type.conforms(to: .image),
+              FileManager.default.fileExists(atPath: path),
+              var attachment = try? Storage.importAttachment(from: url) else { return nil }
+        attachment.mimeType = type.preferredMIMEType ?? "image/png"
+        return attachment
+    }
+
+    private static func stored(_ data: Data, mimeType: String) -> Attachment? {
+        let ext = UTType(mimeType: mimeType)?.preferredFilenameExtension ?? "png"
+        guard var attachment = try? Storage.importAttachment(data: data, name: "Image.\(ext)", fileExtension: ext) else { return nil }
+        attachment.mimeType = mimeType
+        return attachment
     }
 }
 

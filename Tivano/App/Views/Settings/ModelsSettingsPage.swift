@@ -38,8 +38,9 @@ struct ModelsSettingsPage: View {
         let blocks = modelBlocks(query: trimmed)
         let sections = blocks.groups.map(\.section)
         let visiblePins = blocks.ungrouped + blocks.groups.flatMap(\.pins)
-        let providers = registry.availableProviders.filter { provider in
-            trimmed.isEmpty || registry.models(for: provider).contains { Self.matches($0, id: $0.id, provider: provider, query: trimmed) }
+        let available = Set(registry.availableProviders)
+        let providers = ProviderKind.alphabetical.filter { provider in
+            available.contains(provider) && (trimmed.isEmpty || registry.models(for: provider).contains { Self.matches($0, id: $0.id, provider: provider, query: trimmed) })
         }
         // Filtering is instant with no transitions: animating dozens of rows with blur on every
         // keystroke (and all of them again when clearing) is what made entries overlap and jump.
@@ -762,7 +763,7 @@ private struct ProviderModelsSection: View {
     var body: some View {
         let settings = model.settings
         let registry = model.providers
-        let catalogue = registry.models(for: provider)
+        let catalogue = registry.sortedModels(for: provider)
         let isFull = settings.modelList.count >= AppSettings.modelListLimit
         let isFiltering = !query.isEmpty
         let pinned = Set(settings.modelList)
@@ -945,6 +946,7 @@ struct CollapsibleProviderHeader: View {
     @Binding var isExpanded: Bool
     /// What the disclosure shows, named in the help and the accessibility hint.
     let subject: String
+    var detail: String? = nil
 
     var body: some View {
         Button {
@@ -956,7 +958,15 @@ struct CollapsibleProviderHeader: View {
                 Text(verbatim: provider.displayName)
                     .font(.ui(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
+                Spacer(minLength: detail == nil ? 0 : 8)
+                if let detail {
+                    Text(verbatim: detail)
+                        .font(.ui(size: 11))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(-1)
+                }
                 Image(systemName: "chevron.right")
                     .font(.ui(size: 11, weight: .semibold))
                     .foregroundStyle(Chrome.secondaryText)
@@ -967,7 +977,7 @@ struct CollapsibleProviderHeader: View {
         .buttonStyle(ChromeQuietButtonStyle())
         .frame(height: 22)
         .help(Text(verbatim: String(format: Chrome.localized(isExpanded ? "Hide the %@" : "Show the %@"), Chrome.localized(subject))))
-        .accessibilityLabel(Text(verbatim: provider.displayName))
+        .accessibilityLabel(Text(verbatim: detail.map { provider.displayName + ", " + $0 } ?? provider.displayName))
         .accessibilityValue(Text(verbatim: Chrome.localized(isExpanded ? "Expanded" : "Collapsed")))
         .accessibilityHint(Text(verbatim: String(format: Chrome.localized("Shows or hides the %@"), Chrome.localized(subject))))
         .accessibilityAddTraits(.isHeader)

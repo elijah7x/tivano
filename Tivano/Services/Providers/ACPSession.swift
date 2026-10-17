@@ -619,6 +619,13 @@ final class ACPSession: ProviderSession {
         guard method == "session/update", !isReplaying, let update = params["update"] else { return }
         switch update["sessionUpdate"]?.string {
         case "agent_message_chunk":
+            if let content = update["content"], content["type"]?.string == "image",
+               let image = ToolImages.attachment(block: content) {
+                messageID = nil
+                thoughtID = nil
+                onEvent?(.toolUpdated(id: nextID("image"), update: ToolUpdate(title: "Image", status: .completed, images: [image], kind: .other)))
+                return
+            }
             guard let text = update["content"]?["text"]?.string else { return }
             thoughtID = nil
             let id = update["messageId"]?.string.map { "message-\($0)" } ?? messageID ?? nextID("message")
@@ -643,7 +650,7 @@ final class ACPSession: ProviderSession {
             toolKinds[id] = call.kind
             onEvent?(.toolStarted(id: id, call: call))
             let initial = makeToolUpdate(update)
-            if initial.output != nil || initial.status != nil { onEvent?(.toolUpdated(id: id, update: initial)) }
+            if initial.output != nil || initial.status != nil || initial.images != nil { onEvent?(.toolUpdated(id: id, update: initial)) }
         case "tool_call_update":
             guard let id = update["toolCallId"]?.string else { return }
             if todoToolCallIDs.contains(id) || Self.isTodoCall(update) {
@@ -928,7 +935,7 @@ final class ACPSession: ProviderSession {
     private func makeToolUpdate(_ update: JSONValue) -> ToolUpdate {
         var result = ToolUpdate()
         if let kind = update["kind"]?.string { result.kind = Self.kind(kind) }
-        let kind = result.kind ?? .other
+        let kind = result.kind ?? toolKinds[update["toolCallId"]?.string ?? ""] ?? .other
         let title = Self.subject(from: update["title"]?.string, kind: kind)
         // A bare tool-name title ("Edit file") must not overwrite a real path.
         if !title.isEmpty, !Self.isFallbackTitle(title) { result.title = title }
@@ -955,6 +962,8 @@ final class ACPSession: ProviderSession {
             result.exitCode = raw["exitCode"]?.int ?? raw["metadata"]?["exit"]?.int
         }
         if !output.isEmpty, output != "(no output)" { result.output = output }
+        let images = kind == .read ? [] : ToolImages.blocks(update["content"])
+        if !images.isEmpty { result.images = images }
         if let exitCode = result.exitCode, exitCode != 0, result.status == .completed { result.status = .failed }
         return result
     }

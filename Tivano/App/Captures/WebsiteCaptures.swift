@@ -215,8 +215,12 @@ enum WebsiteCaptures {
         let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
             text: "The last reply of a turn gets lost between the tool calls. What would you change?")))
         turn.userItemID = user.id
+        let reply = CaptureRun.isEnabled && (CommandLine.arguments.contains("--render-cost-probe")
+            || CommandLine.arguments.contains("--heavy-load-probe"))
+            ? RenderCostProbe.fixtureAnswer
+            : "Three things, and I would keep them small: tag the final text so the timeline knows which block is the answer, give that block the glass card the plan cards already use, and leave streaming text plain so nothing flickers while it arrives."
         let answer = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(6), content: .assistant(AssistantMessage(
-            text: "Three things, and I would keep them small: tag the final text so the timeline knows which block is the answer, give that block the glass card the plan cards already use, and leave streaming text plain so nothing flickers while it arrives.")))
+            text: reply)))
         let end = TimelineItem(turnID: turn.id, date: turn.completedAt!, content: .turnEnd(TurnSummary(
             turnID: turn.id, status: .completed, duration: 41, filesChanged: 0, additions: 0, deletions: 0)))
         document.turns = [turn]
@@ -283,6 +287,19 @@ enum WebsiteCaptures {
     // MARK: - Run
 
     static func run(model: AppModel) async {
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--text-parity-probe") {
+            await TextParityProbe.run(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--website-captures"),
+           CommandLine.arguments.contains("--heavy-load-probe") {
+            await HeavyLoadProbe.run(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--render-cost-probe") {
+            await RenderCostProbe.run(model: model)
+            return
+        }
         if CommandLine.arguments.contains("--unread-regression") {
             await UnreadRegression.run(model: model)
             return
@@ -379,6 +396,8 @@ final class Stage {
 
     /// The app window's frame in screen coordinates, for a still's sidecar.
     var windowFrame: NSRect? { window?.frame }
+
+    var contentWindow: NSWindow? { window }
 
     /// The app window with its wallpaper margin, in screen coordinates.
     var captureRect: NSRect {
@@ -612,13 +631,13 @@ final class Recorder {
 
     /// Photographs `rect` as <name>.png. `focus`, in screen coordinates, names the part of
     /// the scene the screenshot should zoom on; it goes into the sidecar.
-    func still(_ name: String, _ rect: NSRect, focus: NSRect? = nil) async {
+    func still(_ name: String, _ rect: NSRect, focus: NSRect? = nil, activate: Bool = true) async {
         guard let screen = NSScreen.main else { return }
         // Expanded popover framing can reach beyond the display or into the menu bar.
         // Clip before capture, and record that same rect in the sidecar.
         let rect = rect.intersection(screen.visibleFrame)
         guard !rect.isEmpty else { return }
-        await stage?.ensureActive()
+        if activate { await stage?.ensureActive() }
         WebsiteCaptures.log("still \(name)")
         guard let filter = await Self.filter() else { WebsiteCaptures.log("still \(name): no filter"); return }
         let configuration = Self.configuration(for: rect)

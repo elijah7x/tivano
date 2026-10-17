@@ -175,6 +175,8 @@ struct ToolCall: Codable, Hashable, Sendable {
     var status: Status = .running
     var exitCode: Int?
     var edits: [FileEdit] = []
+    /// Pictures the tool made or returned, kept in app storage. Nil on rows recorded before.
+    var images: [Attachment]?
     var startedAt = Date.now
     var finishedAt: Date?
 

@@ -726,22 +726,25 @@ private struct ProvidersSettingsPage: View {
             if case .signedIn = model.providers.status(provider).auth { return true }
             return false
         }
-        let enabledProviders = ProviderKind.allCases.filter { model.settings.isEnabled($0) }
         // Eager on purpose: a handful of sections, and lazy ones were rebuilt while scrolling,
         // which reset their fields and re-ran every check they started on appear.
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
             ProviderSelectionSection(settings: model.settings)
-            // Configured providers lead, the rest follow; each group keeps allCases' own
-            // order (a stable split, not a sort). An auth refresh reorders instantly —
-            // only header clicks animate.
-            ForEach(enabledProviders.filter(configured) + enabledProviders.filter { !configured($0) }) { provider in
-                ProviderSettingsSection(
-                    provider: provider,
-                    isExpanded: Binding(
-                        get: { providerExpansion[provider] ?? configured(provider) },
-                        set: { providerExpansion[provider] = $0 }
-                    )
-                )
+            ForEach(ProviderGroup.allCases) { group in
+                let providers = group.providers.filter { model.settings.isEnabled($0) }
+                if !providers.isEmpty {
+                    ChromeSection(title: group.title) {
+                        ForEach(providers) { provider in
+                            ProviderSettingsSection(
+                                provider: provider,
+                                isExpanded: Binding(
+                                    get: { providerExpansion[provider] ?? configured(provider) },
+                                    set: { providerExpansion[provider] = $0 }
+                                )
+                            )
+                        }
+                    }
+                }
             }
         }
         .task {
@@ -763,7 +766,9 @@ private struct ProviderSettingsSection: View {
     @State private var keyCheck: Task<Void, Never>?
 
     /// Limits and credits belong to a signed-in account, so a missing or signed-out provider shows none.
+    /// The Providers page also hides them when the page switch is off.
     private var showsUsage: Bool {
+        guard model.settings.showsProviderUsage else { return false }
         guard PlanLimitsReader.exposesLimits(provider) || CreditsReader.exposesCredits(provider) else { return false }
         let status = model.providers.status(provider)
         return status.isInstalled && status.auth != .signedOut
@@ -806,7 +811,7 @@ private struct ProviderSettingsSection: View {
     var body: some View {
         let status = model.providers.status(provider)
         VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
-            CollapsibleProviderHeader(provider: provider, isExpanded: $isExpanded, subject: "provider settings")
+            CollapsibleProviderHeader(provider: provider, isExpanded: $isExpanded, subject: "provider settings", detail: provider.routeSummary)
             ChromeRevealLayout(fraction: isExpanded ? 1 : 0) {
                 ChromeCard {
                     HStack(spacing: 12) {

@@ -32,6 +32,8 @@ struct ProviderStatus: Equatable, Sendable {
 final class ProviderRegistry {
     private(set) var statuses: [ProviderKind: ProviderStatus] = [:]
     private(set) var catalogs: [ProviderKind: [ModelOption]] = [:]
+    /// The A-Z copy of a provider's catalogue beside the catalogue it was sorted from.
+    @ObservationIgnored private var sortedModelCache: [ProviderKind: (source: [ModelOption], sorted: [ModelOption])] = [:]
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var commandErrors: [String: String] = [:]
     private(set) var recentCommands: [String: [String]] = [:]
@@ -198,7 +200,7 @@ final class ProviderRegistry {
     /// so views that ask on appear never re-spawn a CLI or re-hit an API while scrolling.
     @ObservationIgnored private var attemptedCatalogs: Set<ProviderKind> = []
 
-    /// The opencode ACP catalogue, probed once per launch and shared by Zen and Go.
+    /// The full opencode ACP catalogue, probed once per launch.
     @ObservationIgnored private var openCodeCatalogTask: Task<[ModelOption]?, Never>?
 
     init(settings: any ProviderSettings) {
@@ -208,10 +210,11 @@ final class ProviderRegistry {
            let data = UserDefaults.standard.data(forKey: cacheKey),
            let cached = try? JSONDecoder().decode([String: [ModelOption]].self, from: data) {
             for (key, list) in cached {
-                guard let provider = ProviderKind(rawValue: key) else { continue }
+                guard key != "opencodeGo", !(key == "opencode" && cached["opencodeGo"] != nil),
+                      let provider = ProviderKind(rawValue: key) else { continue }
                 // A list cached before the scales were ordered may still run high to low
                 // (Grok's did); the slider reads them low to high, so they are put right here.
-                let ordered = Self.openCodeModels(list, for: provider).map { option in
+                let ordered = list.map { option in
                     var option = option
                     option.efforts = ModelOption.orderedEfforts(option.efforts)
                     return option
@@ -224,6 +227,7 @@ final class ProviderRegistry {
            let data = UserDefaults.standard.data(forKey: catalogDatesKey),
            let raw = try? JSONDecoder().decode([String: Double].self, from: data) {
             for (key, seconds) in raw {
+                guard key != "opencodeGo", !(key == "opencode" && raw["opencodeGo"] != nil) else { continue }
                 if let provider = ProviderKind(rawValue: key) { catalogFetchedAt[provider] = Date(timeIntervalSince1970: seconds) }
             }
         }
@@ -324,7 +328,7 @@ final class ProviderRegistry {
         }
         // OpenCode takes its MCP servers as config content in the environment,
         // so the connected servers reach it without a line written into its config files.
-        if provider == .opencode || provider == .opencodeGo { environment.merge(MCPSessionOverrides.opencodeEnvironment()) { _, new in new } }
+        if provider == .opencode { environment.merge(MCPSessionOverrides.opencodeEnvironment()) { _, new in new } }
         // The CLI reads system settings from that path, so the connected servers reach it without a line in `~/.gemini/settings.json`.
         if provider == .antigravity, let path = MCPProviderConfig.geminiSettingsPath() { environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = path }
         return environment
@@ -370,9 +374,9 @@ final class ProviderRegistry {
         return String(lastLine)
     }
 
-    /// The Providers page's refresh button: checks every provider again, re-reads the usage limits
-    /// the page shows for each signed-in account and reloads the live catalogs. Beyond the limits,
-    /// nothing on that page checks on its own, so this is the only way it hits the CLIs and APIs.
+    /// The Providers page's refresh button: checks every provider again, re-reads usage limits
+    /// for each signed-in account only while the page shows them and reloads the live catalogs.
+    /// Beyond the limits, nothing on that page checks on its own, so this is the only way it hits the CLIs and APIs.
     func refreshEverything() async {
         guard !isRefreshing else { return }
         isRefreshing = true
@@ -380,8 +384,10 @@ final class ProviderRegistry {
         await LoginEnvironment.load(force: true)
         await refreshAll()
         // Credits were already re-read when the key proved itself in `refreshAPIProvider`.
-        for provider in ProviderKind.allCases where status(provider).auth != .signedOut {
-            refreshPlanLimits(provider, force: true)
+        if settings.showsProviderUsage {
+            for provider in ProviderKind.allCases where status(provider).auth != .signedOut {
+                refreshPlanLimits(provider, force: true)
+            }
         }
         // Every installed provider, the ACP ones included: OpenCode, Cursor, Grok and Devin
         // report their models from a session of their own, and a list of the others left
@@ -500,13 +506,20 @@ final class ProviderRegistry {
         catalogs[provider] ?? []
     }
 
+    func sortedModels(for provider: ProviderKind) -> [ModelOption] {
+        // Read even on cache hits so views keep observing catalogue changes. Another
+        // provider's update leaves this array's storage as it was, so the comparison is
+        // by identity and costs nothing; only a catalogue that changed is sorted again.
+        let catalogue = models(for: provider)
+        if let cached = sortedModelCache[provider], cached.source == catalogue { return cached.sorted }
+        let sorted = catalogue.sortedByName()
+        sortedModelCache[provider] = (catalogue, sorted)
+        return sorted
+    }
+
     func model(_ id: String?, for provider: ProviderKind) -> ModelOption? {
         guard let id else { return nil }
-        if let match = Self.match(id, in: models(for: provider)) { return match }
-        // A thread or pin made before Zen and Go split kept `.opencode` for a Go model;
-        // the CLI is one and the same, so the Go catalogue answers.
-        guard provider == .opencode, id.hasPrefix("opencode-go/") else { return nil }
-        return Self.match(id, in: models(for: .opencodeGo))
+        return Self.match(id, in: models(for: provider))
     }
 
     private static func match(_ id: String, in list: [ModelOption]) -> ModelOption? {
@@ -586,7 +599,7 @@ final class ProviderRegistry {
             || (provider == .commandcode && models(for: provider) == Self.commandcodeSeed)
             || (provider == .pi && models(for: provider) == Self.piSeed)
             || (provider == .omp && models(for: provider) == Self.ompSeed)
-            || ((provider == .opencode || provider == .opencodeGo) && Self.lacksEffortWalk(models(for: provider)))
+            || (provider == .opencode && Self.lacksEffortWalk(models(for: provider)))
         let stale = catalogFetchedAt[provider].map { Date.now.timeIntervalSince($0) > Self.catalogFreshness } ?? !(models(for: provider).isEmpty)
         guard force || seeded || stale || models(for: provider).isEmpty else { return }
         loadingCatalogs.insert(provider)
@@ -603,11 +616,10 @@ final class ProviderRegistry {
         case .pi: try? await PiCLI.listModels(executable: executable, environment: environment)
         case .omp: try? await OmpCLI.listModels(executable: executable, environment: environment)
         case .cursor, .grok, .devin, .kimi: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
-        case .opencode, .opencodeGo: await openCodeCatalog(force: force, executable: executable, environment: environment)
+        case .opencode: await openCodeCatalog(force: force, executable: executable, environment: environment)
         case .deepseek, .meta, .zai: nil
         }
-        let list = raw.map { Self.openCodeModels($0, for: provider) }
-        if let list, !list.isEmpty {
+        if let list = raw, !list.isEmpty {
             updateCatalog(list, for: provider)
             catalogFetchedAt[provider] = .now
             storeCatalogDates()
@@ -615,18 +627,6 @@ final class ProviderRegistry {
             // nothing (a cold CLI losing to its handshake timeout, say) is tried again
             // on the next ask rather than leaving the provider empty for the whole run.
             attemptedCatalogs.insert(provider)
-            // One session answers both halves: Zen and Go come from the same probe, so a
-            // load of either leaves the other's catalogue ready for the picker.
-            if let raw, provider == .opencode || provider == .opencodeGo {
-                for kind in [ProviderKind.opencode, .opencodeGo] where kind != provider {
-                    let sibling = Self.openCodeModels(raw, for: kind)
-                    guard !sibling.isEmpty else { continue }
-                    updateCatalog(sibling, for: kind)
-                    catalogFetchedAt[kind] = .now
-                    attemptedCatalogs.insert(kind)
-                }
-                storeCatalogDates()
-            }
         }
     }
 
@@ -636,8 +636,8 @@ final class ProviderRegistry {
         list.count(where: { !$0.efforts.isEmpty }) <= 1
     }
 
-    /// The opencode ACP catalogue once per launch, shared by Zen and Go: the probe spawns
-    /// the CLI and walks every model, so it runs once and each provider keeps its half.
+    /// The full opencode ACP catalogue once per launch, with the CLI's model ids and names.
+    /// The probe spawns the CLI and walks every model.
     private func openCodeCatalog(force: Bool, executable: URL, environment: [String: String]) async -> [ModelOption]? {
         if force { openCodeCatalogTask = nil }
         let task: Task<[ModelOption]?, Never>
@@ -650,26 +650,6 @@ final class ProviderRegistry {
         let list = await task.value
         if list == nil { openCodeCatalogTask = nil }
         return list
-    }
-
-    /// OpenCode serves two catalogues through one CLI and marks them in the model id:
-    /// `opencode/…` is Zen, `opencode-go/…` is Go. Each provider keeps its own half.
-    private static func openCodeModels(_ list: [ModelOption], for provider: ProviderKind) -> [ModelOption] {
-        let goPrefix = "opencode-go/"
-        let half: [ModelOption] = switch provider {
-        case .opencode: list.filter { !$0.id.hasPrefix(goPrefix) }
-        case .opencodeGo: list.filter { $0.id.hasPrefix(goPrefix) }
-        default: list
-        }
-        // The CLI names a row "OpenCode Go/DeepSeek V4 Flash"; the provider already says
-        // which of the two it is, so the redundant half of the name goes.
-        let namePrefix = provider.displayName + "/"
-        return half.map { option in
-            guard option.name.hasPrefix(namePrefix) else { return option }
-            var option = option
-            option.name = String(option.name.dropFirst(namePrefix.count))
-            return option
-        }
     }
 
     private func loadClaudeCatalog(executable: URL, environment: [String: String]) async -> [ModelOption]? {
@@ -964,7 +944,7 @@ final class ProviderRegistry {
             return await OmpCLI.authStatus(executable: executable, environment: environment)
         case .kimi:
             return await ACPSession.authStatus(provider: provider, executable: executable, environment: environment)
-        case .opencode, .opencodeGo:
+        case .opencode:
             guard let result = try? await Shell.run(executable, ["auth", "list"], environment: environment, timeout: 20) else { return .unknown }
             let text = TextCleanup.stripANSI(result.output + result.errorOutput)
             let credentialText = text.components(separatedBy: "\n").prefix { !$0.contains("Environment") }.joined(separator: "\n")
@@ -977,11 +957,7 @@ final class ProviderRegistry {
                 }
                 return name.isEmpty ? nil : name
             }
-            // Go carries its own credential in the one auth file; Zen is whatever else is there.
-            let name = provider == .opencodeGo
-                ? credentials.first { $0.localizedCaseInsensitiveContains("opencode go") }
-                : credentials.first
-            if let name { return .signedIn(name) }
+            if let name = credentials.first { return .signedIn(name) }
             return result.succeeded ? .signedOut : .unknown
         case .grok:
             let url = URL(fileURLWithPath: (LoginEnvironment.homeDirectory as NSString).appendingPathComponent(".grok/auth.json"))

@@ -66,15 +66,17 @@ actor ThumbnailCache {
 enum ThumbnailMemory {
     private static var images = RecentCache<String, CGImage>(limit: 120, costLimit: 16 * 1_024 * 1_024)
 
-    private static func key(_ path: String, pointSize: CGFloat) -> String {
-        "\(path)#\(Int((pointSize * 2).rounded(.up)))"
+    private static func key(_ path: String, pointSize: CGFloat, height: CGFloat?) -> String {
+        let widthKey = "\(path)#\(Int((pointSize * 2).rounded(.up)))"
+        guard let height else { return widthKey }
+        return "\(widthKey)#height-\(Int((height * 2).rounded(.up)))"
     }
 
-    static func image(for path: String, pointSize: CGFloat) -> CGImage? {
-        images.value(for: key(path, pointSize: pointSize))
+    static func image(for path: String, pointSize: CGFloat, height: CGFloat? = nil) -> CGImage? {
+        images.value(for: key(path, pointSize: pointSize, height: height))
     }
 
-    static func store(_ image: CGImage, for path: String, pointSize: CGFloat) {
-        images.insert(image, for: key(path, pointSize: pointSize), cost: image.bytesPerRow * image.height)
+    static func store(_ image: CGImage, for path: String, pointSize: CGFloat, height: CGFloat? = nil) {
+        images.insert(image, for: key(path, pointSize: pointSize, height: height), cost: image.bytesPerRow * image.height)
     }
 }

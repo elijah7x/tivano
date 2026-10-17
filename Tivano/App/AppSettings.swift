@@ -157,8 +157,10 @@ final class AppSettings {
         static let binaryPaths = "providerBinaryPaths"
         static let disabledProviders = "disabledProviders"
         static let unmonitoredProviders = "unmonitoredProviderUpdates"
+        static let showsProviderUsage = "showsProviderUsage"
         static let models = "lastModels"
         static let efforts = "lastEfforts"
+        static let openCodeProviderMigrated = "openCodeProviderMigrated"
         static let lastHydraPair = "lastHydraPairID"
         static let textGeneration = "textGeneration"
         static let preventSleepDuringTasks = "preventSleepDuringTasks"
@@ -627,6 +629,10 @@ final class AppSettings {
         didSet { defaults.set(unmonitoredProviders, forKey: Key.unmonitoredProviders) }
     }
 
+    var showsProviderUsage: Bool {
+        didSet { defaults.set(showsProviderUsage, forKey: Key.showsProviderUsage) }
+    }
+
     private(set) var lastModels: [String: String] {
         didSet { defaults.set(lastModels, forKey: Key.models) }
     }
@@ -808,7 +814,7 @@ final class AppSettings {
 
     init() {
         let defaults = CaptureRun.defaults ?? .standard
-        defaultProvider = ProviderKind(rawValue: defaults.string(forKey: Key.defaultProvider) ?? "") ?? .codex
+        defaultProvider = ProviderKind(storedValue: defaults.string(forKey: Key.defaultProvider) ?? "") ?? .codex
         defaultRuntimeMode = RuntimeMode(rawValue: defaults.string(forKey: Key.runtimeMode) ?? "") ?? .fullAccess
         defaultWorkspaceMode = WorkspaceMode(rawValue: defaults.string(forKey: Key.workspaceMode) ?? "") ?? .local
         notifyWhenFinished = defaults.object(forKey: Key.notify) as? Bool ?? true
@@ -863,6 +869,7 @@ final class AppSettings {
         binaryPaths = defaults.dictionary(forKey: Key.binaryPaths) as? [String: String] ?? [:]
         disabledProviders = defaults.stringArray(forKey: Key.disabledProviders) ?? []
         unmonitoredProviders = defaults.stringArray(forKey: Key.unmonitoredProviders) ?? []
+        showsProviderUsage = defaults.object(forKey: Key.showsProviderUsage) as? Bool ?? true
         lastModels = defaults.dictionary(forKey: Key.models) as? [String: String] ?? [:]
         lastEfforts = defaults.dictionary(forKey: Key.efforts) as? [String: String] ?? [:]
         lastHydraPairID = defaults.string(forKey: Key.lastHydraPair).flatMap(UUID.init(uuidString:))
@@ -907,6 +914,42 @@ final class AppSettings {
         TypeScale.shared.ui = uiFontSize
         TypeScale.shared.content = contentFontSize
         TypeScale.shared.code = codeFontSize
+        migrateOpenCodeGo()
+    }
+
+    private func migrateOpenCodeGo() {
+        // A second pass would re-enable OpenCode when both old entries were disabled.
+        guard !defaults.bool(forKey: Key.openCodeProviderMigrated) else { return }
+        let legacy = "opencodeGo"
+        let current = ProviderKind.opencode.rawValue
+        let goDisabled = disabledProviders.contains(legacy)
+        disabledProviders.removeAll { $0 == legacy || (!goDisabled && $0 == current) }
+        let goUnmonitored = unmonitoredProviders.contains(legacy)
+        unmonitoredProviders.removeAll { $0 == legacy || (!goUnmonitored && $0 == current) }
+        if let value = binaryPaths[legacy] {
+            if binaryPaths[current]?.isEmpty ?? true { binaryPaths[current] = value }
+            binaryPaths[legacy] = nil
+        }
+        if let value = lastModels[legacy] {
+            if lastModels[current]?.isEmpty ?? true { lastModels[current] = value }
+            lastModels[legacy] = nil
+        }
+        if let value = lastEfforts[legacy] {
+            if lastEfforts[current]?.isEmpty ?? true { lastEfforts[current] = value }
+            lastEfforts[legacy] = nil
+        }
+        // Effort and speed choices are keyed `provider/modelID`; Go's keep working under OpenCode.
+        let legacyPrefix = legacy + "/"
+        if modelPreferences.keys.contains(where: { $0.hasPrefix(legacyPrefix) }) {
+            var preferences = modelPreferences
+            for (key, value) in modelPreferences where key.hasPrefix(legacyPrefix) {
+                preferences[key] = nil
+                let moved = current + "/" + key.dropFirst(legacyPrefix.count)
+                if preferences[moved] == nil { preferences[moved] = value }
+            }
+            modelPreferences = preferences
+        }
+        defaults.set(true, forKey: Key.openCodeProviderMigrated)
     }
 
     /// A stored size outside its range is written back clamped. A missing key stays missing

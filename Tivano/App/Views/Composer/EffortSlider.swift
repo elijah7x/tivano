@@ -14,8 +14,8 @@ enum ModelCatalog {
     static func entries(_ model: AppModel, including thread: ChatThread?) -> [Entry] {
         let registry = model.providers
         var result: [Entry] = if model.settings.modelList.isEmpty {
-            registry.availableProviders.flatMap { provider in
-                registry.models(for: provider).map { Entry(provider: provider, option: $0) }
+            ProviderKind.alphabetical.filter(Set(registry.availableProviders).contains).flatMap { provider in
+                registry.sortedModels(for: provider).map { Entry(provider: provider, option: $0) }
             }
         } else {
             model.settings.modelList.compactMap { pin in
@@ -148,6 +148,7 @@ struct ModelEffortButton: View {
         if let current, !current.efforts.isEmpty {
             parts.append(Chrome.localized(ModelOption.effortTitle(thread.effort ?? current.defaultEffort ?? "")))
         }
+        parts.append(thread.provider.routeSummary)
         if let pair { parts.append(HydraPairSummary.title(pair, registry: model.providers)) }
         return parts.joined(separator: " · ")
     }
@@ -1173,7 +1174,7 @@ enum EffortBrand: Hashable {
         case .deepseek: .deepseek
         case .meta: .meta
         case .antigravity: .antigravity
-        case .codex, .cursor, .grok, .opencode, .opencodeGo, .devin, .copilot, .commandcode, .pi, .omp, .zai, .kimi: .silver
+        case .codex, .cursor, .grok, .opencode, .devin, .copilot, .commandcode, .pi, .omp, .zai, .kimi: .silver
         case nil: .purple
         }
     }

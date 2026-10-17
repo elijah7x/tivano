@@ -109,7 +109,7 @@ struct ProseRunRepresentable: NSViewRepresentable {
                 }
             case .quote(let inner):
                 collect(inner, into: &parts)
-            case .code, .table, .rule:
+            case .code, .table, .image, .rule:
                 break
             }
         }
@@ -199,7 +199,7 @@ struct ProseRunRepresentable: NSViewRepresentable {
             for child in inner {
                 append(child, depth: depth, indent: indent + 14, dimmed: true, spacing: spacing, pointSize: pointSize, mentions: mentions, targets: targets, to: out)
             }
-        case .code, .table, .rule:
+        case .code, .table, .image, .rule:
             break
         }
     }

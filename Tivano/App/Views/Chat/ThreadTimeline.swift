@@ -119,8 +119,9 @@ struct ThreadTimeline: View, Equatable {
         let _ = tracking.bindTrace(runtime.threadID, viewportHeight)
         #endif
         let entries = runtime.entries
-        // Nothing here reads an entry's content: the cache keys on identities and kinds,
-        // so a streaming row redraws itself and never brings this body with it.
+        // The cache reads whether a tool row has images (a flag that flips once), never
+        // message text or tool output, so a streaming reply or a running command redraws
+        // its own row and never brings this body with it.
         // Every unarchived head, in the panel or not: a finished head that has already left
         // the panel for the sidebar (auto-clear, or Clear finished heads) keeps its pill
         // until its batch reports, so the list is not the panel's.
@@ -643,7 +644,17 @@ struct ThreadTimeline: View, Equatable {
             .background(alignment: .top) {
                 ScrollViewProbe(
                     usesTimelineTopFade: usesTimelineTopFade,
-                    onResolve: { tracking.probe = $0 },
+                    onResolve: { view in
+                        tracking.probe = view
+                        #if DEBUG
+                        CaptureTimelineScrolling.bind(view, geometry: {
+                            (tracking.offset, max(0, tracking.offset + tracking.distanceFromBottom))
+                        }) { y in
+                            tracking.noteWheelInput()
+                            position.scrollTo(y: y)
+                        }
+                        #endif
+                    },
                     onWheel: { tracking.noteWheelInput() }
                 )
                     .frame(width: 0, height: 0)
@@ -2493,12 +2504,16 @@ private struct ScrollViewProbe: NSViewRepresentable {
         if probe.window != nil { probe.syncTopFade() }
     }
 
-    private final class ProbeView: NSView {
+    fileprivate final class ProbeView: NSView {
         var onResolve: (NSView) -> Void = { _ in }
         var onWheel: () -> Void = {}
         var usesTimelineTopFade = false
         var fade: TimelineTopFade?
         private var wheelMonitor: Any?
+        #if DEBUG
+        var captureScroll: ((CGFloat) -> Void)?
+        var captureGeometry: (() -> (offset: CGFloat, range: CGFloat))?
+        #endif
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
@@ -2543,12 +2558,17 @@ private struct ScrollViewProbe: NSViewRepresentable {
             // AppKit local monitors observe input before dispatch and return it unchanged.
             // https://developer.apple.com/documentation/appkit/nsevent/addlocalmonitorforevents(matching:handler:)
             wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self, let scrollView = enclosingScrollView,
+                // Hidden columns stay attached and retain their app-wide monitor.
+                // Skip them before hit-testing the whole window for every wheel event.
+                guard let self, !isHiddenOrHasHiddenAncestor, let scrollView = enclosingScrollView,
                       event.window === window, event.scrollingDeltaY != 0,
                       let content = window?.contentView, let parent = content.superview else { return event }
                 let point = parent.convert(event.locationInWindow, from: nil)
                 let hit = content.hitTest(point)
                 guard Self.routesVerticalWheel(from: hit, to: scrollView) else { return event }
+                #if DEBUG
+                MainActor.assumeIsolated { CaptureTimelineScrolling.noteWheel() }
+                #endif
                 onWheel()
                 return event
             }
@@ -2568,6 +2588,56 @@ private struct ScrollViewProbe: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+@MainActor
+// Direct clip writes leave SwiftUI's pending bottom position intact and get undone.
+// These isolated probes use the same position binding as the timeline instead.
+enum CaptureTimelineScrolling {
+    private(set) static var acceptedWheelEvents = 0
+
+    static func noteWheel() {
+        guard isEnabled else { return }
+        acceptedWheelEvents += 1
+    }
+
+    struct Driver {
+        let move: (CGFloat) -> Bool
+        let geometry: () -> (offset: CGFloat, range: CGFloat)?
+    }
+
+    private static var isEnabled: Bool {
+        CaptureRun.isEnabled && (CommandLine.arguments.contains("--render-cost-probe")
+            || CommandLine.arguments.contains("--heavy-load-probe"))
+    }
+
+    static func bind(_ view: NSView, geometry: @escaping () -> (offset: CGFloat, range: CGFloat), action: @escaping (CGFloat) -> Void) {
+        guard isEnabled, let probe = view as? ScrollViewProbe.ProbeView else { return }
+        probe.captureScroll = action
+        probe.captureGeometry = geometry
+    }
+
+    static func driver(in scroll: NSScrollView) -> Driver? {
+        guard isEnabled, let document = scroll.documentView else { return nil }
+        func find(_ view: NSView) -> ScrollViewProbe.ProbeView? {
+            if let probe = view as? ScrollViewProbe.ProbeView,
+               probe.enclosingScrollView === scroll, probe.captureScroll != nil { return probe }
+            for child in view.subviews {
+                if let found = find(child) { return found }
+            }
+            return nil
+        }
+        guard let probe = find(document) else { return nil }
+        return Driver(move: { [weak probe, weak scroll] y in
+            guard let probe, let scroll, probe.window != nil,
+                  !probe.isHiddenOrHasHiddenAncestor,
+                  probe.enclosingScrollView === scroll, let action = probe.captureScroll else { return false }
+            action(y)
+            return true
+        }, geometry: { [weak probe] in probe?.captureGeometry?() })
+    }
+}
+#endif
 
 /// Hidden switch. Only the string `b` selects the upstream band; anything else, including a
 /// missing value, keeps the local 72pt band. Read when the mask is laid out, not observed.
@@ -2966,6 +3036,11 @@ enum TimelineGroup: Identifiable, Equatable {
     }
 
     @MainActor
+    static func hasImages(_ entry: TimelineEntry) -> Bool {
+        entry.kind == .tool && entry.hasImages
+    }
+
+    @MainActor
     static func build(_ entries: [TimelineEntry], showReasoning: Bool) -> [TimelineGroup] {
         // Positions of replies. A work run sitting before one has been moved on from, so it
         // starts collapsed. Kind only, never the text: reading streaming content here made the
@@ -2994,6 +3069,11 @@ enum TimelineGroup: Identifiable, Equatable {
                 // the end, and the commands around it stay one run.
                 if isHead(entry) {
                     heads.append(entry)
+                    continue
+                }
+                if hasImages(entry) {
+                    flushWork()
+                    groups.append(.single(entry))
                     continue
                 }
                 if let last = work.last, last.turnID != entry.turnID { flushWork() }
@@ -3212,9 +3292,9 @@ enum DisplayBlock: Identifiable, Equatable {
 }
 
 /// The last build of the timeline's blocks, with everything that build read. Entries are
-/// compared by identity (a pointer each) and by kind, never by content, so a body run that
-/// changed none of them gets its blocks back instead of building them again, and the body
-/// never observes a streaming row through the key. The per-turn meta is the cache's own,
+/// compared by identity (a pointer each), kind and whether a tool carries images, so a body
+/// run that changed none of them gets its blocks back instead of building them again. The
+/// key never reads streaming message text. The per-turn meta is the cache's own,
 /// built with the blocks. Nothing else reaches the blocks: they are handed straight to
 /// the stack, whose rows compare them.
 @MainActor
@@ -3242,6 +3322,7 @@ final class TimelineBlockCache {
 
     private struct Key: Equatable {
         var entries: [ObjectIdentifier]
+        var imageEntries: [ObjectIdentifier]
         /// The fold: a turn's block folds the moment its end marker lands. The marker is an
         /// entry of its own, so the identities say so already; the count says so again for
         /// the price of one integer, should a marker ever be written into a row in place.
@@ -3256,6 +3337,7 @@ final class TimelineBlockCache {
         /// Whether this key is `old` with entries appended and nothing else changed.
         func extends(_ old: Key) -> Bool {
             entries.count > old.entries.count
+                && imageEntries == old.imageEntries
                 && isRunning == old.isRunning
                 && hydraMergeID == old.hydraMergeID
                 && pills == old.pills
@@ -3286,6 +3368,7 @@ final class TimelineBlockCache {
         }
         let wanted = Key(
             entries: identities,
+            imageEntries: entries.filter(TimelineGroup.hasImages).map(ObjectIdentifier.init),
             turnEnds: turnEnds,
             isRunning: isRunning,
             hydraMergeID: hydraMergeID,
@@ -3509,8 +3592,8 @@ private struct TurnRunningBlock: View {
     let entries: [TimelineEntry]
     let showsWorking: Bool
     let context: RowContext
-    /// The partition as last built, keyed on the entries' identities: grouping is by kind
-    /// only, so it changes when a row comes or goes and never while one streams.
+    /// The partition as last built, keyed on identities and image-carrying tools,
+    /// never on streaming message text.
     @State private var groupCache = TurnGroupCache()
 
     var body: some View {
@@ -3566,18 +3649,21 @@ private struct TurnRunningBlock: View {
     }
 }
 
-/// A running turn's last partition, with the identities it was built from. An object, so
-/// handing the groups back is not a state write.
+/// A running turn's last partition, keyed on identities and image-carrying tools.
+/// An object, so handing the groups back is not a state write.
 @MainActor
 private final class TurnGroupCache {
     private var identities: [ObjectIdentifier] = []
+    private var imageEntries: [ObjectIdentifier] = []
     private var groups: [TimelineGroup] = []
 
     func groups(for entries: [TimelineEntry]) -> [TimelineGroup] {
         let wanted = entries.map(ObjectIdentifier.init)
-        if wanted != identities {
+        let images = entries.filter(TimelineGroup.hasImages).map(ObjectIdentifier.init)
+        if wanted != identities || images != imageEntries {
             groups = TimelineGroup.build(entries, showReasoning: false)
             identities = wanted
+            imageEntries = images
         }
         return groups
     }

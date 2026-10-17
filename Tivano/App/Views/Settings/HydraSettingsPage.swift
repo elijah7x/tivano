@@ -504,10 +504,10 @@ struct HydraPairEditor: View {
 
     var body: some View {
         let registry = model.providers
-        let providers = ProviderKind.allCases.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.provider) }
-        let headsProviders = ProviderKind.allCases.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.headsProvider) }
-        let options = registry.models(for: pair.provider)
-        let headsOptions = registry.models(for: pair.headsProvider)
+        let providers = ProviderKind.alphabetical.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.provider) }
+        let headsProviders = ProviderKind.alphabetical.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.headsProvider) }
+        let options = registry.sortedModels(for: pair.provider)
+        let headsOptions = registry.sortedModels(for: pair.headsProvider)
         let leadOption = registry.model(pair.orchestratorModel, for: pair.provider)
         let workerOption = registry.model(pair.workerModel, for: pair.headsProvider)
         // A lead that may be any model offers every effort the provider's models know.

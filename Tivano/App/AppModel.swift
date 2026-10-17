@@ -439,6 +439,20 @@ final class AppModel {
         return true
     }
 
+    @discardableResult
+    func moveProject(_ id: UUID, to targetID: UUID, placeAfter: Bool) -> Bool {
+        guard id != targetID, let moving = projects.first(where: { $0.id == id }),
+              projects.contains(where: { $0.id == targetID }) else { return false }
+        var reordered = projects
+        reordered.removeAll { $0.id == id }
+        guard let index = reordered.firstIndex(where: { $0.id == targetID }) else { return false }
+        reordered.insert(moving, at: placeAfter ? index + 1 : index)
+        guard reordered.map(\.id) != projects.map(\.id) else { return false }
+        projects = reordered
+        scheduleSave()
+        return true
+    }
+
     var archivedThreads: [ChatThread] {
         threads.filter(\.isArchived).sorted { $0.updatedAt > $1.updatedAt }
     }

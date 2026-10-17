@@ -482,7 +482,7 @@ struct ProviderChecklist: View {
 
     var body: some View {
         ChromeCard {
-            ForEach(Array(ProviderKind.allCases.enumerated()), id: \.element) { index, provider in
+            ForEach(Array(ProviderKind.alphabetical.enumerated()), id: \.element) { index, provider in
                 if index > 0 { ChromeRowDivider() }
                 ProviderStatusRow(provider: provider)
             }
@@ -503,9 +503,11 @@ private struct ProviderStatusRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: provider.displayName)
                     .font(.ui(.body))
-                Text(verbatim: status.isChecking ? Chrome.localized("Checking…") : status.summary)
+                Text(verbatim: provider.routeSummary + " · " + (status.isChecking ? Chrome.localized("Checking…") : status.summary))
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
             Spacer()
             if status.isChecking {

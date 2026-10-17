@@ -45,6 +45,8 @@ enum MessageText {
         case .table(let header, let rows):
             lines.append(header.joined(separator: "  "))
             for row in rows { lines.append(row.joined(separator: "  ")) }
+        case .image(let alt, let source):
+            lines.append(alt.isEmpty ? source : alt)
         case .rule:
             break
         }

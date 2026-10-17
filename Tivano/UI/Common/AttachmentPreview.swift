@@ -15,6 +15,22 @@ enum PreviewImages {
         extensions.contains((path as NSString).pathExtension.lowercased())
     }
 
+    static func localImagePath(_ source: String) -> String? {
+        let path: String
+        if source.hasPrefix("file://") {
+            guard let resolved = URL(string: source)?.path else { return nil }
+            path = resolved
+        } else if source.hasPrefix("~/") {
+            path = (source as NSString).expandingTildeInPath
+        } else if source.hasPrefix("/") {
+            path = source
+        } else {
+            return nil
+        }
+        guard isImagePath(path), FileManager.default.fileExists(atPath: path) else { return nil }
+        return path
+    }
+
     /// Answers already found, keyed by everything the answer is made of. Every tool row
     /// asks this on every render, and the answer ends in `FileManager.fileExists`: a disk
     /// hit, per row, per frame the row is rebuilt. A row's question never changes once its

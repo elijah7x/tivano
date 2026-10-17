@@ -77,9 +77,21 @@ final class TimelineEntry: Identifiable {
     let kind: Kind
     let turnID: UUID?
     var item: TimelineItem {
-        didSet { if oldValue != item { onChange?() } }
+        didSet {
+            if oldValue != item { onChange?() }
+            let images = Self.carriesImages(item)
+            if images != hasImages { hasImages = images }
+        }
     }
+    /// Whether this tool row carries images. Kept apart from `item` so grouping can watch it
+    /// without watching the row's output: it only changes when the first image lands.
+    private(set) var hasImages = false
     @ObservationIgnored var onChange: (() -> Void)?
+
+    private static func carriesImages(_ item: TimelineItem) -> Bool {
+        guard case .tool(let call) = item.content else { return false }
+        return call.images?.isEmpty == false
+    }
 
     init(_ item: TimelineItem) {
         id = item.id
@@ -95,6 +107,7 @@ final class TimelineEntry: Identifiable {
         case .turnEnd: .turnEnd
         }
         self.item = item
+        hasImages = Self.carriesImages(item)
     }
 }
 
@@ -227,18 +240,7 @@ final class ThreadRuntime {
     let threadID: UUID
 
     private(set) var entries: [TimelineEntry] = [] {
-        didSet {
-            let previous = Set(oldValue.map(\.id))
-            let current = Set(entries.map(\.id))
-            for entry in oldValue where !current.contains(entry.id) { markTurnDirty(entry.turnID) }
-            for entry in entries where !previous.contains(entry.id) {
-                entry.onChange = { [weak self, weak entry] in
-                    guard let self, let entry else { return }
-                    self.markTurnDirty(entry.turnID)
-                }
-                markTurnDirty(entry.turnID)
-            }
-        }
+        didSet { itemPositionsInvalid = true }
     }
     private(set) var turns: [TurnRecord] = [] {
         // A turn leaving the thread (reverted) takes any edit of its message, and its
@@ -568,7 +570,10 @@ final class ThreadRuntime {
     @ObservationIgnored private var turnRevisions: [UUID: UInt64] = [:]
     @ObservationIgnored private var savedTurnRevisions: [UUID: UInt64] = [:]
     @ObservationIgnored private var nextTurnRevision: UInt64 = 0
-    @ObservationIgnored private var itemPositions: [String: Double] = [:]
+    @ObservationIgnored private var itemPositions: [String: Double] = [:] {
+        didSet { itemPositionsInvalid = true }
+    }
+    @ObservationIgnored private var itemPositionsInvalid = true
     @ObservationIgnored private var installingHistory = false
 
     private func markTurnDirty(_ id: UUID?) {
@@ -757,6 +762,7 @@ final class ThreadRuntime {
             return head.hydra?.toolUseID
         } ?? [])
         for entry in loaded {
+            bindEntry(entry)
             entryIndex[entry.id] = entry
             switch entry.item.content {
             case .assistant(let message): recovered = recovered || message.isStreaming
@@ -810,6 +816,7 @@ final class ThreadRuntime {
                 let next = itemPositions.values.filter { $0 > previous }.min()
                 itemPositions[entry.id] = next.map { previous + ($0 - previous) / 2 } ?? (previous + 1)
             }
+            bindEntry(entry)
             entries.insert(entry, at: lastIndex + 1)
             entryIndex[entry.id] = entry
         }
@@ -1797,7 +1804,7 @@ final class ThreadRuntime {
             case .commandcode: CommandCodeSession(configuration: configuration)
             case .pi: PiSession(configuration: configuration)
             case .omp: OmpSession(configuration: configuration)
-            case .cursor, .opencode, .opencodeGo, .grok, .devin, .kimi: ACPSession(configuration: configuration)
+            case .cursor, .opencode, .grok, .devin, .kimi: ACPSession(configuration: configuration)
             case .deepseek: DeepSeekSession(configuration: configuration)
             case .meta: MetaSession(configuration: configuration)
             case .zai: ZaiSession(configuration: configuration)
@@ -2418,7 +2425,7 @@ final class ThreadRuntime {
         }
 
         let removedIDs = Set(removed.map(\.id))
-        entries.removeAll { entry in
+        removeEntries { entry in
             guard let turn = entry.item.turnID else { return false }
             return removedIDs.contains(turn)
         }
@@ -2663,6 +2670,7 @@ final class ThreadRuntime {
             }
             for (offset, item) in recoveredItems.enumerated() {
                 let entry = TimelineEntry(item)
+                self.bindEntry(entry)
                 self.entries.insert(entry, at: endIndex + offset)
                 self.entryIndex[item.id] = entry
             }
@@ -3562,16 +3570,38 @@ final class ThreadRuntime {
         scheduleSave()
     }
 
+    private func bindEntry(_ entry: TimelineEntry) {
+        entry.onChange = { [weak self, weak entry] in
+            guard let self, let entry else { return }
+            self.markTurnDirty(entry.turnID)
+        }
+        markTurnDirty(entry.turnID)
+    }
+
+    private func removeEntries(where shouldRemove: (TimelineEntry) -> Bool) {
+        var removed: [TimelineEntry] = []
+        entries.removeAll { entry in
+            guard shouldRemove(entry) else { return false }
+            removed.append(entry)
+            return true
+        }
+        for entry in removed {
+            entry.onChange = nil
+            markTurnDirty(entry.turnID)
+        }
+    }
+
     private func append(_ item: TimelineItem) {
         for entry in entries.suffix(6) { endStreaming(entry) }
         let entry = TimelineEntry(item)
+        bindEntry(entry)
         entries.append(entry)
         entryIndex[item.id] = entry
         saveRevision += 1
     }
 
     private func remove(_ id: String) {
-        entries.removeAll { $0.id == id }
+        removeEntries { $0.id == id }
         entryIndex[id] = nil
         streamByteLengths[id] = nil
         saveRevision += 1
@@ -3845,6 +3875,7 @@ final class ThreadRuntime {
             if call.edits.isEmpty { landed = edits.count }
             call.edits = Self.capped(edits)
         }
+        if let images = update.images, !images.isEmpty { call.images = images }
         if let output = update.output { call.setOutput(output) }
         if let exitCode = update.exitCode { call.exitCode = exitCode }
         if let status = update.status {
@@ -4367,8 +4398,8 @@ final class ThreadRuntime {
         flushTask = nil
     }
 
-    private func snapshotForSave() -> ThreadSave {
-        flushDeltas(scheduleSave: false)
+    private func updateItemPositionsIfNeeded() {
+        guard itemPositionsInvalid else { return }
         // Positions remain stable when a row is deleted or inserted, so editing one
         // turn never makes all the following turn files dirty just to renumber them.
         var nextPositions = [Double?](repeating: nil, count: entries.count)
@@ -4387,6 +4418,12 @@ final class ThreadRuntime {
                 previous = position
             }
         }
+        itemPositionsInvalid = false
+    }
+
+    private func snapshotForSave() -> ThreadSave {
+        flushDeltas(scheduleSave: false)
+        updateItemPositionsIfNeeded()
         var head = ThreadDocument(threadID: threadID)
         let finished = turns.filter { $0.status != .running && $0.id != currentTurnID && $0.id != finishingTurnID }
         let finishedIDs = Set(finished.map(\.id))
@@ -4539,6 +4576,7 @@ extension ThreadRuntime {
         let userItem = TimelineItem(turnID: turn.id, content: .user(UserMessage(text: text)))
         updateTurn(turn.id) { $0.userItemID = userItem.id }
         let entry = TimelineEntry(userItem)
+        bindEntry(entry)
         entries.insert(entry, at: 0)
         entryIndex[userItem.id] = entry
         saveRevision += 1

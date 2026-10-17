@@ -12,6 +12,9 @@ protocol ProviderSettings: AnyObject {
     /// Whether update checks stay on for this provider. The app defaults this to on and
     /// remembers a switch off. A conformer with no opinion of its own stays monitored.
     func monitorsUpdates(_ provider: ProviderKind) -> Bool
+    /// Whether the Providers page shows and reads plan limits and balances.
+    /// The chat usage ring is not affected.
+    var showsProviderUsage: Bool { get }
     /// Moves chosen models and their preferences from a variant's id to the row its
     /// variants were merged into (see `ModelFamilies.collapsed`), keeping its effort and speed.
     func adoptModelFamilies(_ families: [ModelOption], for provider: ProviderKind)
@@ -19,4 +22,5 @@ protocol ProviderSettings: AnyObject {
 
 extension ProviderSettings {
     func monitorsUpdates(_ provider: ProviderKind) -> Bool { true }
+    var showsProviderUsage: Bool { true }
 }

@@ -69,8 +69,6 @@ struct AcceptanceIntegration {
             try require(auth == .signedOut, "empty HOME did not sign out")
             do { _ = try await OmpCLI.listModels(executable: executable, environment: environment); throw Failure(message: "empty catalog accepted") }
             catch is ProviderError { }
-            let limits = await OmpPlanLimits.read(executable: executable, environment: environment)
-            try require(limits == nil, "signed-out usage not empty")
         }
         await check("cli-errors-malformed-and-nonzero-fault-injection") {
             let home = evidence.appendingPathComponent("cli-errors")
@@ -83,43 +81,7 @@ struct AcceptanceIntegration {
                 try require(auth == .unknown, "failed CLI incorrectly reported login")
                 do { _ = try await OmpCLI.listModels(executable: file, environment: cleanEnvironment(home: home)); throw Failure(message: "failed CLI catalog accepted") }
                 catch is ProviderError { }
-                let limits = await OmpPlanLimits.read(executable: file, environment: cleanEnvironment(home: home))
-                try require(limits == nil, "failed CLI usage accepted")
             }
-        }
-        if CommandLine.arguments.contains("--real-account") {
-            await check("real-usage-percent-reset-provider-and-dispatch") {
-                let raw = JSONValue.parse(try Data(contentsOf: evidence.appendingPathComponent("usage-home.json")))!
-                guard let limits = OmpPlanLimits.windows(from: raw) else { throw Failure(message: "real usage has no windows") }
-                for report in raw["reports"]?.array ?? [] {
-                    let provider = report["provider"]!.string!
-                    for row in report["limits"]?.array ?? [] {
-                        let id = provider + "|" + row["id"]!.string!
-                        guard let window = limits.windows.first(where: { $0.id == id }) else { throw Failure(message: "missing real usage window") }
-                        let percent = min(max(row["amount"]?["usedFraction"]?.double ?? -1, 0), 1) * 100
-                        try require(abs(window.percent - percent) < 0.000001, "percent mismatch")
-                        let reset = row["window"]?["resetsAt"]?.double.map { Date(timeIntervalSince1970: $0 / 1000) }
-                        try require(window.resetsAt == reset.flatMap { $0 > .now ? $0 : nil }, "reset mismatch")
-                    }
-                }
-                let live = await PlanLimitsReader.read(.omp, executable: executable, environment: ProcessInfo.processInfo.environment)
-                try require(live == limits, "PlanLimits dispatch differs from actual CLI usage")
-                let rows: [[String: Any]] = limits.windows.map { ["id": $0.id, "title": $0.title, "percent": $0.percent, "reset": $0.resetsAt?.timeIntervalSince1970 ?? 0] }
-                try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]).write(to: evidence.appendingPathComponent("mapped-usage.json"))
-                print("USAGE windows=\(limits.windows.count)")
-            }
-        }
-        await check("usage-old-duplicate-clamp-reset-fault-injection") {
-            let now = Date(timeIntervalSince1970: 1_800_000_000)
-            let limit: JSONValue = ["id": "window", "label": "Window", "amount": ["usedFraction": 1.5], "window": ["resetsAt": .double(now.addingTimeInterval(-1).timeIntervalSince1970 * 1000)]]
-            let payload: JSONValue = ["reports": .array([
-                ["provider": "deepseek", "fetchedAt": .double(now.addingTimeInterval(-21601).timeIntervalSince1970 * 1000), "limits": .array([limit])],
-                ["provider": "kimi-code", "fetchedAt": .double(now.timeIntervalSince1970 * 1000), "limits": .array([limit])],
-                ["provider": "kimi-code", "limits": .array([limit])]
-            ])]
-            let mapped = OmpPlanLimits.windows(from: payload, now: now)
-            try require(mapped?.windows.count == 1 && mapped?.windows[0].percent == 100 && mapped?.windows[0].resetsAt == nil, "stale/duplicate/clamp/reset failed")
-            try require(PlanLimitsReader.exposesLimits(.omp), "OMP limits capability missing")
         }
         await check("cli-update-private-layout-and-optional-live-read-only") {
             let environment = ProcessInfo.processInfo.environment

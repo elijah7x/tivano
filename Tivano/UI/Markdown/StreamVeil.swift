@@ -43,8 +43,8 @@ final class StreamVeil {
     private static let cadenceSeed: TimeInterval = 0.16
     private static let gapCeiling: TimeInterval = 1.0
 
-    /// The text as last handed over, nil until a veil attaches.
-    private var previous: [Character]?
+    private var characterCount = 0
+    private var lastCharacter: Character?
     private var sourceText: String?
     private var chunks: [Chunk] = []
     private var cadence = cadenceSeed
@@ -55,14 +55,32 @@ final class StreamVeil {
     /// for unchanged text, so a body may call it on every evaluation.
     func advance(_ text: String, at now: Date) {
         guard sourceText != text else { return }
+        let previous = sourceText
         sourceText = text
-        let characters = Array(text)
         guard let previous else {
-            self.previous = characters
+            characterCount = text.count
+            lastCharacter = text.last
             return
         }
-        if characters != previous {
-            let prefix = Self.commonPrefix(previous, characters)
+        let prefix: Int
+        let count: Int
+        if text.utf8.starts(with: previous.utf8) {
+            // An append may join the old final grapheme (combining mark, CRLF or ZWJ).
+            // Re-segment that grapheme with the tail rather than expanding the history.
+            let suffix = String(decoding: text.utf8.dropFirst(previous.utf8.count), as: UTF8.self)
+            if let lastCharacter {
+                let tail = String(lastCharacter) + suffix
+                prefix = characterCount - (tail.first == lastCharacter ? 0 : 1)
+                count = characterCount - 1 + tail.count
+            } else {
+                prefix = 0
+                count = suffix.count
+            }
+        } else {
+            prefix = Self.commonPrefix(previous, text)
+            count = text.count
+        }
+        if prefix != characterCount || count != characterCount {
             // A rewrite shorter than a chunk's start (a delegation block leaving the reply,
             // say) drops that chunk whole: a range built with its upper bound below its
             // lower one traps.
@@ -73,17 +91,18 @@ final class StreamVeil {
                 kept.range = chunk.range.lowerBound..<upper
                 return kept
             }
-            if characters.count > prefix {
+            if count > prefix {
                 if let lastAppend {
                     let gap = min(now.timeIntervalSince(lastAppend), Self.gapCeiling)
                     cadence = cadence * 0.7 + gap * 0.3
                 }
                 lastAppend = now
                 let duration = min(max(cadence * 3, Self.shortestFade), Self.longestFade)
-                chunks.append(Chunk(range: prefix..<characters.count, started: now, duration: duration))
+                chunks.append(Chunk(range: prefix..<count, started: now, duration: duration))
             }
-            self.previous = characters
         }
+        characterCount = count
+        lastCharacter = text.last
         prune(at: now)
     }
 
@@ -118,7 +137,8 @@ final class StreamVeil {
     /// Forgets the text and every chunk, so a settled paragraph holds nothing; the next
     /// `advance` attaches afresh.
     func reset() {
-        previous = nil
+        characterCount = 0
+        lastCharacter = nil
         sourceText = nil
         chunks = []
         lastAppend = nil
@@ -135,11 +155,13 @@ final class StreamVeil {
         1 + 0.3 * Double(max(0, active - 2))
     }
 
-    private static func commonPrefix(_ a: [Character], _ b: [Character]) -> Int {
-        let limit = min(a.count, b.count)
-        var index = 0
-        while index < limit, a[index] == b[index] { index += 1 }
-        return index
+    private static func commonPrefix(_ a: String, _ b: String) -> Int {
+        var count = 0
+        for (left, right) in zip(a, b) {
+            guard left == right else { break }
+            count += 1
+        }
+        return count
     }
 }
 

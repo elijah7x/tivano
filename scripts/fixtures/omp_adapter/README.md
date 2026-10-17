@@ -42,7 +42,7 @@ fixture 标识，不指向真实设备、账户或会话。合成模型仅请求
 artifacts 目录传给 MCP runner 的 `--integration`。integration 默认创建私有 HOME
 并只继承 PATH 等最小环境，不导入登录 shell、API key 或真实账户缓存。
 默认 CLI 场景覆盖空 HOME、失败注入、私有安装布局和无效选择；账户目录、
-当前模型、usage、真实安装归属和在线 registry 查询跳过，summary 明示缺口。
+当前模型、真实安装归属和在线 registry 查询跳过，summary 明示缺口。
 
 真实账户查询必须显式使用：
 

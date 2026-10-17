@@ -21,6 +21,14 @@ struct ProviderSelectionSection: View {
                             .presentedChrome()
                         }
                 }
+                ChromeRowDivider()
+                ChromeRow(title: "Show remaining usage", detail: "Plan limits and balances in the provider cards below. The usage ring in a chat still shows them.") {
+                    SettingsSwitch(isOn: Binding(
+                        get: { settings.showsProviderUsage },
+                        set: { settings.showsProviderUsage = $0 }
+                    ))
+                    .accessibilityLabel(Text(verbatim: Chrome.localized("Show remaining usage")))
+                }
             }
         }
     }
@@ -40,9 +48,6 @@ struct ProviderSelectionCard: View {
             count: columnCount
         )
     }
-    private static let providers = ProviderKind.allCases.sorted {
-        $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
@@ -52,20 +57,24 @@ struct ProviderSelectionCard: View {
                     .foregroundStyle(Chrome.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: ChromeVisualTileMetrics.captionSpacing) {
-                ForEach(Self.providers) { provider in
-                    let enabled = isEnabled(provider)
-                    ChromeVisualTile(
-                        title: provider.displayName,
-                        isSelected: enabled,
-                        width: Self.columnWidth,
-                        layout: .inline
-                    ) {
-                        withAnimation(Chrome.hover) { setEnabled(!enabled, provider) }
-                    } content: {
-                        ProviderIcon(provider: provider, size: Chrome.iconSize)
+            ForEach(ProviderGroup.allCases) { group in
+                ChromeSection(title: group.title) {
+                    LazyVGrid(columns: Self.columns, alignment: .leading, spacing: ChromeVisualTileMetrics.captionSpacing) {
+                        ForEach(group.providers) { provider in
+                            let enabled = isEnabled(provider)
+                            ChromeVisualTile(
+                                title: provider.displayName,
+                                isSelected: enabled,
+                                width: Self.columnWidth,
+                                layout: .inline
+                            ) {
+                                withAnimation(Chrome.hover) { setEnabled(!enabled, provider) }
+                            } content: {
+                                ProviderIcon(provider: provider, size: Chrome.iconSize)
+                            }
+                            .accessibilityValue(Text(verbatim: Chrome.localized(enabled ? "Active" : "Hidden")))
+                        }
                     }
-                    .accessibilityValue(Text(verbatim: Chrome.localized(enabled ? "Active" : "Hidden")))
                 }
             }
         }

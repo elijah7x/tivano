@@ -1,11 +1,26 @@
 import Foundation
 
+enum ProviderGroup: String, CaseIterable, Identifiable, Sendable {
+    case agentCLI
+    case tivanoCode
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .agentCLI: "Agent CLIs"
+        case .tivanoCode: "Tivano Code"
+        }
+    }
+
+    var providers: [ProviderKind] { ProviderKind.alphabetical.filter { $0.group == self } }
+}
+
 enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case codex
     case claude
     case cursor
     case opencode
-    case opencodeGo
     case grok
     case deepseek
     case meta
@@ -18,6 +33,23 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case kimi
     case omp
 
+    /// A raw value read from storage; the retired `opencodeGo` means `opencode`.
+    init?(storedValue raw: String) {
+        self.init(rawValue: raw == "opencodeGo" ? "opencode" : raw)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        guard let provider = Self(storedValue: raw) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown provider: \(raw)")
+        }
+        self = provider
+    }
+
+    /// The order used by every provider list shown to the user.
+    static let alphabetical: [ProviderKind] = allCases.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+
     var id: String { rawValue }
 
     var displayName: String {
@@ -25,8 +57,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .codex: "Codex"
         case .claude: "Claude"
         case .cursor: "Cursor"
-        case .opencode: "OpenCode Zen"
-        case .opencodeGo: "OpenCode Go"
+        case .opencode: "OpenCode"
         case .grok: "Grok"
         case .deepseek: "DeepSeek"
         case .meta: "Meta"
@@ -41,13 +72,65 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// English name of the program that runs the tool loop.
+    var agentName: String {
+        switch self {
+        case .codex: "Codex CLI"
+        case .claude: "Claude Code"
+        case .cursor: "Cursor CLI"
+        case .opencode: "OpenCode CLI"
+        case .grok: "Grok Build"
+        case .deepseek: "Tivano Code"
+        case .meta: "Tivano Code"
+        case .zai: "Tivano Code"
+        case .devin: "Devin CLI"
+        case .antigravity: "Antigravity CLI"
+        case .copilot: "Copilot CLI"
+        case .commandcode: "Command Code CLI"
+        case .pi: "Pi CLI"
+        case .omp: "omp CLI"
+        case .kimi: "Kimi Code CLI"
+        }
+    }
+
+    /// Grouped by where the tool loop runs: an agent CLI the user installs, or Tivano Code.
+    var group: ProviderGroup {
+        switch self {
+        case .deepseek, .meta, .zai: .tivanoCode
+        case .codex, .claude, .cursor, .opencode, .grok, .devin, .antigravity, .copilot, .commandcode, .pi, .kimi, .omp: .agentCLI
+        }
+    }
+
+    /// English key for what the user signs in with or pays for, in the vendor's wording.
+    var accountLabel: String {
+        switch self {
+        case .codex: "ChatGPT plan or API key"
+        case .claude: "Claude plan or API key"
+        case .cursor: "Cursor account"
+        case .opencode: "Set up in OpenCode"
+        case .grok: "Grok plan or API key"
+        case .deepseek: "API key"
+        case .meta: "API key"
+        case .zai: "GLM Coding Plan"
+        case .devin: "Devin account"
+        case .antigravity: "Google account or API key"
+        case .copilot: "Copilot plan or API key"
+        case .commandcode: "Subscription or credits"
+        case .pi: "Set up in Pi"
+        case .omp: "Set up in omp"
+        case .kimi: "Kimi membership or API key"
+        }
+    }
+
+    /// Agent name and localized account label for display.
+    var routeSummary: String { agentName + " · " + AppText.localized(accountLabel) }
+
     var executableName: String {
         switch self {
         case .codex: "codex"
         case .claude: "claude"
         case .cursor: "cursor-agent"
         case .opencode: "opencode"
-        case .opencodeGo: "opencode"
         case .grok: "grok"
         case .deepseek: ""
         case .meta: ""
@@ -62,8 +145,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Both OpenCode plans are the one `opencode` CLI; the mark is the same.
-    var iconName: String { self == .opencodeGo ? "provider-opencode" : "provider-\(rawValue)" }
+    var iconName: String { "provider-\(rawValue)" }
 
     var loginCommand: String {
         switch self {
@@ -71,7 +153,6 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .claude: "claude auth login"
         case .cursor: "cursor-agent login"
         case .opencode: "opencode auth login"
-        case .opencodeGo: "opencode auth login"
         case .grok: "grok login"
         case .deepseek: "DEEPSEEK_API_KEY=sk-..."
         case .meta: "MODEL_API_KEY=..."
@@ -92,7 +173,6 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .claude: URL(string: "https://claude.com/product/claude-code")!
         case .cursor: URL(string: "https://cursor.com/cli")!
         case .opencode: URL(string: "https://opencode.ai")!
-        case .opencodeGo: URL(string: "https://opencode.ai")!
         case .grok: URL(string: "https://x.ai/cli")!
         case .deepseek: URL(string: "https://platform.deepseek.com/api_keys")!
         case .meta: URL(string: "https://dev.meta.ai/")!
@@ -111,7 +191,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var isAPIKeyBased: Bool { self == .deepseek || self == .meta || self == .zai }
 
     /// Driven over the Agent Client Protocol by `ACPSession`.
-    var usesACP: Bool { self == .cursor || self == .opencode || self == .opencodeGo || self == .grok || self == .devin || self == .kimi }
+    var usesACP: Bool { self == .cursor || self == .opencode || self == .grok || self == .devin || self == .kimi }
 
     /// Providers with an API key field in Settings: the API-key providers, which need one,
     /// and Command Code, whose CLI takes a Studio key through `COMMAND_CODE_API_KEY` as an
@@ -354,6 +434,19 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         case "": "Default"
         default: effort.prefix(1).uppercased() + effort.dropFirst()
         }
+    }
+}
+
+extension Array where Element == ModelOption {
+    /// A-Z by the name the picker shows, numbers in natural order. Each name is built once:
+    /// `shortName` allocates, and a sort of six hundred rows would otherwise build it thousands of times.
+    func sortedByName() -> [ModelOption] {
+        map { (name: $0.shortName, option: $0) }
+            .sorted { lhs, rhs in
+                let order = lhs.name.localizedStandardCompare(rhs.name)
+                return order == .orderedSame ? lhs.option.id < rhs.option.id : order == .orderedAscending
+            }
+            .map(\.option)
     }
 }
 

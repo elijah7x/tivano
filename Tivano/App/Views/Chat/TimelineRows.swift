@@ -1274,150 +1274,6 @@ struct UserBubble: Shape {
     }
 }
 
-struct AttachmentStrip: View {
-    let attachments: [Attachment]
-
-    /// One preview panel for the strip, so every photo opens in a single tap no matter
-    /// how many are attached, and made on the first tap rather than with the row.
-    @State private var preview = AttachmentPreviewSlot()
-
-    var body: some View {
-        // Weak/box captures only: hover responders and anchor views must not keep this
-        // strip (and its panel) alive after it scrolls away.
-        let slot = preview
-        // A plain stack hugs the thumbnails, so a trailing-aligned row keeps the
-        // photos over the bubble — and the anchor view fills just the photos.
-        HStack(spacing: 6) {
-            ForEach(attachments) { attachment in
-                AttachmentThumbnail(attachment: attachment, preview: preview)
-                    .help(attachment.name)
-            }
-        }
-        .background {
-            AttachmentAnchorCapture { [weak slot] in slot?.setAnchor($0) }
-        }
-        .onDisappear { [weak slot] in slot?.close() }
-    }
-}
-
-struct AttachmentThumbnail: View {
-    let attachment: Attachment
-    var size: CGFloat = 56
-    /// The panel the photo opens in: either a slot, which makes its panel on the first
-    /// tap, or one the caller already holds. A strip that scrolls with the conversation
-    /// wants the slot; the composer's own strips, which are made once, take either.
-    private let slot: AttachmentPreviewSlot?
-    private let panel: AttachmentPreviewCoordinator?
-
-    @State private var image: CGImage?
-    /// The thumbnail's own NSView, handed to the panel on tap so the arrow
-    /// lands on the tapped photo rather than the strip's middle. Mounted once the
-    /// pointer has been on the photo: a tap always follows a hover, and a strip
-    /// scrolling past should not be building views for a tap that never comes.
-    @State private var ownAnchor = WeakView()
-    @State private var needsAnchor = false
-    /// Never mounts an anchor view of its own: for a strip that keeps every AppKit view
-    /// out of SwiftUI's key-view-loop walk (see `WindowRectAnchor`). The panel then aims
-    /// at the tap inside the strip's own anchor, which is where the pointer is anyway.
-    private let anchorless: Bool
-
-    init(attachment: Attachment, size: CGFloat = 56, preview: AttachmentPreviewSlot, anchorless: Bool = false) {
-        self.init(attachment: attachment, size: size, slot: preview, panel: nil, anchorless: anchorless)
-    }
-
-    init(attachment: Attachment, size: CGFloat = 56, preview: AttachmentPreviewCoordinator) {
-        self.init(attachment: attachment, size: size, slot: nil, panel: preview, anchorless: false)
-    }
-
-    private init(attachment: Attachment, size: CGFloat, slot: AttachmentPreviewSlot?, panel: AttachmentPreviewCoordinator?, anchorless: Bool) {
-        self.attachment = attachment
-        self.size = size
-        self.slot = slot
-        self.panel = panel
-        self.anchorless = anchorless
-        // A photo shown before starts out drawn, so scrolling back to it never fades it in again.
-        _image = State(initialValue: attachment.isImage ? ThumbnailMemory.image(for: attachment.path, pointSize: size) : nil)
-    }
-
-    /// Opens (or closes) the panel for this photo, making one only now if the caller
-    /// handed over a slot.
-    private func togglePanel() {
-        if let slot {
-            slot.panel.toggle(attachment, over: ownAnchor.value)
-        } else {
-            panel?.toggle(attachment, over: ownAnchor.value)
-        }
-    }
-
-    var body: some View {
-        // The anchor box alone: the hover responder and the anchor view must not keep
-        // this row (and its attachment) alive after it scrolls away.
-        let anchorBox = ownAnchor
-        Button {
-            togglePanel()
-        } label: {
-            if attachment.isImage {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.quaternary.opacity(0.6))
-                    if let image {
-                        Image(decorative: image, scale: 2)
-                            .resizable()
-                            .interpolation(.high)
-                            .aspectRatio(contentMode: .fill)
-                            .transition(.opacity)
-                    }
-                }
-                .frame(width: size, height: size)
-                .clipShape(.rect(cornerRadius: 12, style: .continuous))
-            } else if attachment.isVideo {
-                AttachmentVideoThumbnail(attachment: attachment, size: size)
-            } else {
-                // A file fills its chip the way a photo does: the Finder icon at the
-                // chip's full size on the same plate, so a text file, a PDF and a
-                // folder all read at a glance. The name is the tooltip and the preview
-                // panel; at 48pt it never fit under a 16pt icon anyway.
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.quaternary.opacity(0.6))
-                    Image(nsImage: FileIcons.icon(for: attachment.path))
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
-                        .padding(size * 0.08)
-                }
-                .frame(width: size, height: size)
-                .clipShape(.rect(cornerRadius: 12, style: .continuous))
-                .accessibilityLabel(Text(attachment.name))
-            }
-        }
-        .buttonStyle(.plain)
-        .focusable(false)
-        // The .fill image is drawn wider than the cell before it is clipped;
-        // pinning the hit shape to the cell keeps the neighbour's remove badge
-        // reachable no matter how hit-testing treats the overflow.
-        .contentShape(.rect(cornerRadius: 12, style: .continuous))
-        .onHover { [needed = $needsAnchor, anchorless] hovering in
-            if hovering, !anchorless, !needed.wrappedValue { needed.wrappedValue = true }
-        }
-        .background {
-            if needsAnchor, !anchorless {
-                AttachmentAnchorCapture { [weak anchorBox] in anchorBox?.value = $0 }
-            }
-        }
-        .task(id: attachment.path) {
-            guard attachment.isImage else { return }
-            if let known = ThumbnailMemory.image(for: attachment.path, pointSize: size) {
-                if image !== known { image = known }
-                return
-            }
-            guard let thumbnail = await ThumbnailCache.shared.thumbnail(for: attachment.path, pointSize: size, fillingSquare: true) else { return }
-            ThumbnailMemory.store(thumbnail.image, for: attachment.path, pointSize: size)
-            withAnimation(.easeOut(duration: 0.15)) { image = thumbnail.image }
-        }
-    }
-}
-
 struct AssistantMessageRow: View {
     let entry: TimelineEntry
     /// The turn's summary, set only on the turn's last reply. Precomputed by the
@@ -1813,6 +1669,9 @@ struct ToolRow: View {
                 if isExpanded, showsOutput, !opensImage {
                     ToolDetailView(call: call, disclosureID: disclosureID, workingDirectory: workingDirectory)
                         .padding(.trailing, 12)
+                }
+                if let images = call.images, !images.isEmpty, !(call.kind == .read && imagePath != nil) {
+                    AttachmentStrip(attachments: images, medium: true)
                 }
             }
             .onDisappear { [weak slot] in slot?.close() }
@@ -2651,15 +2510,14 @@ struct TurnFinishedBlock: View {
         _fallbackExpanded = State(initialValue: chronological)
     }
     @Environment(\.revealTimelineEnd) private var revealBox
-    /// What the body last derived from the turn, keyed on its entries' identities and the
-    /// fold: an evaluation with the same key reads it back instead of walking the turn
-    /// again. Written after the body (see the `onChange` below), never in it.
+    /// What the body last derived from the turn, keyed on identities, image-carrying tools
+    /// and the fold. Written after the body (see the `onChange` below), never in it.
     @State private var derived: (key: DerivedKey, value: Derived)?
 
-    /// What `Derived` depends on: which entries the turn holds (each a class, so identity
-    /// is enough) and whether the full steps are showing.
+    /// Images can arrive on an existing tool entry after the turn has folded.
     private struct DerivedKey: Equatable {
         var ids: [ObjectIdentifier]
+        var imageEntries: [ObjectIdentifier]
         var expanded: Bool
         var stepLimit: Int
     }
@@ -2676,10 +2534,12 @@ struct TurnFinishedBlock: View {
         var conversation: [TimelineEntry] = []
         var hasEdits = false
         var hasResponse = false
-        /// The heads the turn sent out, always shown below the final response, folded or not.
+        /// Image results stay above the response, outside the steps fold.
+        var imageEntries: [TimelineEntry] = []
+        /// Heads without image results stay below the response, folded or not.
         var headEntries: [TimelineEntry] = []
-        /// The turn's steps, built only while they are showing. Neither the conversation
-        /// nor the heads are among them: both stay in view below.
+        /// The turn's steps, built only while they are showing. The conversation,
+        /// images and heads stay outside the steps fold.
         var detailGroups: [TimelineGroup] = []
 
         @MainActor
@@ -2701,7 +2561,11 @@ struct TurnFinishedBlock: View {
                     }
                 case .tool:
                     guard case .tool(let call) = entry.item.content else { continue }
-                    if call.kind == .agent { headEntries.append(entry) }
+                    if call.images?.isEmpty == false {
+                        imageEntries.append(entry)
+                    } else if call.kind == .agent {
+                        headEntries.append(entry)
+                    }
                     if !call.edits.isEmpty { hasEdits = true }
                 default:
                     break
@@ -2709,7 +2573,7 @@ struct TurnFinishedBlock: View {
             }
             hasResponse = !conversation.isEmpty
             if expanded {
-                let shown = Set(conversation.map(ObjectIdentifier.init))
+                let shown = Set((conversation + imageEntries).map(ObjectIdentifier.init))
                 detailGroups = TimelineGroup.build(Array(content.suffix(stepLimit)), showReasoning: false).filter {
                     switch $0 {
                     case .heads: false
@@ -2722,15 +2586,21 @@ struct TurnFinishedBlock: View {
     }
 
     var body: some View {
-        let key = DerivedKey(ids: content.map(ObjectIdentifier.init), expanded: isExpanded, stepLimit: stepLimit)
+        let key = DerivedKey(
+            ids: content.map(ObjectIdentifier.init),
+            imageEntries: content.filter(TimelineGroup.hasImages).map(ObjectIdentifier.init),
+            expanded: isExpanded,
+            stepLimit: stepLimit
+        )
         let derived = (self.derived?.key == key ? self.derived?.value : nil) ?? Derived(content: content, expanded: isExpanded, stepLimit: stepLimit)
         let showsHeads = !derived.headEntries.isEmpty
+        let showsImages = !derived.imageEntries.isEmpty
         // The files as the turn's own diff saw them, or as an older turn's were worked out
         // once (see the task below).
         let changes = summary.changes ?? legacyChanges
         let hasFiles = changes?.files.isEmpty == false
         let showsSteps = isExpanded && !derived.detailGroups.isEmpty
-        let showsBody = showsHeads || hasFiles || derived.hasResponse || showsSteps
+        let showsBody = showsHeads || showsImages || hasFiles || derived.hasResponse || showsSteps
         VStack(alignment: .leading, spacing: 0) {
             ForEach(userEntries) { entry in
                 UserMessageRow(entry: entry, runtime: runtime, canRevert: canUndo)
@@ -2808,7 +2678,17 @@ struct TurnFinishedBlock: View {
                     RoundedRectangle(cornerRadius: TimelineMetrics.pillRadius, style: .continuous)
                         .fill(.quaternary.opacity(0.32))
                 }
-                .padding(.bottom, derived.hasResponse || showsHeads ? TimelineMetrics.rowSpacing : 0)
+                .padding(.bottom, derived.hasResponse || showsImages || showsHeads ? TimelineMetrics.rowSpacing : 0)
+            }
+            ForEach(derived.imageEntries) { entry in
+                TimelineGroupView(
+                    group: .single(entry),
+                    runtime: runtime,
+                    summary: nil,
+                    hasReply: false,
+                    context: RowContext(workingDirectory: workingDirectory, canRewind: canUndo, chronological: chronological)
+                )
+                .padding(.bottom, TimelineMetrics.rowSpacing)
             }
             if derived.hasResponse {
                 VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {

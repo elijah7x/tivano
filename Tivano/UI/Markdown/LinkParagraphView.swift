@@ -285,6 +285,15 @@ extension EnvironmentValues {
 /// Non-editable selectable text view that sizes itself to its content width.
 /// No continuous work: layout runs once per text or width change.
 final class LinkTextView: NSTextView {
+    #if DEBUG
+    private static let legacyFullReplace = CaptureRun.isEnabled && CommandLine.arguments.contains("--legacy-native-render-probe")
+    private static var captureAppends = 0
+    private static var captureReplacements = 0
+
+    static func captureMutationCounts() -> [String: Int] {
+        ["appends": captureAppends, "fullReplacements": captureReplacements]
+    }
+    #endif
     private var lastLaidOutWidth: CGFloat = 0
     private var lastMeasuredHeight: CGFloat = 0
 
@@ -499,8 +508,37 @@ final class LinkTextView: NSTextView {
             .underlineStyle: 0,
             .cursor: NSCursor.pointingHand,
         ]
-        if textStorage?.isEqual(to: text) != true {
-            textStorage?.setAttributedString(text)
+        #if DEBUG
+        if Self.legacyFullReplace {
+            if textStorage?.isEqual(to: text) != true {
+                textStorage?.setAttributedString(text)
+                Self.captureReplacements += 1
+                lastMeasuredHeight = 0
+                measuredWidth = 0
+            }
+            invalidateIntrinsicContentSize()
+            return
+        }
+        #endif
+        if let storage = textStorage, !storage.isEqual(to: text) {
+            let count = storage.length
+            let extends = text.length >= count && text.string.utf16.starts(with: storage.string.utf16)
+            let selection = extends && selectedRange().length > 0 ? selectedRanges : []
+            // A closing Markdown delimiter can restyle old text; only an identical
+            // attributed prefix may retain its glyph layout.
+            if text.length > count, extends,
+               text.attributedSubstring(from: NSRange(location: 0, length: count)).isEqual(to: storage) {
+                storage.append(text.attributedSubstring(from: NSRange(location: count, length: text.length - count)))
+                #if DEBUG
+                if CaptureRun.isEnabled { Self.captureAppends += 1 }
+                #endif
+            } else {
+                storage.setAttributedString(text)
+                #if DEBUG
+                if CaptureRun.isEnabled { Self.captureReplacements += 1 }
+                #endif
+            }
+            if !selection.isEmpty { selectedRanges = selection }
             lastMeasuredHeight = 0
             measuredWidth = 0
         }

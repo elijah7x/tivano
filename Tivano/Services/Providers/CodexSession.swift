@@ -1123,7 +1123,8 @@ final class CodexSession: ProviderSession {
         case "imageView":
             return ToolCall(kind: .read, title: ToolTitles.relativePath(item["path"]?.string ?? "Image", to: workingDirectory))
         case "imageGeneration":
-            return ToolCall(kind: .other, title: item["revisedPrompt"]?.string ?? "Generate image")
+            // The prompt is a paragraph; as the title it would sit over the picture as a caption.
+            return ToolCall(kind: .other, title: "Generate image", detail: item["revisedPrompt"]?.string)
         case "enteredReviewMode", "exitedReviewMode":
             return ToolCall(kind: .other, title: "Review", detail: item["review"]?.string)
         default:
@@ -1155,9 +1156,20 @@ final class CodexSession: ProviderSession {
             } else if let content = item["result"]?["content"]?.array {
                 update.output = content.compactMap { $0["text"]?.string }.joined(separator: "\n")
             }
+            let images = ToolImages.blocks(item["result"]?["content"])
+            if !images.isEmpty { update.images = images }
             update.status = Self.toolStatus(rawStatus, exitCode: nil)
         case "webSearch", "imageView", "enteredReviewMode", "exitedReviewMode":
             update.status = .completed
+        case "imageGeneration":
+            update.status = Self.toolStatus(rawStatus, exitCode: nil)
+            if let path = item["savedPath"]?.string, !path.isEmpty,
+               let attachment = ToolImages.file(at: path) {
+                update.images = [attachment]
+            } else if let result = item["result"]?.string, !result.isEmpty,
+                      let attachment = ToolImages.attachment(block: ["type": "image", "data": .string(result), "mimeType": "image/png"]) {
+                update.images = [attachment]
+            }
         default:
             update.status = Self.toolStatus(rawStatus, exitCode: nil)
         }

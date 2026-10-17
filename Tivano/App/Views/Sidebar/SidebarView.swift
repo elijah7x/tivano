@@ -35,6 +35,7 @@ struct SidebarView: View {
     /// The live reorder, exactly the queue's: the grabbed row follows the pointer, its
     /// helpers with it, and neighbours slide across as its centre passes theirs.
     @State private var drag = RowDrag<UUID>()
+    @State private var projectDrag = RowDrag<UUID>()
     /// Every row's height by its item id. A thread's slot is its own row plus the helper
     /// rows under it, so a dragged row crosses a neighbour with helpers in one go. Kept out
     /// of observation like the frames below: every row reports its height as the list lays
@@ -44,9 +45,11 @@ struct SidebarView: View {
     /// below to find the row under the pointer at the grab. Kept out of observation like
     /// the heights: the rows report as they lay out, only a grab reads them.
     @State private var rowFrames = RowFrames()
+    @State private var projectFrames = RowFrames()
     /// The grabbed row's peers and their slot heights, taken once at the grab and again
     /// after each swap, so a pointer move never rebuilds the list to find them.
     @State private var dragPeers: DragPeers?
+    @State private var projectDragPeers: DragPeers?
     /// The built list, kept while its inputs stand (see `SidebarItemCache`): a render
     /// that changed no thread, project or setting hands back the same items.
     @State private var itemCache = SidebarItemCache()
@@ -65,6 +68,7 @@ struct SidebarView: View {
     /// The list's own coordinate space: the rows report their frames in it and the drag
     /// gesture reads its locations in it, whatever the scroll position.
     private nonisolated static let listSpace = "sidebar-list"
+    private nonisolated static let listTopInset: CGFloat = 12
 
     var body: some View {
         // Where every thread sits, worked out once per pass: the grouping and the list below
@@ -133,10 +137,10 @@ struct SidebarView: View {
                     .animation(Chrome.panelSlide, value: model.threads.count)
                     .animation(Chrome.panelSlide, value: model.projects.map(\.isExpanded))
                     .padding(.horizontal, Chrome.listInset)
-                    .padding(.top, 12)
+                    .padding(.top, Self.listTopInset)
                     .padding(.bottom, 8)
                     .coordinateSpace(name: Self.listSpace)
-                    .pointerStyle(drag.id != nil ? .grabActive : nil)
+                    .pointerStyle(drag.id != nil || projectDrag.id != nil ? .grabActive : nil)
                     // One drag gesture for the whole list, ahead of every row's own click: the
                     // row under the pointer at the grab is the one that moves (a helper
                     // row reports no frame, so a drag from one goes nowhere), and a
@@ -144,10 +148,20 @@ struct SidebarView: View {
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.listSpace))
                             .onChanged { value in
-                                guard let id = drag.id ?? rowFrames.thread(at: value.startLocation) else { return }
-                                dragChanged(id, translation: value.translation.height)
+                                if let id = projectDrag.id {
+                                    projectDragChanged(id, translation: value.translation.height)
+                                } else if drag.id == nil, rowFrames.row(at: value.startLocation) == nil,
+                                          let id = projectFrames.row(at: value.startLocation) {
+                                    projectDragChanged(id, translation: value.translation.height)
+                                } else {
+                                    guard let id = drag.id ?? rowFrames.row(at: value.startLocation) else { return }
+                                    dragChanged(id, translation: value.translation.height)
+                                }
                             }
-                            .onEnded { _ in dragEnded() },
+                            .onEnded { _ in
+                                dragEnded()
+                                projectDragEnded()
+                            },
                         isEnabled: query.isEmpty
                     )
                 }
@@ -171,6 +185,12 @@ struct SidebarView: View {
                     guard let thread = model.thread(reveal) else { return }
                     withAnimation(Chrome.panelSlide) {
                         proxy.scrollTo(SidebarItem.id(for: thread), anchor: .center)
+                    }
+                }
+                .onChange(of: projectDrag.id) { old, new in
+                    guard let old, new == nil else { return }
+                    withAnimation(Chrome.panelSlide) {
+                        proxy.scrollTo("project-\(old)", anchor: .center)
                     }
                 }
             }
@@ -421,7 +441,15 @@ struct SidebarView: View {
         case .gap(let height):
             Color.clear.frame(height: height)
         case .project(let project, let count):
-            ProjectRow(snapshot: project, count: count)
+            let isDragged = projectDrag.id == project.id
+            ProjectRow(snapshot: project, count: count, isDragged: isDragged)
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.listSpace)) }) { frame in
+                    rowHeights.note(item.id, frame.height)
+                    projectFrames.note(project.id, frame)
+                }
+                .onDisappear { projectFrames.forget(project.id) }
+                .offset(y: isDragged ? projectDrag.visualOffset : 0)
+                .zIndex(isDragged ? 1 : 0)
         case .header(let title, let isFirst):
             ActivityHeader(title: title, isFirst: isFirst)
         case .thread(let thread, let projectName, let projectIcon, let peers, let hasHelpers):
@@ -525,6 +553,7 @@ struct SidebarView: View {
         let key = SidebarItemCache.Key(
             placements: placements,
             projects: model.projects,
+            reordersProjects: projectDrag.id != nil,
             attention: activity ? Set(model.threads.filter { needsAttention($0) }.map(\.id)) : [],
             activityView: activity,
             activityThreadStyle: model.settings.activityThreadStyle,
@@ -606,7 +635,7 @@ struct SidebarView: View {
             // The count a folded project shows: its threads and everything under them.
             let count = projectThreads.reduce(0) { $0 + 1 + (helpers[$1.id]?.count ?? 0) }
             items.append(SidebarItem(id: "project-\(project.id)", kind: .project(project, count: count)))
-            guard project.isExpanded else { continue }
+            guard project.isExpanded, projectDrag.id == nil else { continue }
             // Pinned threads lead each project's list.
             let orderedThreads = projectThreads.filter(\.isPinned) + projectThreads.filter { !$0.isPinned }
             for thread in orderedThreads {
@@ -851,6 +880,49 @@ struct SidebarView: View {
         // The offset animates from wherever the pointer let go to the row's slot, so the
         // row settles instead of snapping.
         withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { drag = RowDrag() }
+    }
+
+    private func projectDragChanged(_ id: UUID, translation: CGFloat) {
+        if projectDrag.id != id {
+            guard let expandedTop = projectFrames.frame(of: id)?.minY,
+                  let index = model.projects.firstIndex(where: { $0.id == id }) else { return }
+            let collapsedTop = Self.listTopInset + model.projects.prefix(index).reduce(CGFloat.zero) {
+                $0 + (rowHeights.values["project-\($1.id)"] ?? Chrome.rowHeight) + 1
+            } + CGFloat(index) * (Chrome.groupGap + 1)
+            var grab = RowDrag<UUID>(id: id)
+            // Compensate for the rows above disappearing without moving the grip.
+            grab.settled = collapsedTop - expandedTop
+            withAnimation(Chrome.panelSlide) { projectDrag = grab }
+            projectDragPeers = DragPeers((model.projects.map(\.id), nil), heights: projectSlotHeights)
+        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { projectDrag.translation = translation }
+
+        guard let snapshot = projectDragPeers else { return }
+        let moved = projectDrag.settle(order: snapshot.order, heights: snapshot.heights, fallbackHeight: Chrome.rowHeight + Chrome.groupGap + 2) { neighbour, placeAfter in
+            withAnimation(Self.slide) {
+                model.moveProject(id, to: neighbour, placeAfter: placeAfter)
+            }
+        }
+        if moved {
+            projectDragPeers = DragPeers((model.projects.map(\.id), nil), heights: projectSlotHeights)
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
+    }
+
+    private func projectDragEnded() {
+        guard projectDrag.id != nil else { return }
+        projectDragPeers = nil
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { projectDrag = RowDrag() }
+    }
+
+    private func projectSlotHeights(for order: [UUID]) -> [UUID: CGFloat] {
+        var heights: [UUID: CGFloat] = [:]
+        for id in order {
+            heights[id] = (rowHeights.values["project-\(id)"] ?? Chrome.rowHeight) + 1 + Chrome.groupGap + 1
+        }
+        return heights
     }
 
     /// The threads a row can be reordered among, in their current order: its activity group
@@ -1146,13 +1218,16 @@ private struct ProjectRow: View {
     /// list once for every row rather than here, per row, over the whole library.
     let count: Int
     var togglesExpansion = true
+    var isDragged = false
 
     @State private var isMenuPresented = false
+    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     var body: some View {
         // The global switch in Settings activates every project at once; only a project
         // explicitly switched here keeps its own choice, and shows dimmed while off.
         let isActive = model.settings.isProjectActive(project.id)
+        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
         SidebarRow(
             title: project.name,
             accessoryWidth: 40,
@@ -1172,7 +1247,7 @@ private struct ProjectRow: View {
                 }
             },
             accessory: { hovering in
-                if hovering || isMenuPresented {
+                if (hovering || isMenuPresented) && !isDragged {
                     HStack(spacing: 0) {
                         RowActionsButton(actions: actions(isActive: isActive), isPresented: $isMenuPresented)
                         Button {
@@ -1192,6 +1267,15 @@ private struct ProjectRow: View {
             }
         )
         .opacity(isActive ? 1 : 0.55)
+        .background {
+            if isDragged {
+                shape
+                    .fill(Chrome.overlay(0.12))
+                    .shadow(color: .black.opacity(performanceMode ? 0 : 0.28), radius: performanceMode ? 0 : 10, y: performanceMode ? 0 : 4)
+            }
+        }
+        .scaleEffect(isDragged ? 1.02 : 1)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isDragged)
         // Snapshots only: the menu builder must not capture the row, so the AppKit menu it
         // builds cannot pin the row's state storage (and its responder with it) after dismiss.
         .contextMenu { [project, model] in
@@ -2141,7 +2225,7 @@ private final class RowHeights {
     }
 }
 
-/// Every open thread row's frame in the list's space, kept out of observation like the
+/// Every row's frame in the list's space, kept out of observation like the
 /// heights: the rows write as they lay out, and only the grab of a drag reads them.
 private final class RowFrames {
     private var frames: [UUID: CGRect] = [:]
@@ -2155,8 +2239,12 @@ private final class RowFrames {
         frames[id] = nil
     }
 
-    /// The thread whose row is under `point`, if an open one is.
-    func thread(at point: CGPoint) -> UUID? {
+    func frame(of id: UUID) -> CGRect? {
+        frames[id]
+    }
+
+    /// The row under `point`, if a visible one is.
+    func row(at point: CGPoint) -> UUID? {
         frames.first { $0.value.contains(point) }?.key
     }
 }
@@ -2272,6 +2360,7 @@ private final class SidebarItemCache {
     struct Key: Equatable {
         var placements: [ThreadPlacement]
         var projects: [Project]
+        var reordersProjects: Bool
         /// The threads heading the activity layout under "Needs attention".
         var attention: Set<UUID>
         var activityView: Bool

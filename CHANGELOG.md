@@ -8,6 +8,48 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [1.3.14] - 2026-10-17
+
+### English
+
+### New features
+
+- Drag a project folder in the sidebar to reorder it. While you drag, every folder folds to a single row so a folder with many chats stays easy to move, and each goes back to its own open or closed state when you drop it.
+- Images an agent sends back now show in the chat: pictures Codex generates, pictures tools return such as browser screenshots, and Markdown image lines that point to a local file. Each appears as a medium tile you click to open large, and a step that produced an image stays above the reply after its turn folds.
+- Each provider now shows which agent runs it and which account it uses, such as `Codex CLI · ChatGPT plan or API key` or `Tivano Code · API key`. It appears on the provider's header in Settings › Providers, in the welcome checklist and in the tooltip of the model button.
+- Settings › Providers has a Show remaining usage switch that hides plan limits and balances from that page. The usage ring in a chat still shows them.
+
+### Refinements
+
+- Providers are grouped as Agent CLIs and Tivano Code and listed A–Z in Settings and in Choose providers, and a signed-in provider no longer jumps to the top. Model lists are A–Z too, while the models you pinned keep your own order.
+- Pi and omp no longer show plan usage.
+- OpenCode Zen and OpenCode Go are now one OpenCode provider. The opencode CLI decides which plan or API it uses, and your chats, pinned models and settings from either keep working.
+- Reduce repeated work when adding to long chat histories and preparing them for saving by processing only new rows and reusing valid save positions.
+- Reuse the existing text layout when streaming text with links grows without changing its earlier content or styling, preserving text selection as it appends.
+- Skip scroll-wheel hit tests for hidden chats and reduce repeated character processing when updating text fade-in state.
+
+### 简体中文
+
+### 新功能
+
+- 可在侧边栏拖动项目文件夹来调整顺序。拖动时所有文件夹会临时收起为单行，会话再多的文件夹也好拖；松手后各自恢复原来的展开状态。
+- Agent 发回的图片现在会显示在对话里：Codex 生成的图片、工具返回的图片（如浏览器截图），以及回复中指向本地文件的 Markdown 图片行。图片以中等尺寸的方块展示，点击可放大查看；回合折叠后，产出图片的步骤仍会留在回复上方。
+- 每个服务商现在会标明由哪个 agent 运行、用哪种账号，例如 `Codex CLI · ChatGPT 套餐或 API 密钥`、`Tivano Code · API 密钥`。显示在设置 › 服务商的标题行、欢迎页的服务商清单和模型按钮的悬停提示里。
+- 设置 › 服务商新增“显示剩余额度”开关，可在该页隐藏套餐额度和余额；聊天里的用量圆环仍会显示。
+
+### 优化改进
+
+- 服务商分为“智能体 CLI”和 Tivano Code 两组，设置页与“选择服务商”弹窗都按 A–Z 排列，已登录的服务商不再被提到最前。模型列表同样按 A–Z，你固定的模型保持原顺序。
+- Pi 和 omp 不再显示套餐用量。
+- OpenCode Zen 与 OpenCode Go 合并为一个 OpenCode 服务商。用哪个套餐或 API 由 opencode CLI 决定，原有的对话、固定的模型和设置继续可用。
+- 向长对话历史追加内容时只处理新增行，准备保存时复用仍有效的保存位置，减少重复计算。
+- 含链接的流式文本追加时，若已有内容和样式未变，会复用已有文本布局，并保留文字选择。
+- 跳过隐藏对话的滚轮命中测试，并减少更新文字淡入状态时的重复字符处理。
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.3.8] - 2026-10-16
 
 ### English

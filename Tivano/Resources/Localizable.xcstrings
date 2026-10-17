@@ -5905,6 +5905,17 @@
         }
       }
     },
+    "ChatGPT plan or API key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ChatGPT 套餐或 API 密钥"
+          }
+        }
+      }
+    },
     "Check again" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6154,6 +6165,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Claude 浅色"
+          }
+        }
+      }
+    },
+    "Claude plan or API key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 套餐或 API 密钥"
           }
         }
       }
@@ -6741,6 +6763,17 @@
         }
       }
     },
+    "Copilot plan or API key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copilot 套餐或 API 密钥"
+          }
+        }
+      }
+    },
     "Copy" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6979,6 +7012,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "累计"
+          }
+        }
+      }
+    },
+    "Cursor account" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cursor 账号"
           }
         }
       }
@@ -7496,6 +7540,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开发者"
+          }
+        }
+      }
+    },
+    "Devin account" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Devin 账号"
           }
         }
       }
@@ -8787,6 +8842,17 @@
         }
       }
     },
+    "GLM Coding Plan" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GLM Coding Plan"
+          }
+        }
+      }
+    },
     "GPT-6 Astra orchestrates at high; Muse Spark Contributor heads build at medium." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8952,6 +9018,17 @@
         }
       }
     },
+    "Google account or API key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 账号或 API 密钥"
+          }
+        }
+      }
+    },
     "Got it" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8970,6 +9047,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "要授予额外权限吗？"
+          }
+        }
+      }
+    },
+    "Grok plan or API key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grok 套餐或 API 密钥"
           }
         }
       }
@@ -9707,6 +9795,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "密钥保存在你的钥匙串中"
+          }
+        }
+      }
+    },
+    "Kimi membership or API key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kimi 会员或 API 密钥"
           }
         }
       }
@@ -11889,6 +11988,39 @@
         }
       }
     },
+    "Plan limits and balances in the provider cards below. The usage ring in a chat still shows them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在下方各服务商卡片中显示套餐额度与余额。聊天中的用量圆环仍会显示。"
+          }
+        }
+      }
+    },
+    "Agent CLIs" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体 CLI"
+          }
+        }
+      }
+    },
+    "Tivano Code" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano Code"
+          }
+        }
+      }
+    },
     "Reads, writes and searches files in one folder" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13132,6 +13264,17 @@
         }
       }
     },
+    "Set up in Pi" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Pi 中配置"
+          }
+        }
+      }
+    },
     "Set up in Settings" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13139,6 +13282,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "前往设置"
+          }
+        }
+      }
+    },
+    "Set up in omp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 omp 中配置"
           }
         }
       }
@@ -13337,6 +13491,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "收起"
+          }
+        }
+      }
+    },
+    "Show remaining usage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示剩余额度"
           }
         }
       }
@@ -14030,6 +14195,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "保存在你的钥匙串中。可前往 %@ 获取。"
+          }
+        }
+      }
+    },
+    "Subscription or credits" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订阅或额度"
           }
         }
       }
@@ -15757,6 +15933,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的模型"
+          }
+        }
+      }
+    },
+    "Set up in OpenCode" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 OpenCode 中配置"
           }
         }
       }

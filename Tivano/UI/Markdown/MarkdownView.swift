@@ -87,7 +87,7 @@ struct MarkdownView: View, Equatable {
             switch block {
             case .heading, .paragraph, .list, .quote:
                 run.append(block)
-            case .code, .table, .rule:
+            case .code, .table, .image, .rule:
                 close()
                 out.append(.block(block))
             }
@@ -233,6 +233,8 @@ struct MarkdownView: View, Equatable {
             return text.count + 2
         case .code(_, let code):
             return code.count + 8
+        case .image(let alt, let source):
+            return alt.count + source.count + 6
         case .quote(let inner):
             return approximateSourceLength(inner[...]) + 2
         case .table(let header, let rows):
@@ -314,7 +316,7 @@ struct MarkdownView: View, Equatable {
                 }
             case .quote(let inner):
                 try inlineSources(of: inner, into: &sources)
-            case .code, .table, .rule:
+            case .code, .table, .image, .rule:
                 break
             }
         }
@@ -413,6 +415,8 @@ struct MarkdownBlockView: View, Equatable {
                 .environment(\.markdownDimmed, true)
             case .table(let header, let rows):
                 TableBlock(header: header, rows: rows)
+            case .image(let alt, let source):
+                MarkdownImageBlock(alt: alt, source: source)
             case .rule:
                 Rectangle()
                     .fill(.quaternary)
@@ -469,9 +473,9 @@ struct MarkdownBlockView: View, Equatable {
         MentionScanner.matches(in: text, candidates: names, name: { $0 }).map(\.range)
     }
     private func mentionSegments(in text: String) -> [VeiledText.Segment]? {
+        guard !hydraMentionPersonas.isEmpty else { return nil }
         let pretty = InlineText.scaledInlineCode(RichLink.prettyAttributed(text, streaming: streaming), pointSize: TypeScale.shared.code(12))
         let chars = String(pretty.characters)
-        guard !hydraMentionPersonas.isEmpty else { return nil }
         let matches = MentionScanner.matches(in: chars, candidates: hydraMentionPersonas, name: \.name)
         guard !matches.isEmpty else { return nil }
         func prettyRange(_ r: Range<String.Index>) -> Range<AttributedString.Index> {
@@ -1126,6 +1130,9 @@ enum FaviconCache {
 }
 
 struct InlineText: View {
+    #if DEBUG
+    private static let nativePlainProbe = CaptureRun.isEnabled && CommandLine.arguments.contains("--native-plain-text-probe")
+    #endif
     let source: String
     /// Set when the caller already branched on containsLinks, so the check runs once.
     let hasLinks: Bool?
@@ -1157,7 +1164,12 @@ struct InlineText: View {
         let resolvedSize = pointSize == 0 ? TypeScale.shared.content(13) : pointSize
         let scaled = (resolvedSize * 2).rounded() / 2
         // Local file links have no host, but still need the native link opener.
-        let hasLinkText = hasLinks ?? RichLink.containsLinks(in: source, streaming: streaming)
+        let sourceHasLinks = hasLinks ?? RichLink.containsLinks(in: source, streaming: streaming)
+        #if DEBUG
+        let hasLinkText = sourceHasLinks || (Self.nativePlainProbe && hasLinks == false && !hugsContent)
+        #else
+        let hasLinkText = sourceHasLinks
+        #endif
         if hasLinkText {
             // An AppKit view has no text baseline of its own, so a list's marker sat on the
             // paragraph's top edge and the text started a line below it. The first line's
@@ -1349,6 +1361,21 @@ struct CodeBlock: View {
     }
 
 
+}
+
+struct MarkdownImageBlock: View {
+    let alt: String
+    let source: String
+
+    var body: some View {
+        if let path = PreviewImages.localImagePath(source) {
+            AttachmentStrip(attachments: [PreviewImages.attachment(for: path)], medium: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
+        } else {
+            InlineText(alt.isEmpty ? source : alt, hasLinks: false)
+        }
+    }
 }
 
 struct TableBlock: View {

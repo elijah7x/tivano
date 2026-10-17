@@ -8,6 +8,7 @@ enum MarkdownBlock: Hashable, Sendable {
     case list(ordered: Bool, start: Int, items: [MarkdownListItem])
     case quote([MarkdownBlock])
     case table(header: [String], rows: [[String]])
+    case image(alt: String, source: String)
     case rule
 }
 
@@ -229,6 +230,24 @@ enum MarkdownParser {
                 blocks.append(list)
                 index = next
                 continue
+            }
+
+            // A line holding several images is left as text: its first `](` would swallow the rest.
+            if trimmed.hasPrefix("!["), trimmed.hasSuffix(")"), trimmed.components(separatedBy: "](").count == 2,
+               let delimiter = trimmed.range(of: "](") {
+                let alt = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<delimiter.lowerBound])
+                var source = String(trimmed[delimiter.upperBound..<trimmed.index(before: trimmed.endIndex)])
+                    .trimmingCharacters(in: .whitespaces)
+                if source.hasPrefix("<"), source.hasSuffix(">") {
+                    source = String(source.dropFirst().dropLast())
+                }
+                if source.hasPrefix("/") || source.hasPrefix("file://") || source.hasPrefix("~/") {
+                    flushParagraph()
+                    blockLines.append(index)
+                    blocks.append(.image(alt: alt, source: source))
+                    index += 1
+                    continue
+                }
             }
 
             if paragraph.isEmpty { paragraphStart = index }

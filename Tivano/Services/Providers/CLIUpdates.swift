@@ -626,7 +626,7 @@ enum CLIUpdates {
         case .codex:
             return try await registryVersion("@openai/codex", tag: "latest", probe: probe)
         case .copilot: return try await registryVersion("@github/copilot", tag: "latest", probe: probe)
-        case .opencode, .opencodeGo: return nil
+        case .opencode: return nil
         case .pi: return try await registryVersion("@earendil-works/pi-coding-agent", tag: "latest", probe: probe)
         case .omp: return nil
         case .kimi: return try await registryVersion("@moonshot-ai/kimi-code", tag: "latest", probe: probe)
@@ -914,7 +914,7 @@ enum CLIUpdates {
         case .claude: ["@anthropic-ai/claude-code"]
         case .codex: ["@openai/codex"]
         case .copilot: ["@github/copilot"]
-        case .opencode, .opencodeGo: ["opencode-ai"]
+        case .opencode: ["opencode-ai"]
         case .pi: ["@earendil-works/pi-coding-agent"]
         case .omp: []
         case .kimi: ["@moonshot-ai/kimi-code"]
