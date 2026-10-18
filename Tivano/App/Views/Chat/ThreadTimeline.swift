@@ -129,7 +129,8 @@ struct ThreadTimeline: View, Equatable {
         let finished = HydraHeadsWorkingRow.finishedHeads(in: team).sorted { ($0.finishedAt ?? .distantPast) < ($1.finishedAt ?? .distantPast) }
         let since = runtime.isRunning ? runtime.turnStartedAt : nil
         let earlier = since.map { cut in finished.filter { ($0.finishedAt ?? .distantPast) < cut } } ?? []
-        let later = finished.filter { head in !earlier.contains { $0.index == head.index } }
+        let earlierIndices = Set(earlier.map(\.index))
+        let later = finished.filter { !earlierIndices.contains($0.index) }
         let pills = HeadPills(earlier: earlier.map(\.index), later: later.map(\.index))
         // A backgrounded command still running after the turn ended: kept out of the cache,
         // so the row comes and goes with the list.
@@ -249,7 +250,8 @@ struct ThreadTimeline: View, Equatable {
         let visible = Array(blocks[range])
         let topSpace = measurements.height(of: blocks[startIndex..<range.lowerBound])
         let bottomSpace = measurements.height(of: blocks[range.upperBound..<blocks.count])
-        measurements.noteArrivals(blocks.map(\.id), questions: runtime.questions.map(\.id))
+        let outline = blocks.map { (id: $0.id, hasUserMessage: $0.hasUserMessage) }
+        measurements.noteArrivals(outline.map(\.id), questions: runtime.questions.map(\.id))
         // The turns a row may offer to revert. Read here, once, so a turn record changing
         // (checkpoints, diffs, anchors) re-runs this body alone; rows get a plain flag that
         // only changes when their own answer does.
@@ -263,10 +265,10 @@ struct ThreadTimeline: View, Equatable {
         // space, so the conversation stays centered exactly like the composer.
         // Ticks centre in the full column height, so the queue tab opening never moves them.
         return ZStack(alignment: .leading) {
-            timelineScroll(blocks: blocks, visible: visible, hidden: hidden, topSpace: topSpace, bottomSpace: bottomSpace, rewindable: rewindable)
+            timelineScroll(blocks: blocks, outline: outline, visible: visible, hidden: hidden, topSpace: topSpace, bottomSpace: bottomSpace, rewindable: rewindable)
             // The rail fades with the slide of the panel that takes its edge.
             ZStack {
-                if showsMinimap, blocks.count(where: \.hasUserMessage) > 1 {
+                if showsMinimap, outline.lazy.filter(\.hasUserMessage).prefix(2).count > 1 {
                     // The rail starts under the title bar: nothing of it, not its hover
                     // tracking nor its scrub gesture, may sit over the window buttons and
                     // the chrome row at the top of the column.
@@ -552,14 +554,14 @@ struct ThreadTimeline: View, Equatable {
             .onAppear { measurements.materializedIDs.insert(block.id) }
     }
 
-    private func timelineScroll(blocks: [DisplayBlock], visible: [DisplayBlock], hidden: Int, topSpace: CGFloat, bottomSpace: CGFloat, rewindable: Set<UUID>) -> some View {
+    private func timelineScroll(blocks: [DisplayBlock], outline: [(id: String, hasUserMessage: Bool)], visible: [DisplayBlock], hidden: Int, topSpace: CGFloat, bottomSpace: CGFloat, rewindable: Set<UUID>) -> some View {
         // What the stack renders last: the newest question badge, or the newest block.
         // Its change is something arriving at the end of the conversation.
         let lastEntryID = runtime.questions.last.map { "question-" + $0.id } ?? visible.last?.id
         // The outline the rail resolves against, kept in step with what is laid out. Rows
         // coming and going is when the stack can lose its place; a look a beat from now
         // costs nothing and catches it whether or not any row says so.
-        if tracking.setOutline(blocks.map { ($0.id, $0.hasUserMessage) }) {
+        if tracking.setOutline(outline) {
             tracking.armBlankWatch("outline")
             // A new block at the end under a reader held there: the stack is told where
             // the viewport is, since the block may have landed below rows it built for
@@ -3042,13 +3044,10 @@ enum TimelineGroup: Identifiable, Equatable {
 
     @MainActor
     static func build(_ entries: [TimelineEntry], showReasoning: Bool) -> [TimelineGroup] {
-        // Positions of replies. A work run sitting before one has been moved on from, so it
+        // A work run sitting before the last reply has been moved on from, so it
         // starts collapsed. Kind only, never the text: reading streaming content here made the
         // whole timeline regroup on every token. A reply row is created by its first delta.
-        var replyIndices: [Int] = []
-        for (index, entry) in entries.enumerated() where entry.kind == .assistant {
-            replyIndices.append(index)
-        }
+        let lastReplyIndex = entries.lastIndex { $0.kind == .assistant }
         var groups: [TimelineGroup] = []
         var work: [TimelineEntry] = []
         var workStart = 0
@@ -3057,7 +3056,7 @@ enum TimelineGroup: Identifiable, Equatable {
         func flushWork() {
             guard let first = work.first else { return }
             let workEnd = workStart + work.count - 1
-            let collapsed = replyIndices.contains { $0 > workEnd }
+            let collapsed = lastReplyIndex.map { $0 > workEnd } ?? false
             groups.append(.work(id: "work-\(first.id)", entries: work, startsCollapsed: collapsed))
             work.removeAll()
         }
@@ -3361,14 +3360,17 @@ final class TimelineBlockCache {
     func blocks(for entries: [TimelineEntry], showReasoning: Bool, isRunning: Bool, hydraMergeID: String?, pills: HeadPills = HeadPills()) -> [DisplayBlock] {
         var identities: [ObjectIdentifier] = []
         identities.reserveCapacity(entries.count)
+        var imageEntries: [ObjectIdentifier] = []
         var turnEnds = 0
         for entry in entries {
-            identities.append(ObjectIdentifier(entry))
+            let identity = ObjectIdentifier(entry)
+            identities.append(identity)
+            if TimelineGroup.hasImages(entry) { imageEntries.append(identity) }
             if entry.kind == .turnEnd { turnEnds += 1 }
         }
         let wanted = Key(
             entries: identities,
-            imageEntries: entries.filter(TimelineGroup.hasImages).map(ObjectIdentifier.init),
+            imageEntries: imageEntries,
             turnEnds: turnEnds,
             isRunning: isRunning,
             hydraMergeID: hydraMergeID,
@@ -3658,8 +3660,14 @@ private final class TurnGroupCache {
     private var groups: [TimelineGroup] = []
 
     func groups(for entries: [TimelineEntry]) -> [TimelineGroup] {
-        let wanted = entries.map(ObjectIdentifier.init)
-        let images = entries.filter(TimelineGroup.hasImages).map(ObjectIdentifier.init)
+        var wanted: [ObjectIdentifier] = []
+        wanted.reserveCapacity(entries.count)
+        var images: [ObjectIdentifier] = []
+        for entry in entries {
+            let identity = ObjectIdentifier(entry)
+            wanted.append(identity)
+            if TimelineGroup.hasImages(entry) { images.append(identity) }
+        }
         if wanted != identities || images != imageEntries {
             groups = TimelineGroup.build(entries, showReasoning: false)
             identities = wanted
@@ -4085,10 +4093,12 @@ private final class TimelineMeasurements {
     private var knownQuestions: Set<String>?
 
     func noteArrivals(_ ids: [String], questions: [String]) {
-        blockIDs = ids
-        let current = Set(ids)
-        if let knownIDs { liveIDs.formUnion(current.subtracting(knownIDs)) }
-        knownIDs = current
+        if knownIDs == nil || blockIDs != ids {
+            blockIDs = ids
+            let current = Set(ids)
+            if let knownIDs { liveIDs.formUnion(current.subtracting(knownIDs)) }
+            knownIDs = current
+        }
         let questionIDs = Set(questions)
         if let knownQuestions { liveQuestions.formUnion(questionIDs.subtracting(knownQuestions)) }
         knownQuestions = questionIDs

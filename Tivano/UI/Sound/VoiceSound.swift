@@ -6,6 +6,8 @@ enum VoiceSound {
     private static var sounds: [Bool: NSSound] = [:]
 
     static func play(start: Bool, enabled: Bool) {
+        sounds[!start]?.stop()
+        sounds[start]?.stop()
         guard enabled, !CaptureRun.isEnabled else { return }
         let sound = sounds[start] ?? {
             let name = start ? "voice-start" : "voice-end"
@@ -13,8 +15,6 @@ enum VoiceSound {
             sounds[start] = made
             return made
         }()
-        sounds[!start]?.stop()
-        sound?.stop()
         sound?.play()
     }
 }

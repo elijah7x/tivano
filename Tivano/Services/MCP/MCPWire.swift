@@ -263,11 +263,11 @@ final class MCPStdioConnection: Sendable {
         self.process = process
     }
 
-    static func launch(executable: URL, arguments: [String], environment: [String: String]) throws -> MCPStdioConnection {
+    static func launch(executable: URL, arguments: [String], environment: [String: String], directory: URL? = nil) throws -> MCPStdioConnection {
         let process = StdioProcess(
             executable: executable,
             arguments: arguments,
-            directory: FileManager.default.homeDirectoryForCurrentUser,
+            directory: directory ?? FileManager.default.homeDirectoryForCurrentUser,
             environment: environment
         )
         let connection = MCPStdioConnection(process: process)

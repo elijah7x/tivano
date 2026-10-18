@@ -16,9 +16,9 @@ struct WindowChromeConfigurator: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: WindowChromeProbeView, context: Context) {
-        nsView.sidebarDragging = sidebarDragging
-        nsView.sidebarVisible = sidebarVisible
-        nsView.performanceMode = performanceMode
+        if nsView.sidebarDragging != sidebarDragging { nsView.sidebarDragging = sidebarDragging }
+        if nsView.sidebarVisible != sidebarVisible { nsView.sidebarVisible = sidebarVisible }
+        if nsView.performanceMode != performanceMode { nsView.performanceMode = performanceMode }
     }
 }
 

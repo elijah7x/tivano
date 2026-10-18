@@ -8,6 +8,56 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-18
+
+### English
+
+### New features
+
+- Add Alpha, a settings page for early features behind one master switch, off by default.
+- Talk with Codex out loud with Codex realtime voice, an Alpha feature off by default. Start a call from Start voice in the sidebar, or from the waveform button in any Codex chat to continue that chat by voice; Codex listens, answers and does the work in the chat. Needs Codex 0.159 or later signed in with ChatGPT.
+- DeepSeek Harness joins the providers, run through its `dsh` command line. It signs in with the DeepSeek account of your DeepSeek Harness app or uses the DeepSeek API key set in Settings, and each chat picks Standard, PTC, Minimal agent or Creator mode and keeps the plugins and default model of your DeepSeek Harness app. Without a sign-in, Sign in opens the DeepSeek Harness app. With Hydra on, its own sub-agent tools are switched off so heads go out through Hydra.
+
+### Bug fixes
+
+- A Pi chat keeps its running indicator when Pi retries after a provider error, and gets it back when Pi picks the work up again by itself. The retry notice now names the error Pi hit.
+
+### Refinements
+
+- The app stays responsive while agents stream long replies: hovering, clicking and switching Settings pages no longer wait behind the reply being written. The paragraph still being written becomes selectable as soon as it finishes appearing; finished messages are selectable right away as before.
+- Building rich text for a streaming reply does less work per update, especially for long paragraphs.
+- While Settings or the voice stage covers a chat, its shimmer, effort-slider and call-timer animations pause, and other chats are no longer prepared in the background.
+- Settings pages, the sidebar, the command palette and shared controls redraw less when you hover or switch, and collapsed provider cards are no longer built until you open them.
+- Attachment previews and file icons stop re-reading the disk on every redraw.
+- Settings › Power now has a dropdown instead of a switch: Off, Keep Mac awake, or Keep Mac and screen awake. The last one also keeps the display lit while tasks run, so agents can run front-end tests. Your earlier on or off choice carries over.
+- Copy in a message's right-click menu now copies what you selected, and the whole message only when nothing is selected. The markdown option is renamed Copy message as markdown, since it always copies the whole message.
+
+### 简体中文
+
+### 新功能
+
+- 新增「实验室」设置页，集中放置早期功能，由一个总开关控制，默认关闭。
+- 新增 Codex 实时语音（实验室功能，默认关闭），可直接用语音和 Codex 对话。从侧边栏的「开始语音」发起通话，或在任意 Codex 会话中点击波形按钮，用语音继续该会话；Codex 会倾听、回答，并在会话中完成工作。需要 Codex 0.159 或更高版本，并使用 ChatGPT 登录。
+- 新增 DeepSeek Harness 服务商，通过其 `dsh` 命令行运行。直接使用 DeepSeek Harness 应用里已登录的 DeepSeek 账号，或设置里的 DeepSeek API 密钥，每个会话可选标准、PTC、极简或创意模式，并沿用你在 DeepSeek Harness 桌面版里装的插件和默认模型。开启 Hydra 时会关闭它自带的子代理工具，由 Hydra 统一派发。未登录时，“登录”会打开 DeepSeek Harness 桌面版。
+
+### 问题修复
+
+- Pi 遇到服务商错误后自动重试时，对话的运行图标不再熄灭；Pi 自行继续工作时图标也会恢复。重试提示现在会写出 Pi 遇到的具体错误。
+
+### 优化改进
+
+- Agent 流式输出长回复时，应用保持流畅：悬停、点击和切换设置页不再被正在写入的回复卡住。正在写入的段落在淡入完成后即可选中文字；已完成的消息与以前一样可立即选中。
+- 流式回复生成富文本时每次更新的计算量更小，长段落尤其明显。
+- 设置页或语音界面遮住对话时，对话里的闪光、强度滑条和通话计时动画会暂停，也不再在后台预先准备其他对话。
+- 设置页、侧边栏、命令面板和通用控件在悬停与切换时重绘更少；折叠的服务商卡片在展开前不再构建。
+- 附件预览和文件图标不再在每次重绘时重复读取磁盘。
+- 设置 › 电源 的开关改为下拉选项：关闭、保持唤醒、保持唤醒并亮屏。最后一项会在任务运行时让屏幕也一直亮着，方便 agent 做前端测试。之前的开关选择会沿用。
+- 消息右键菜单里的「复制」现在复制你选中的文字，没有选中时才复制整条消息。Markdown 选项改名为「将消息复制为 Markdown」，因为它始终复制整条消息。
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.3.14] - 2026-10-17
 
 ### English

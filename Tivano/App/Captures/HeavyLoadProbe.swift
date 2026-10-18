@@ -15,6 +15,62 @@ enum HeavyLoadProbe {
         await Session(model: model, output: output, defaults: defaults).run()
     }
 
+    /// Reuses the fixture and cadence without scroll driving or heavy-load report writes.
+    static func startStationaryTextLoad(model: AppModel) -> StationaryTextLoad? {
+        guard CaptureRun.isEnabled, CommandLine.arguments.contains("--website-captures"),
+              let output = CaptureRun.outputDirectory, let defaults = CaptureRun.defaults,
+              model.isLibraryLoaded, ids.allSatisfy({ id in model.threads.contains { $0.id == id } }) else { return nil }
+        let session = Session(model: model, output: output, defaults: defaults)
+        session.stationaryTextOnly = true
+        session.runtimes = ids.map { model.runtime(for: $0) }
+        guard session.runtimes.allSatisfy({ !$0.isLoadingHistory && !$0.isRunning }) else { return nil }
+        for runtime in session.runtimes {
+            runtime.cancelPersistence()
+            runtime.rehearseTurn("Heavy load probe: deterministic local fixture.")
+        }
+        let task = Task { @MainActor in await session.sendLoad(count: 2400, saveProgress: false) }
+        return StationaryTextLoad(runtimes: session.runtimes, task: task)
+    }
+
+    @MainActor
+    final class StationaryTextLoad {
+        let runtimes: [ThreadRuntime]
+        private let task: Task<Void, Never>
+        private var stopped = false
+
+        fileprivate init(runtimes: [ThreadRuntime], task: Task<Void, Never>) {
+            self.runtimes = runtimes
+            self.task = task
+        }
+
+        var isRunning: Bool { !stopped && runtimes.count == 3 && runtimes.allSatisfy { $0.isRunning } }
+
+        func waitUntilRunning() async -> Bool {
+            let deadline = ProcessInfo.processInfo.systemUptime + 8
+            while !isRunning, ProcessInfo.processInfo.systemUptime < deadline, !stopped {
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+            return isRunning
+        }
+
+        func stop() async -> Bool {
+            if !stopped {
+                stopped = true
+                task.cancel()
+                await task.value
+                for (index, runtime) in runtimes.enumerated() where runtime.isRunning {
+                    runtime.rehearse(.messageCompleted(id: "heavy-message-\(index + 1)-1", text: ""))
+                    runtime.rehearse(.turnCompleted(status: .completed, error: nil))
+                }
+            }
+            let deadline = ProcessInfo.processInfo.systemUptime + 8
+            while runtimes.contains(where: { $0.isRunning }), ProcessInfo.processInfo.systemUptime < deadline {
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+            return runtimes.allSatisfy { !$0.isRunning }
+        }
+    }
+
     @MainActor
     private final class Session: NSObject {
         let model: AppModel
@@ -22,8 +78,9 @@ enum HeavyLoadProbe {
         let defaults: UserDefaults
         let usesExternalWheel = CommandLine.arguments.contains("--manual-wheel-probe")
         let usesStationaryLoad = CommandLine.arguments.contains("--stationary-load-probe")
-        let textOnly = CommandLine.arguments.contains("--text-only-load-probe")
-        let linkedText = CommandLine.arguments.contains("--linked-text-load-probe")
+        var stationaryTextOnly = false
+        var textOnly: Bool { stationaryTextOnly || CommandLine.arguments.contains("--text-only-load-probe") }
+        var linkedText: Bool { !stationaryTextOnly && CommandLine.arguments.contains("--linked-text-load-probe") }
         let resumesSameID = CommandLine.arguments.contains("--resumed-id-stress-probe")
         var messageCount: Int { textOnly || resumesSameID ? 1 : 20 }
         var drivesScroll: Bool { !usesExternalWheel && !usesStationaryLoad }
@@ -342,10 +399,10 @@ enum HeavyLoadProbe {
         func toolID(_ thread: Int, _ group: Int) -> String { "heavy-tool-\(thread + 1)-\(group)" }
         func toolText(_ thread: Int, _ group: Int) -> String { "Local fixture thread \(thread + 1), tool group \(group): complete.\n" }
 
-        func sendLoad() async {
+        func sendLoad(count: Int = 240, saveProgress: Bool = true) async {
             let start = now
-            for number in 1...240 {
-                guard !Task.isCancelled, !stopped, elapsed < 100 else { break }
+            for number in 1...count {
+                guard !Task.isCancelled, !stopped, elapsed < (stationaryTextOnly ? 140 : 100) else { break }
                 for (index, runtime) in runtimes.enumerated() {
                     runtime.rehearse(.messageDelta(id: messageID(index, number: number), text: chunk(index, number)))
                     sent[index] += 1; eventsSent[index] += 1
@@ -362,12 +419,12 @@ enum HeavyLoadProbe {
                         eventsSent[index] += 3
                     }
                 }
-                if number.isMultiple(of: 60) { save("running", "load progress") }
+                if saveProgress && number.isMultiple(of: 60) { save("running", "load progress") }
                 // No catch-up bursts: overload extends elapsed time rather than dropping inputs.
                 do { try await Task.sleep(for: .milliseconds(50)) } catch { break }
             }
             phases[1]["inputElapsedSeconds"] = now - start
-            for (index, runtime) in runtimes.enumerated() where sent[index] == 240 && !Task.isCancelled {
+            for (index, runtime) in runtimes.enumerated() where sent[index] == count && !Task.isCancelled {
                 if textOnly || resumesSameID {
                     runtime.rehearse(.messageCompleted(id: messageID(index), text: ""))
                     eventsSent[index] += 1

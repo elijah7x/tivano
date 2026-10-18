@@ -502,7 +502,7 @@ struct SidebarView: View {
     /// hundreds of threads.
     @State private var placementCache = PlacementCache()
     private var threadPlacements: [ThreadPlacement] {
-        placementCache.placements(for: model.threads)
+        placementCache.placements(for: model)
     }
 
     /// A scroll movement (re)arms the list's scroll freeze: rows take no hover or clicks
@@ -550,18 +550,19 @@ struct SidebarView: View {
         let parentsShowingHeads = autoHidesIdleHeads
             ? Set(helpers.compactMap { parent, heads in hasRunningHead(heads) ? parent : nil })
             : []
+        let attention = activity ? Set(model.threads.lazy.filter { needsAttention($0) }.map(\.id)) : []
         let key = SidebarItemCache.Key(
             placements: placements,
             projects: model.projects,
             reordersProjects: projectDrag.id != nil,
-            attention: activity ? Set(model.threads.filter { needsAttention($0) }.map(\.id)) : [],
+            attention: attention,
             activityView: activity,
             activityThreadStyle: model.settings.activityThreadStyle,
             autoHidesIdleHeads: autoHidesIdleHeads,
             parentsShowingHeads: parentsShowingHeads
         )
         return itemCache.items(for: key) {
-            activity ? activityItems(helpers: helpers) : projectItems(helpers: helpers)
+            activity ? activityItems(helpers: helpers, attentionIDs: attention) : projectItems(helpers: helpers)
         }
     }
 
@@ -653,14 +654,14 @@ struct SidebarView: View {
 
     // MARK: Activity layout
 
-    private func activityItems(helpers: [UUID: [ChatThread]]) -> [SidebarItem] {
+    private func activityItems(helpers: [UUID: [ChatThread]], attentionIDs: Set<UUID>) -> [SidebarItem] {
         let shown = model.threads.filter(\.isStandaloneListCandidate)
         // An ordinary helper whose parent is here sits under it (see helperItems); one
         // whose parent is gone or archived stands on its own. Heads only sit under leads.
         let shownIDs = Set(shown.map(\.id))
         let active = shown.filter { $0.parentThreadID.map { !shownIDs.contains($0) } ?? true }
-        let attention = Self.placed(active.filter { needsAttention($0) })
-        let rest = active.filter { !needsAttention($0) }
+        let attention = Self.placed(active.filter { attentionIDs.contains($0.id) })
+        let rest = active.filter { !attentionIDs.contains($0.id) }
         var items: [SidebarItem] = []
         if !attention.isEmpty {
             items.append(SidebarItem(id: "attention", kind: .header("Needs attention", isFirst: true)))
@@ -1467,21 +1468,19 @@ private struct SidebarHelperRow: View, Equatable {
     let onRename: () -> Void
     let onDelete: () -> Void
 
-    @State private var isHovering = false
-    @State private var isMenuPresented = false
-
     var body: some View {
         // Through the thread's own cell: a selection change re-renders the two rows it
         // touches, not every row in the list.
         let isSelected = model.isSelected(thread.id)
-        let showsActions = isHovering || isMenuPresented
-        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
         HStack(spacing: 0) {
             HelperConnector(endsHere: isLast, action: onFold)
                 .frame(width: ThreadRowMetrics.connectorWidth, height: ThreadRowMetrics.helperHeight)
-            Button {
-                model.openThread(thread.id)
-            } label: {
+            SidebarHelperInteraction(
+                isSelected: isSelected,
+                onSelect: { model.openThread(thread.id) },
+                onWarm: { model.warmDocuments([thread.id]) },
+                actions: makeActions,
+                label:
                 HStack(spacing: 6) {
                     // A head keeps its glyph, so the team reads at a glance under its lead,
                     // at the same size the card draws it.
@@ -1496,30 +1495,7 @@ private struct SidebarHelperRow: View, Equatable {
                         .truncationMode(.tail)
                     Spacer(minLength: 4)
                 }
-                .padding(.leading, 6)
-                .padding(.trailing, Chrome.rowHorizontalPadding + (showsActions ? 26 : 18))
-                .frame(height: ThreadRowMetrics.helperHeight)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background {
-                    shape
-                        .fill(isSelected ? Chrome.overlay(0.12) : (isHovering ? Chrome.overlay(0.06) : Color.clear))
-                        .animation(Chrome.hover, value: isSelected)
-                }
-                .contentShape(shape)
-            }
-            .buttonStyle(.plain)
-            .overlay(alignment: .trailing) {
-                Group {
-                    if showsActions {
-                        RowActionsButton(actions: makeActions(), isPresented: $isMenuPresented)
-                    }
-                }
-                .padding(.trailing, 6)
-            }
-            .onHover { hovering in
-                withAnimation(Chrome.hover) { isHovering = hovering }
-                if hovering { model.warmDocuments([thread.id]) }
-            }
+            )
             // Snapshots only: the menu builder must not capture the row, so the AppKit menu
             // it builds cannot pin the row's state storage (and its responder with it).
             .contextMenu { [thread, model, menuRequests] in
@@ -1549,6 +1525,49 @@ private struct SidebarHelperRow: View, Equatable {
     }
 }
 
+private struct SidebarHelperInteraction<Label: View>: View {
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onWarm: () -> Void
+    let actions: () -> [RowAction]
+    let label: Label
+
+    @State private var isHovering = false
+    @State private var isMenuPresented = false
+
+    var body: some View {
+        let showsActions = isHovering || isMenuPresented
+        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+        Button(action: onSelect) {
+            label
+                .padding(.leading, 6)
+                .padding(.trailing, Chrome.rowHorizontalPadding + (showsActions ? 26 : 18))
+                .frame(height: ThreadRowMetrics.helperHeight)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    shape
+                        .fill(isSelected ? Chrome.overlay(0.12) : (isHovering ? Chrome.overlay(0.06) : Color.clear))
+                        .animation(Chrome.hover, value: isSelected)
+                }
+                .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .trailing) {
+            Group {
+                if showsActions {
+                    RowActionsButton(actions: actions(), isPresented: $isMenuPresented)
+                }
+            }
+            .padding(.trailing, 6)
+        }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            withAnimation(Chrome.hover) { isHovering = hovering }
+            if hovering { onWarm() }
+        }
+    }
+}
+
 private struct HeadCardsRow: View {
     @Environment(AppModel.self) private var model
     let parentSnapshot: ChatThread
@@ -1557,7 +1576,6 @@ private struct HeadCardsRow: View {
     let onFold: () -> Void
 
     @State private var width: CGFloat = 0
-    @State private var hoveredID: UUID?
     /// The card shows the first twelve faces and keeps the rest behind the chevron: a
     /// long-running chat's team must not push the card half the sidebar tall.
     @State private var showsAllHeads = false
@@ -1607,12 +1625,7 @@ private struct HeadCardsRow: View {
                                         }
                                 }
                                 .buttonStyle(.plain)
-                                .scaleEffect(hoveredID == head.id ? 1.18 : 1)
-                                .animation(Chrome.hover, value: hoveredID == head.id)
-                                .onHover { hovering in
-                                    withAnimation(Chrome.hover) { hoveredID = hovering ? head.id : (hoveredID == head.id ? nil : hoveredID) }
-                                    if hovering { model.warmDocuments([head.id]) }
-                                }
+                                .modifier(HeadGlyphHover(onWarm: { model.warmDocuments([head.id]) }))
                                 .help(Text(verbatim: "\(info.persona.name) · \(info.task)"))
                                 // Snapshots only: the menu builder must not capture the row, so the AppKit menu
                                 // it builds cannot pin the row's state storage (and its responder with it).
@@ -1668,6 +1681,22 @@ private struct HeadCardsRow: View {
     }
 }
 
+private struct HeadGlyphHover: ViewModifier {
+    let onWarm: () -> Void
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(isHovering ? 1.18 : 1)
+            .animation(Chrome.hover, value: isHovering)
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                withAnimation(Chrome.hover) { isHovering = hovering }
+                if hovering { onWarm() }
+            }
+    }
+}
+
 /// A parent's folded helpers as one small line: the connector's stub, a chevron and their
 /// count, with a pulse when any of them is still working. Clicking it unfolds them.
 private struct HelperStubRow: View {
@@ -1678,8 +1707,6 @@ private struct HelperStubRow: View {
     /// one's live record through the model's per-thread cell.
     let helperSnapshots: [ChatThread]
     let action: () -> Void
-
-    @State private var isHovering = false
 
     /// The row reads its parent through the model's per-thread cell, so a change to it
     /// re-renders this row alone and a change to any other thread does not reach it. The
@@ -1696,6 +1723,18 @@ private struct HelperStubRow: View {
         }
         // A team of heads is called that; merges alone stay "helpers".
         let isHeads = helpers.allSatisfy(\.isHydraHead)
+        HelperStubFace(count: count, working: working, isHeads: isHeads, action: action)
+    }
+}
+
+private struct HelperStubFace: View {
+    let count: Int
+    let working: Bool
+    let isHeads: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
         let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
         Button(action: action) {
             HStack(spacing: 0) {
@@ -1726,6 +1765,7 @@ private struct HelperStubRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
+            guard isHovering != hovering else { return }
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
         .help(Text(verbatim: count == 1 ? Chrome.localized(isHeads ? "Show the head" : "Show the helper") : String(format: Chrome.localized(isHeads ? "Show %d heads" : "Show %d helpers"), count)))
@@ -1769,7 +1809,10 @@ private struct HelperConnector: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
         .help(Text(verbatim: Chrome.localized("Hide helpers")))
         .accessibilityLabel(Text("Hide helpers"))
     }
@@ -1818,8 +1861,6 @@ private struct SidebarThreadRow: View, Equatable {
     let onRename: () -> Void
     let onDelete: () -> Void
 
-    @State private var isHovering = false
-    @State private var isMenuPresented = false
     @State private var windowFrame = FrameHolder()
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
@@ -1830,80 +1871,34 @@ private struct SidebarThreadRow: View, Equatable {
         // of the model, and the runtime's fields are observed per runtime.
         let isSelected = model.isSelected(thread.id)
         let isDetailed = projectName != nil
-        let showsActions = (isHovering || isMenuPresented) && !isDragged
-        let showsFold = showsActions && onToggleFold != nil
         // Read here, in the body, so the row follows the merge as it moves from stage to stage.
         let mergeStage = Self.mergeStage(of: model.existingRuntime(for: thread.id))
         let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
-        Button {
-            model.openThread(thread.id)
-        } label: {
+        SidebarThreadInteraction(
+            isSelected: isSelected,
+            isDetailed: isDetailed,
+            isPinned: thread.isPinned,
+            isDragged: isDragged,
+            foldsHelpers: thread.foldsHelpers,
+            updatedAt: thread.updatedAt,
+            windowFrame: windowFrame,
+            onSelect: { model.openThread(thread.id) },
+            onWarm: { model.warmDocuments([thread.id]) },
+            onArchive: archiveWithGenie,
+            onToggleFold: onToggleFold,
+            actions: makeActions,
+            label:
             ThreadRowFace(
                 thread: thread,
                 projectName: projectName,
                 projectIcon: projectIcon,
                 isSelected: isSelected,
-                trailingClearance: Self.trailingClearance(isDetailed: isDetailed, showsActions: showsActions, showsFold: showsFold),
+                trailingClearance: 0,
                 mergeStage: mergeStage
             ) {
                 ThreadBadge(thread: thread)
             }
-            .background {
-                // Only the fill animates with selection; the row's place is never animated from here.
-                shape
-                    .fill(thread.isPinned && !isSelected ? Chrome.danger.opacity(0.10) : Chrome.overlay(Self.fill(isSelected: isSelected, isHovering: isHovering)))
-                    .animation(Chrome.hover, value: isSelected)
-            }
-            .overlay {
-                if thread.isPinned && isSelected {
-                    shape.fill(Chrome.danger.opacity(0.06))
-                }
-            }
-            .contentShape(shape)
-        }
-        .buttonStyle(.plain)
-        .overlay(alignment: .trailing) {
-            Group {
-                if showsActions {
-                    HStack(spacing: 0) {
-                        Button {
-                            archiveWithGenie()
-                        } label: {
-                            RowAccessoryIcon("archivebox")
-                        }
-                        .buttonStyle(.plain)
-                        .help(Text(verbatim: Chrome.localized("Archive thread")))
-                        RowActionsButton(actions: makeActions(), isPresented: $isMenuPresented)
-                    }
-                } else if !isDetailed {
-                    RelativeTimeLabel(date: thread.updatedAt)
-                }
-            }
-            .padding(.trailing, 6)
-        }
-        // The helpers under the thread fold away and come back from here, as they do from the
-        // connector beside them. The button sits before the archive and the ellipsis.
-        .overlay(alignment: .trailing) {
-            if showsFold, let onToggleFold {
-                let folded = thread.foldsHelpers
-                Button(action: onToggleFold) {
-                    RowAccessoryIcon(folded ? "chevron.right" : "chevron.down")
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, ThreadRowMetrics.foldInset)
-                .help(Text(verbatim: folded ? Chrome.localized("Show helpers") : Chrome.localized("Hide helpers")))
-                .accessibilityLabel(Text(verbatim: folded ? Chrome.localized("Show helpers") : Chrome.localized("Hide helpers")))
-            }
-        }
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-            // The pointer resting on a row usually means a click is coming: decode its history now.
-            if hovering { model.warmDocuments([thread.id]) }
-        }
-        .onGeometryChange(for: CGRect.self, of: Self.windowFrame) { frame in
-            guard isDragged || isHovering else { return }
-            windowFrame.note(frame)
-        }
+        )
         // Lifted: a touch larger with a shadow, over an opaque fill so the rows sliding
         // underneath never show through. The queue's rows lift the same way.
         .background {
@@ -1929,11 +1924,6 @@ private struct SidebarThreadRow: View, Equatable {
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 
-    private static func fill(isSelected: Bool, isHovering: Bool) -> Double {
-        if isSelected { return 0.12 }
-        return isHovering ? 0.06 : 0
-    }
-
     /// Value inputs only: closures and the frame holder are ignored, so the parent's
     /// re-evaluation skips rows whose thread did not change. Live state still reaches the
     /// body through the model's per-thread cells.
@@ -1947,20 +1937,9 @@ private struct SidebarThreadRow: View, Equatable {
             && (lhs.onToggleFold != nil) == (rhs.onToggleFold != nil)
     }
 
-    /// The room the title leaves for the archive button and ellipsis on hover,
-    /// or the status and time otherwise.
-    private static func trailingClearance(isDetailed: Bool, showsActions: Bool, showsFold: Bool = false) -> CGFloat {
-        if showsActions { return 52 + (showsFold ? 20 : 0) }
-        return isDetailed ? 18 : 52
-    }
-
     /// Built when the ellipsis shows or the context menu opens, never on a plain render.
     private func makeActions() -> [RowAction] {
         ThreadActions.make(model: model, thread: thread, onRename: onRename, onDelete: onDelete)
-    }
-
-    private nonisolated static func windowFrame(_ proxy: GeometryProxy) -> CGRect {
-        proxy.frame(in: .named(GenieAnimator.coordinateSpace))
     }
 
     /// What the team's merge is doing, with an ellipsis, while it runs; nil otherwise.
@@ -1983,6 +1962,96 @@ private struct SidebarThreadRow: View, Equatable {
                 .background { shape.fill(fill) }
         }
         withAnimation(Chrome.panelSlide) { model.archive(thread.id) }
+    }
+}
+
+private struct SidebarThreadInteraction<Label: View>: View {
+    let isSelected: Bool
+    let isDetailed: Bool
+    let isPinned: Bool
+    let isDragged: Bool
+    let foldsHelpers: Bool
+    let updatedAt: Date
+    let windowFrame: FrameHolder
+    let onSelect: () -> Void
+    let onWarm: () -> Void
+    let onArchive: () -> Void
+    let onToggleFold: (() -> Void)?
+    let actions: () -> [RowAction]
+    let label: Label
+
+    @State private var isHovering = false
+    @State private var isMenuPresented = false
+
+    var body: some View {
+        let showsActions = (isHovering || isMenuPresented) && !isDragged
+        let showsFold = showsActions && onToggleFold != nil
+        let clearance: CGFloat = showsActions ? 52 + (showsFold ? 20 : 0) : (isDetailed ? 18 : 52)
+        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+        Button(action: onSelect) {
+            label.padding(.trailing, clearance)
+            .background {
+                // Only the fill animates with selection; the row's place is never animated from here.
+                shape
+                    .fill(isPinned && !isSelected ? Chrome.danger.opacity(0.10) : Chrome.overlay(fill))
+                    .animation(Chrome.hover, value: isSelected)
+            }
+            .overlay {
+                if isPinned && isSelected {
+                    shape.fill(Chrome.danger.opacity(0.06))
+                }
+            }
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .trailing) {
+            Group {
+                if showsActions {
+                    HStack(spacing: 0) {
+                        Button {
+                            onArchive()
+                        } label: {
+                            RowAccessoryIcon("archivebox")
+                        }
+                        .buttonStyle(.plain)
+                        .help(Text(verbatim: Chrome.localized("Archive thread")))
+                        RowActionsButton(actions: actions(), isPresented: $isMenuPresented)
+                    }
+                } else if !isDetailed {
+                    RelativeTimeLabel(date: updatedAt)
+                }
+            }
+            .padding(.trailing, 6)
+        }
+        // The helpers under the thread fold away and come back from here, as they do from the
+        // connector beside them. The button sits before the archive and the ellipsis.
+        .overlay(alignment: .trailing) {
+            if showsFold, let onToggleFold {
+                let folded = foldsHelpers
+                Button(action: onToggleFold) {
+                    RowAccessoryIcon(folded ? "chevron.right" : "chevron.down")
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, ThreadRowMetrics.foldInset)
+                .help(Text(verbatim: folded ? Chrome.localized("Show helpers") : Chrome.localized("Hide helpers")))
+                .accessibilityLabel(Text(verbatim: folded ? Chrome.localized("Show helpers") : Chrome.localized("Hide helpers")))
+            }
+        }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            withAnimation(Chrome.hover) { isHovering = hovering }
+            // The pointer resting on a row usually means a click is coming: decode its history now.
+            if hovering { onWarm() }
+        }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(GenieAnimator.coordinateSpace)) }) { frame in
+            guard isDragged || isHovering else { return }
+            windowFrame.note(frame)
+        }
+    }
+
+    private var fill: Double {
+        if isSelected { return 0.12 }
+        return isHovering ? 0.06 : 0
     }
 }
 
@@ -2256,10 +2325,8 @@ private struct SidebarSearchResult {
     let count: Int
 }
 
-/// The sidebar's `threadPlacements`, kept while a cheap fingerprint of the threads stands:
-/// a selection change or hover re-renders the list without rebuilding placements for
-/// hundreds of threads. The fingerprint covers every field `ThreadPlacement` reads, so a
-/// placement change always rebuilds.
+/// An unchanged thread revision skips the full fingerprint. On a metadata change the
+/// fingerprint still covers every placement field, preserving the narrower cache hit.
 private final class PlacementCache {
     private struct Fingerprint: Equatable {
         let id: UUID
@@ -2297,10 +2364,19 @@ private final class PlacementCache {
         }
     }
 
+    private weak var source: AppModel?
+    private var revision: UInt64?
     private var fingerprint: [Fingerprint]?
     private var cached: [ThreadPlacement] = []
 
-    func placements(for threads: [ChatThread]) -> [ThreadPlacement] {
+    @MainActor
+    func placements(for model: AppModel) -> [ThreadPlacement] {
+        let nextRevision = model.threadsRevision
+        if source === model, revision == nextRevision { return cached }
+        // Both collection replacement and updateThread advance this revision, including unread changes.
+        source = model
+        revision = nextRevision
+        let threads = model.threads
         let next = threads.map(Fingerprint.init)
         if next == fingerprint { return cached }
         fingerprint = next
@@ -2311,7 +2387,7 @@ private final class PlacementCache {
 
 /// The fields that decide where a thread sits in the list and how its group is ordered:
 /// which project or parent it is under, whether it is shown at all, pinned or
-/// folded, and the dates and orders the sorts read. A title, an unread flag or a head's
+/// folded, unread, and the dates and orders the sorts read. A title or a head's
 /// progress note changes none of them, so those never rebuild the list; the rows read
 /// them through the model's per-thread cells instead.
 private struct ThreadPlacement: Equatable {

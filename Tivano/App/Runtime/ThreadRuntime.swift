@@ -664,6 +664,10 @@ final class ThreadRuntime {
         /// (`--model`, `--effort`, `--mode`), so any of them restarts it.
         var launchModel: String?
         var launchInteraction: InteractionMode?
+        var launchDshMode: DshAgentMode?
+        var dshFinalReport = false
+        var dshAuthenticationRevision: UUID?
+        var dshKeyFingerprint: Int?
         /// Changing the team or switching Hydra restarts the session on every provider.
         var hydra: HydraLaunch?
         var hydraPairID: UUID?
@@ -1499,7 +1503,7 @@ final class ThreadRuntime {
             // afterwards rather than handed back as a value, because a session is not
             // Sendable and this task is one of its own.
             if let warmup { await warmup.value }
-            let start = Task { () async throws -> Void in _ = try await self.ensureSession(directory: directory) }
+            let start = Task { () async throws -> Void in _ = try await self.ensureSession(directory: directory, dshFinalReport: isFinalReport) }
             if await checkpoint.value {
                 updateTurn(turn.id) { $0.baseCheckpoint = checkpointRef }
             }
@@ -1621,8 +1625,14 @@ final class ThreadRuntime {
     /// A thread with no model yet takes the provider's default, so the session launches
     /// with the model the app would show.
     private func ensureModel(_ thread: ChatThread) async {
-        guard thread.model == nil, let app else { return }
+        guard let app, thread.model == nil || thread.provider == .dsh else { return }
         await app.providers.loadCatalog(thread.provider)
+        if let selected = thread.model {
+            if let model = app.providers.model(selected, for: thread.provider), model.id != selected {
+                app.updateThread(threadID) { $0.model = model.id }
+            }
+            return
+        }
         if let model = app.providers.defaultModel(for: thread.provider) {
             app.updateThread(threadID) {
                 $0.model = model.id
@@ -1636,6 +1646,9 @@ final class ThreadRuntime {
     /// Only for CLI providers without a session; a send in the meantime waits for the
     /// warm-up instead of starting a second process.
     func warmSession() {
+        #if DEBUG
+        if DshCaptureReplay.isEnabled { return }
+        #endif
         guard phase == .idle, session == nil, warmup == nil, !isReverting, !hydraStartupPending,
               let app, let thread = app.thread(threadID), !thread.isArchived, !thread.provider.isAPIKeyBased,
               thread.hydra?.pendingProjectReference == nil,
@@ -1653,7 +1666,11 @@ final class ThreadRuntime {
         }
     }
 
-    private func ensureSession(directory: String, allowNewSession: Bool = true) async throws -> any ProviderSession {
+    private func ensureSession(directory: String, allowNewSession: Bool = true, dshFinalReport: Bool = false) async throws -> any ProviderSession {
+        #if DEBUG
+        // Replay is history-only, including accidental UI actions during capture.
+        if DshCaptureReplay.isEnabled { throw ProviderError.notRunning }
+        #endif
         guard let app, let thread = app.thread(threadID) else { throw ProviderError.notRunning }
         if !thread.provider.isAPIKeyBased {
             await app.providers.waitWhileCLIUpdating(thread.provider)
@@ -1673,11 +1690,15 @@ final class ThreadRuntime {
         let signature = SessionSignature(
             provider: thread.provider,
             directory: directory,
-            launchRuntimeMode: thread.provider == .cursor || thread.provider == .grok || thread.provider == .devin || thread.provider == .antigravity || thread.provider == .omp ? thread.runtimeMode : copilotLaunchMode,
+            launchRuntimeMode: thread.provider == .cursor || thread.provider == .grok || thread.provider == .devin || thread.provider == .antigravity || thread.provider == .omp || thread.provider == .dsh ? thread.runtimeMode : copilotLaunchMode,
             launchEffort: thread.provider == .claude || thread.provider == .antigravity ? thread.effort : nil,
             launchFast: thread.provider == .claude ? thread.fastMode : nil,
             launchModel: thread.provider == .antigravity ? thread.model : nil,
             launchInteraction: thread.provider == .antigravity || thread.provider == .omp ? thread.interactionMode : nil,
+            launchDshMode: thread.provider == .dsh ? (thread.dshMode ?? .standard) : nil,
+            dshFinalReport: thread.provider == .dsh && dshFinalReport,
+            dshAuthenticationRevision: thread.provider == .dsh ? app.providers.dshAuthenticationRevision : nil,
+            dshKeyFingerprint: thread.provider == .dsh ? app.settings.apiKey(for: .deepseek).hashValue : nil,
             hydra: hydra,
             hydraPairID: hydra == nil ? nil : thread.hydraPairID,
             antiSlopEnabled: app.settings.antiSlopEnabled,
@@ -1699,7 +1720,7 @@ final class ThreadRuntime {
         }
         // A message sent right after launch waits for the login shell, where a CLI installed
         // off the fallback PATH is found; this must not read as "not installed".
-        await LoginEnvironment.load()
+        if !DshIntegrationConfiguration.isEnabled { await LoginEnvironment.load() }
         releaseSession(stop: true)
         try await waitForReplacedSessions()
 
@@ -1787,14 +1808,16 @@ final class ThreadRuntime {
                 runtimeMode: thread.runtimeMode,
                 interactionMode: thread.interactionMode,
                 hydra: hydra,
-                isHydraHead: thread.provider == .codex && thread.hydra?.kind == .tivano,
+                isHydraHead: (thread.provider == .codex || thread.provider == .dsh) && thread.hydra?.kind == .tivano,
                 managesCodexHeadHistory: thread.provider == .codex && thread.hydra?.tracksProviderHistory == true
                     && (resumeID == nil || thread.hydra?.ownedCodexSessionID == resumeID),
                 codexHistoryArchived: thread.hydra?.ownedCodexSessionID == resumeID && thread.hydra?.codexHistoryArchived == true,
                 codexHistoryDirectory: thread.hydra?.ownedCodexWorkingDirectory,
                 antiSlopEnabled: signature.antiSlopEnabled,
                 voiceContext: signature.voiceContext,
-                modelCatalog: thread.provider.namesModelVariants ? app.providers.models(for: thread.provider) : []
+                modelCatalog: thread.provider.namesModelVariants || thread.provider == .dsh ? app.providers.models(for: thread.provider) : [],
+                dshMode: thread.dshMode ?? .standard,
+                dshFinalReport: signature.dshFinalReport
             )
             let created: any ProviderSession = switch thread.provider {
             case .codex: CodexSession(configuration: configuration)
@@ -1804,7 +1827,7 @@ final class ThreadRuntime {
             case .commandcode: CommandCodeSession(configuration: configuration)
             case .pi: PiSession(configuration: configuration)
             case .omp: OmpSession(configuration: configuration)
-            case .cursor, .opencode, .grok, .devin, .kimi: ACPSession(configuration: configuration)
+            case .cursor, .opencode, .grok, .devin, .kimi, .dsh: ACPSession(configuration: configuration)
             case .deepseek: DeepSeekSession(configuration: configuration)
             case .meta: MetaSession(configuration: configuration)
             case .zai: ZaiSession(configuration: configuration)
@@ -2679,6 +2702,13 @@ final class ThreadRuntime {
         }
     }
 
+    func stopSessionAndWait(timeout: TimeInterval = 5) async {
+        stopSession()
+        let stopped = sessionsAwaitingReplacement
+        for session in stopped { await session.stopAndWait(timeout: timeout) }
+        sessionsAwaitingReplacement.removeAll { session in stopped.contains { $0 === session } }
+    }
+
     func stopSession() {
         releaseSession(stop: true)
         // The session's own end is dropped with it (see `releaseSession`), so a turn cut
@@ -2714,7 +2744,8 @@ final class ThreadRuntime {
 
     private func openBackgroundTurn() {
         rehearseTurn(nil)
-        if isVoiceOrchestrator { return }
+        // Pi has no background tasks: it resumes after a failed run, and its retry notices say so.
+        if isVoiceOrchestrator || thread?.provider == .pi { return }
         let name = thread?.provider.displayName ?? Chrome.localized("The agent")
         appendNotice(.info, String(format: Chrome.localized("%@ picked the work back up after a background task finished."), name))
     }

@@ -83,7 +83,7 @@ struct PopoverScroll<Content: View>: View {
         ScrollView {
             content()
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
-                    if !isPremeasured { contentHeight = height }
+                    if !isPremeasured, abs(contentHeight - height) > 0.5 { contentHeight = height }
                 }
         }
         .scrollBounceBehavior(.basedOnSize)
@@ -331,6 +331,7 @@ struct PopoverItem: View {
         .opacity(isEnabled ? 1 : 0.4)
         .accessibilityLabel(Text(verbatim: detail.map { "\(Chrome.localized(title)), \(Chrome.localized($0))" } ?? Chrome.localized(title)))
         .onHover { hovering in
+            guard isHovering != hovering else { return }
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
     }

@@ -34,6 +34,7 @@ struct AlphaSettingsPage: View {
                     }
                     Spacer(minLength: 12)
                     SettingsSwitch(isOn: $settings.alphaEnabled)
+                        .accessibilityLabel(Text("Alpha"))
                 }
                 .padding(.leading, 16)
                 .padding(.trailing, Chrome.rowControlTrailingPadding)
@@ -50,6 +51,7 @@ struct AlphaSettingsPage: View {
             ChromeCard {
                 ChromeRow(title: "Codex realtime voice", detail: "Talk with Codex out loud. Start a call from Start voice in the sidebar, or from the waveform button in any Codex chat to continue that chat by voice. Codex listens, answers and does the work in the chat. Needs Codex 0.159 or later, signed in with ChatGPT.") {
                     SettingsSwitch(isOn: $settings.alphaVoiceEnabled)
+                        .accessibilityLabel(Text("Codex realtime voice"))
                 }
                 if settings.alphaVoiceEnabled {
                     ChromeRowDivider()
@@ -79,6 +81,7 @@ private struct VoiceStyleRow: View {
                 options: [(String?.none, "Codex default")] + options.map { (String?.some($0), VoiceCatalog.label($0)) },
                 selection: $settings.codexVoice
             )
+            .accessibilityLabel(Text("Codex voice style"))
         }
     }
 }

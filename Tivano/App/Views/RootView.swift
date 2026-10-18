@@ -176,10 +176,14 @@ struct DetailView: View {
     /// `kCGAnyInputEventType`, which Quartz leaves out of the Swift enum.
     private static let anyInput = CGEventType(rawValue: ~0)!
 
+    private var isCovered: Bool {
+        (WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented) || model.voice.stageOpen
+    }
+
     var body: some View {
         if let threadID = model.selectedThreadID, model.thread(threadID) != nil {
             let running = Set(model.threads.compactMap { model.existingRuntime(for: $0.id)?.isRunning == true ? $0.id : nil })
-            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, isCovered: (WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented) || model.voice.stageOpen, model: model, liveResize: liveResize)
+            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, isCovered: isCovered, model: model, liveResize: liveResize)
                 .onChange(of: threadID) { _, _ in prebuilt = [] }
                 .task(id: threadID) {
                     // The neighbours, and at launch the sidebar's top rows, one at a time, once
@@ -194,10 +198,11 @@ struct DetailView: View {
                     for id in candidates where !Task.isCancelled {
                         // Never under the reader's hands: a build holds the main thread for a
                         // frame or a few, which a keystroke would wait on.
-                        while !Task.isCancelled, CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: Self.anyInput) < 1 {
+                        // Wait while Settings or the voice stage covers the chat to keep input responsive.
+                        while !Task.isCancelled, isCovered || CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: Self.anyInput) < 1 {
                             try? await Task.sleep(for: .milliseconds(300))
                         }
-                        guard !Task.isCancelled, !(model.existingRuntime(for: threadID)?.isRunning ?? false) else { return }
+                        guard !Task.isCancelled, !isCovered, !(model.existingRuntime(for: threadID)?.isRunning ?? false) else { return }
                         if id != threadID, !prebuilt.contains(id) { prebuilt.append(id) }
                         try? await Task.sleep(for: .milliseconds(400))
                     }
@@ -364,6 +369,9 @@ private struct ThreadColumns: NSViewRepresentable {
         /// on one of the threads finds its rows made. Each is built once per request: one
         /// dropped to make room for the columns visited since stays dropped.
         func prebuild(_ ids: [UUID], in pane: NSView, model: AppModel, liveResize: WindowLiveResize) {
+            guard !isCovered,
+                  !(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented),
+                  !model.voice.stageOpen else { return }
             for id in ids where !requested.contains(id) && columns[id] == nil {
                 let started = ContinuousClock.now
                 make(id, isShown: false, in: pane, model: model, liveResize: liveResize).layoutSubtreeIfNeeded()

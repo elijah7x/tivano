@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 struct ProviderStatus: Equatable, Sendable {
     enum Auth: Equatable, Sendable {
@@ -10,7 +11,9 @@ struct ProviderStatus: Equatable, Sendable {
     var executable: URL?
     var version: String?
     var auth: Auth = .unknown
+    var authMessage: String?
     var isChecking = false
+    var catalogError: String?
     /// Native API providers (DeepSeek, Meta, Z.ai) have no CLI; they are installed once an API key exists.
     var apiKeyConfigured = false
 
@@ -18,11 +21,108 @@ struct ProviderStatus: Equatable, Sendable {
 
     var summary: String {
         guard isInstalled else { return AppText.localized("Not installed") }
+        if let authMessage { return authMessage }
         switch auth {
         case .signedIn(let account): return account.map { String(format: AppText.localized("Signed in as %@"), $0) } ?? AppText.localized("Signed in")
-        case .signedOut: return AppText.localized("Not signed in")
+        case .signedOut: return authMessage ?? AppText.localized("Not signed in")
         case .unknown: return version.map { String(format: AppText.localized("Installed · %@"), $0) } ?? AppText.localized("Installed")
         }
+    }
+}
+
+enum DshIntegrationConfiguration {
+    static var isEnabled: Bool {
+        #if DEBUG
+        CaptureRun.isEnabled && (CommandLine.arguments.contains("--dsh-integration-probe")
+            || CommandLine.arguments.contains("--dsh-offline-native-probe"))
+        #else
+        false
+        #endif
+    }
+
+    static var isOfflineHydra: Bool {
+        isEnabled && CommandLine.arguments.contains("--dsh-offline-hydra-probe")
+    }
+
+    static var isOfflineNative: Bool {
+        isEnabled && CommandLine.arguments.contains("--dsh-offline-native-probe")
+    }
+
+    struct Paths {
+        let executable: URL
+        let home: URL
+    }
+
+    static var paths: Paths? {
+        guard isEnabled else { return nil }
+        let arguments = CommandLine.arguments
+        func path(_ flag: String) -> URL? {
+            guard arguments.filter({ $0 == flag }).count == 1,
+                  let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1),
+                  arguments[index + 1].hasPrefix("/") else { return nil }
+            return URL(fileURLWithPath: arguments[index + 1]).standardizedFileURL.resolvingSymlinksInPath()
+        }
+        guard let executable = path("--dsh-test-executable"), let home = path("--dsh-test-home"),
+              let binary = try? executable.resourceValues(forKeys: [.isRegularFileKey]), binary.isRegularFile == true,
+              FileManager.default.isExecutableFile(atPath: executable.path),
+              let directory = try? home.resourceValues(forKeys: [.isDirectoryKey]), directory.isDirectory == true else { return nil }
+        guard let output = CaptureRun.outputDirectory?.standardizedFileURL.resolvingSymlinksInPath() else { return nil }
+        if isOfflineNative {
+            let temporary = URL(fileURLWithPath: "/private/tmp", isDirectory: true).resolvingSymlinksInPath()
+            let environment = ProcessInfo.processInfo.environment
+            guard !isOfflineHydra, output.deletingLastPathComponent() == temporary,
+                  output.lastPathComponent.hasPrefix("tivano-dsh-app-native-"),
+                  home == output.appendingPathComponent("dsh-home"),
+                  !executable.path.hasPrefix(output.path + "/"),
+                  let processHome = environment["HOME"], let dshHome = environment["DSH_HOME"],
+                  URL(fileURLWithPath: processHome).resolvingSymlinksInPath() == output.appendingPathComponent("home"),
+                  URL(fileURLWithPath: dshHome).resolvingSymlinksInPath() == home else { return nil }
+        } else if isOfflineHydra {
+            // Canonical descendants only: symlinks cannot point this offline fixture at the account or installed CLI.
+            let ownerHome = FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path
+            guard output.path != "/", output.path != ownerHome,
+                  !ownerHome.hasPrefix(output.path + "/"),
+                  home.path.hasPrefix(output.path + "/"),
+                  executable.path.hasPrefix(output.path + "/"),
+                  !executable.path.hasPrefix(home.path + "/") else { return nil }
+        } else {
+            guard home.path != output.path,
+                  !home.path.hasPrefix(output.path + "/"),
+                  !output.path.hasPrefix(home.path + "/") else { return nil }
+        }
+        return Paths(executable: executable, home: home)
+    }
+
+    static var environment: [String: String] {
+        guard let paths, let root = CaptureRun.storageRoot else { return [:] }
+        if isOfflineNative {
+            guard let output = CaptureRun.outputDirectory?.resolvingSymlinksInPath(),
+                  let data = try? Data(contentsOf: output.appendingPathComponent("manifest.json")),
+                  let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                  manifest["fixture"] == "tivano-dsh-app-native-v1",
+                  let port = manifest["port"].flatMap(Int.init), (1024...65535).contains(port),
+                  FileManager.default.fileExists(atPath: output.appendingPathComponent("started").path) else { return [:] }
+            return ["HOME": output.appendingPathComponent("home").path,
+                    "DSH_HOME": paths.home.path, "TMPDIR": output.appendingPathComponent("tmp").path,
+                    "PATH": paths.executable.deletingLastPathComponent().path + ":/opt/homebrew/bin:/usr/bin:/bin",
+                    "LANG": "en_US.UTF-8", "SHELL": "/bin/sh", "TERM": "dumb",
+                    "DEEPSEEK_API_KEY": "offline-fixture-only", "DSH_TELEMETRY_DISABLED": "1",
+                    "DEEPSEEK_BASE_URL": "http://127.0.0.1:\(port)/anthropic",
+                    "NO_PROXY": "127.0.0.1,localhost",
+                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"]
+        }
+        let home = root.appendingPathComponent("probe-home", isDirectory: true)
+        let temporary = root.appendingPathComponent("probe-tmp", isDirectory: true)
+        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        // An allowlist, not a filtered login environment: no shell hooks or injected auth.
+        return [
+            "HOME": home.path, "TMPDIR": temporary.path,
+            "PATH": paths.executable.deletingLastPathComponent().path + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "LANG": "en_US.UTF-8", "TERM": "dumb", "SHELL": "/bin/sh",
+            "DSH_HOME": paths.home.path,
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+        ]
     }
 }
 
@@ -31,9 +131,14 @@ struct ProviderStatus: Equatable, Sendable {
 @Observable
 final class ProviderRegistry {
     private(set) var statuses: [ProviderKind: ProviderStatus] = [:]
-    private(set) var catalogs: [ProviderKind: [ModelOption]] = [:]
-    /// The A-Z copy of a provider's catalogue beside the catalogue it was sorted from.
-    @ObservationIgnored private var sortedModelCache: [ProviderKind: (source: [ModelOption], sorted: [ModelOption])] = [:]
+    private(set) var catalogs: [ProviderKind: [ModelOption]] = [:] {
+        didSet {
+            for provider in sortedModelCache.keys where oldValue[provider] != catalogs[provider] {
+                sortedModelCache[provider] = nil
+            }
+        }
+    }
+    @ObservationIgnored private var sortedModelCache: [ProviderKind: [ModelOption]] = [:]
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var commandErrors: [String: String] = [:]
     private(set) var recentCommands: [String: [String]] = [:]
@@ -45,6 +150,11 @@ final class ProviderRegistry {
     /// not cost a process launch every minute.
     private static let commandFreshness: TimeInterval = 600
     private(set) var loadingCatalogs: Set<ProviderKind> = []
+    @ObservationIgnored private var deepSeekKeyFingerprint: Int?
+    @ObservationIgnored private var deepSeekKeyRefresh: Task<Void, Never>?
+    @ObservationIgnored private var dshCatalogTask: Task<[ModelOption]?, Never>?
+    @ObservationIgnored private var dshCatalogGeneration = UUID()
+    @ObservationIgnored private(set) var dshAuthenticationRevision = UUID()
 
     /// Visible to `ProviderRegistry+CLIUpdates`. The registry still does not see the rest of the app.
     @ObservationIgnored let settings: any ProviderSettings
@@ -146,11 +256,12 @@ final class ProviderRegistry {
     /// alone; the catalog probe walked the rest), so a live row without a scale keeps
     /// the scale, default and fast tier the catalog already holds for that id. Rows the
     /// live list dropped go; rows it added come in as they are.
-    private static func mergedACPCatalog(_ live: [ModelOption], over cached: [ModelOption]) -> [ModelOption] {
+    private static func mergedACPCatalog(_ live: [ModelOption], over cached: [ModelOption], provider: ProviderKind) -> [ModelOption] {
         guard !cached.isEmpty else { return live }
         let known = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return live.map { option in
-            guard option.efforts.isEmpty, let kept = known[option.id] else { return option }
+            let id = provider == .dsh ? DshCLI.resolvedModelID(option.id, in: cached) : option.id
+            guard option.efforts.isEmpty, let kept = known[id] else { return option }
             var option = option
             option.efforts = kept.efforts
             if option.defaultEffort == nil { option.defaultEffort = kept.defaultEffort }
@@ -166,6 +277,10 @@ final class ProviderRegistry {
 
     // Seeds come from the same tables the live fetch uses, so the two can never disagree.
     static let deepseekSeed = ["deepseek-v4-pro", "deepseek-flash"].compactMap(DeepSeekAPI.option(for:))
+    static let dshSeed = ["deepseek-flash", "deepseek-v4-pro"].map { model in
+        let id = "[\"deepseek-account\",\"\(model)\"]"
+        return ModelOption(id: id, name: DshCLI.displayName(forModelID: id), efforts: ["off", "low", "high", "max"], defaultEffort: "high", isDefault: model == "deepseek-flash")
+    }
     static let metaSeed = ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-spark-1.2", "muse-spark-1.2-contributor", "muse-spark-1.1"]
         .compactMap(MetaAPI.option(for:))
     static let zaiSeed = ["glm-5.3", "glm-5.3-flash"].compactMap(ZaiAPI.option(for:))
@@ -205,6 +320,7 @@ final class ProviderRegistry {
 
     init(settings: any ProviderSettings) {
         self.settings = settings
+        var initialCatalogs: [ProviderKind: [ModelOption]] = [:]
         recentCommands = (CaptureRun.defaults ?? .standard).dictionary(forKey: "recentSlashCommands") as? [String: [String]] ?? [:]
         if !CaptureRun.isEnabled,
            let data = UserDefaults.standard.data(forKey: cacheKey),
@@ -212,6 +328,7 @@ final class ProviderRegistry {
             for (key, list) in cached {
                 guard key != "opencodeGo", !(key == "opencode" && cached["opencodeGo"] != nil),
                       let provider = ProviderKind(rawValue: key) else { continue }
+                if provider == .dsh, list.contains(where: { $0.name == $0.id || $0.name.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") }) { continue }
                 // A list cached before the scales were ordered may still run high to low
                 // (Grok's did); the slider reads them low to high, so they are put right here.
                 let ordered = list.map { option in
@@ -220,7 +337,7 @@ final class ProviderRegistry {
                     return option
                 }
                 // A list cached before variants were merged is merged on the way in.
-                catalogs[provider] = provider.namesModelVariants ? ModelFamilies.collapsed(ordered) : ordered
+                initialCatalogs[provider] = provider.namesModelVariants ? ModelFamilies.collapsed(ordered) : ordered
             }
         }
         if !CaptureRun.isEnabled,
@@ -231,20 +348,72 @@ final class ProviderRegistry {
                 if let provider = ProviderKind(rawValue: key) { catalogFetchedAt[provider] = Date(timeIntervalSince1970: seconds) }
             }
         }
-        if Self.isStaleClaudeSeed(catalogs[.claude] ?? []) { catalogs[.claude] = Self.claudeSeed }
-        if catalogs[.deepseek]?.isEmpty ?? true { catalogs[.deepseek] = Self.deepseekSeed }
-        if catalogs[.meta]?.isEmpty ?? true { catalogs[.meta] = Self.metaSeed }
-        if catalogs[.zai]?.isEmpty ?? true { catalogs[.zai] = Self.zaiSeed }
-        if catalogs[.antigravity]?.isEmpty ?? true || catalogs[.antigravity]?.contains(where: { $0.id.hasSuffix("-high") || $0.id.hasSuffix("-medium") || $0.id.hasSuffix("-low") }) == true {
-            catalogs[.antigravity] = Self.antigravitySeed
+        if Self.isStaleClaudeSeed(initialCatalogs[.claude] ?? []) { initialCatalogs[.claude] = Self.claudeSeed }
+        if initialCatalogs[.deepseek]?.isEmpty ?? true { initialCatalogs[.deepseek] = Self.deepseekSeed }
+        if initialCatalogs[.dsh]?.isEmpty ?? true {
+            initialCatalogs[.dsh] = Self.dshSeed
+            catalogFetchedAt[.dsh] = nil
         }
-        if catalogs[.copilot]?.isEmpty ?? true { catalogs[.copilot] = [Self.copilotAuto] }
-        if catalogs[.commandcode]?.isEmpty ?? true { catalogs[.commandcode] = Self.commandcodeSeed }
-        if catalogs[.pi]?.isEmpty ?? true { catalogs[.pi] = Self.piSeed }
-        if catalogs[.omp]?.isEmpty ?? true { catalogs[.omp] = Self.ompSeed }
-        for provider in ProviderKind.allCases where provider.namesModelVariants {
+        if initialCatalogs[.meta]?.isEmpty ?? true { initialCatalogs[.meta] = Self.metaSeed }
+        if initialCatalogs[.zai]?.isEmpty ?? true { initialCatalogs[.zai] = Self.zaiSeed }
+        if initialCatalogs[.antigravity]?.isEmpty ?? true || initialCatalogs[.antigravity]?.contains(where: { $0.id.hasSuffix("-high") || $0.id.hasSuffix("-medium") || $0.id.hasSuffix("-low") }) == true {
+            initialCatalogs[.antigravity] = Self.antigravitySeed
+        }
+        if initialCatalogs[.copilot]?.isEmpty ?? true { initialCatalogs[.copilot] = [Self.copilotAuto] }
+        if initialCatalogs[.commandcode]?.isEmpty ?? true { initialCatalogs[.commandcode] = Self.commandcodeSeed }
+        if initialCatalogs[.pi]?.isEmpty ?? true { initialCatalogs[.pi] = Self.piSeed }
+        if initialCatalogs[.omp]?.isEmpty ?? true { initialCatalogs[.omp] = Self.ompSeed }
+        if catalogs != initialCatalogs { catalogs = initialCatalogs }
+        for provider in ProviderKind.allCases where provider.namesModelVariants || provider == .dsh {
             if let list = catalogs[provider] { settings.adoptModelFamilies(list, for: provider) }
         }
+        observeDeepSeekKey()
+    }
+
+    private func observeDeepSeekKey() {
+        let fingerprint = withObservationTracking {
+            settings.apiKey(for: .deepseek).hashValue
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeDeepSeekKey() }
+        }
+        defer { deepSeekKeyFingerprint = fingerprint }
+        guard let previous = deepSeekKeyFingerprint, previous != fingerprint else { return }
+        invalidateDshAuthentication()
+        deepSeekKeyRefresh?.cancel()
+        deepSeekKeyRefresh = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+            guard let self, !Task.isCancelled else { return }
+            await self.refresh(.dsh)
+            guard !Task.isCancelled else { return }
+            await self.loadCatalog(.dsh, force: true)
+            guard !Task.isCancelled else { return }
+            await self.refresh(.deepseek)
+            guard !Task.isCancelled else { return }
+            await self.loadCatalog(.deepseek, force: true)
+        }
+    }
+
+    private func invalidateDshAuthentication() {
+        dshAuthenticationRevision = UUID()
+        dshCatalogGeneration = UUID()
+        dshCatalogTask?.cancel()
+        dshCatalogTask = nil
+        if loadingCatalogs.contains(.dsh) { loadingCatalogs.remove(.dsh) }
+        attemptedCatalogs.remove(.dsh)
+        catalogFetchedAt[.dsh] = nil
+        storeCatalogDates()
+        var status = statuses[.dsh] ?? ProviderStatus()
+        status.auth = .unknown
+        status.authMessage = nil
+        status.catalogError = nil
+        status.isChecking = false
+        setStatus(status, for: .dsh)
+    }
+
+    private func setDshCatalogError(_ message: String?) {
+        var status = statuses[.dsh] ?? ProviderStatus()
+        status.catalogError = message
+        setStatus(status, for: .dsh)
     }
 
     var availableProviders: [ProviderKind] {
@@ -256,10 +425,14 @@ final class ProviderRegistry {
     /// `bootstrap()` probes the providers (see `AppDelegate`), so a strict read there found
     /// no pair and no provider: every one of them read as missing.
     func countsAsInstalled(_ provider: ProviderKind) -> Bool {
-        statuses[provider]?.isInstalled ?? true
+        if DshIntegrationConfiguration.isEnabled { return status(provider).isInstalled }
+        return statuses[provider]?.isInstalled ?? true
     }
 
     func status(_ provider: ProviderKind) -> ProviderStatus {
+        if DshIntegrationConfiguration.isEnabled {
+            return provider == .dsh ? (statuses[provider] ?? ProviderStatus()) : ProviderStatus()
+        }
         // A capture run never probes the CLIs (see `refresh`), and reads as a Mac with every
         // provider installed and signed in, so the pairs and pickers show what they offer.
         if CaptureRun.isEnabled {
@@ -269,6 +442,9 @@ final class ProviderRegistry {
     }
 
     func executable(for provider: ProviderKind) -> URL? {
+        if DshIntegrationConfiguration.isEnabled {
+            return provider == .dsh ? DshIntegrationConfiguration.paths?.executable : nil
+        }
         guard !provider.isAPIKeyBased else { return nil }
         let custom = settings.binaryPath(for: provider)
         guard !custom.isEmpty || !provider.executableName.isEmpty else { return nil }
@@ -304,16 +480,23 @@ final class ProviderRegistry {
         case .omp:
             let home = LoginEnvironment.homeDirectory
             return ["\(home)/.bun/bin/omp", "\(home)/.npm-global/bin/omp", "/opt/homebrew/bin/omp", "/usr/local/bin/omp", "\(home)/.local/bin/omp", "\(home)/.volta/bin/omp"].map { URL(fileURLWithPath: $0) }
-        case .pi, .kimi:
+        case .pi, .kimi, .dsh:
             let home = LoginEnvironment.homeDirectory
             let name = provider.executableName
-            return ["\(home)/.npm-global/bin/\(name)", "/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)", "\(home)/.volta/bin/\(name)", "\(home)/.bun/bin/\(name)"].map { URL(fileURLWithPath: $0) }
+            var candidates = ["\(home)/.npm-global/bin/\(name)", "/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)", "\(home)/.volta/bin/\(name)", "\(home)/.bun/bin/\(name)"]
+            if provider == .dsh {
+                candidates.append("/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh")
+            }
+            return candidates.map { URL(fileURLWithPath: $0) }
         default:
             return []
         }
     }
 
     func environment(for provider: ProviderKind) -> [String: String] {
+        if DshIntegrationConfiguration.isEnabled {
+            return provider == .dsh ? DshIntegrationConfiguration.environment : [:]
+        }
         var environment = LoginEnvironment.current
         if let directory = executable(for: provider)?.deletingLastPathComponent().path,
            let path = environment["PATH"],
@@ -325,6 +508,9 @@ final class ProviderRegistry {
         if provider == .commandcode {
             let key = settings.apiKey(for: .commandcode)
             if !key.isEmpty { environment["COMMAND_CODE_API_KEY"] = key }
+        }
+        if provider == .dsh {
+            DshCLI.applyBaseEnvironment(&environment, apiKey: settings.apiKey(for: .deepseek))
         }
         // OpenCode takes its MCP servers as config content in the environment,
         // so the connected servers reach it without a line written into its config files.
@@ -343,8 +529,11 @@ final class ProviderRegistry {
     /// browser, then a fresh status check and usage read, so the numbers follow the new login
     /// without a trip to Terminal. Returns the CLI's message when it failed, nil on success.
     func signIn(_ provider: ProviderKind) async -> String? {
+        guard !DshIntegrationConfiguration.isEnabled else {
+            return AppText.localized("DeepSeek Harness sign-in did not finish. Try again.")
+        }
         guard signingIn == nil else { return nil }
-        guard !provider.isAPIKeyBased else { return nil }
+        guard !provider.isAPIKeyBased, provider == .dsh || !provider.loginCommand.isEmpty else { return nil }
         signingIn = provider
         defer { signingIn = nil }
         await LoginEnvironment.load()
@@ -352,32 +541,37 @@ final class ProviderRegistry {
             let missing = String(format: AppText.localized("%@ was not found on your PATH."), provider.displayName)
             return LoginEnvironment.diagnostic.map { missing + " " + $0 } ?? missing
         }
-        // The login command starts with the executable's own name; the rest are its arguments.
-        let arguments = provider.loginCommand.split(whereSeparator: \.isWhitespace).dropFirst().map(String.init)
         let loginEnvironment = environment(for: provider)
-        let result: ShellResult
         do {
-            result = try await Shell.run(executable, arguments, environment: loginEnvironment, timeout: 300)
+            if provider == .dsh {
+                try await DshLogin.signIn(executable: executable, environment: loginEnvironment)
+            } else {
+                // The login command starts with the executable's own name; the rest are its arguments.
+                let arguments = provider.loginCommand.split(whereSeparator: \.isWhitespace).dropFirst().map(String.init)
+                let result = try await Shell.run(executable, arguments, environment: loginEnvironment, timeout: 300)
+                if !result.succeeded {
+                    let output = TextCleanup.stripANSI(result.output + result.errorOutput)
+                    guard let lastLine = output.split(separator: "\n", omittingEmptySubsequences: true).last, !lastLine.isEmpty else {
+                        return "\(provider.displayName) did not finish signing in."
+                    }
+                    return String(lastLine)
+                }
+            }
         } catch {
-            return error.localizedDescription
+            return provider == .dsh ? AppText.localized("DeepSeek Harness sign-in did not finish. Try again.") : error.localizedDescription
         }
-        if result.succeeded {
-            refreshPlanLimits(provider, force: true, executable: executable, environment: loginEnvironment)
-            await refresh(provider)
-            await loadCatalog(provider, force: true)
-            return nil
-        }
-        let output = TextCleanup.stripANSI(result.output + result.errorOutput)
-        guard let lastLine = output.split(separator: "\n", omittingEmptySubsequences: true).last, !lastLine.isEmpty else {
-            return "\(provider.displayName) did not finish signing in."
-        }
-        return String(lastLine)
+        if provider == .dsh { invalidateDshAuthentication() }
+        refreshPlanLimits(provider, force: true, executable: executable, environment: loginEnvironment)
+        await refresh(provider)
+        await loadCatalog(provider, force: true)
+        return nil
     }
 
     /// The Providers page's refresh button: checks every provider again, re-reads usage limits
     /// for each signed-in account only while the page shows them and reloads the live catalogs.
     /// Beyond the limits, nothing on that page checks on its own, so this is the only way it hits the CLIs and APIs.
     func refreshEverything() async {
+        guard !DshIntegrationConfiguration.isEnabled else { return }
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -409,6 +603,8 @@ final class ProviderRegistry {
     private static let probeWidth = 4
 
     func refreshAll() async {
+        // The integration runner owns its deadlines and serializes its probes.
+        guard !DshIntegrationConfiguration.isEnabled else { return }
         let providers = ProviderKind.allCases
         var next = 0
         await withTaskGroup(of: Void.self) { group in
@@ -426,18 +622,31 @@ final class ProviderRegistry {
         }
     }
 
+    private func setStatus(_ status: ProviderStatus, for provider: ProviderKind) {
+        guard statuses[provider] != status else { return }
+        statuses[provider] = status
+    }
+
     func refresh(_ provider: ProviderKind) async {
+        if DshIntegrationConfiguration.isEnabled {
+            guard provider == .dsh, let executable = executable(for: provider) else { return }
+            let version = await Self.version(executable, environment(for: provider))
+            // Credential contents belong to dsh. A version check is not evidence of login.
+            setStatus(ProviderStatus(executable: executable, version: version, auth: .unknown), for: provider)
+            return
+        }
         guard !CaptureRun.isEnabled else { return }
+        let dshRevision = dshAuthenticationRevision
         var status = statuses[provider] ?? ProviderStatus()
         status.isChecking = true
-        statuses[provider] = status
+        setStatus(status, for: provider)
         if provider.isAPIKeyBased {
             await refreshAPIProvider(provider)
             return
         }
         await LoginEnvironment.load()
         guard let executable = executable(for: provider) else {
-            statuses[provider] = ProviderStatus()
+            setStatus(ProviderStatus(), for: provider)
             return
         }
         let environment = environment(for: provider)
@@ -446,57 +655,61 @@ final class ProviderRegistry {
         // provider being checked alongside.
         let version = await Self.version(executable, environment)
         let auth = await Self.auth(provider, executable, environment)
-        statuses[provider] = ProviderStatus(executable: executable, version: version, auth: auth)
+        guard provider != .dsh || (dshRevision == dshAuthenticationRevision && !Task.isCancelled) else { return }
+        let authMessage = provider == .dsh && auth == .signedOut
+            ? AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings → Providers → DeepSeek.")
+            : nil
+        setStatus(ProviderStatus(executable: executable, version: version, auth: auth, authMessage: authMessage, catalogError: statuses[provider]?.catalogError), for: provider)
     }
 
     /// API-key providers have no binary: presence (and validity) of the key is the install state.
     private func refreshAPIProvider(_ provider: ProviderKind) async {
         let apiKey = settings.apiKey(for: provider)
         guard !apiKey.isEmpty else {
-            statuses[provider] = ProviderStatus(auth: .signedOut)
+            setStatus(ProviderStatus(auth: .signedOut), for: provider)
             return
         }
         if provider == .deepseek {
             let valid = await DeepSeekAPI.validate(apiKey: apiKey)
-            statuses[provider] = ProviderStatus(
+            setStatus(ProviderStatus(
                 version: "API",
                 auth: valid ? .signedIn(nil) : .signedOut,
                 apiKeyConfigured: true
-            )
+            ), for: provider)
             // The key just proved itself, so read the balance behind it right away: the
             // usage panel has it from launch, and a rejected key must not leave a stale one.
             if valid {
                 refreshCredits(.deepseek, force: true)
             } else {
-                credits[.deepseek] = nil
+                if credits[.deepseek] != nil { credits[.deepseek] = nil }
                 creditsFetchedAt[.deepseek] = nil
             }
         } else if provider == .meta {
             let valid = await MetaAPI.validate(apiKey: apiKey)
-            statuses[provider] = ProviderStatus(
+            setStatus(ProviderStatus(
                 version: "API",
                 auth: valid ? .signedIn(nil) : .signedOut,
                 apiKeyConfigured: true
-            )
+            ), for: provider)
         } else if provider == .zai {
             let valid = await ZaiAPI.validate(apiKey: apiKey)
-            statuses[provider] = ProviderStatus(
+            setStatus(ProviderStatus(
                 version: "API",
                 auth: valid ? .signedIn(nil) : .signedOut,
                 apiKeyConfigured: true
-            )
+            ), for: provider)
             if valid {
                 refreshPlanLimits(.zai, force: true)
             } else {
                 limitReadGenerations[.zai] = nil
                 limitReadTasks[.zai]?.cancel()
                 limitReadTasks[.zai] = nil
-                loadingLimits.remove(.zai)
-                planLimits[.zai] = nil
+                if loadingLimits.contains(.zai) { loadingLimits.remove(.zai) }
+                if planLimits[.zai] != nil { planLimits[.zai] = nil }
                 limitsFetchedAt[.zai] = nil
             }
         } else {
-            statuses[provider] = ProviderStatus(auth: .signedIn(nil), apiKeyConfigured: true)
+            setStatus(ProviderStatus(auth: .signedIn(nil), apiKeyConfigured: true), for: provider)
         }
     }
 
@@ -507,19 +720,19 @@ final class ProviderRegistry {
     }
 
     func sortedModels(for provider: ProviderKind) -> [ModelOption] {
-        // Read even on cache hits so views keep observing catalogue changes. Another
-        // provider's update leaves this array's storage as it was, so the comparison is
-        // by identity and costs nothing; only a catalogue that changed is sorted again.
+        // Read even on cache hits so views keep observing catalogue changes.
         let catalogue = models(for: provider)
-        if let cached = sortedModelCache[provider], cached.source == catalogue { return cached.sorted }
+        if let cached = sortedModelCache[provider] { return cached }
         let sorted = catalogue.sortedByName()
-        sortedModelCache[provider] = (catalogue, sorted)
+        sortedModelCache[provider] = sorted
         return sorted
     }
 
     func model(_ id: String?, for provider: ProviderKind) -> ModelOption? {
         guard let id else { return nil }
-        return Self.match(id, in: models(for: provider))
+        let list = models(for: provider)
+        if provider == .dsh { return list.first { $0.id == DshCLI.resolvedModelID(id, in: list) } }
+        return Self.match(id, in: list)
     }
 
     private static func match(_ id: String, in list: [ModelOption]) -> ModelOption? {
@@ -574,6 +787,10 @@ final class ProviderRegistry {
 
     /// The version the installed CLI reports, or nil when it cannot be read.
     func installedCLIVersion(_ provider: ProviderKind) async -> String? {
+        if DshIntegrationConfiguration.isEnabled {
+            guard provider == .dsh, let executable = executable(for: provider) else { return nil }
+            return await Self.version(executable, environment(for: provider))
+        }
         await LoginEnvironment.load()
         guard let executable = executable(for: provider) else { return nil }
         let raw = await cliCommandRunner.readVersion(executable, CLIInstallEnvironment.current)
@@ -581,7 +798,11 @@ final class ProviderRegistry {
     }
 
     func loadCatalog(_ provider: ProviderKind, force: Bool = false) async {
-        guard !CaptureRun.isEnabled else { return }
+        guard !CaptureRun.isEnabled || (DshIntegrationConfiguration.isEnabled && provider == .dsh && DshIntegrationConfiguration.paths != nil) else { return }
+        if provider == .dsh {
+            await loadDshCatalog(force: force)
+            return
+        }
         guard !loadingCatalogs.contains(provider) else { return }
         guard force || !attemptedCatalogs.contains(provider) else { return }
         if provider.isAPIKeyBased {
@@ -615,7 +836,7 @@ final class ProviderRegistry {
         case .commandcode: try? await CommandCodeAPI.listModels(executable: executable, environment: environment)
         case .pi: try? await PiCLI.listModels(executable: executable, environment: environment)
         case .omp: try? await OmpCLI.listModels(executable: executable, environment: environment)
-        case .cursor, .grok, .devin, .kimi: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
+        case .cursor, .grok, .devin, .kimi, .dsh: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
         case .opencode: await openCodeCatalog(force: force, executable: executable, environment: environment)
         case .deepseek, .meta, .zai: nil
         }
@@ -628,6 +849,52 @@ final class ProviderRegistry {
             // on the next ask rather than leaving the provider empty for the whole run.
             attemptedCatalogs.insert(provider)
         }
+    }
+
+    private func loadDshCatalog(force: Bool) async {
+        guard !loadingCatalogs.contains(.dsh) else { return }
+        let stale = catalogFetchedAt[.dsh].map { Date.now.timeIntervalSince($0) > Self.catalogFreshness } ?? true
+        let seeded = models(for: .dsh) == Self.dshSeed
+        guard force || (!attemptedCatalogs.contains(.dsh) && (seeded || stale || models(for: .dsh).isEmpty)) else { return }
+        let generation = UUID()
+        dshCatalogGeneration = generation
+        loadingCatalogs.insert(.dsh)
+        setDshCatalogError(nil)
+        defer {
+            if dshCatalogGeneration == generation {
+                loadingCatalogs.remove(.dsh)
+                dshCatalogTask = nil
+            }
+        }
+        if !DshIntegrationConfiguration.isEnabled { await LoginEnvironment.load() }
+        guard dshCatalogGeneration == generation, !Task.isCancelled else { return }
+        guard let executable = executable(for: .dsh) else {
+            setDshCatalogError(AppText.localized("DeepSeek Harness is not installed or its binary path is unavailable."))
+            return
+        }
+        let environment = environment(for: .dsh)
+        let task = Task { () -> [ModelOption]? in
+            do {
+                return try await ACPSession.probeModels(provider: .dsh, executable: executable, environment: environment)
+            } catch {
+                guard !Task.isCancelled, self.dshCatalogGeneration == generation else { return nil }
+                self.setDshCatalogError(AppText.localized("Could not load DeepSeek Harness models. Check your sign-in and connection, then retry."))
+                return nil
+            }
+        }
+        dshCatalogTask = task
+        let list = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        guard dshCatalogGeneration == generation, !Task.isCancelled else { return }
+        guard let list, !list.isEmpty else {
+            if statuses[.dsh]?.catalogError == nil {
+                setDshCatalogError(AppText.localized("DeepSeek Harness returned no models. Check your sign-in and retry."))
+            }
+            return
+        }
+        updateCatalog(list, for: .dsh)
+        catalogFetchedAt[.dsh] = .now
+        storeCatalogDates()
+        attemptedCatalogs.insert(.dsh)
     }
 
     /// An OpenCode list cached before the catalog probe walked the models for their
@@ -707,7 +974,7 @@ final class ProviderRegistry {
         limitReadGenerations[provider] = generation
         limitReadTasks[provider]?.cancel()
         limitsFetchedAt[provider] = nil
-        loadingLimits.insert(provider)
+        if !loadingLimits.contains(provider) { loadingLimits.insert(provider) }
         // Cancellation is advisory for the underlying readers. Generation ownership
         // protects both publication and cleanup when a timed-out request returns late.
         let watchdog = Task {
@@ -748,7 +1015,7 @@ final class ProviderRegistry {
         guard limitReadGenerations[provider] == generation else { return }
         limitReadGenerations[provider] = nil
         limitReadTasks[provider] = nil
-        loadingLimits.remove(provider)
+        if loadingLimits.contains(provider) { loadingLimits.remove(provider) }
         var limits = limits
         // A read that only counted the banked resets keeps the expiries the last read listed, while the count is unchanged.
         if let fresh = limits.resetCredits, fresh.credits.count < fresh.availableCount,
@@ -756,7 +1023,7 @@ final class ProviderRegistry {
            previous.availableCount == fresh.availableCount, previous.credits.count > fresh.credits.count {
             limits.resetCredits = previous
         }
-        planLimits[provider] = limits
+        if planLimits[provider] != limits { planLimits[provider] = limits }
         limitsFetchedAt[provider] = limits.problem == nil ? .now : nil
     }
 
@@ -793,7 +1060,7 @@ final class ProviderRegistry {
             ? (CommandCodeAPI.apiKey(environment: environment(for: .commandcode)) ?? "")
             : settings.apiKey(for: provider)
         guard !apiKey.isEmpty else {
-            credits[provider] = nil
+            if credits[provider] != nil { credits[provider] = nil }
             return
         }
         if !force, let fetched = creditsFetchedAt[provider], Date.now.timeIntervalSince(fetched) < 60 { return }
@@ -802,7 +1069,7 @@ final class ProviderRegistry {
             let balance = await CreditsReader.read(provider, apiKey: apiKey)
             loadingCredits.remove(provider)
             guard let balance else { return }
-            credits[provider] = balance
+            if credits[provider] != balance { credits[provider] = balance }
             creditsFetchedAt[provider] = .now
         }
     }
@@ -829,13 +1096,13 @@ final class ProviderRegistry {
         // list keeps the scales the probe walked, see `mergedACPCatalog`.
         let list = switch provider {
         case .claude: Self.mergedClaudeCatalog(list)
-        case _ where provider.namesModelVariants: Self.mergedACPCatalog(ModelFamilies.collapsed(list), over: catalogs[provider] ?? [])
-        case _ where provider.usesACP: Self.mergedACPCatalog(list, over: catalogs[provider] ?? [])
+        case _ where provider.namesModelVariants: Self.mergedACPCatalog(ModelFamilies.collapsed(list), over: catalogs[provider] ?? [], provider: provider)
+        case _ where provider.usesACP: Self.mergedACPCatalog(list, over: catalogs[provider] ?? [], provider: provider)
         default: list
         }
         guard !list.isEmpty, list != catalogs[provider] else { return }
         catalogs[provider] = list
-        if provider.namesModelVariants { settings.adoptModelFamilies(list, for: provider) }
+        if provider.namesModelVariants || provider == .dsh { settings.adoptModelFamilies(list, for: provider) }
         guard !CaptureRun.isEnabled else { return }
         let encoded = Dictionary(uniqueKeysWithValues: catalogs.map { ($0.key.rawValue, $0.value) })
         if let data = try? JSONEncoder().encode(encoded) {
@@ -849,22 +1116,27 @@ final class ProviderRegistry {
 
     func updateCommands(_ list: [SlashCommand], for provider: ProviderKind, directory: String) {
         let key = Self.commandKey(provider, directory: directory)
-        if commands[key] == nil, commands.count >= 32,
+        var updatedCommands = commands
+        var updatedErrors = commandErrors
+        if updatedCommands[key] == nil, updatedCommands.count >= 32,
            let oldest = commandsFetchedAt.min(by: { $0.value < $1.value })?.key {
-            commands[oldest] = nil
+            updatedCommands[oldest] = nil
             commandsFetchedAt[oldest] = nil
-            commandErrors[oldest] = nil
+            updatedErrors[oldest] = nil
         }
-        commands[key] = list
+        updatedCommands[key] = list
+        updatedErrors[key] = nil
+        if commands != updatedCommands { commands = updatedCommands }
         commandsFetchedAt[key] = .now
-        commandErrors[key] = nil
+        if commandErrors != updatedErrors { commandErrors = updatedErrors }
     }
 
     func recordCommand(_ name: String, for provider: ProviderKind) {
         var recent = recentCommands[provider.rawValue] ?? []
         recent.removeAll { $0 == name }
         recent.insert(name, at: 0)
-        recentCommands[provider.rawValue] = Array(recent.prefix(100))
+        let updated = Array(recent.prefix(100))
+        if recentCommands[provider.rawValue] != updated { recentCommands[provider.rawValue] = updated }
         (CaptureRun.defaults ?? .standard).set(recentCommands, forKey: "recentSlashCommands")
     }
 
@@ -884,8 +1156,10 @@ final class ProviderRegistry {
                     : ClaudeSession.handshake(executable: executable, directory: directoryURL, environment: environment).commands
                 updateCommands(list, for: provider, directory: directory)
             } catch {
-                if commandErrors.count >= 32 { commandErrors.removeAll(keepingCapacity: true) }
-                commandErrors[key] = error.localizedDescription
+                var updatedErrors = commandErrors
+                if updatedErrors.count >= 32 { updatedErrors.removeAll(keepingCapacity: true) }
+                updatedErrors[key] = error.localizedDescription
+                if commandErrors != updatedErrors { commandErrors = updatedErrors }
             }
         }
         commandLoads[key] = task
@@ -944,6 +1218,11 @@ final class ProviderRegistry {
             return await OmpCLI.authStatus(executable: executable, environment: environment)
         case .kimi:
             return await ACPSession.authStatus(provider: provider, executable: executable, environment: environment)
+        case .dsh:
+            if DshCLI.hasAccountLogin(environment: environment) {
+                return .signedIn(AppText.localized("DeepSeek account"))
+            }
+            return (environment["DEEPSEEK_API_KEY"] ?? "").isEmpty ? .signedOut : .signedIn(AppText.localized("API key"))
         case .opencode:
             guard let result = try? await Shell.run(executable, ["auth", "list"], environment: environment, timeout: 20) else { return .unknown }
             let text = TextCleanup.stripANSI(result.output + result.errorOutput)

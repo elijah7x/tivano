@@ -308,14 +308,32 @@ final class PiSession: ProviderSession {
             if !text.isEmpty { onEvent?(.toolOutput(id: id, text: text)) }
         case "tool_execution_end":
             handleToolEnd(message)
+        case "agent_start":
+            // Pi resumes on its own after a failed run (its own retry, or an extension's):
+            // no `send` opened this turn, so the thread would stay idle while it works.
+            guard !turnActive else { return }
+            turnActive = true
+            turnError = nil
+            lastReplyText = ""
+            onEvent?(.turnStarted(providerTurnID: nil))
         case "agent_end":
-            finishTurn()
+            // `willRetry`: Pi's own retry follows this run, so the turn is not over.
+            if message["willRetry"]?.bool == true {
+                turnError = nil
+            } else {
+                finishTurn()
+            }
         case "compaction_start":
             onEvent?(.notice(Notice(level: .info, message: "Compacting the conversation…")))
         case "compaction_end":
             onEvent?(.notice(Notice(level: .info, message: "Conversation compacted")))
         case "auto_retry_start":
-            onEvent?(.notice(Notice(level: .warning, message: message["error"]?.string ?? "Pi is retrying.")))
+            onEvent?(.notice(Notice(level: .warning, message: message["errorMessage"]?.string ?? message["error"]?.string ?? "Pi is retrying.")))
+        case "auto_retry_end":
+            // A retry cancelled while it waited ends no run, so nothing else closes the turn.
+            guard message["success"]?.bool == false else { return }
+            turnError = message["finalError"]?.string ?? "Pi reported an error."
+            finishTurn()
         case "extension_error":
             onEvent?(.notice(Notice(level: .error, message: message["error"]?.string ?? "Pi reported an extension error.")))
         case "extension_ui_request":

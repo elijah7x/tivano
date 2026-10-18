@@ -4,6 +4,59 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor
+private struct PreviewMetadataCache<Value> {
+    private struct Entry {
+        let value: Value
+        let timestamp: TimeInterval
+    }
+
+    private var entries: RecentCache<String, Entry>
+
+    init(limit: Int = 512) {
+        entries = RecentCache(limit: limit)
+    }
+
+    /// `keeps` decides which answers are remembered: a missing file is never cached, so one
+    /// written a moment after a first look is found on the very next render.
+    mutating func value(for key: String, keeps: (Value) -> Bool = { _ in true }, load: () -> Value) -> Value {
+        let now = ProcessInfo.processInfo.systemUptime
+        // Refresh after two seconds so a deletion appears on the next render.
+        if let entry = entries.value(for: key), now - entry.timestamp < 2 { return entry.value }
+        let value = load()
+        if keeps(value) { entries.insert(Entry(value: value, timestamp: now), for: key) }
+        return value
+    }
+}
+
+@MainActor
+private enum AttachmentFileMetadata {
+    private static var existence = PreviewMetadataCache<Bool>()
+    private static var sizes = PreviewMetadataCache<Int64?>()
+    private static var textSizes = PreviewMetadataCache<Int?>()
+
+    nonisolated static func fileExists(atPath path: String) -> Bool {
+        guard Thread.isMainThread else { return FileManager.default.fileExists(atPath: path) }
+        return MainActor.assumeIsolated {
+            existence.value(for: (path as NSString).standardizingPath, keeps: { $0 }) {
+                FileManager.default.fileExists(atPath: path)
+            }
+        }
+    }
+
+    static func fileSize(_ path: String) -> Int64? {
+        sizes.value(for: (path as NSString).standardizingPath, keeps: { $0 != nil }) {
+            (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value
+        }
+    }
+
+    static func textFileSize(_ url: URL) -> Int? {
+        textSizes.value(for: (url.path as NSString).standardizingPath, keeps: { $0 != nil }) {
+            try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        }
+    }
+}
+
 /// Shared helpers for showing large image previews of attachments and files the agent read.
 enum PreviewImages {
     static let extensions: Set<String> = [
@@ -27,7 +80,7 @@ enum PreviewImages {
         } else {
             return nil
         }
-        guard isImagePath(path), FileManager.default.fileExists(atPath: path) else { return nil }
+        guard isImagePath(path), AttachmentFileMetadata.fileExists(atPath: path) else { return nil }
         return path
     }
 
@@ -110,8 +163,8 @@ enum PreviewImages {
 
     @MainActor
     static func fileSize(_ path: String) -> String? {
-        guard let size = try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber else { return nil }
-        return size.int64Value.formatted(.byteCount(style: .file))
+        guard let size = AttachmentFileMetadata.fileSize(path) else { return nil }
+        return size.formatted(.byteCount(style: .file))
     }
 }
 
@@ -120,6 +173,7 @@ enum PreviewImages {
 enum FileIcons {
     private static var cache: [String: NSImage] = [:]
     private static var order: [String] = []
+    private static var pathKeys = PreviewMetadataCache<String>()
 
     static func icon(for path: String) -> NSImage {
         let key = iconKey(for: path)
@@ -138,14 +192,16 @@ enum FileIcons {
     private static func iconKey(for path: String) -> String {
         let ext = (path as NSString).pathExtension.lowercased()
         if !ext.isEmpty { return ext }
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
-            return "folder"
+        return pathKeys.value(for: (path as NSString).standardizingPath) {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return "folder"
+            }
+            if let type = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentTypeKey]).contentType {
+                return "type:\(type.identifier)"
+            }
+            return "file"
         }
-        if let type = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentTypeKey]).contentType {
-            return "type:\(type.identifier)"
-        }
-        return "file"
     }
 }
 
@@ -398,7 +454,7 @@ struct AttachmentLargePreview: View {
 
     private static func textPreview(for attachment: Attachment) -> String? {
         let url = attachment.url
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 500_000 else { return nil }
+        guard let size = AttachmentFileMetadata.textFileSize(url), size < 500_000 else { return nil }
         guard let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else { return nil }
         return String(text.prefix(8_000))
     }

@@ -1,6 +1,435 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "DeepSeek account" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek 账号"
+          }
+        }
+      }
+    },
+    "Opens DeepSeek Harness to sign in to your DeepSeek account." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 DeepSeek Harness，登录你的 DeepSeek 账号。"
+          }
+        }
+      }
+    },
+    "Opens your browser to sign in to your DeepSeek account." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开浏览器，登录你的 DeepSeek 账号。"
+          }
+        }
+      }
+    },
+    "Waiting for you to sign in to DeepSeek Harness…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待你登录 DeepSeek Harness…"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness sign-in did not finish. Try again." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek Harness 登录未完成，请重试。"
+          }
+        }
+      }
+    },
+    "Cannot read marketplace input: %@" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取市场输入：%@"
+          }
+        }
+      }
+    },
+    "The DeepSeek Harness profile changed while preparing this session. Try again." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "准备此会话时，DeepSeek Harness 的 profile 发生了变化。请重试。"
+          }
+        }
+      }
+    },
+    "Cannot read %@. Check its format, installation and permissions." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 %@。请检查其格式、安装情况和权限。"
+          }
+        }
+      }
+    },
+    "Read-only marketplace inheritance currently requires DeepSeek Harness 0.2.1-rc.2." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以只读方式继承市场配置目前需要 DeepSeek Harness 0.2.1-rc.2。"
+          }
+        }
+      }
+    },
+    "The DeepSeek Harness home changed during launch. Restart with a consistent DSH_HOME." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek Harness 的主目录在启动期间发生了变化。请确保 DSH_HOME 一致后重新启动。"
+          }
+        }
+      }
+    },
+    "Invalid bundle selection in %@/package.json" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@/package.json 中的 bundle 选择无效"
+          }
+        }
+      }
+    },
+    "Invalid version exemptions in %@/compatibility.json" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@/compatibility.json 中的版本豁免无效"
+          }
+        }
+      }
+    },
+    "Bundle %@ has no dsh.bundle declaration." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bundle %@ 缺少 dsh.bundle 声明。"
+          }
+        }
+      }
+    },
+    "Bundle %@ is incompatible with this DeepSeek Harness version." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bundle %@ 与此 DeepSeek Harness 版本不兼容。"
+          }
+        }
+      }
+    },
+    "Cannot resolve the selected marketplace bundles and their installed dependencies." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法解析所选市场 bundle 及其已安装的依赖。"
+          }
+        }
+      }
+    },
+    "A patch in %@ targets a missing or incompatible ACP row. Desktop-only overrides are not supported." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 中的补丁指向不存在或不兼容的 ACP 配置项。不支持仅适用于桌面端的覆盖配置。"
+          }
+        }
+      }
+    },
+    "The ACP boundary row %@ was changed or disabled." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ACP 边界配置项 %@ 已被修改或禁用。"
+          }
+        }
+      }
+    },
+    "Unsupported Cordis entry: %@" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不支持的 Cordis 条目：%@"
+          }
+        }
+      }
+    },
+    "Cannot resolve enabled plugin %@." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法解析已启用的插件 %@。"
+          }
+        }
+      }
+    },
+    "Dynamic plugin module names are not supported by read-only marketplace inheritance." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以只读方式继承市场配置时，不支持动态插件模块名。"
+          }
+        }
+      }
+    },
+    "Plugin %@ requires an unsupported desktop, Web, HMR, Include or Worker surface." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "插件 %@ 需要此处不支持的桌面端、Web、HMR、Include 或 Worker 运行环境。"
+          }
+        }
+      }
+    },
+    "Dynamic group %@ is not supported by read-only marketplace inheritance." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以只读方式继承市场配置时，不支持动态分组 %@。"
+          }
+        }
+      }
+    },
+    "Plugin %@ failed runtime compatibility admission." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "插件 %@ 未通过运行时兼容性检查。"
+          }
+        }
+      }
+    },
+    "An enabled marketplace or ACP plugin could not activate. Check required host services and installed dependencies." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个已启用的市场插件或 ACP 插件无法激活。请检查所需的宿主服务和已安装的依赖。"
+          }
+        }
+      }
+    },
+    "The read-only marketplace host stopped before ACP became ready." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ACP 就绪前，只读市场宿主已停止运行。"
+          }
+        }
+      }
+    },
+    "Read-only marketplace startup failed. Check the selected bundles and their ACP compatibility." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只读市场启动失败。请检查所选 bundle 及其与 ACP 的兼容性。"
+          }
+        }
+      }
+    },
+    "Tivano inherits this DeepSeek Harness profile read-only. Change installed plugins, bundle selections and version exemptions in DeepSeek Harness, then restart this session." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tivano 以只读方式继承此 DeepSeek Harness profile。请在 DeepSeek Harness 中修改已安装的插件、bundle 选择和版本豁免，然后重新启动此会话。"
+          }
+        }
+      }
+    },
+    "This DeepSeek Harness installation does not support read-only marketplace inheritance. Use the bundled desktop CLI." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前安装的 DeepSeek Harness 不支持以只读方式继承市场配置。请使用桌面应用自带的 CLI。"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness could not create a private marketplace run directory." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek Harness 无法创建私有的市场运行目录。"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness could not read the selected profile manifest. Repair it before restarting." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek Harness 无法读取所选 profile 的清单文件。请修复后再重新启动。"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness could not enable tool-free reporting. Update DeepSeek Harness and try again." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek Harness 无法启用无工具汇报。请更新 DeepSeek Harness 后重试。"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness is not installed or its binary path is unavailable." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未安装 DeepSeek Harness，或其可执行文件路径不可用。"
+          }
+        }
+      }
+    },
+    "Could not load DeepSeek Harness models. Check your sign-in and connection, then retry." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载 DeepSeek Harness 模型。请检查登录状态和网络连接后重试。"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness returned no models. Check your sign-in and retry." : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek Harness 未返回模型。请检查登录状态后重试。"
+          }
+        }
+      }
+    },
+  "Could not start DeepSeek Harness sign-in. Try updating DeepSeek Harness.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "无法启动 DeepSeek Harness 登录，请尝试更新 DeepSeek Harness。"
+        }
+      }
+    }
+  },
+  "Could not open DeepSeek Harness sign-in.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "无法打开 DeepSeek Harness 登录。"
+        }
+      }
+    }
+  },
+  "DeepSeek Harness account sign-in failed. Try again.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "DeepSeek Harness 账号登录失败，请重试。"
+        }
+      }
+    }
+  },
+  "DeepSeek Harness sign-in timed out. Try again.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "DeepSeek Harness 登录超时，请重试。"
+        }
+      }
+    }
+  },
+  "DeepSeek Harness sign-in was cancelled.": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "DeepSeek Harness 登录已取消。"
+        }
+      }
+    }
+  },
   "This Devin CLI is bundled with the desktop app. Update it through that app.": {
     "extractionState": "manual",
     "localizations": {
@@ -232,6 +661,17 @@
         }
       }
     },
+    "An MCP server did not respond, so DeepSeek Harness started without your MCP servers." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 MCP 服务器没有响应，因此 DeepSeek Harness 未带 MCP 服务器启动。"
+          }
+        }
+      }
+    },
     "Called %d tools" : {
       "extractionState": "manual",
       "localizations": {
@@ -272,6 +712,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "点击模型可为每个新对话设置其推理强度和快速模式；右键可将其移到其他分组。"
+          }
+        }
+      }
+    },
+    "Creator" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创意模式"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness could not load Tivano's configuration. Update DeepSeek Harness or check your profile patches, then try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek Harness 无法加载 Tivano 的配置。请更新 DeepSeek Harness 或检查你的配置补丁后重试。"
           }
         }
       }
@@ -602,6 +1064,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "显示这些步骤"
+          }
+        }
+      }
+    },
+    "Standard plus tools to inspect DeepSeek Harness and build its plugins and presets." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在标准模式基础上，增加查看 DeepSeek Harness 内部以及开发插件和预设的工具。"
           }
         }
       }
@@ -2512,9 +2985,17 @@
       "extractionState": "manual",
       "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "任务运行时防止休眠" } } }
     },
-    "Keep your Mac awake while Tivano runs tasks. The display can turn off, and you can still sleep manually or close the lid." : {
+    "While tasks run, your Mac won't doze off. Keep Mac awake lets the screen turn off on its own; Keep Mac and screen awake leaves it lit too, which helps when an agent needs to see a front end. Manual sleep and closing the lid still work." : {
       "extractionState": "manual",
-      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "Tivano 运行任务时，让 Mac 保持唤醒。屏幕仍可自动熄灭，也可手动休眠或合盖休眠。" } } }
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "任务运行期间，Mac 不会自己睡着。「保持唤醒」时屏幕仍会自行熄灭；「保持唤醒并亮屏」会让屏幕也一直亮着，适合 agent 需要盯着前端界面测试的时候。手动休眠和合盖仍然有效。" } } }
+    },
+    "Keep Mac awake" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "保持唤醒" } } }
+    },
+    "Keep Mac and screen awake" : {
+      "extractionState": "manual",
+      "localizations": { "zh-Hans": { "stringUnit": { "state": "translated", "value": "保持唤醒并亮屏" } } }
     },
     "No update found" : {
       "extractionState": "manual",
@@ -4904,6 +5385,17 @@
         }
       }
     },
+    "Agent mode" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代理模式"
+          }
+        }
+      }
+    },
     "All changes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6796,17 +7288,6 @@
         }
       }
     },
-    "Copy as markdown" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制为 Markdown"
-          }
-        }
-      }
-    },
     "Copy last code block" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6829,13 +7310,13 @@
         }
       }
     },
-    "Copy message" : {
+    "Copy message as markdown" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制消息"
+            "value" : "将消息复制为 Markdown"
           }
         }
       }
@@ -7309,6 +7790,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "减小字号"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek Harness"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings → Providers → DeepSeek." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek Harness 需要已登录的 DeepSeek 账号或 DeepSeek API 密钥。请在 DeepSeek Harness 应用中登录，或在“设置 → 服务商 → DeepSeek”中添加密钥。"
           }
         }
       }
@@ -8842,6 +9345,17 @@
         }
       }
     },
+    "Full toolset: files, shell, search and web." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完整工具集:文件、Shell、搜索与网页。"
+          }
+        }
+      }
+    },
     "GLM Coding Plan" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10261,6 +10775,17 @@
         }
       }
     },
+    "Minimal agent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "极简模式"
+          }
+        }
+      }
+    },
     "Model" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11053,6 +11578,17 @@
         }
       }
     },
+    "One persistent shell and nothing else." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有一个持久的 Shell,没有其他工具。"
+          }
+        }
+      }
+    },
     "Only your sign-in." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11412,6 +11948,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "独立副本"
+          }
+        }
+      }
+    },
+    "PTC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PTC"
+          }
+        }
+      }
+    },
+    "PTC, Minimal and Hydra need DeepSeek Harness 0.2.0 or 0.2.1. Install one of those, or use Standard mode." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PTC、极简模式和 Hydra 需要 DeepSeek Harness 0.2.0 或 0.2.1。请安装其中一个版本,或改用标准模式。"
           }
         }
       }
@@ -14639,6 +15197,17 @@
         }
       }
     },
+    "The model writes a TypeScript program per step and calls the tools from it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型每一步编写一段 TypeScript 程序,并在程序中调用各个工具。"
+          }
+        }
+      }
+    },
     "The page is open in your browser" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15394,6 +15963,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已使用工具"
+          }
+        }
+      }
+    },
+    "Uses the DeepSeek account signed in to the DeepSeek Harness app, or the DeepSeek API key from the DeepSeek provider." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 DeepSeek Harness 应用中已登录的 DeepSeek 账号，或 DeepSeek 服务商中的 DeepSeek API 密钥。"
           }
         }
       }

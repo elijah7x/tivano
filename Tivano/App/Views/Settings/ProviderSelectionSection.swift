@@ -42,14 +42,13 @@ struct ProviderSelectionCard: View {
         ChromeVisualTileMetrics.regularWidth * 2 + ChromeVisualTileMetrics.spacing * 2
             + CGFloat(TypeScale.shared.ui - TypeScale.stockUI) * Chrome.rowHorizontalPadding
     }
-    private static var columns: [GridItem] {
-        Array(
-            repeating: GridItem(.fixed(columnWidth), spacing: ChromeVisualTileMetrics.spacing, alignment: .top),
-            count: columnCount
-        )
-    }
 
     var body: some View {
+        let columnWidth = Self.columnWidth
+        let columns = Array(
+            repeating: GridItem(.fixed(columnWidth), spacing: ChromeVisualTileMetrics.spacing, alignment: .top),
+            count: Self.columnCount
+        )
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
             ChromeSection(title: "Active providers") {
                 Text("Click a provider to show or hide it. Your settings are kept.")
@@ -59,13 +58,13 @@ struct ProviderSelectionCard: View {
             }
             ForEach(ProviderGroup.allCases) { group in
                 ChromeSection(title: group.title) {
-                    LazyVGrid(columns: Self.columns, alignment: .leading, spacing: ChromeVisualTileMetrics.captionSpacing) {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: ChromeVisualTileMetrics.captionSpacing) {
                         ForEach(group.providers) { provider in
                             let enabled = isEnabled(provider)
                             ChromeVisualTile(
                                 title: provider.displayName,
                                 isSelected: enabled,
-                                width: Self.columnWidth,
+                                width: columnWidth,
                                 layout: .inline
                             ) {
                                 withAnimation(Chrome.hover) { setEnabled(!enabled, provider) }
@@ -79,7 +78,7 @@ struct ProviderSelectionCard: View {
             }
         }
         .padding(Chrome.contentHorizontalPadding)
-        .frame(width: Self.columnWidth * CGFloat(Self.columnCount)
+        .frame(width: columnWidth * CGFloat(Self.columnCount)
             + ChromeVisualTileMetrics.spacing * CGFloat(Self.columnCount - 1)
             + Chrome.contentHorizontalPadding * 2)
         .background { NoWindowDragArea() }

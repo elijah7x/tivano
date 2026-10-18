@@ -35,9 +35,10 @@ struct VoiceSidebarTrigger: View {
         let voice = model.voice!
         if voice.isOffered {
             let live = voice.isLive
+            let preparing = voice.phase == .checking || voice.phase == .starting
             let failure = voice.failureText
             SidebarRow(
-                title: live ? (voice.stageOpen ? "Hide voice" : "Voice is live") : "Start voice",
+                title: preparing ? voice.statusText : live ? (voice.stageOpen ? "Hide voice" : "Voice is live") : "Start voice",
                 action: { voice.start() }
             ) {
                 SidebarIconBadge {
@@ -53,7 +54,7 @@ struct VoiceSidebarTrigger: View {
                     }
                 }
             } accessory: { _ in EmptyView() }
-            .help(Chrome.localized(live ? (voice.stageOpen ? "Hide voice · Esc" : "Voice is live · open") : (failure ?? "Start voice · Codex orchestrator")))
+            .help(Chrome.localized(preparing ? voice.statusText : live ? (voice.stageOpen ? "Hide voice · Esc" : "Voice is live · open") : (failure ?? "Start voice · Codex orchestrator")))
             .popover(isPresented: Binding(get: { failure != nil }, set: { if !$0 { voice.dismissReason() } }), arrowEdge: .top) {
                 VoiceFailureCard(text: failure ?? "") { voice.dismissReason() }
             }
@@ -128,21 +129,28 @@ struct VoiceComposerButton: View {
 
     var body: some View {
         let voice = model.voice!
-        if thread.provider == .codex, !thread.isHydraHead, voice.isOffered {
+        if thread.provider == .codex, !thread.isHydraHead, !thread.isArchived, voice.isOffered {
             let liveHere = voice.isLive && voice.threadID == thread.id
             let liveElsewhere = voice.isLive && !liveHere
-            let help = liveHere ? "Open voice" : liveElsewhere ? "Voice is live in another chat" : "Start voice in this chat"
-            Button {
-                if liveHere { voice.setStageOpen(true) } else { voice.start(in: thread.id) }
-            } label: {
-                Image(systemName: "waveform")
-                    .font(Chrome.iconFont)
+            let help = voice.isLive && voice.threadID == nil ? voice.statusText : liveHere ? "Open voice" : liveElsewhere ? "Voice is live in another chat" : "Start voice in this chat"
+            HStack(spacing: 6) {
+                Button {
+                    if liveHere { voice.setStageOpen(true) } else { voice.start(in: thread.id) }
+                } label: {
+                    Image(systemName: "waveform")
+                        .font(Chrome.iconFont)
+                }
+                .buttonStyle(.chip(active: liveHere))
+                .focusable(false)
+                .disabled(liveElsewhere)
+                .help(Text(verbatim: Chrome.localized(help)))
+                .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
+                if let failure = voice.failureText {
+                    InfoHoverButton(help: failure, width: 232) {
+                        VoiceFailureCard(text: failure) { voice.dismissReason() }
+                    }
+                }
             }
-            .buttonStyle(.chip(active: liveHere))
-            .focusable(false)
-            .disabled(liveElsewhere)
-            .help(Text(verbatim: Chrome.localized(help)))
-            .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
         }
     }
 }
@@ -219,9 +227,10 @@ private struct VoiceCaptionView: View {
     let text: String
 
     var body: some View {
-        let shown = text.count > VoiceStageMetrics.captionCharacters
-            ? "…" + text.suffix(VoiceStageMetrics.captionCharacters).trimmingCharacters(in: .whitespacesAndNewlines)
-            : text
+        let caption = text.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let shown = caption.count > VoiceStageMetrics.captionCharacters
+            ? "…" + caption.suffix(VoiceStageMetrics.captionCharacters).trimmingCharacters(in: .whitespacesAndNewlines)
+            : caption
         ZStack {
             Text(verbatim: shown)
                 .id(item ?? "")
@@ -248,18 +257,20 @@ private struct VoiceCallBar: View {
 
     var body: some View {
         let voice = model.voice!
+        let paused = !voice.stageOpen || (WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented)
         let awaiting = voice.work == .awaitingInput
         let muted = voice.muted
-        let liveTone: Color = awaiting ? Chrome.warning : (muted ? Chrome.primaryText.opacity(0.35) : Chrome.success)
+        let liveTone: Color = voice.phase != .active || muted ? Chrome.primaryText.opacity(0.35) : (awaiting ? Chrome.warning : Chrome.success)
         HStack(spacing: 6) {
             // Session clock, like a meeting's running time.
             HStack(spacing: 8) {
                 Circle().fill(liveTone).frame(width: 7, height: 7)
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(verbatim: voice.activeSince.map { VoiceCatalog.formatElapsed(max(0, Int(context.date.timeIntervalSince($0)))) } ?? "–:––")
-                        .font(.ui(size: 13, design: .monospaced))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .frame(minWidth: 40, alignment: .leading)
+                if paused {
+                    elapsedTime(at: .now)
+                } else {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        elapsedTime(at: context.date)
+                    }
                 }
                 Text(verbatim: voice.hostName == "This Mac" ? Chrome.localized("This Mac") : voice.hostName)
                     .font(.ui(size: 12))
@@ -305,6 +316,13 @@ private struct VoiceCallBar: View {
         }
         .padding(VoiceStageMetrics.barPadding)
         .floatingGlass(Capsule(style: .continuous))
+    }
+
+    private func elapsedTime(at date: Date) -> some View {
+        Text(verbatim: model.voice!.activeSince.map { VoiceCatalog.formatElapsed(max(0, Int(date.timeIntervalSince($0)))) } ?? "–:––")
+            .font(.ui(size: 13, design: .monospaced))
+            .foregroundStyle(Chrome.secondaryText)
+            .frame(minWidth: 40, alignment: .leading)
     }
 
     private var divider: some View {

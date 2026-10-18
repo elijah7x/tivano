@@ -64,6 +64,22 @@ enum WebsiteCaptures {
     /// Writes the library, the thread histories and the project folders the run opens, and
     /// resets the run's defaults. Called before anything reads settings or the library.
     static func prepare() {
+        if DshNativeIntegrationProbe.isRequested {
+            DshNativeIntegrationProbe.prepare()
+            return
+        }
+        if DshCaptureReplay.isEnabled {
+            DshCaptureReplay.prepare()
+            return
+        }
+        if DshIntegrationConfiguration.isOfflineHydra {
+            DshHydraIntegrationProbe.prepare()
+            return
+        }
+        if DshIntegrationConfiguration.isEnabled {
+            DshIntegrationProbe.prepare()
+            return
+        }
         guard let output = CaptureRun.outputDirectory, let root = CaptureRun.storageRoot, let defaults = CaptureRun.defaults else { return }
         let files = FileManager.default
         try? files.removeItem(at: root)
@@ -287,8 +303,29 @@ enum WebsiteCaptures {
     // MARK: - Run
 
     static func run(model: AppModel) async {
+        if DshNativeIntegrationProbe.isRequested {
+            await DshNativeIntegrationProbe.run(model: model)
+            return
+        }
+        if DshCaptureReplay.isEnabled {
+            await DshCaptureReplay.run(model: model)
+            return
+        }
+        if DshIntegrationConfiguration.isOfflineHydra {
+            await DshHydraIntegrationProbe.run(model: model)
+            return
+        }
+        if DshIntegrationConfiguration.isEnabled {
+            await DshIntegrationProbe.run(model: model)
+            return
+        }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--text-parity-probe") {
             await TextParityProbe.run(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--website-captures"),
+           CommandLine.arguments.contains("--settings-interaction-probe") {
+            await SettingsInteractionProbe.run(model: model)
             return
         }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--website-captures"),

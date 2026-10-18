@@ -35,13 +35,22 @@ struct ModelsSettingsPage: View {
         let pins = settings.modelList
         let items = settings.modelListItems
         let trimmed = query.trimmed
-        let blocks = modelBlocks(query: trimmed)
+        let searchQuery = trimmed.lowercased(with: .current)
+        let blocks = modelBlocks(query: searchQuery, items: items)
         let sections = blocks.groups.map(\.section)
         let visiblePins = blocks.ungrouped + blocks.groups.flatMap(\.pins)
         let available = Set(registry.availableProviders)
-        let providers = ProviderKind.alphabetical.filter { provider in
-            available.contains(provider) && (trimmed.isEmpty || registry.models(for: provider).contains { Self.matches($0, id: $0.id, provider: provider, query: trimmed) })
-        }
+        let availableProviders = ProviderKind.alphabetical.filter { available.contains($0) }
+        let matchingCatalogues: [ProviderKind: [ModelOption]] = searchQuery.isEmpty ? [:] : Dictionary(
+            uniqueKeysWithValues: availableProviders.compactMap { provider -> (ProviderKind, [ModelOption])? in
+                let catalogue = registry.sortedModels(for: provider)
+                let matches = provider.displayName.localizedCaseInsensitiveContains(searchQuery) ? catalogue : catalogue.filter {
+                    Self.matches($0, id: $0.id, provider: provider, query: searchQuery)
+                }
+                return matches.isEmpty ? nil : (provider, matches)
+            }
+        )
+        let providers = searchQuery.isEmpty ? availableProviders : availableProviders.filter { matchingCatalogues[$0] != nil }
         // Filtering is instant with no transitions: animating dozens of rows with blur on every
         // keystroke (and all of them again when clearing) is what made entries overlap and jump.
         // Lazy all the way down: expanded catalogues run to hundreds of rows, and the
@@ -156,6 +165,7 @@ struct ModelsSettingsPage: View {
                 ProviderModelsSection(
                     provider: provider,
                     query: trimmed,
+                    matchingCatalogue: matchingCatalogues[provider],
                     isExpanded: Binding(
                         get: { providerExpansion[provider] ?? true },
                         set: { providerExpansion[provider] = $0 }
@@ -175,9 +185,10 @@ struct ModelsSettingsPage: View {
             let heightsByID = rowHeights.reduce(into: [String: CGFloat]()) { heights, entry in
                 heights[entry.key.id] = entry.value
             }
-            rowHeights = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            let updatedHeights = Dictionary(uniqueKeysWithValues: items.compactMap { item in
                 heightsByID[item.id].map { (item, $0) }
             })
+            if rowHeights != updatedHeights { rowHeights = updatedHeights }
         }
     }
 
@@ -189,17 +200,17 @@ struct ModelsSettingsPage: View {
         var id: UUID { section.id }
     }
 
-    private func modelBlocks(query: String) -> (ungrouped: [ModelPin], groups: [ModelGroupBlock]) {
+    private func modelBlocks(query: String, items: [ModelListItem]? = nil) -> (ungrouped: [ModelPin], groups: [ModelGroupBlock]) {
         let registry = model.providers
         var ungrouped: [ModelPin] = []
         var groups: [ModelGroupBlock] = []
-        for item in model.settings.modelListItems {
+        for item in items ?? model.settings.modelListItems {
             switch item {
             case .section(let section):
                 groups.append(ModelGroupBlock(section: section))
             case .pin(let pin):
                 guard model.settings.isEnabled(pin.provider),
-                      Self.matches(registry.model(pin.modelID, for: pin.provider), id: pin.modelID, provider: pin.provider, query: query) else { continue }
+                      query.isEmpty || Self.matches(registry.model(pin.modelID, for: pin.provider), id: pin.modelID, provider: pin.provider, query: query) else { continue }
                 if groups.isEmpty {
                     ungrouped.append(pin)
                 } else {
@@ -247,7 +258,7 @@ struct ModelsSettingsPage: View {
                 }
                 .modifier(PinnedRowHeightReporter(item: item, heights: $rowHeights))
                 .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named(Self.cardsSpace)).midY }) { mid in
-                    if !isDragged, rowMids[pin] != mid { rowMids[pin] = mid }
+                    if !isDragged, rowMids[pin].map({ abs($0 - mid) > 0.5 }) ?? true { rowMids[pin] = mid }
                 }
                 .offset(y: isDragged ? drag.visualOffset : 0)
                 .zIndex(isDragged ? 1 : 0)
@@ -272,7 +283,7 @@ struct ModelsSettingsPage: View {
             return
         }
         dropTarget = nil
-        let blocks = modelBlocks(query: query.trimmed)
+        let blocks = modelBlocks(query: query.trimmed.lowercased(with: .current))
         let pins = sectionID.map { id in blocks.groups.first(where: { $0.id == id })?.pins ?? [] } ?? blocks.ungrouped
         let order = pins.map { ModelListItem.pin($0) }
         guard let current = order.first(where: { $0.id == item.id }) else { return }
@@ -298,7 +309,7 @@ struct ModelsSettingsPage: View {
 
     private func dragEnded(_ item: ModelListItem, pointerY: CGFloat) {
         guard let target = dropTarget, case .pin(let pin) = item else { return dragEnded() }
-        let blocks = modelBlocks(query: query.trimmed)
+        let blocks = modelBlocks(query: query.trimmed.lowercased(with: .current))
         let pins = target.sectionID.map { id in blocks.groups.first { $0.id == id }?.pins ?? [] } ?? blocks.ungrouped
         // A folded group takes the model at its end; an open one where the pointer lets go.
         let isFolded = target.sectionID.map { query.trimmed.isEmpty && model.settings.isModelSectionCollapsed($0) } ?? false
@@ -400,9 +411,16 @@ struct ModelsSettingsPage: View {
                 .animation(.easeOut(duration: 0.12), value: isTarget)
                 .zIndex(holdsDrag ? 1 : 0)
                 .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(ModelsSettingsPage.cardsSpace)) }) { frame in
-                    if frames[card] != frame { frames[card] = frame }
+                    if let previous = frames[card],
+                       abs(previous.minX - frame.minX) <= 0.5,
+                       abs(previous.minY - frame.minY) <= 0.5,
+                       abs(previous.width - frame.width) <= 0.5,
+                       abs(previous.height - frame.height) <= 0.5 { return }
+                    frames[card] = frame
                 }
-                .onDisappear { frames[card] = nil }
+                .onDisappear {
+                    if frames[card] != nil { frames[card] = nil }
+                }
         }
     }
 
@@ -412,7 +430,7 @@ struct ModelsSettingsPage: View {
 
         func body(content: Content) -> some View {
             content.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
-                if heights[item] != height { heights[item] = height }
+                if heights[item].map({ abs($0 - height) > 0.5 }) ?? true { heights[item] = height }
             }
         }
     }
@@ -467,7 +485,7 @@ private struct PinnedModelRow: View {
                     ProviderIcon(provider: pin.provider, size: 16)
                         .foregroundStyle(Chrome.primaryText)
                         .frame(width: 22)
-                    Text(verbatim: option?.shortName ?? pin.modelID)
+                    Text(verbatim: option?.shortName ?? pin.displayName)
                         .font(.ui(size: 13))
                         .foregroundStyle(Chrome.primaryText)
                         .lineLimit(1)
@@ -487,7 +505,7 @@ private struct PinnedModelRow: View {
             .onHover { isHovering = $0 }
             .popover(isPresented: $isPresented, arrowEdge: .trailing) {
                 EffortSliderCard(
-                    modelName: option?.shortName ?? pin.modelID,
+                    modelName: option?.shortName ?? pin.displayName,
                     provider: pin.provider,
                     efforts: option?.efforts ?? [],
                     defaultEffort: option?.defaultEffort,
@@ -733,6 +751,7 @@ private struct ProviderModelsSection: View {
     @Environment(AppModel.self) private var model
     let provider: ProviderKind
     var query = ""
+    var matchingCatalogue: [ModelOption]?
 
     /// Lives on the page (`providerExpansion`), so typing in the search field — which
     /// rebuilds this section — doesn't reset it. Absent there means expanded.
@@ -763,10 +782,11 @@ private struct ProviderModelsSection: View {
     var body: some View {
         let settings = model.settings
         let registry = model.providers
-        let catalogue = registry.sortedModels(for: provider)
-        let isFull = settings.modelList.count >= AppSettings.modelListLimit
+        let catalogue = matchingCatalogue ?? registry.sortedModels(for: provider)
+        let modelList = settings.modelList
+        let isFull = modelList.count >= AppSettings.modelListLimit
         let isFiltering = !query.isEmpty
-        let pinned = Set(settings.modelList)
+        let pinned = Set(modelList)
         let rows = rows(catalogue, pinned: pinned, isFiltering: isFiltering)
         // Collapsed with nothing chosen closes the card outright.
         let cardVisible = isExpanded || isFiltering || !rows.isEmpty
@@ -776,7 +796,7 @@ private struct ProviderModelsSection: View {
             LazyVStack(spacing: 0) {
                 if catalogue.isEmpty {
                     // The loading/empty row is the expanded state; collapsed closes it.
-                    ChromeRevealLayout(fraction: cardVisible ? 1 : 0) {
+                    ChromeReveal(isExpanded: cardVisible) {
                         ChromeRow(title: registry.loadingCatalogs.contains(provider) ? "Loading models…" : "No models loaded") {
                             Button("Load models") {
                                 Task { await registry.loadCatalog(provider, force: true) }
@@ -833,7 +853,7 @@ private struct ProviderModelsSection: View {
     private func rows(_ catalogue: [ModelOption], pinned: Set<ModelPin>, isFiltering: Bool) -> [Row] {
         let isPinned = { (option: ModelOption) in pinned.contains(ModelPin(provider: provider, modelID: option.id)) }
         if isFiltering {
-            return catalogue.filter { ModelsSettingsPage.matches($0, id: $0.id, provider: provider, query: query) }.map { .model($0) }
+            return catalogue.map { .model($0) }
         }
         guard isExpanded else { return catalogue.filter(isPinned).map { .model($0) } }
         guard catalogue.count > Self.foldingThreshold else { return catalogue.map { .model($0) } }

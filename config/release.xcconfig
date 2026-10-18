@@ -1,6 +1,6 @@
 // Stable edition; advances only when the owner requests a release/catch-up.
-MARKETING_VERSION = 1.3.14
-CURRENT_PROJECT_VERSION = 26
+MARKETING_VERSION = 1.4.0
+CURRENT_PROJECT_VERSION = 27
 
 // Public Developer ID signing; no credentials are stored here.
 DEVELOPMENT_TEAM = 5WF7HRPLRX

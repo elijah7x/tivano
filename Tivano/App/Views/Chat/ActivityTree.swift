@@ -157,6 +157,7 @@ struct ActivityHeaderLabel: View {
 /// seconds; a still frame while the reader scrolls, and none at all with reduced motion.
 private struct ActivityShimmer: ViewModifier {
     let isActive: Bool
+    @Environment(\.chatColumnIsShown) private var columnIsShown
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var width: CGFloat = 0
@@ -185,7 +186,7 @@ private struct ActivityShimmer: ViewModifier {
             content
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
                 .overlay {
-                    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: ScrollActivity.shared.isScrolling)) { context in
+                    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: ScrollActivity.shared.isScrolling || !columnIsShown)) { context in
                         let centre = Self.bandCentre(at: context.date)
                         content
                             .foregroundStyle(Chrome.primaryText)

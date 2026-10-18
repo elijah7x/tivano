@@ -369,11 +369,9 @@ struct VeiledText: View {
 
     var body: some View {
         let _ = ingest()
-        if veil.isFading(at: .now) {
-            fadingText()
-        } else {
-            settledText()
-        }
+        let fading = veil.isFading(at: .now)
+        let rendered = fading ? fadingText() : settledText()
+        rendered.modifier(MarkdownBlockSelection(isLive: fading))
     }
 
     private func ingest() {
@@ -383,13 +381,31 @@ struct VeiledText: View {
         mapping.source = source
         if veiled {
             mapping.styled = source.styled
-            mapping.indices = Array(mapping.styled.characters.indices) + [mapping.styled.endIndex]
-            veil.advance(source.characters, at: .now)
+            var characters = source.characters
+            characters.makeContiguousUTF8()
+            var offset = 0
+            if !mapping.utf8Offsets.isEmpty, characters.utf8.starts(with: mapping.characters.utf8) {
+                // The old final grapheme may absorb the append; earlier boundaries stay valid.
+                if mapping.utf8Offsets.count > 1 {
+                    mapping.utf8Offsets.removeLast()
+                    offset = mapping.utf8Offsets.last!
+                }
+            } else {
+                mapping.utf8Offsets = [0]
+            }
+            let tail = String(decoding: characters.utf8.dropFirst(offset), as: UTF8.self)
+            for character in tail {
+                offset += String(character).utf8.count
+                mapping.utf8Offsets.append(offset)
+            }
+            mapping.characters = characters
+            veil.advance(characters, at: .now)
         } else if changed {
             // Static text needs no character map. An unchanged streaming tail keeps its
             // map until the last fade settles; rewritten text must not reuse its ranges.
             mapping.styled = AttributedString()
-            mapping.indices = []
+            mapping.characters = ""
+            mapping.utf8Offsets = []
             veil.reset()
         }
     }
@@ -399,7 +415,15 @@ struct VeiledText: View {
         var source: Source?
         var active = false
         var styled = AttributedString()
-        var indices: [AttributedString.Index] = []
+        var characters = ""
+        var utf8Offsets: [Int] = []
+
+        func index(at offset: Int, in styled: AttributedString) -> AttributedString.Index {
+            // AttributedString indices belong to a particular value; only byte offsets survive reparsing.
+            let position = characters.utf8.index(characters.utf8.startIndex, offsetBy: utf8Offsets[offset])
+            return AttributedString.Index(position, within: styled)
+                ?? styled.characters.index(styled.startIndex, offsetBy: min(offset, styled.characters.count))
+        }
     }
 
     /// This frame of the dissolve, and the clock kept running to the last chunk's settle.
@@ -440,12 +464,12 @@ struct VeiledText: View {
     private func text(at now: Date) -> Text {
         var styled = mapping.styled
         let base = dimmed ? Color.primary.opacity(0.7) : Color.primary
-        let count = max(0, mapping.indices.count - 1)
+        let count = max(0, mapping.utf8Offsets.count - 1)
         for span in veil.spans(at: now) where span.alpha < 1 {
             let range = span.range.clamped(to: 0..<count)
             guard !range.isEmpty else { continue }
-            let lower = mapping.indices[range.lowerBound]
-            let upper = mapping.indices[range.upperBound]
+            let lower = mapping.index(at: range.lowerBound, in: styled)
+            let upper = mapping.index(at: range.upperBound, in: styled)
             styled[lower..<upper].foregroundColor = base.opacity(span.alpha)
         }
         if let segments {
@@ -456,7 +480,7 @@ struct VeiledText: View {
                 switch segment {
                 case .fixed(let t): out = Text("\(out)\(t)")
                 case .prose:
-                    let end = mapping.indices[proseEnds[prose]]
+                    let end = mapping.index(at: proseEnds[prose], in: styled)
                     out = Text("\(out)\(Text(AttributedString(styled[cursor..<end])))")
                     cursor = end
                     prose += 1

@@ -155,9 +155,9 @@ struct TokenActivitySection: View {
             Text("Less")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
-            ForEach(Array(Self.ladder.enumerated()), id: \.offset) { _, step in
+            ForEach(Self.ladderValues.indices, id: \.self) { index in
                 RoundedRectangle(cornerRadius: TokenActivityStyle.cellRadius, style: .continuous)
-                    .fill(step)
+                    .fill(TokenActivityStyle.color(for: Self.ladderValues[index], maxValue: 8, future: false))
                     .frame(width: 10, height: 10)
             }
             Text("More")
@@ -172,9 +172,7 @@ struct TokenActivitySection: View {
     }
 
     /// The five steps `TokenActivityStyle.color(for:maxValue:future:)` paints, as a ladder.
-    private static var ladder: [Color] {
-        [0, 1, 3, 5, 7].map { TokenActivityStyle.color(for: $0, maxValue: 8, future: false) }
-    }
+    private static let ladderValues = [0, 1, 3, 5, 7]
 
     private static func modeHelp(_ mode: TokenActivityMode) -> String {
         switch mode {
@@ -221,7 +219,9 @@ private struct HeatmapCanvas: View {
             .modifier(HeatmapBlendModifier(grid: grid, previous: previous, blend: blend, base: Double(switchIndex - 1)))
             .frame(maxWidth: .infinity)
             .frame(height: max(1, cell * rows + gap * (rows - 1)))
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { next in
+                if abs(width - next) > 0.5 { width = next }
+            }
     }
 }
 

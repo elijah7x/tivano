@@ -77,7 +77,6 @@ private struct HydraCookbookRow: View {
 
     var body: some View {
         let registry = model.providers
-        let isAdded = pair.map { HydraCookbook.isAdded($0, in: model.settings.hydraPairs) } ?? false
         HStack(alignment: .center, spacing: 12) {
             // The marks show the providers the pair resolved to here; a waiting recipe shows its first choices.
             HydraPairMark(
@@ -112,23 +111,33 @@ private struct HydraCookbookRow: View {
             }
             Spacer(minLength: 8)
             if let pair {
-                if isAdded {
-                    Label("Added", systemImage: "checkmark")
-                        .font(.ui(.callout, weight: .medium))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .padding(.horizontal, 10)
-                } else {
-                    Button {
-                        withAnimation(Chrome.panelSlide) { model.settings.addHydraPair(pair) }
-                    } label: {
-                        Label("Add", systemImage: "plus")
-                    }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.small)
-                }
+                HydraCookbookAddButton(pair: pair)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+}
+
+private struct HydraCookbookAddButton: View {
+    @Environment(AppModel.self) private var model
+    let pair: HydraPair
+
+    var body: some View {
+        let isAdded = HydraCookbook.isAdded(pair, in: model.settings.hydraPairs)
+        if isAdded {
+            Label("Added", systemImage: "checkmark")
+                .font(.ui(.callout, weight: .medium))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(.horizontal, 10)
+        } else {
+            Button {
+                withAnimation(Chrome.panelSlide) { model.settings.addHydraPair(pair) }
+            } label: {
+                Label("Add", systemImage: "plus")
+            }
+            .buttonStyle(.glassProminent)
+            .controlSize(.small)
+        }
     }
 }

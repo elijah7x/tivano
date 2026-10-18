@@ -28,6 +28,7 @@ struct ProviderUpdateSubtitle: View {
     let state: ProviderUpdateViewState
 
     var body: some View {
+        let color = color
         VStack(alignment: .leading, spacing: 2) {
             ForEach(lines, id: \.self) { line in
                 Text(verbatim: line)

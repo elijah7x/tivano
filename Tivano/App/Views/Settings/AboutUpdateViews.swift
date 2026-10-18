@@ -85,8 +85,20 @@ struct UpdateReleaseNotesDigest: Equatable {
 
     /// Language headings may be promoted from ### to ## when publishing. Category
     /// headings stay inside their language section; Thanks is shared by both.
+    @MainActor private static var lastSelection: (raw: String, language: String, notes: String)?
+
+    @MainActor
     static func selectedNotes(_ raw: String?, language: String) -> String? {
         guard let raw else { return nil }
+        if let lastSelection, lastSelection.raw == raw, lastSelection.language == language {
+            return lastSelection.notes
+        }
+        let notes = selectNotes(raw, language: language)
+        lastSelection = (raw, language, notes)
+        return notes
+    }
+
+    private static func selectNotes(_ raw: String, language: String) -> String {
         var english: [String] = []
         var chinese: [String] = []
         var thanks: [String] = []
@@ -323,8 +335,8 @@ private struct UpdateReleaseSectionPopover: View {
             }
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 9) {
-                    ForEach(Array(section.bullets.enumerated()), id: \.offset) { _, bullet in
-                        Text(verbatim: bullet)
+                    ForEach(section.bullets.indices, id: \.self) { index in
+                        Text(verbatim: section.bullets[index])
                             .font(.ui(.body))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -420,7 +432,9 @@ struct SmoothedUpdateProgressSlider: View {
                     if reached != settled { settled = reached }
                 }
         }
-        .onChange(of: target.value) { _, _ in settled = false }
+        .onChange(of: target.value) { _, _ in
+            if settled { settled = false }
+        }
     }
 }
 

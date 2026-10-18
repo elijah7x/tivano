@@ -127,11 +127,15 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var createdAt: Date
     var updatedAt: Date
     var provider: ProviderKind {
-        didSet { runtimeMode = Self.supportedMode(runtimeMode, on: provider) }
+        didSet {
+            runtimeMode = Self.supportedMode(runtimeMode, on: provider)
+            if provider != oldValue { dshMode = nil }
+        }
     }
     var model: String?
     var effort: String?
     var fastMode: Bool
+    var dshMode: DshAgentMode?
     var runtimeMode: RuntimeMode {
         didSet { runtimeMode = Self.supportedMode(runtimeMode, on: provider) }
     }
@@ -260,6 +264,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         model = container.value(.model, default: nil)
         effort = container.value(.effort, default: nil)
         fastMode = container.value(.fastMode, default: false)
+        dshMode = container.value(.dshMode, default: nil)
         // `value` swallows a type mismatch as well as a missing key, so a mode that
         // cannot be read falls back to the one that asks before it acts: a thread must
         // never quietly come back from disk with full access to the machine.

@@ -253,6 +253,8 @@ enum CLIUpdates {
         let resolved = probe.standardize(probe.resolve(executable).path)
         guard !isProtected(resolved) else { return nil }
         let layout = probe.standardize((probe.installLayout?(executable) ?? probe.resolve(executable)).path)
+        // The desktop app owns its bundled launcher, even if it contains an npm layout.
+        if provider == .dsh, [original, resolved, layout].contains(where: { components($0).contains(where: { $0.hasSuffix(".app") }) }) { return nil }
         for path in [layout, resolved, original] {
             if isProtected(path) { continue }
             if let owned = npmChannel(provider, path: path, environment: environment, probe: probe) { return owned }
@@ -630,6 +632,7 @@ enum CLIUpdates {
         case .pi: return try await registryVersion("@earendil-works/pi-coding-agent", tag: "latest", probe: probe)
         case .omp: return nil
         case .kimi: return try await registryVersion("@moonshot-ai/kimi-code", tag: "latest", probe: probe)
+        case .dsh: return try await registryVersion(DshCLI.packageName, tag: "latest", probe: probe)
         case .commandcode: return try await registryVersion("command-code", tag: "latest", probe: probe)
         default:
             return nil
@@ -918,6 +921,7 @@ enum CLIUpdates {
         case .pi: ["@earendil-works/pi-coding-agent"]
         case .omp: []
         case .kimi: ["@moonshot-ai/kimi-code"]
+        case .dsh: [DshCLI.packageName]
         case .commandcode: ["command-code"]
         default: []
         }
@@ -925,13 +929,13 @@ enum CLIUpdates {
 
     /// https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html
     private static func packageMetadataMatches(_ provider: ProviderKind, package: String, parts: [String], modules: Int, probe: CLIProbe) -> Bool {
-        guard provider == .kimi else { return true }
+        guard provider == .kimi || provider == .dsh else { return true }
         let root = join(Array(parts.prefix(modules + 1))) + "/" + package
         guard let data = probe.readFile(root + "/package.json"),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               json["name"] as? String == package,
               let version = json["version"] as? String, versionToken(exact: version) != nil,
-              let bins = json["bin"] as? [String: String], let entry = bins["kimi"],
+              let bins = json["bin"] as? [String: String], let entry = bins[provider.executableName],
               !entry.hasPrefix("/"), !components(entry).contains("..") else { return false }
         return same(join(parts), (root as NSString).appendingPathComponent(entry))
     }

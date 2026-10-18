@@ -20,6 +20,7 @@ final class RecentDownloads {
 
     private(set) var items: [RecentDownload] = []
     private(set) var thumbnails: [String: CGImage] = [:]
+    private(set) var icons: [String: NSImage] = [:]
     private(set) var isLoaded = false
 
     var directory: URL? {
@@ -58,9 +59,11 @@ final class RecentDownloads {
         }
         guard !Task.isCancelled else { return }
         var items: [RecentDownload] = []
+        var icons: [String: NSImage] = [:]
         items.reserveCapacity(urls.count)
         await withTaskGroup(of: (String, CGImage)?.self) { group in
             for (url, size) in urls {
+                icons[url.path] = FileIcons.icon(for: url.path)
                 let isImage = Self.imageExtensions.contains(url.pathExtension.lowercased())
                 items.append(RecentDownload(
                     url: url,
@@ -80,6 +83,7 @@ final class RecentDownloads {
                 }
             }
             self.items = items
+            self.icons = icons
             self.thumbnails = [:]
             isLoaded = true
             for await result in group {
@@ -119,6 +123,7 @@ struct DownloadsPopover: View {
                 ForEach(downloads.items) { item in
                     DownloadRow(
                         item: item,
+                        icon: downloads.icons[item.url.path],
                         thumbnail: downloads.thumbnails[item.url.path],
                         pick: { pick(item.url) }
                     )
@@ -161,6 +166,7 @@ private struct DownloadRow: View {
     static let height: CGFloat = 38
 
     let item: RecentDownload
+    let icon: NSImage?
     let thumbnail: CGImage?
     let pick: () -> Void
 
@@ -174,7 +180,7 @@ private struct DownloadRow: View {
             if let thumbnail {
                 picture = NSImage(cgImage: thumbnail, size: NSSize(width: 28, height: 28))
             } else {
-                picture = FileIcons.icon(for: item.url.path)
+                picture = icon ?? FileIcons.icon(for: item.url.path)
             }
             AttachmentDrops.shared.arm(
                 image: picture,
@@ -210,6 +216,7 @@ private struct DownloadRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
+            guard isHovering != hovering else { return }
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
     }
@@ -222,15 +229,23 @@ private struct DownloadRow: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 28, height: 28)
                 .clipShape(.rect(cornerRadius: 6, style: .continuous))
-                .background { ScreenFrameReader { previewFrame = $0 } }
+                .background { ScreenFrameReader { updatePreviewFrame($0) } }
         } else {
-            Image(nsImage: FileIcons.icon(for: item.url.path))
+            Image(nsImage: icon ?? FileIcons.icon(for: item.url.path))
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 28, height: 28)
                 // The icon row flies too, so this branch reports its frame as well:
                 // without it the flight would start from the screen's own corner.
-                .background { ScreenFrameReader { previewFrame = $0 } }
+                .background { ScreenFrameReader { updatePreviewFrame($0) } }
         }
+    }
+
+    private func updatePreviewFrame(_ frame: CGRect) {
+        guard abs(previewFrame.origin.x - frame.origin.x) > 0.5
+            || abs(previewFrame.origin.y - frame.origin.y) > 0.5
+            || abs(previewFrame.width - frame.width) > 0.5
+            || abs(previewFrame.height - frame.height) > 0.5 else { return }
+        previewFrame = frame
     }
 }

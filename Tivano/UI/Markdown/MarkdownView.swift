@@ -365,7 +365,6 @@ struct MarkdownBlockView: View, Equatable {
                     InlineText(text, hasLinks: true)
                 } else if listDepth == 0, let segments = mentionSegments(in: text) {
                     VeiledText(segments: segments)
-                        .modifier(MarkdownBlockSelection())
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -616,6 +615,7 @@ enum RichLink {
 
     nonisolated static func build(_ source: String) -> AttributedString {
         let base = baseAttributed(source)
+        guard base.runs.contains(where: { $0.link != nil }) else { return base }
         var result = AttributedString()
         for run in base.runs {
             let slice = AttributedString(base[run.range])
@@ -794,45 +794,65 @@ enum RichLink {
         var out = AttributedString()
         for run in parsed.runs {
             let slice = parsed[run.range]
-            let text = String(slice.characters)
             if run.link != nil || (run.inlinePresentationIntent ?? []).contains(.code) {
                 out.append(AttributedString(slice))
                 continue
             }
-            guard let pattern = bareDomainPattern else {
+            let text = String(slice.characters)
+            var afterDot = false
+            let mayContainDomain = text.utf8.contains { byte in
+                defer { afterDot = byte == 46 }
+                // ICU case folding can also match non-ASCII letters to [A-Za-z].
+                return afterDot && ((65...90).contains(byte) || (97...122).contains(byte) || byte >= 128)
+            }
+            guard mayContainDomain, let pattern = bareDomainPattern else {
                 out.append(AttributedString(slice))
                 continue
             }
             let ns = text as NSString
             let matches = pattern.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length))
-            if matches.isEmpty {
+            let trimSet = ".,;:!?'\""
+            func candidate(_ match: NSTextCheckingResult) -> (text: String, url: URL?)? {
+                guard let range = Range(match.range, in: text) else { return nil }
+                var matchText = String(text[range])
+                // Trailing punctuation belongs to the sentence, not the link.
+                while let last = matchText.last, trimSet.contains(last) { matchText.removeLast() }
+                let slash = matchText.firstIndex(of: "/")
+                let domainPart = slash.map { String(matchText[..<$0]) } ?? matchText
+                let lastLabel = domainPart.split(separator: ".").last.map(String.init)?.lowercased() ?? ""
+                let url = bareDomainTLDs.contains(lastLabel) ? URL(string: "https://" + matchText) : nil
+                return (matchText, url)
+            }
+            guard matches.contains(where: { candidate($0)?.url != nil }) else {
                 out.append(AttributedString(slice))
                 continue
             }
             // Offsets are Characters throughout: the regex reports UTF-16 ranges, and
             // `Range(_:in:)` turns one back into the text's own indices, so a sentence with
             // an emoji or an accent before the domain still links the domain itself.
-            let trimSet = ".,;:!?'\""
             var cursor = 0
+            var pieceIndex = slice.characters.startIndex
+            var pieceOffset = 0
+            var textIndex = text.startIndex
+            var textOffset = 0
             func piece(_ span: Range<Int>) -> AttributedString {
-                let lo = slice.characters.index(slice.characters.startIndex, offsetBy: span.lowerBound)
-                let hi = slice.characters.index(slice.characters.startIndex, offsetBy: span.upperBound)
+                let lo = slice.characters.index(pieceIndex, offsetBy: span.lowerBound - pieceOffset)
+                let hi = slice.characters.index(lo, offsetBy: span.count)
+                pieceIndex = hi
+                pieceOffset = span.upperBound
                 return AttributedString(slice[lo..<hi])
             }
             for match in matches {
                 guard let range = Range(match.range, in: text) else { continue }
-                let start = text.distance(from: text.startIndex, to: range.lowerBound)
+                let distance = text.distance(from: textIndex, to: range.lowerBound)
+                let start = textOffset + distance
+                textIndex = text.index(textIndex, offsetBy: distance)
+                textOffset = start
                 guard start >= cursor else { continue }
-                var matchText = String(text[range])
-                // Trailing punctuation belongs to the sentence, not the link.
-                while let last = matchText.last, trimSet.contains(last) { matchText.removeLast() }
-                let end = start + matchText.count
+                guard let candidate = candidate(match) else { continue }
+                let end = start + candidate.text.count
                 if start > cursor { out.append(piece(cursor..<start)) }
-                // Split at the first `/`: domain part vs the rest of the path/query.
-                let slash = matchText.firstIndex(of: "/")
-                let domainPart = slash.map { String(matchText[..<$0]) } ?? matchText
-                let lastLabel = domainPart.split(separator: ".").last.map(String.init)?.lowercased() ?? ""
-                if bareDomainTLDs.contains(lastLabel), let url = URL(string: "https://" + matchText) {
+                if let url = candidate.url {
                     var linkSlice = piece(start..<end)
                     linkSlice.link = url
                     out.append(linkSlice)
@@ -841,7 +861,8 @@ enum RichLink {
                 }
                 cursor = end
             }
-            if cursor < text.count { out.append(piece(cursor..<text.count)) }
+            let count = textOffset + text.distance(from: textIndex, to: text.endIndex)
+            if cursor < count { out.append(piece(cursor..<count)) }
         }
         return out
     }
@@ -875,7 +896,7 @@ private struct MarkdownStreamingKey: EnvironmentKey {
 
 /// Whether each block selects its own text. On everywhere, replies included: a
 /// finished reply's blocks are copyable at all times, one paragraph at a time. Whole
-/// replies go to the clipboard through the row menu's Copy message (`MessageText`).
+/// replies go to the clipboard through the row menu's Copy (`MessageText`).
 private struct MarkdownBlockSelectionKey: EnvironmentKey {
     static let defaultValue = true
 }
@@ -907,11 +928,14 @@ extension EnvironmentValues {
     }
 }
 
-/// `.textSelection(.enabled)` only while the environment allows blocks their own selection.
+/// `.textSelection(.enabled)` only for idle blocks whose environment allows selection.
 struct MarkdownBlockSelection: ViewModifier {
+    var isLive = false
     @Environment(\.markdownBlockSelection) private var enabled
+    @Environment(\.markdownStreaming) private var streaming
     func body(content: Content) -> some View {
-        if enabled {
+        // SwiftUI rebuilds the whole TextKit layout for selectable text on every content change.
+        if enabled && !streaming && !isLive {
             content.textSelection(.enabled)
         } else {
             content.textSelection(.disabled)
@@ -1204,7 +1228,6 @@ struct InlineText: View {
             // code come through as inline presentation intents. Streamed characters fade
             // in through the veil.
             VeiledText(Self.scaledInlineCode(RichLink.prettyAttributed(source, streaming: streaming), pointSize: TypeScale.shared.code(max(9, scaled - CGFloat(TypeScale.shared.content - TypeScale.stockContent) - 1))))
-                .modifier(MarkdownBlockSelection())
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: hugsContent ? nil : .infinity, alignment: .leading)
         }
@@ -1339,7 +1362,6 @@ struct CodeBlock: View {
                 // Code streams line by line and veils in like prose.
                 VeiledText(verbatim: visible)
                     .font(.code(.callout))
-                    .modifier(MarkdownBlockSelection())
                     .fixedSize(horizontal: true, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)

@@ -25,7 +25,7 @@ struct ACPSelectionError: LocalizedError {
     var errorDescription: String? { underlying.localizedDescription }
 }
 
-/// Drives Agent Client Protocol agents: Cursor, OpenCode, Grok, Devin and Kimi Code.
+/// Drives Agent Client Protocol agents: Cursor, OpenCode, Grok, Devin, Kimi Code and DeepSeek Harness.
 @MainActor
 final class ACPSession: ProviderSession {
     private static let launchGate = ACPLaunchGate(spacing: 1.5)
@@ -35,8 +35,12 @@ final class ACPSession: ProviderSession {
     private let configuration: SessionConfiguration
     private var connection: JSONRPCConnection?
     private var sessionID: String?
+    private var expectedSessionID: String?
+    private var isStarting = false
+    private var isReady = false
     private var authMethods: [String] = []
     private var canLoadSessions = false
+    private var canResumeSessions = false
     private var supportsHTTPMCP = false
     private var isReplaying = false
     private var isStopping = false
@@ -52,6 +56,7 @@ final class ACPSession: ProviderSession {
     }
     private var pendingQuestions: [String: PendingQuestion] = [:]
     private var toolKinds: [String: ToolCall.Kind] = [:]
+    private var toolInputs: [String: (title: String, rawInput: JSONValue)] = [:]
     private var promptActive = false
     private var cancelRequested = false
     /// Tool calls already routed to the checklist (opencode `todowrite` arrives as a
@@ -71,6 +76,8 @@ final class ACPSession: ProviderSession {
     private var buildMode: String?
     private var currentMode: String?
     private var currentModel: String?
+    private var initialDSHModel: String?
+    private var dshReportGuardReady = false
     private var currentEffort: String?
     private var currentFast: String?
     /// Cursor only exposes effort/fast selectors when the client opts into its parameterized picker.
@@ -104,6 +111,8 @@ final class ACPSession: ProviderSession {
             case .auto: ["--permission-mode", "auto", "agent", "stdio"]
             case .fullAccess: ["agent", "--always-approve", "stdio"]
             }
+        case .dsh:
+            [] // Prepared asynchronously through DshCLI.prepareLaunch.
         case .devin:
             // Devin's modes at a glance: auto approves read-only tools, accept-edits
             // adds workspace edits, smart adds model-judged-safe actions, dangerous
@@ -124,20 +133,53 @@ final class ACPSession: ProviderSession {
     }
 
     private func start(applyingSelection: Bool) async throws -> String {
-        guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
+        if isReady, !isStopping, let connection, !connection.isClosed, let sessionID { return sessionID }
+        guard !isStarting, connection == nil, !isStopping else { throw ProviderError.notRunning }
+        isStarting = true
+        defer { isStarting = false }
+        guard var executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
+        var arguments = launchArguments
+        var environment = configuration.environment
+        var launchPlan: DshLaunchPlan?
+        var processStarted = false
+        defer { if !processStarted { launchPlan?.cleanup() } }
+        if configuration.provider == .dsh {
+            if applyingSelection {
+                environment["DSH_PERMISSION_MODE"] = DshCLI.permissionMode(for: configuration.runtimeMode)
+            }
+            let plan = try await DshCLI.prepareLaunch(executable: executable, mode: configuration.dshMode, delegationOff: configuration.hydra != nil || configuration.isHydraHead, environment: environment, finalReport: configuration.dshFinalReport)
+            launchPlan = plan
+            executable = plan.executable
+            arguments = plan.arguments
+            environment = plan.environment
+        }
         await Self.launchGate.wait()
+        try Task.checkCancellation()
+        guard !isStopping else { throw ProviderError.notRunning }
         let process = StdioProcess(
             executable: executable,
-            arguments: launchArguments,
+            arguments: arguments,
             directory: configuration.workingDirectory,
-            environment: configuration.environment
+            environment: environment
         )
         let connection = JSONRPCConnection(process: process, sendsVersion: true)
         connection.onNotification = { [weak self] method, params in self?.handleNotification(method, params) }
         connection.onRequest = { [weak self] id, method, params in self?.handleRequest(id, method, params) }
         connection.onClose = { [weak self] tail in self?.handleClose(tail) }
         self.connection = connection
+        defer {
+            if !isReady {
+                connection.onNotification = nil
+                connection.onRequest = nil
+                connection.onClose = nil
+                connection.close()
+                sessionID = nil
+                expectedSessionID = nil
+            }
+        }
         try connection.start()
+        processStarted = true
+        launchPlan?.releaseAfterExit(of: process)
 
         let initialized = try await deadlineRequest(connection, "initialize", [
             "protocolVersion": 1,
@@ -145,6 +187,8 @@ final class ACPSession: ProviderSession {
             "clientInfo": ["name": "tivano", "title": "Tivano", "version": .string(AppInfo.version)],
         ])
         canLoadSessions = initialized["agentCapabilities"]?["loadSession"]?.bool ?? false
+        canResumeSessions = initialized["agentCapabilities"]?["sessionCapabilities"]?["resume"]
+            .map { !$0.isNull && $0.bool != false } ?? false
         supportsHTTPMCP = initialized["agentCapabilities"]?["mcpCapabilities"]?["http"]?.bool ?? false
         authMethods = (initialized["authMethods"]?.array ?? []).compactMap { $0["id"]?.string }
         if let state = initialized["_meta"]?["modelState"] { applyModels(state) }
@@ -152,7 +196,8 @@ final class ACPSession: ProviderSession {
         let session: JSONValue
         do {
             session = try await openSession(connection)
-        } catch let error as RPCError where error.message.localizedCaseInsensitiveContains("auth") && !authMethods.isEmpty {
+        } catch let error as RPCError where error.message.localizedCaseInsensitiveContains("auth") && !authMethods.isEmpty
+            && !(configuration.provider == .dsh && configuration.resumeID != nil) {
             if configuration.provider == .kimi { throw Self.kimiLoginRequired }
             _ = try await deadlineRequest(connection, "authenticate", ["methodId": .string(authMethods[0])])
             session = try await openSession(connection)
@@ -169,6 +214,9 @@ final class ACPSession: ProviderSession {
         guard let sessionID else {
             throw ProviderError.failed("\(configuration.provider.displayName) did not start a session.")
         }
+        try Task.checkCancellation()
+        guard !isStopping, !connection.isClosed else { throw ProviderError.notRunning }
+        isReady = true
         return sessionID
     }
 
@@ -189,6 +237,12 @@ final class ACPSession: ProviderSession {
     }
 
     func send(_ input: TurnInput) async throws {
+        if configuration.provider == .dsh, input.isFinalReport || configuration.dshFinalReport {
+            guard input.isFinalReport, configuration.dshFinalReport, dshReportGuardReady else {
+                throw ProviderError.failed(AppText.localized("DeepSeek Harness could not enable tool-free reporting. Update DeepSeek Harness and try again."))
+            }
+        }
+        guard isReady, !isStopping else { throw ProviderError.notRunning }
         guard let connection, !connection.isClosed, let sessionID else { throw ProviderError.notRunning }
         runtimeMode = input.runtimeMode
         try await applySelection(
@@ -307,12 +361,28 @@ final class ACPSession: ProviderSession {
         .failed(AppText.localized("Sign in to Kimi Code with `kimi login`, then try again."))
     }
 
+    private static var dshAPIKeyRequired: ProviderError {
+        .failed(AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings → Providers → DeepSeek."))
+    }
+
     static func authStatus(provider: ProviderKind, executable: URL, environment: [String: String]) async -> ProviderStatus.Auth {
-        let process = StdioProcess(executable: executable, arguments: ["acp"], directory: FileManager.default.temporaryDirectory, environment: environment)
-        let connection = JSONRPCConnection(process: process, sendsVersion: true)
-        defer { connection.close() }
+        var launchPlan: DshLaunchPlan?
+        var processStarted = false
+        defer { if !processStarted { launchPlan?.cleanup() } }
         do {
+            let plan: DshLaunchPlan
+            if provider == .dsh {
+                plan = try await DshCLI.prepareLaunch(executable: executable, mode: .standard, delegationOff: false, environment: environment)
+            } else {
+                plan = DshLaunchPlan(executable: executable, arguments: ["acp"], environment: environment, ownedDirectory: nil)
+            }
+            launchPlan = plan
+            let process = StdioProcess(executable: plan.executable, arguments: plan.arguments, directory: FileManager.default.temporaryDirectory, environment: plan.environment)
+            let connection = JSONRPCConnection(process: process, sendsVersion: true)
+            defer { connection.close() }
             try connection.start()
+            processStarted = true
+            plan.releaseAfterExit(of: process)
             _ = try await withDeadline(seconds: 20, provider: provider.displayName, operation: "authenticate") {
                 _ = try await connection.request("initialize", ["protocolVersion": 1, "clientCapabilities": [:]])
                 return try await connection.request("authenticate", ["methodId": "login"])
@@ -338,14 +408,12 @@ final class ACPSession: ProviderSession {
             runtimeMode: .supervised,
             interactionMode: .build
         ))
-        var models: [ModelOption] = []
-        session.onEvent = { event in
-            if case .models(let list, _) = event { models = list }
-        }
         defer { session.stop() }
-        _ = try await session.start(applyingSelection: false)
-        await session.probeModelEfforts()
-        return models
+        return try await withDeadline(seconds: 180, provider: provider.displayName, operation: "probeModels") {
+            _ = try await session.start(applyingSelection: false)
+            try await session.probeModelEfforts()
+            return session.models
+        }
     }
 
     // MARK: - Session state
@@ -359,18 +427,34 @@ final class ACPSession: ProviderSession {
     private func openSession(_ connection: JSONRPCConnection) async throws -> JSONValue {
         // The connected servers ride into every new session through ACP's own field,
         // HTTP ones directly where the agent says it speaks HTTP MCP, else through `mcp-remote`.
-        let base: [String: JSONValue] = ["cwd": .string(workingDirectory), "mcpServers": MCPProviderConfig.acpServers(allowsHTTP: supportsHTTPMCP)]
+        let servers = MCPProviderConfig.acpServers(allowsHTTP: supportsHTTPMCP)
+        return try await openSession(connection, servers: servers)
+    }
+
+    private func openSession(_ connection: JSONRPCConnection, servers: JSONValue) async throws -> JSONValue {
+        let base: [String: JSONValue] = ["cwd": .string(workingDirectory), "mcpServers": servers]
         if let resumeID = configuration.resumeID {
-            guard canLoadSessions else {
-                throw ProviderError.failed(AppText.localized("This ACP agent cannot resume the original session."))
-            }
+            expectedSessionID = resumeID
+            defer { expectedSessionID = nil }
             var params = base
             params["sessionId"] = .string(resumeID)
-            isReplaying = true
-            defer { isReplaying = false }
-            let result = try await deadlineRequest(connection, "session/load", .object(params))
-            sessionID = resumeID
-            return result
+            if configuration.provider == .dsh {
+                guard canResumeSessions else {
+                    throw ProviderError.failed(AppText.localized("This ACP agent cannot resume the original session."))
+                }
+                let result = try await deadlineRequest(connection, "session/resume", .object(params))
+                sessionID = result["sessionId"]?.string ?? resumeID
+                return result
+            } else {
+                guard canLoadSessions else {
+                    throw ProviderError.failed(AppText.localized("This ACP agent cannot resume the original session."))
+                }
+                isReplaying = true
+                defer { isReplaying = false }
+                let result = try await deadlineRequest(connection, "session/load", .object(params))
+                sessionID = resumeID
+                return result
+            }
         }
         let result = try await deadlineRequest(connection, "session/new", .object(base))
         sessionID = result["sessionId"]?.string
@@ -378,7 +462,7 @@ final class ACPSession: ProviderSession {
     }
 
     private func applySessionState(_ state: JSONValue) {
-        if let modes = state["modes"], !modes.isNull {
+        if configuration.provider != .dsh, let modes = state["modes"], !modes.isNull {
             hasModeAPI = true
             currentMode = modes["currentModeId"]?.string
             resolveModes((modes["availableModes"]?.array ?? []).compactMap { $0["id"]?.string })
@@ -394,16 +478,32 @@ final class ACPSession: ProviderSession {
     /// that arrived with a scale (Grok lists them in `_meta.reasoningEfforts`) are
     /// skipped by the `where` filter. A provider that names its variants (Devin) has its
     /// scale in the names and no effort option to read, so it is not walked at all.
-    private func probeModelEfforts() async {
-        guard let modelConfigID, !configuration.provider.namesModelVariants else { return }
-        let original = currentModel
+    private func probeModelEfforts() async throws {
+        guard let modelConfigID, !configuration.provider.namesModelVariants,
+              let original = configuration.provider == .dsh ? (models.first(where: \.isDefault)?.id ?? currentModel) : currentModel else { return }
         for model in models where model.efforts.isEmpty {
-            guard (try? await setConfigOption(modelConfigID, value: model.id)) != nil else { continue }
-            currentModel = model.id
+            try Task.checkCancellation()
+            do {
+                try await setConfigOption(modelConfigID, value: model.id)
+                currentModel = model.id
+            } catch is RPCError {
+                try Task.checkCancellation()
+                continue
+            }
         }
-        if let original, !Self.sameModel(original, currentModel) {
-            if (try? await setConfigOption(modelConfigID, value: original)) != nil { currentModel = original }
+        if !sameSelectedModel(original, currentModel) {
+            try await setConfigOption(modelConfigID, value: original)
+            currentModel = original
         }
+        try Task.checkCancellation()
+        if configuration.provider != .dsh {
+            models = models.map { model in
+                var model = model
+                model.isDefault = sameSelectedModel(model.id, original)
+                return model
+            }
+        }
+        onEvent?(.models(models, current: currentModel))
     }
 
     private func resolveModes(_ ids: [String]) {
@@ -443,21 +543,22 @@ final class ACPSession: ProviderSession {
             guard let id = option["id"]?.string else { continue }
             let values = Self.flatten(option["options"]?.array ?? [])
             let current = option["currentValue"]?.string
-            switch option["category"]?.string ?? id {
+            let category = id == "model" || id == "reasoning_effort" ? id : option["category"]?.string ?? id
+            switch category {
             case "model":
                 modelConfigID = id
                 currentModel = current.map { usesParameterizedModels ? Self.baseModelID($0) : $0 } ?? currentModel
                 // One lookup per value: the walk over OpenCode's four hundred models replies
                 // four hundred times, and a linear search per value on each reply stalled the
                 // main actor.
-                let knownByID = Dictionary(models.map { (Self.baseModelID($0.id), $0) }, uniquingKeysWith: { first, _ in first })
-                let list = values.compactMap { value -> ModelOption? in
+                let knownByID = Dictionary(models.map { (configuration.provider == .dsh ? $0.id : Self.baseModelID($0.id), $0) }, uniquingKeysWith: { first, _ in first })
+                let list = configuration.provider == .dsh ? dshModels(option, known: knownByID) : values.compactMap { value -> ModelOption? in
                     guard let rawID = value["value"]?.string else { return nil }
                     let valueID = usesParameterizedModels ? Self.baseModelID(rawID) : rawID
                     // A rebuilt list keeps what earlier passes learned about each model (its
                     // scale, its Fast tier): Cursor reports them for the current model only,
                     // one pass at a time.
-                    let known = knownByID[Self.baseModelID(valueID)]
+                    let known = knownByID[configuration.provider == .dsh ? valueID : Self.baseModelID(valueID)]
                     var option = ModelOption(
                         id: valueID,
                         name: value["name"]?.string ?? valueID,
@@ -471,17 +572,18 @@ final class ACPSession: ProviderSession {
                 }
                 if !list.isEmpty { models = configuration.provider.namesModelVariants ? ModelFamilies.collapsed(list) : list }
             case "mode":
+                guard configuration.provider != .dsh else { break }
                 modeConfigID = id
                 currentMode = current ?? currentMode
                 resolveModes(values.compactMap { $0["value"]?.string })
-            case "thought_level", "effort":
+            case "thought_level", "effort", "reasoning_effort":
                 // Cursor also advertises a boolean `thinking` thought_level; only the
                 // scale (low/medium/high/…) drives the effort slider.
                 let scale = values.compactMap { $0["value"]?.string }
                 guard Self.isEffortScale(scale) else { break }
                 effortConfigID = id
                 currentEffort = current
-                efforts = ModelOption.orderedEfforts(scale)
+                efforts = id == "reasoning_effort" ? scale : ModelOption.orderedEfforts(scale)
             case "model_config":
                 if id == "fast" {
                     fastConfigID = id
@@ -494,7 +596,7 @@ final class ACPSession: ProviderSession {
         }
         models = models.map { model in
             var model = model
-            let isCurrent = Self.sameModel(model.id, currentModel)
+            let isCurrent = sameSelectedModel(model.id, currentModel)
             if isCurrent, !efforts.isEmpty {
                 model.efforts = efforts
                 model.defaultEffort = currentEffort ?? model.defaultEffort
@@ -508,16 +610,81 @@ final class ACPSession: ProviderSession {
         if !models.isEmpty { onEvent?(.models(models, current: currentModel)) }
     }
 
+    /// dsh groups its models by route: `deepseek-official` takes an API key, `deepseek-account`
+    /// the signed-in DeepSeek account, and lists the account route only when one is signed in.
+    /// With no key the official route cannot answer, so only the account's models are offered;
+    /// with both, each name says which route it is on. Preserve the initial current model
+    /// when its route is usable, including while probing other models.
+    private func dshModels(_ option: JSONValue, known: [String: ModelOption]) -> [ModelOption] {
+        struct Row {
+            var route: String
+            var group: String
+            var value: String
+            var name: String
+            var detail: String?
+        }
+        var rows: [Row] = []
+        for entry in option["options"]?.array ?? [] {
+            for value in entry["options"]?.array ?? [entry] {
+                guard let id = value["value"]?.string else { continue }
+                let route = entry["group"]?.string ?? DshCLI.modelRoute(for: id)?.route ?? ""
+                let group: String = switch route {
+                case "deepseek-account": AppText.localized("DeepSeek account")
+                case "deepseek-official": AppText.localized("API key")
+                default: entry["name"]?.string ?? DshCLI.displayName(forModelID: route)
+                }
+                let suppliedName = value["name"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let name = DshCLI.knownName(forModelID: id)
+                    ?? suppliedName.flatMap { $0.isEmpty || $0.hasPrefix("[") || $0 == id ? nil : $0 }
+                    ?? DshCLI.displayName(forModelID: id)
+                rows.append(Row(route: route, group: group, value: id, name: name, detail: value["description"]?.string))
+            }
+        }
+        let hasKey = !(configuration.environment["DEEPSEEK_API_KEY"] ?? "").isEmpty
+        let hasAccount = rows.contains { $0.route == "deepseek-account" }
+        if !hasKey, hasAccount { rows.removeAll { $0.route == "deepseek-official" } }
+        let preferred = hasKey || !hasAccount ? "deepseek-official" : "deepseek-account"
+        let usable = rows.filter { $0.route == preferred }
+        if initialDSHModel == nil, let current = option["currentValue"]?.string {
+            if rows.contains(where: { $0.value == current }) {
+                initialDSHModel = current
+            } else if let selected = try? JSONDecoder().decode([String].self, from: Data(current.utf8)), selected.count == 2 {
+                // dsh can initially name the official route even when only the account is
+                // usable. Preserve the model (e.g. Flash), not an unavailable credential route.
+                initialDSHModel = usable.first { row in
+                    guard let route = try? JSONDecoder().decode([String].self, from: Data(row.value.utf8)) else { return false }
+                    return route.count == 2 && route[1] == selected[1]
+                }?.value
+            }
+        }
+        let fallback = rows.first { $0.value == initialDSHModel }?.value ?? usable.first?.value ?? rows.first?.value
+        let qualified = Set(rows.map(\.route)).count > 1
+        let knownModels = Array(known.values)
+        return rows.map { row in
+            let kept = known[row.value] ?? known[DshCLI.resolvedModelID(row.value, in: knownModels)]
+            var model = ModelOption(
+                id: row.value,
+                name: qualified ? "\(row.name) · \(row.group)" : row.name,
+                detail: row.detail,
+                efforts: kept?.efforts ?? [],
+                defaultEffort: kept?.defaultEffort,
+                isDefault: row.value == fallback
+            )
+            model.fastTier = kept?.fastTier
+            return model
+        }
+    }
+
     private static func flatten(_ values: [JSONValue]) -> [JSONValue] {
         values.flatMap { value -> [JSONValue] in
-            if let nested = value["options"]?.array { return nested }
+            if let nested = value["options"]?.array { return flatten(nested) }
             return [value]
         }
     }
 
     /// Values that belong on the effort slider, as opposed to a boolean thinking toggle.
     private static func isEffortScale(_ values: [String]) -> Bool {
-        let known: Set<String> = ["none", "low", "medium", "high", "xhigh", "max", "extra-high"]
+        let known: Set<String> = ["off", "none", "low", "medium", "high", "xhigh", "max", "extra-high"]
         return values.contains { known.contains($0.lowercased()) }
     }
 
@@ -532,6 +699,7 @@ final class ACPSession: ProviderSession {
     /// from before its provider's variants were merged runs as it was until the effort
     /// or Fast is changed, and then moves within its family.
     private func providerID(for model: String, effort: String?, fastMode: Bool) -> String {
+        guard configuration.provider != .dsh else { return DshCLI.resolvedModelID(model, in: models) }
         if let family = models.first(where: { $0.id == model }) {
             return family.providerID(effort: effort, fastMode: fastMode)
         }
@@ -543,6 +711,11 @@ final class ACPSession: ProviderSession {
     private static func sameModel(_ lhs: String?, _ rhs: String?) -> Bool {
         guard let lhs, let rhs else { return false }
         return baseModelID(lhs) == baseModelID(rhs)
+    }
+
+    private func sameSelectedModel(_ lhs: String?, _ rhs: String?) -> Bool {
+        if configuration.provider == .dsh { return lhs != nil && lhs == rhs }
+        return Self.sameModel(lhs, rhs)
     }
 
     private func applySelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async throws {
@@ -559,11 +732,11 @@ final class ACPSession: ProviderSession {
         guard let connection, let sessionID else { throw ProviderError.notRunning }
         if let model, !model.isEmpty {
             let wireID = usesParameterizedModels ? Self.baseModelID(model) : providerID(for: model, effort: effort, fastMode: fastMode)
-            if !Self.sameModel(wireID, currentModel) {
+            if !sameSelectedModel(wireID, currentModel) {
                 if let modelConfigID {
                     try await setConfigOption(modelConfigID, value: wireID)
                 } else {
-                    _ = try await connection.request("session/set_model", ["sessionId": .string(sessionID), "modelId": .string(wireID)])
+                    _ = try await deadlineRequest(connection, "session/set_model", ["sessionId": .string(sessionID), "modelId": .string(wireID)])
                 }
                 currentModel = wireID
             }
@@ -579,6 +752,7 @@ final class ACPSession: ProviderSession {
                 currentFast = wanted
             }
         }
+        guard configuration.provider != .dsh else { return }
         let wantedMode: String?
         if configuration.provider == .kimi, interaction != .plan {
             wantedMode = switch runtimeMode {
@@ -597,7 +771,7 @@ final class ACPSession: ProviderSession {
             if let modeConfigID {
                 try await setConfigOption(modeConfigID, value: mode)
             } else if hasModeAPI {
-                _ = try await connection.request("session/set_mode", ["sessionId": .string(sessionID), "modeId": .string(mode)])
+                _ = try await deadlineRequest(connection, "session/set_mode", ["sessionId": .string(sessionID), "modeId": .string(mode)])
             }
             currentMode = mode
         }
@@ -605,7 +779,7 @@ final class ACPSession: ProviderSession {
 
     private func setConfigOption(_ configID: String, value: String) async throws {
         guard let connection, let sessionID else { throw ProviderError.notRunning }
-        let result = try await connection.request("session/set_config_option", [
+        let result = try await deadlineRequest(connection, "session/set_config_option", [
             "sessionId": .string(sessionID),
             "configId": .string(configID),
             "value": .string(value),
@@ -615,8 +789,26 @@ final class ACPSession: ProviderSession {
 
     // MARK: - Updates
 
+    private func acceptsSession(_ params: JSONValue) -> Bool {
+        guard !isStopping, let expected = sessionID ?? expectedSessionID else { return false }
+        return params["sessionId"]?.string == expected
+    }
+
+    private static func requestKey(_ id: RPCID) -> String {
+        switch id {
+        case .int(let value): "int:\(value)"
+        case .string(let value): "string:\(value)"
+        }
+    }
+
     private func handleNotification(_ method: String, _ params: JSONValue) {
-        guard method == "session/update", !isReplaying, let update = params["update"] else { return }
+        if method == "tivano/report_guard_ready", configuration.provider == .dsh,
+           configuration.dshFinalReport, !isStopping, params["version"]?.int == 1 {
+            dshReportGuardReady = true
+            return
+        }
+        // Before session/new replies there is no trusted ID; its response supplies state.
+        guard method == "session/update", acceptsSession(params), !isReplaying, let update = params["update"] else { return }
         switch update["sessionUpdate"]?.string {
         case "agent_message_chunk":
             if let content = update["content"], content["type"]?.string == "image",
@@ -640,6 +832,7 @@ final class ACPSession: ProviderSession {
             guard let id = update["toolCallId"]?.string else { return }
             messageID = nil
             thoughtID = nil
+            let update = mergeToolDetails(update)
             if Self.isTodoCall(update) {
                 todoToolCallIDs.insert(id)
                 let steps = Self.todoSteps(update)
@@ -653,13 +846,13 @@ final class ACPSession: ProviderSession {
             if initial.output != nil || initial.status != nil || initial.images != nil { onEvent?(.toolUpdated(id: id, update: initial)) }
         case "tool_call_update":
             guard let id = update["toolCallId"]?.string else { return }
+            let update = mergeToolDetails(update)
             if todoToolCallIDs.contains(id) || Self.isTodoCall(update) {
                 todoToolCallIDs.insert(id)
                 let steps = Self.todoSteps(update)
                 if !steps.isEmpty { onEvent?(.todos(steps)) }
                 return
             }
-            if let kind = update["kind"]?.string { toolKinds[id] = Self.kind(kind) }
             onEvent?(.toolUpdated(id: id, update: makeToolUpdate(update)))
         case "plan":
             let steps = Self.parseTodoItems(update["entries"])
@@ -693,26 +886,33 @@ final class ACPSession: ProviderSession {
     }
 
     private func handleRequest(_ id: RPCID, _ method: String, _ params: JSONValue) {
+        let key = Self.requestKey(id)
         if method == "elicitation/create", configuration.provider == .kimi {
+            guard !isStopping, sessionID != nil,
+                  params["sessionId"] == nil || acceptsSession(params) else {
+                connection?.respond(to: id, result: ["action": "cancel"])
+                return
+            }
             guard let form = ACPQuestionForm(params) else {
                 onEvent?(.notice(Notice(level: .warning, message: AppText.localized("Kimi Code asked a question in a form Tivano cannot display. The request was declined."))))
                 connection?.respond(to: id, errorCode: -32602, message: "Unsupported question form")
                 return
             }
-            pendingQuestions[id.key] = PendingQuestion(rpcID: id, form: form)
-            onEvent?(.question(QuestionRequest(id: id.key, questions: form.questions)))
+            pendingQuestions[key] = PendingQuestion(rpcID: id, form: form)
+            onEvent?(.question(QuestionRequest(id: key, questions: form.questions)))
             return
         }
         guard method == "session/request_permission" else {
             connection?.respond(to: id, errorCode: -32601, message: "Method not found")
             return
         }
-        let options = params["options"]?.array ?? []
-        let toolCall = params["toolCall"] ?? .null
-        var call = makeToolCall(toolCall)
-        if let toolID = toolCall["toolCallId"]?.string, let knownKind = toolKinds[toolID], toolCall["kind"] == nil {
-            call.kind = knownKind
+        guard acceptsSession(params), !isReplaying else {
+            connection?.respond(to: id, result: ["outcome": ["outcome": "cancelled"]])
+            return
         }
+        let options = params["options"]?.array ?? []
+        let toolCall = mergeToolDetails(params["toolCall"] ?? .null)
+        let call = makeToolCall(toolCall)
         let isQuestion = configuration.provider == .kimi && (toolCall["title"]?.string == "AskUserQuestion"
             || options.contains { $0["optionId"]?.string?.hasPrefix("q0_") == true })
         let isPlan = configuration.provider == .kimi && options.contains { $0["optionId"]?.string?.hasPrefix("plan_") == true }
@@ -725,8 +925,8 @@ final class ACPSession: ProviderSession {
                 optionIDs[label] = optionID
             }
             if !choices.isEmpty, Set(choices.map(\.label)).count == choices.count {
-                pendingQuestions[id.key] = PendingQuestion(rpcID: id, form: nil, permissionOptions: optionIDs)
-                onEvent?(.question(QuestionRequest(id: id.key, questions: [
+                pendingQuestions[key] = PendingQuestion(rpcID: id, form: nil, permissionOptions: optionIDs)
+                onEvent?(.question(QuestionRequest(id: key, questions: [
                     .init(id: "q0", header: call.title, prompt: permissionDetail(toolCall) ?? call.title,
                           choices: choices, allowsMultiple: false, allowsOther: false, isSecret: false)
                 ])))
@@ -746,7 +946,7 @@ final class ACPSession: ProviderSession {
             }
             return .init(id: optionID, title: option["name"]?.string ?? optionID, role: role)
         }
-        pendingPermissions[id.key] = id
+        pendingPermissions[key] = id
         let kind: ApprovalRequest.Kind
         if isPlan {
             kind = .plan
@@ -758,7 +958,7 @@ final class ACPSession: ProviderSession {
             }
         }
         onEvent?(.approval(ApprovalRequest(
-            id: id.key,
+            id: key,
             kind: kind,
             title: call.title,
             detail: call.detail ?? permissionDetail(toolCall),
@@ -789,6 +989,7 @@ final class ACPSession: ProviderSession {
         promptActive = false
         todoToolCallIDs.removeAll()
         toolKinds.removeAll()
+        toolInputs.removeAll()
         if let connection, !connection.isClosed {
             cancelQuestions(connection)
             for (key, id) in pendingPermissions {
@@ -803,8 +1004,11 @@ final class ACPSession: ProviderSession {
             onEvent?(.turnCompleted(status: .interrupted, error: nil))
         } else if let error {
             let detail: String
-            if configuration.provider == .kimi, let rpc = error as? RPCError,
-               rpc.code == -32000, rpc.message.localizedCaseInsensitiveContains("auth") {
+            if configuration.provider == .dsh,
+               (error as? RPCError)?.message.localizedCaseInsensitiveContains("no API key for provider route") == true {
+                detail = Self.dshAPIKeyRequired.localizedDescription
+            } else if configuration.provider == .kimi, let rpc = error as? RPCError,
+                      rpc.code == -32000, rpc.message.localizedCaseInsensitiveContains("auth") {
                 detail = Self.kimiLoginRequired.localizedDescription
             } else {
                 detail = error.localizedDescription
@@ -840,7 +1044,7 @@ final class ACPSession: ProviderSession {
     private static func isTodoTitle(_ title: String) -> Bool {
         let text = title.trimmed.lowercased()
         switch text {
-        case "todo", "todos", "todowrite", "todo write", "write todos":
+        case "todo", "todos", "todowrite", "todo_write", "todo write", "write todos":
             return true
         default:
             break
@@ -883,11 +1087,11 @@ final class ACPSession: ProviderSession {
     /// pending so a new provider state never drops an item.
     static func parseTodoItems(_ value: JSONValue?) -> [TodoStep] {
         (value?.array ?? []).compactMap { item -> TodoStep? in
-            guard let text = item["content"]?.string ?? item["text"]?.string ?? item["step"]?.string ?? item["title"]?.string,
+            guard let text = item.string ?? item["content"]?.string ?? item["text"]?.string ?? item["step"]?.string ?? item["title"]?.string ?? item["task"]?.string ?? item["description"]?.string,
                   !text.trimmed.isEmpty else { return nil }
-            let status: TodoStep.Status = switch item["status"]?.string {
+            let status: TodoStep.Status = switch item["status"]?.string?.lowercased() {
             case "completed", "complete", "done": .done
-            case "in_progress", "inProgress", "in-progress", "active": .active
+            case "in_progress", "inprogress", "in-progress", "active": .active
             default: .pending
             }
             return TodoStep(text: text, status: status)
@@ -905,7 +1109,7 @@ final class ACPSession: ProviderSession {
     /// the subject comes from `rawInput` and `locations` first and the title
     /// is the fallback, with its leading verb dropped.
     private func makeToolCall(_ update: JSONValue) -> ToolCall {
-        let kind = Self.kind(update["kind"]?.string)
+        let kind = toolKind(update)
         let raw = update["rawInput"] ?? .null
         let location = update["locations"]?.array?.first?["path"]?.string.map { ToolTitles.relativePath($0, to: workingDirectory) }
         let path = Self.string(in: raw, keys: Self.pathKeys).map { ToolTitles.relativePath($0, to: workingDirectory) } ?? location
@@ -934,7 +1138,7 @@ final class ACPSession: ProviderSession {
 
     private func makeToolUpdate(_ update: JSONValue) -> ToolUpdate {
         var result = ToolUpdate()
-        if let kind = update["kind"]?.string { result.kind = Self.kind(kind) }
+        result.kind = toolKind(update)
         let kind = result.kind ?? toolKinds[update["toolCallId"]?.string ?? ""] ?? .other
         let title = Self.subject(from: update["title"]?.string, kind: kind)
         // A bare tool-name title ("Edit file") must not overwrite a real path.
@@ -950,7 +1154,13 @@ final class ACPSession: ProviderSession {
         let edits = diffs(update["content"])
         if !edits.isEmpty { result.edits = edits }
         var output = (update["content"]?.array ?? [])
-            .compactMap { $0["type"]?.string == "content" ? $0["content"]?["text"]?.string : nil }
+            .compactMap { block -> String? in
+                switch block["type"]?.string {
+                case "content": block["content"]?["text"]?.string
+                case "text": block["text"]?.string
+                default: nil
+                }
+            }
             .joined(separator: "\n")
         if let raw = update["rawOutput"], !raw.isNull {
             if output.isEmpty {
@@ -960,6 +1170,14 @@ final class ACPSession: ProviderSession {
                     .joined(separator: "\n")
             }
             result.exitCode = raw["exitCode"]?.int ?? raw["metadata"]?["exit"]?.int
+        }
+        // DSH ACP omits bash exit metadata; its desktop terminal uses this trailing marker too.
+        // Scope it to bash presentation, never PTC output or authorization/edit evidence.
+        if configuration.provider == .dsh, update["title"]?.string == "bash",
+           result.exitCode == nil, result.status == .completed,
+           let line = output.split(whereSeparator: \.isNewline).last,
+           line.hasPrefix("[exit code: "), line.hasSuffix("]") {
+            result.exitCode = Int(line.dropFirst("[exit code: ".count).dropLast())
         }
         if !output.isEmpty, output != "(no output)" { result.output = output }
         let images = kind == .read ? [] : ToolImages.blocks(update["content"])
@@ -1031,6 +1249,7 @@ final class ACPSession: ProviderSession {
             "webfetch", "websearch", "fetch", "todowrite", "todoread", "task", "tool", "apply_patch", "read_file",
             "write_file", "edit_file", "list_files", "search_files", "run_command", "run_terminal_cmd", "web_search",
             "web_fetch", "codebase_search", "file_search", "grep_search", "list_dir", "view_file", "replace_file_content",
+            "read_image", "run_code", "todo_write",
         ]
         return bare.contains(title.lowercased())
     }
@@ -1043,6 +1262,45 @@ final class ACPSession: ProviderSession {
                 old: block["oldText"]?.string ?? "",
                 new: block["newText"]?.string ?? ""
             )
+        }
+    }
+
+    private func mergeToolDetails(_ update: JSONValue) -> JSONValue {
+        guard let id = update["toolCallId"]?.string, var fields = update.object else { return update }
+        let known = toolInputs[id]
+        if fields["title"]?.string?.isEmpty != false, let known { fields["title"] = .string(known.title) }
+        if let incoming = fields["rawInput"]?.object, var raw = known?.rawInput.object {
+            raw.merge(incoming) { _, new in new }
+            fields["rawInput"] = .object(raw)
+        } else if fields["rawInput"] == nil || fields["rawInput"]?.isNull == true {
+            fields["rawInput"] = known?.rawInput
+        }
+        let merged = JSONValue.object(fields)
+        toolKinds[id] = toolKind(merged)
+        toolInputs[id] = (title: fields["title"]?.string ?? "", rawInput: fields["rawInput"] ?? .null)
+        return merged
+    }
+
+    private func toolKind(_ update: JSONValue) -> ToolCall.Kind {
+        let explicit = Self.kind(update["kind"]?.string)
+        if explicit != .other { return explicit }
+        let id = update["toolCallId"]?.string
+        if configuration.provider == .dsh {
+            let title = update["title"]?.string ?? id.flatMap { toolInputs[$0]?.title }
+            let inferred = Self.dshKind(title)
+            if inferred != .other { return inferred }
+        }
+        return id.flatMap { toolKinds[$0] } ?? .other
+    }
+
+    private static func dshKind(_ title: String?) -> ToolCall.Kind {
+        switch title?.lowercased() {
+        case "bash", "run_code": .command
+        case "read", "read_image": .read
+        case "write", "edit": .edit
+        case "glob", "grep", "web_search": .search
+        case "web_fetch": .web
+        default: .other
         }
     }
 
@@ -1100,7 +1358,8 @@ extension SessionConfiguration {
         workingDirectory: URL,
         environment: [String: String],
         runtimeMode: RuntimeMode,
-        interactionMode: InteractionMode
+        interactionMode: InteractionMode,
+        dshMode: DshAgentMode = .standard
     ) {
         self.init(
             provider: provider,
@@ -1112,7 +1371,8 @@ extension SessionConfiguration {
             model: nil,
             effort: nil,
             runtimeMode: runtimeMode,
-            interactionMode: interactionMode
+            interactionMode: interactionMode,
+            dshMode: dshMode
         )
     }
 }

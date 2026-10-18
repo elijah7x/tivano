@@ -30,6 +30,7 @@ struct ChromeSegmentedPicker<Value: Hashable>: View {
         HStack(spacing: 2) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                 ChromeSegment(title: option.title, symbol: option.symbol, isSelected: option.value == selection) {
+                    guard selection != option.value else { return }
                     withAnimation(Chrome.hover) { selection = option.value }
                 }
             }
@@ -49,7 +50,6 @@ private struct ChromeSegment: View {
     let symbol: String?
     let isSelected: Bool
     let select: () -> Void
-    @State private var isHovering = false
 
     var body: some View {
         Button(action: select) {
@@ -60,13 +60,10 @@ private struct ChromeSegment: View {
                 .padding(.horizontal, 9)
                 .frame(minWidth: 26)
                 .frame(height: 22)
-                .background(Capsule(style: .continuous).fill(isSelected ? Chrome.accent.opacity(0.22) : Chrome.overlay(isHovering ? 0.08 : 0)))
                 .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
+        .modifier(ChromeSegmentHighlight(isSelected: isSelected))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityLabel(Text(verbatim: Chrome.localized(title)))
     }
@@ -78,5 +75,23 @@ private struct ChromeSegment: View {
         } else {
             Text(verbatim: Chrome.localized(title))
         }
+    }
+}
+
+private struct ChromeSegmentHighlight: ViewModifier {
+    let isSelected: Bool
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                Capsule(style: .continuous)
+                    .fill(isSelected ? Chrome.accent.opacity(0.22) : Chrome.overlay(isHovering ? 0.08 : 0))
+                    .animation(Chrome.hover, value: isHovering)
+            }
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                isHovering = hovering
+            }
     }
 }

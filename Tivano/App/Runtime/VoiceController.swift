@@ -43,7 +43,12 @@ final class VoiceController {
     @ObservationIgnored private weak var app: AppModel?
     @ObservationIgnored private var epoch = 0
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// A new call must not overtake the previous call's thread-scoped stop.
+    @ObservationIgnored private var stopTask: Task<Void, Never>?
     @ObservationIgnored private var levelsTask: Task<Void, Never>?
+    @ObservationIgnored private var homeTask: Task<Void, Never>?
+    @ObservationIgnored private var homeThread: ChatThread?
+    @ObservationIgnored private var homeProjectPath: String?
     /// Fails a start still connecting `startTimeout` seconds after the microphone opened.
     @ObservationIgnored private var startDeadline: Task<Void, Never>?
     private static let startTimeout: Double = 90
@@ -58,6 +63,7 @@ final class VoiceController {
     @ObservationIgnored private var realtimeSessionID: String?
     @ObservationIgnored private var startSignals: AsyncStream<StartSignal>.Continuation?
     @ObservationIgnored private var terminationObserver: NSObjectProtocol?
+    @ObservationIgnored private var sleepObserver: NSObjectProtocol?
 
     private enum StartSignal {
         case accepted
@@ -154,6 +160,9 @@ final class VoiceController {
         muted = false
         setStageOpen(true)
         let epoch = epoch
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.close(epoch: epoch, reason: nil) }
+        }
         let voice = app.settings.codexVoice
         task = Task { [weak self] in
             do {
@@ -215,29 +224,43 @@ final class VoiceController {
 
     private func run(epoch: Int, voice: String?, in target: UUID?) async throws {
         guard let app else { return }
+        try requireCurrent(epoch)
+        // Everything but the permission prompt, which waits on the user, counts toward the limit.
+        func armDeadline() {
+            startDeadline?.cancel()
+            startDeadline = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.startTimeout))
+                guard !Task.isCancelled, let self, epoch == self.epoch,
+                      self.phase == .checking || self.phase == .starting else { return }
+                Self.log.notice("voice start timed out")
+                self.fail(epoch: epoch, .protocol)
+            }
+        }
+        armDeadline()
         await app.providers.waitWhileCLIUpdating(.codex)
         try requireCurrent(epoch)
         guard app.providers.status(.codex).isInstalled, app.settings.isEnabled(.codex),
               let executable = app.providers.executable(for: .codex) else { throw VoiceRejection.wrongProvider }
         let helper = try CodexVoiceHost.installedHelper(codexExecutable: executable)
+        startDeadline?.cancel()
         try await Self.requestMicrophone()
         try requireCurrent(epoch)
-        // Past the permission prompt, nothing the start waits on should take this long.
-        startDeadline = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.startTimeout))
-            guard !Task.isCancelled, let self, self.phase != .active else { return }
-            Self.log.notice("voice start timed out")
-            self.fail(epoch: epoch, .protocol)
-        }
+        armDeadline()
+        await stopTask?.value
+        try requireCurrent(epoch)
         let home: ChatThread
         if let target {
-            guard let existing = app.thread(target), existing.provider == .codex, !existing.isHydraHead else { throw VoiceRejection.wrongProvider }
+            guard let existing = app.thread(target), existing.provider == .codex, !existing.isHydraHead, !existing.isArchived else { throw VoiceRejection.wrongProvider }
             home = existing
         } else {
             guard let created = app.voiceHomeThread() else { throw VoiceRejection.noProject }
             home = created
         }
         threadID = home.id
+        homeThread = home
+        homeProjectPath = app.project(home.projectID)?.path
+        try requireCurrent(epoch)
+        watchHome(epoch: epoch)
         let runtime = app.runtime(for: home.id)
         let session = try await runtime.codexSessionForVoice()
         try requireCurrent(epoch)
@@ -258,10 +281,11 @@ final class VoiceController {
         guard account["account"]?["type"]?.string == "chatgpt" else { throw VoiceRejection.chatgptRequired }
         let listed = try? await session.voiceRequest("thread/realtime/listVoices", .object([:]), seconds: 15)
         try requireCurrent(epoch)
-        guard let catalog = listed?["voices"]?["v1"]?.array?.compactMap(\.string) else { throw VoiceRejection.unsupported }
+        // A missing list only drops the style choice; a Codex without realtime voice fails the start below.
+        let catalog = listed?["voices"]?["v1"]?.array?.compactMap(\.string) ?? []
         if !catalog.isEmpty { voices = catalog }
         let voice = voice.flatMap { catalog.contains($0) ? $0 : nil }
-        guard epoch == self.epoch else { return }
+        try requireCurrent(epoch)
 
         let host = try await CodexVoiceHost.open(helper: helper)
         guard epoch == self.epoch else {
@@ -288,10 +312,14 @@ final class VoiceController {
         ]
         if let voice { params["voice"] = .string(voice) }
         serverLive = true
-        _ = try await session.voiceRequest("thread/realtime/start", .object(params), seconds: 30)
+        do {
+            _ = try await session.voiceRequest("thread/realtime/start", .object(params), seconds: 30)
+        } catch let error as RPCError where error.code == -32601 {
+            throw VoiceRejection.unsupported
+        }
         try requireCurrent(epoch)
         let answer = try await Self.awaitAnswer(signals, seconds: 30)
-        guard epoch == self.epoch else { return }
+        try requireCurrent(epoch)
         startSignals = nil
 
         try await host.applyAnswer(answer)
@@ -299,7 +327,7 @@ final class VoiceController {
         try await host.openDevices()
         try requireCurrent(epoch)
         try await host.setControls(microphoneMuted: muted)
-        guard epoch == self.epoch else { return }
+        try requireCurrent(epoch)
         startDeadline?.cancel()
         startDeadline = nil
         phase = .active
@@ -346,6 +374,9 @@ final class VoiceController {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
                 do {
+                    guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+                        throw VoiceRejection.microphonePermissionDenied
+                    }
                     let levels = try await host.levels()
                     guard let self, epoch == self.epoch else { return }
                     self.microphoneLevel = levels.microphone
@@ -371,14 +402,15 @@ final class VoiceController {
             if mode != "chatgpt", mode != "chatgptAuthTokens" { fail(epoch: epoch, .chatgptRequired) }
             return
         }
-        guard params["threadId"]?.string == thread else { return }
+        guard params["threadId"]?.string == thread, let realtimeSessionID else { return }
+        if let eventSessionID = params["realtimeSessionId"]?.string, eventSessionID != realtimeSessionID { return }
         switch method {
         case "thread/realtime/started":
-            guard startSignals != nil else { return }
-            if params["version"]?.string == "v3", params["realtimeSessionId"]?.string == realtimeSessionID {
+            guard startSignals != nil, params["realtimeSessionId"]?.string == realtimeSessionID else { return }
+            if params["version"]?.string == "v3" {
                 startSignals?.yield(.accepted)
             } else {
-                startSignals?.yield(.unsupported)
+                fail(epoch: epoch, .unsupported)
             }
         case "thread/realtime/sdp":
             if let sdp = params["sdp"]?.string, !sdp.isEmpty, sdp.utf8.count <= 65_536 {
@@ -404,18 +436,10 @@ final class VoiceController {
             if let threadID { app?.existingRuntime(for: threadID)?.recordVoiceTranscript(itemID: id, role: role, text: text) }
         case "thread/realtime/closed":
             serverLive = false
-            if startSignals != nil {
-                startSignals?.yield(.failed(.protocol))
-            } else {
-                close(epoch: epoch, reason: nil)
-            }
+            close(epoch: epoch, reason: phase == .active ? nil : .protocol)
         case "thread/realtime/error":
             Self.log.notice("realtime voice failed")
-            if startSignals != nil {
-                startSignals?.yield(.failed(.protocol))
-            } else {
-                close(epoch: epoch, reason: .protocol)
-            }
+            close(epoch: epoch, reason: .protocol)
         default:
             break
         }
@@ -423,10 +447,40 @@ final class VoiceController {
 
     private func requireCurrent(_ epoch: Int) throws {
         guard epoch == self.epoch, !Task.isCancelled else { throw CancellationError() }
+        if let homeThread {
+            guard let app, let current = app.thread(homeThread.id),
+                  !current.isArchived, !current.isHydraHead, current.provider == .codex,
+                  current.title == homeThread.title, current.projectID == homeThread.projectID,
+                  current.worktreePath == homeThread.worktreePath,
+                  let project = app.project(current.projectID), project.path == homeProjectPath else {
+                close(epoch: epoch, reason: nil)
+                throw CancellationError()
+            }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: current.executionDirectory(projectPath: project.path), isDirectory: &isDirectory), isDirectory.boolValue else {
+                close(epoch: epoch, reason: .noProject)
+                throw CancellationError()
+            }
+        }
+    }
+
+    private func watchHome(epoch: Int) {
+        homeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                    guard let self else { return }
+                    try self.requireCurrent(epoch)
+                } catch {
+                    return
+                }
+            }
+        }
     }
 
     func sessionEnded(for threadID: UUID) {
-        guard self.threadID == threadID, isLive else { return }
+        // Preparing voice may replace an old chat session before this call attaches.
+        guard self.threadID == threadID, isLive, session != nil else { return }
         fail(epoch: epoch, .protocol)
     }
 
@@ -458,12 +512,17 @@ final class VoiceController {
     /// Stops the provider side and the helper, and invalidates every pending step.
     private func teardown() {
         epoch &+= 1
+        let previousTask = task
         task?.cancel()
         task = nil
         startDeadline?.cancel()
         startDeadline = nil
         levelsTask?.cancel()
         levelsTask = nil
+        homeTask?.cancel()
+        homeTask = nil
+        if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
+        sleepObserver = nil
         startSignals?.finish()
         startSignals = nil
         realtimeSessionID = nil
@@ -472,8 +531,18 @@ final class VoiceController {
         if let session {
             session.onVoiceNotification = nil
             session.onVoiceClosed = nil
-            if serverLive, let thread = session.voiceThreadID {
-                Task { _ = try? await session.voiceRequest("thread/realtime/stop", ["threadId": .string(thread)], seconds: 2) }
+        }
+        // A new call on this session must wait for the previous run and its stop attempt.
+        let previousStop = stopTask
+        let stoppingSession = serverLive ? session : nil
+        let stoppingThread = stoppingSession?.voiceThreadID
+        if previousTask != nil || stoppingSession != nil {
+            stopTask = Task {
+                await previousStop?.value
+                await previousTask?.value
+                if let stoppingSession, let stoppingThread {
+                    _ = try? await stoppingSession.voiceRequest("thread/realtime/stop", ["threadId": .string(stoppingThread)], seconds: 2)
+                }
             }
         }
         serverLive = false
@@ -489,11 +558,14 @@ final class VoiceController {
         caption.clear()
         microphoneLevel = 0
         speakerLevel = 0
+        muted = false
         playing = false
         speakerActivity = SpeakerActivity()
         stageOpen = false
         activeSince = nil
         threadID = nil
+        homeThread = nil
+        homeProjectPath = nil
     }
 
     /// Asks for the microphone in Tivano's own identity before the helper opens the

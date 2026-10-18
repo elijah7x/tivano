@@ -54,7 +54,7 @@ extension ProviderRegistry {
         cliCheckGeneration[provider] = UUID()
         cliCheckCache[provider] = nil
         if ![.waiting, .updating].contains(cliUpdates[provider]?.phase) {
-            cliUpdates[provider] = nil
+            setCLIUpdateStatus(nil, for: provider)
         }
         guard !monitorsCLIUpdates(provider) else {
             Task { @MainActor [weak self] in
@@ -233,7 +233,7 @@ extension ProviderRegistry {
             var status = CLIUpdateStatus(phase: .current, installed: installed)
             status.error = CLIUpdates.unmanagedReason(provider, executable: executable)
             status.checkedAt = .now
-            cliUpdates[provider] = status
+            setCLIUpdateStatus(status, for: provider)
             cliCheckCache[provider] = nil
             return
         }
@@ -280,7 +280,7 @@ extension ProviderRegistry {
         status.updateFailed = false
         status.checkedAt = key.checkedAt
         guard cliCheckStillCurrent(provider, generation: generation, epoch: epoch) else { return }
-        cliUpdates[provider] = status
+        setCLIUpdateStatus(status, for: provider)
         cliCheckCache[provider] = latest == nil ? nil : key
     }
 
@@ -339,13 +339,13 @@ extension ProviderRegistry {
         status.phase = .checking
         status.error = nil
         status.updateFailed = false
-        cliUpdates[provider] = status
+        setCLIUpdateStatus(status, for: provider)
     }
 
     private func abandonCLICheck(_ provider: ProviderKind, generation: UUID, snapshot: CLIUpdateStatus?) {
         guard cliCheckGeneration[provider] == generation else { return }
         guard cliUpdates[provider]?.phase == .checking else { return }
-        cliUpdates[provider] = snapshot
+        setCLIUpdateStatus(snapshot, for: provider)
     }
 
     private func publishCLICheckFailure(
@@ -362,7 +362,7 @@ extension ProviderRegistry {
         status.error = cliReason(message)
         status.updateFailed = false
         status.checkedAt = .now
-        cliUpdates[provider] = status
+        setCLIUpdateStatus(status, for: provider)
         cliCheckCache[provider] = nil
     }
 
@@ -652,29 +652,38 @@ extension ProviderRegistry {
         return catalogFetchedAt[provider] != before && !models(for: provider).isEmpty
     }
 
+    private func setCLIUpdateStatus(_ status: CLIUpdateStatus?, for provider: ProviderKind) {
+        guard cliUpdates[provider] != status else { return }
+        cliUpdates[provider] = status
+    }
+
     private func markCLIWaiting(_ providers: [ProviderKind]) {
+        var updates = cliUpdates
         for provider in providers {
-            var status = cliUpdates[provider] ?? CLIUpdateStatus(phase: .waiting)
+            var status = updates[provider] ?? CLIUpdateStatus(phase: .waiting)
             status.phase = .waiting
             status.error = nil
             status.updateFailed = false
-            cliUpdates[provider] = status
+            updates[provider] = status
             cliStatusEpoch[provider, default: 0] &+= 1
         }
+        if cliUpdates != updates { cliUpdates = updates }
     }
 
     private func markCLIUpdating(_ providers: [ProviderKind], channel: CLIInstallChannel, installed: String, latest: String?) {
+        var updates = cliUpdates
         for provider in providers {
-            var status = cliUpdates[provider] ?? CLIUpdateStatus(phase: .updating)
+            var status = updates[provider] ?? CLIUpdateStatus(phase: .updating)
             status.phase = .updating
             status.installed = installed
             status.latest = latest
             status.channel = channel
             status.error = nil
             status.updateFailed = false
-            cliUpdates[provider] = status
+            updates[provider] = status
             cliStatusEpoch[provider, default: 0] &+= 1
         }
+        if cliUpdates != updates { cliUpdates = updates }
     }
 
     private func restoreCLIWait(
@@ -683,13 +692,15 @@ extension ProviderRegistry {
         requester: ProviderKind? = nil,
         failure: CLIUpdateStatus? = nil
     ) {
-        for provider in sharers where cliUpdates[provider]?.phase != .updating {
+        var updates = cliUpdates
+        for provider in sharers where updates[provider]?.phase != .updating {
             if provider == requester, let failure {
-                cliUpdates[provider] = failure
+                updates[provider] = failure
             } else {
-                cliUpdates[provider] = snapshot[provider]
+                updates[provider] = snapshot[provider]
             }
         }
+        if cliUpdates != updates { cliUpdates = updates }
     }
 
     private func cliUpdateRefusal(_ provider: ProviderKind, _ reason: String, channel: CLIInstallChannel?, keeping previous: CLIUpdateStatus?) -> CLIUpdateStatus {
@@ -722,10 +733,12 @@ extension ProviderRegistry {
     }
 
     private func writeCLIUpdateResult(_ status: CLIUpdateStatus, sharers: [ProviderKind]) {
+        var updates = cliUpdates
         for provider in sharers {
-            cliUpdates[provider] = status
+            updates[provider] = status
             cliCheckCache[provider] = nil
         }
+        if cliUpdates != updates { cliUpdates = updates }
     }
 
     // MARK: - Install identity

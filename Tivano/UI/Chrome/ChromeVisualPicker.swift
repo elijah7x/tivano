@@ -38,6 +38,7 @@ struct ChromeVisualPicker<Value: Hashable, Preview: View>: View {
         HStack(alignment: .top, spacing: ChromeVisualTileMetrics.spacing) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                 ChromeVisualTile(title: option.title, isSelected: option.value == selection, width: tileWidth) {
+                    guard selection != option.value else { return }
                     withAnimation(Chrome.hover) { selection = option.value }
                 } content: {
                     preview(option.value)
@@ -62,23 +63,16 @@ struct ChromeVisualTile<Content: View>: View {
     var layout: ChromeVisualTileLayout = .stacked
     let action: () -> Void
     @ViewBuilder var content: () -> Content
-    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
             if layout == .inline {
-                inlineLabel
+                ChromeVisualTileFace(isSelected: isSelected, width: width, layout: layout, face: inlineLabel, caption: EmptyView())
             } else {
-                VStack(spacing: ChromeVisualTileMetrics.captionSpacing) {
-                    stage
-                    caption
-                }
+                ChromeVisualTileFace(isSelected: isSelected, width: width, layout: layout, face: stage, caption: caption)
             }
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
         .accessibilityLabel(Text(verbatim: Chrome.localized(title)))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -101,14 +95,6 @@ struct ChromeVisualTile<Content: View>: View {
                 .opacity(isSelected ? 1 : 0)
                 .accessibilityHidden(true)
         }
-        .opacity(isSelected || isHovering ? 1 : 0.7)
-        .padding(.horizontal, Chrome.rowHorizontalPadding)
-        .frame(width: width, height: Chrome.rowHeight + ChromeVisualTileMetrics.captionSpacing * 2)
-        .background(
-            RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
-                .fill(Chrome.overlay(isHovering ? 0.06 : 0))
-        )
-        .contentShape(.rect)
     }
 
     /// The option's name under its tile: the symbol alone does not say what the choice is.
@@ -126,19 +112,53 @@ struct ChromeVisualTile<Content: View>: View {
             .font(.ui(.title2, weight: .medium))
             .foregroundStyle(isSelected ? Chrome.accent : Chrome.secondaryText)
             .frame(width: width, height: ChromeVisualTileMetrics.height)
-            .background(
-                RoundedRectangle(cornerRadius: ChromeVisualTileMetrics.cornerRadius, style: .continuous)
-                    .fill(Chrome.overlay(isHovering || isSelected ? 0.10 : 0.06))
-            )
-            .clipShape(RoundedRectangle(cornerRadius: ChromeVisualTileMetrics.cornerRadius, style: .continuous))
-            .padding(ChromeVisualTileMetrics.ringInset)
-            .overlay(
-                RoundedRectangle(
-                    cornerRadius: ChromeVisualTileMetrics.cornerRadius + ChromeVisualTileMetrics.ringInset,
-                    style: .continuous
-                )
-                .strokeBorder(isSelected ? Chrome.accent : Color.clear, lineWidth: ChromeVisualTileMetrics.ringWidth)
-            )
-            .contentShape(Rectangle())
+    }
+}
+
+private struct ChromeVisualTileFace<Face: View, Caption: View>: View {
+    let isSelected: Bool
+    let width: CGFloat
+    let layout: ChromeVisualTileLayout
+    let face: Face
+    let caption: Caption
+    @State private var isHovering = false
+
+    var body: some View {
+        Group {
+            if layout == .inline {
+                face
+                    .opacity(isSelected || isHovering ? 1 : 0.7)
+                    .padding(.horizontal, Chrome.rowHorizontalPadding)
+                    .frame(width: width, height: Chrome.rowHeight + ChromeVisualTileMetrics.captionSpacing * 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+                            .fill(Chrome.overlay(isHovering ? 0.06 : 0))
+                    )
+                    .contentShape(.rect)
+            } else {
+                VStack(spacing: ChromeVisualTileMetrics.captionSpacing) {
+                    face
+                        .background(
+                            RoundedRectangle(cornerRadius: ChromeVisualTileMetrics.cornerRadius, style: .continuous)
+                                .fill(Chrome.overlay(isHovering || isSelected ? 0.10 : 0.06))
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: ChromeVisualTileMetrics.cornerRadius, style: .continuous))
+                        .padding(ChromeVisualTileMetrics.ringInset)
+                        .overlay(
+                            RoundedRectangle(
+                                cornerRadius: ChromeVisualTileMetrics.cornerRadius + ChromeVisualTileMetrics.ringInset,
+                                style: .continuous
+                            )
+                            .strokeBorder(isSelected ? Chrome.accent : Color.clear, lineWidth: ChromeVisualTileMetrics.ringWidth)
+                        )
+                        .contentShape(Rectangle())
+                    caption
+                }
+            }
+        }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            withAnimation(Chrome.hover) { isHovering = hovering }
+        }
     }
 }

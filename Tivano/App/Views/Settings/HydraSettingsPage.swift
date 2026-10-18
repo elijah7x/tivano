@@ -12,9 +12,16 @@ struct HydraSettingsPage: View {
 
     /// Neighbours sliding out of the grabbed row's way.
     private static let slide = Animation.spring(response: 0.28, dampingFraction: 0.82)
+    private static let maxHeadsOptions = [ChromeSegmentedOption(value: Int?.none, title: "No cap", symbol: "infinity")]
+        + HydraPair.maxHeadsRange.map { ChromeSegmentedOption(value: Optional($0), title: String($0)) }
+    private static let checkoutOptions = [(true, "Own copy"), (false, "Shared")]
+    private static let detailOptions = [(false, "Progress"), (true, "Every step")]
+    private static let panelOptions = [(false, "One panel"), (true, "A panel each")]
+    private static let historyOptions = [(false, "Keep visible"), (true, "Auto-archive")]
 
     var body: some View {
         @Bindable var settings = model.settings
+        let pairs = settings.hydraPairs
         VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
             ChromeCard {
                 HStack(spacing: 14) {
@@ -61,7 +68,7 @@ struct HydraSettingsPage: View {
                             ? "Each head works in a copy of its own; its changes land in the chat's checkout when it reports."
                             : "Heads work in the chat's checkout itself."
                     ) {
-                        ChromeVisualPicker(options: [(true, "Own copy"), (false, "Shared")], selection: $settings.hydraIsolateHeads) { isolated in
+                        ChromeVisualPicker(options: Self.checkoutOptions, selection: $settings.hydraIsolateHeads) { isolated in
                             Image(systemName: isolated ? "doc.on.doc" : "folder")
                         }
                     }
@@ -71,8 +78,7 @@ struct HydraSettingsPage: View {
                         detail: settings.hydraMaxHeads.map { String(format: Chrome.localized("At most %lld heads in parallel."), $0) } ?? "As many heads as the job needs."
                     ) {
                         ChromeSegmentedPicker(
-                            options: [ChromeSegmentedOption(value: Int?.none, title: "No cap", symbol: "infinity")]
-                                + HydraPair.maxHeadsRange.map { ChromeSegmentedOption(value: Optional($0), title: String($0)) },
+                            options: Self.maxHeadsOptions,
                             selection: $settings.hydraMaxHeads
                         )
                     }
@@ -82,7 +88,7 @@ struct HydraSettingsPage: View {
                     toggleRow("Auto-hide heads in the sidebar", detail: "A chat's heads show in the sidebar while one of them runs; the whole card leaves once every head of that chat has finished, and comes back on its own when one starts again.", isOn: $settings.hydraAutoHidesIdleHeads)
                     ChromeRowDivider()
                     ChromeRow(title: "Head panel", detail: "The head's progress bar, or each of its steps as it goes.") {
-                        ChromeVisualPicker(options: [(false, "Progress"), (true, "Every step")], selection: $settings.hydraShowsHeadDetails) { showsSteps in
+                        ChromeVisualPicker(options: Self.detailOptions, selection: $settings.hydraShowsHeadDetails) { showsSteps in
                             Image(systemName: showsSteps ? "list.number" : "chart.bar")
                         }
                     }
@@ -91,7 +97,7 @@ struct HydraSettingsPage: View {
                         title: "Heads' panels",
                         detail: settings.hydraAutoPopsHeads ? "Each head after the first gets a panel of its own beside the chat while there is room, left and right until each side is full." : "One panel over the chat lists every head."
                     ) {
-                        ChromeVisualPicker(options: [(false, "One panel"), (true, "A panel each")], selection: $settings.hydraAutoPopsHeads) { popped in
+                        ChromeVisualPicker(options: Self.panelOptions, selection: $settings.hydraAutoPopsHeads) { popped in
                             Image(systemName: popped ? "square.grid.2x2" : "rectangle")
                         }
                     }
@@ -146,7 +152,7 @@ struct HydraSettingsPage: View {
                     .padding(.vertical, 14)
                 }
                 ChromeCard {
-                    if settings.hydraPairs.isEmpty {
+                    if pairs.isEmpty {
                         ChromeRow(title: "No pairs yet", detail: "Heads run on the chat's own model until a chat joins a pair.") {
                             HydraAddPairButton()
                         }
@@ -156,10 +162,10 @@ struct HydraSettingsPage: View {
                         // it ignores zIndex, which the lifted row needs. The add row stays
                         // outside, so a drag only reorders pairs that already exist.
                         VStack(spacing: 0) {
-                            ForEach(settings.hydraPairs) { pair in
+                            ForEach(pairs) { pair in
                                 let isDragged = drag.id == pair.id
                                 VStack(spacing: 0) {
-                                    ChromeRowDivider().opacity(pair.id == settings.hydraPairs.first?.id || isDragged ? 0 : 1)
+                                    ChromeRowDivider().opacity(pair.id == pairs.first?.id || isDragged ? 0 : 1)
                                     HydraPairRow(
                                         pair: pair,
                                         isDragged: isDragged,
@@ -179,7 +185,7 @@ struct HydraSettingsPage: View {
                         }
                     }
                 }
-                .onChange(of: settings.hydraPairs.map(\.id)) { _, ids in
+                .onChange(of: pairs.map(\.id)) { _, ids in
                     let kept = Set(ids)
                     if rowHeights.contains(where: { !kept.contains($0.key) }) {
                         rowHeights = rowHeights.filter { kept.contains($0.key) }
@@ -203,7 +209,7 @@ struct HydraSettingsPage: View {
                     title: "Codex local session history",
                     detail: "For new delegated Tivano-run Codex heads after successful completion. Archived sessions keep their IDs and resume on the next message. Lead chats, older sessions and heads with user follow-ups stay visible."
                 ) {
-                    ChromeVisualPicker(options: [(false, "Keep visible"), (true, "Auto-archive")], selection: $settings.hydraArchivesCodexHeads) { archive in
+                    ChromeVisualPicker(options: Self.historyOptions, selection: $settings.hydraArchivesCodexHeads) { archive in
                         Image(systemName: archive ? "archivebox" : "eye")
                     }
                 }
@@ -222,12 +228,7 @@ struct HydraSettingsPage: View {
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
                 .padding(.horizontal, 4)
-            ForEach(model.threads.filter { $0.provider == .codex && $0.hydra?.providerHistoryIssue != nil }) { head in
-                Text("\(head.title): \(head.hydra?.providerHistoryIssue ?? "")")
-                    .font(.ui(.subheadline))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .padding(.horizontal, 4)
-            }
+            HydraProviderHistoryIssues()
         }
         ChromeSection(title: "Where heads run") {
             ChromeCard {
@@ -293,7 +294,7 @@ struct HydraSettingsPage: View {
 
         func body(content: Content) -> some View {
             content.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
-                if heights[id] != height { heights[id] = height }
+                if heights[id].map({ abs($0 - height) > 0.5 }) ?? true { heights[id] = height }
             }
         }
     }
@@ -306,6 +307,19 @@ struct HydraSettingsPage: View {
         }
         .disabled(reason != nil)
         .opacity(reason == nil ? 1 : 0.5)
+    }
+}
+
+private struct HydraProviderHistoryIssues: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ForEach(model.threads.filter { $0.provider == .codex && $0.hydra?.providerHistoryIssue != nil }) { head in
+            Text("\(head.title): \(head.hydra?.providerHistoryIssue ?? "")")
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(.horizontal, 4)
+        }
     }
 }
 
@@ -355,19 +369,11 @@ private struct HydraPairRow: View {
 
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var isEditing = false
-    @State private var isHovering = false
-    /// Whether the pointer is over the reorder grip, which brightens its icon.
-    @State private var isHoveringGrip = false
 
     var body: some View {
         let registry = model.providers
         HStack(spacing: 10) {
-            Image(systemName: "line.3.horizontal")
-                .font(.ui(size: 11, weight: .medium))
-                .foregroundStyle(Chrome.secondaryText.opacity(isHoveringGrip ? 1 : 0.7))
-                .frame(width: 24, height: 24)
-                .contentShape(.rect)
-                .onHover { hovering in isHoveringGrip = hovering }
+            HydraPairGrip()
                 .pointerStyle(isDragged ? .grabActive : .grabIdle)
                 .gesture(
                     DragGesture(minimumDistance: 1, coordinateSpace: .global)
@@ -379,26 +385,9 @@ private struct HydraPairRow: View {
             Button {
                 isEditing = true
             } label: {
-                HStack(spacing: 12) {
-                    HydraPairIcons(pair: pair)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: HydraPairSummary.title(pair, registry: registry))
-                            .font(.ui(.body))
-                            .foregroundStyle(Chrome.primaryText)
-                        Text(verbatim: summary(registry: registry))
-                            .font(.ui(.subheadline))
-                            .foregroundStyle(Chrome.secondaryText)
-                    }
-                    Spacer(minLength: 8)
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.ui(.callout))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .opacity(isHovering ? 1 : 0)
-                }
-                .contentShape(.rect)
+                HydraPairEditLabel(pair: pair, title: HydraPairSummary.title(pair, registry: registry), summary: summary(registry: registry))
             }
             .buttonStyle(.plain)
-            .onHover { isHovering = $0 }
             .popover(isPresented: $isEditing, arrowEdge: .trailing) {
                 HydraPairEditor(pair: pair, update: { change in model.updateHydraPair(pair.id, change) })
                     .frame(width: 360)
@@ -475,6 +464,47 @@ private struct HydraPairRow: View {
     }
 }
 
+private struct HydraPairGrip: View {
+    @State private var isHovering = false
+
+    var body: some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.ui(size: 11, weight: .medium))
+            .foregroundStyle(Chrome.secondaryText.opacity(isHovering ? 1 : 0.7))
+            .frame(width: 24, height: 24)
+            .contentShape(.rect)
+            .onHover { if isHovering != $0 { isHovering = $0 } }
+    }
+}
+
+private struct HydraPairEditLabel: View {
+    let pair: HydraPair
+    let title: String
+    let summary: String
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            HydraPairIcons(pair: pair)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: title)
+                    .font(.ui(.body))
+                    .foregroundStyle(Chrome.primaryText)
+                Text(verbatim: summary)
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "slider.horizontal.3")
+                .font(.ui(.callout))
+                .foregroundStyle(Chrome.secondaryText)
+                .opacity(isHovering ? 1 : 0)
+        }
+        .contentShape(.rect)
+        .onHover { if isHovering != $0 { isHovering = $0 } }
+    }
+}
+
 /// A pair's provider marks: the lead's larger and the heads' smaller after an arrow,
 /// the same mark wherever a pair is drawn, so a same-provider pair shows
 /// provider → provider too and a row reads the same everywhere.
@@ -501,13 +531,16 @@ struct HydraPairEditor: View {
     /// caret landing there read as a prompt to rename the pair. The field is given back
     /// its focus only on a click.
     @FocusState private var isNameFocused: Bool
+    private static let maxHeadsOptions = [(Int?.none, "As many as it takes")]
+        + HydraPair.maxHeadsRange.map { (Optional($0), String($0)) }
 
     var body: some View {
         let registry = model.providers
         let providers = ProviderKind.alphabetical.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.provider) }
         let headsProviders = ProviderKind.alphabetical.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.headsProvider) }
         let options = registry.sortedModels(for: pair.provider)
-        let headsOptions = registry.sortedModels(for: pair.headsProvider)
+        let headsOptions = pair.headsProvider == pair.provider ? options : registry.sortedModels(for: pair.headsProvider)
+        let catalogProviders = Self.catalogProviders(pair)
         let leadOption = registry.model(pair.orchestratorModel, for: pair.provider)
         let workerOption = registry.model(pair.workerModel, for: pair.headsProvider)
         // A lead that may be any model offers every effort the provider's models know.
@@ -650,14 +683,14 @@ struct HydraPairEditor: View {
             }
             editorRow("At once") {
                 GlassPickerButton(
-                    options: [(Int?.none, "As many as it takes")] + HydraPair.maxHeadsRange.map { (Optional($0), String($0)) },
+                    options: Self.maxHeadsOptions,
                     selection: Binding(
                         get: { pair.maxHeads },
                         set: { count in update { $0.maxHeads = count } }
                     )
                 )
             }
-            ForEach(Self.catalogProviders(pair), id: \.self) { provider in
+            ForEach(catalogProviders, id: \.self) { provider in
                 if registry.models(for: provider).isEmpty {
                     Text(verbatim: String(format: Chrome.localized(registry.loadingCatalogs.contains(provider) ? "Loading %@'s models…" : "No models loaded for %@ yet."), provider.displayName))
                         .font(.ui(.subheadline))
@@ -672,8 +705,8 @@ struct HydraPairEditor: View {
             // After the popover's own first-responder pass, which runs as it shows.
             DispatchQueue.main.async { isNameFocused = false }
         }
-        .task(id: Self.catalogProviders(pair)) {
-            for provider in Self.catalogProviders(pair) {
+        .task(id: catalogProviders) {
+            for provider in catalogProviders {
                 await registry.loadCatalog(provider)
             }
         }
@@ -736,8 +769,8 @@ struct HydraPairEditor: View {
     /// A model's efforts for the picker: its declared scale, or the fallback when the
     /// declaration is empty — a catalog that has not walked the model's scale yet would
     /// otherwise take the effort row away from a model that does reason.
-    private static func efforts(of option: ModelOption?, fallback: [String]) -> [String] {
-        guard let option, !option.efforts.isEmpty else { return fallback }
+    private static func efforts(of option: ModelOption?, fallback: @autoclosure () -> [String]) -> [String] {
+        guard let option, !option.efforts.isEmpty else { return fallback() }
         return option.efforts
     }
 

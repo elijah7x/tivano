@@ -4,6 +4,8 @@ extension AppModel {
     /// The only place that chooses the project and creates the call's home chat.
     func voiceHomeThread() -> ChatThread? {
         guard let project = currentProject else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
         let current = selectedThread?.provider == .codex ? selectedThread : nil
         var thread = ChatThread(
             projectID: project.id,

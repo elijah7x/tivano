@@ -143,7 +143,7 @@ final class AppModel {
 
     func updateTaskSleepPrevention() {
         taskSleepPrevention.update(
-            isEnabled: settings.preventSleepDuringTasks && !CaptureRun.isEnabled,
+            mode: CaptureRun.isEnabled ? .off : settings.taskSleepMode,
             hasRunningTasks: runtimes.values.contains(where: Self.hasActiveTasks)
         )
     }
@@ -322,11 +322,10 @@ final class AppModel {
             }
         }
         await providers.refreshAll()
-        // The catalogs a fresh install starts without, or with only a seed of: one CLI and
-        // two HTTPS calls, overlapped. Claude's brings its slash commands too, so the picker
-        // and the composer are complete before any turn.
+        // Load the live catalogs behind the launch seeds, overlapped. Claude's brings its
+        // slash commands too, so the picker and the composer are complete before any turn.
         await withTaskGroup(of: Void.self) { group in
-            for provider in [ProviderKind.claude, .codex, .deepseek, .meta] where providers.status(provider).isInstalled {
+            for provider in [ProviderKind.claude, .codex, .deepseek, .meta, .dsh] where providers.status(provider).isInstalled && (provider != .dsh || settings.isEnabled(provider)) {
                 group.addTask { await self.providers.loadCatalog(provider) }
             }
         }

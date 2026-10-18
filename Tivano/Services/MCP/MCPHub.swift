@@ -393,14 +393,24 @@ private actor MCPClient {
                 connection.stop()
                 stdio = nil
             }
-            guard let executable = LoginEnvironment.which(command, in: LoginEnvironment.current) else {
+            let environmentBase: [String: String]
+            if DshIntegrationConfiguration.isOfflineNative {
+                environmentBase = DshIntegrationConfiguration.environment
+                guard DshIntegrationConfiguration.paths != nil, !environmentBase.isEmpty,
+                      command.hasPrefix("/") else { throw MCPHubError.server("Invalid offline native fixture") }
+            } else {
+                environmentBase = LoginEnvironment.current
+            }
+            guard let executable = LoginEnvironment.which(command, in: environmentBase) else {
                 throw MCPHubError.server(String(format: String(localized: "%@ isn't installed."), command))
             }
-            var environment = LoginEnvironment.current
+            var environment = environmentBase
             for (key, value) in env { environment[key] = value }
             let connection: MCPStdioConnection
             do {
-                connection = try MCPStdioConnection.launch(executable: executable, arguments: args, environment: environment)
+                let directory = DshIntegrationConfiguration.isOfflineNative
+                    ? environmentBase["HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) } : nil
+                connection = try MCPStdioConnection.launch(executable: executable, arguments: args, environment: environment, directory: directory)
             } catch {
                 throw MCPHubError.server(error.localizedDescription)
             }

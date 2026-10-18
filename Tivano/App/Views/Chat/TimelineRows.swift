@@ -44,6 +44,20 @@ private func copyMessageText(_ text: String) {
     NSPasteboard.general.setString(ProseReflow.reflowed(text), forType: .string)
 }
 
+/// The copy items every message menu opens with. Copy takes what the reader selected,
+/// like Command-C, and the whole message as plain text when nothing is selected; the
+/// markdown source is always the whole message, and its title says so.
+@MainActor
+private func copyActions(text: String, selection: SelectionCopy) -> [RowAction] {
+    let textSnapshot = text
+    return [
+        RowAction(title: "Copy", symbol: "doc.on.doc", confirms: "Copied") {
+            if !selection.copy() { copyMessageText(MessageText.plain(textSnapshot)) }
+        },
+        RowAction(title: "Copy message as markdown", symbol: "number", confirms: "Copied") { copyMessageText(textSnapshot) },
+    ]
+}
+
 /// The last whole fenced code block's code, if the text holds one: a simple scan for
 /// lines starting with three backticks.
 private func lastCodeBlock(in text: String) -> String? {
@@ -216,11 +230,12 @@ struct UserMessageRow: View {
             // capture the row, so the popover cannot pin the row's state storage
             // after dismiss. The revert intent goes through the binding alone, the
             // way the hover responder does below.
-            .rightClickPopover { [message, canRevert, confirming = $menuRequests.confirmRevert] in
+            .rightClickPopover { [message, canRevert, confirming = $menuRequests.confirmRevert] selection in
                 Self.messageActions(
                     text: message.text,
                     canRevert: canRevert,
-                    confirmRevert: confirming
+                    confirmRevert: confirming,
+                    selection: selection
                 )
             }
             // The room for the hover line lives inside the row but is taken back out
@@ -260,12 +275,8 @@ struct UserMessageRow: View {
 
     /// The context menu's items, from value snapshots with weak captures: the AppKit menu
     /// outlives the right-click, so its callbacks must not retain the row.
-    private static func messageActions(text: String, canRevert: Bool, confirmRevert: Binding<Bool>) -> [RowAction] {
-        let textSnapshot = text
-        var items = [
-            RowAction(title: "Copy message", symbol: "doc.on.doc", confirms: "Copied") { copyMessageText(MessageText.plain(textSnapshot)) },
-            RowAction(title: "Copy as markdown", symbol: "number", confirms: "Copied") { copyMessageText(textSnapshot) },
-        ]
+    private static func messageActions(text: String, canRevert: Bool, confirmRevert: Binding<Bool>, selection: SelectionCopy) -> [RowAction] {
+        var items = copyActions(text: text, selection: selection)
         if canRevert {
             items.append(RowAction(title: "Edit from here", symbol: "arrow.uturn.backward", startsGroup: true) { [confirm = confirmRevert] in
                 confirm.wrappedValue = true
@@ -545,6 +556,7 @@ private struct FinishedHeadPill: View {
 /// A shimmer sweeping across the content on a loop: a narrow bright band sliding
 /// left to right, masked to the content itself. Still when reduced motion is on.
 private struct HydraShimmer: ViewModifier {
+    @Environment(\.chatColumnIsShown) private var columnIsShown
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var width: CGFloat = 0
 
@@ -564,7 +576,7 @@ private struct HydraShimmer: ViewModifier {
                     // Thirty frames a second is enough for a band this soft, a quarter of the
                     // display's rate; and it holds still while the reader scrolls anywhere, so
                     // the mask pass below never lands on a scrolled frame.
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ScrollActivity.shared.isScrolling)) { context in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ScrollActivity.shared.isScrolling || !columnIsShown)) { context in
                         let phase = CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.sweep) / Self.sweep)
                         Color.clear
                             .overlay(alignment: .leading) {
@@ -1315,13 +1327,10 @@ struct AssistantMessageRow: View {
 
     /// The context menu's items, from value snapshots with weak captures: the AppKit menu
     /// outlives the right-click, so its callbacks must not retain the row.
-    static func messageActions(text: String, code: String?, runtime: ThreadRuntime) -> [RowAction] {
+    static func messageActions(text: String, code: String?, runtime: ThreadRuntime, selection: SelectionCopy) -> [RowAction] {
         let textSnapshot = text
         let codeSnapshot = code
-        var items = [
-            RowAction(title: "Copy message", symbol: "doc.on.doc", confirms: "Copied") { copyMessageText(MessageText.plain(textSnapshot)) },
-            RowAction(title: "Copy as markdown", symbol: "number", confirms: "Copied") { copyMessageText(textSnapshot) },
-        ]
+        var items = copyActions(text: text, selection: selection)
         if let codeSnapshot {
             items.append(RowAction(title: "Copy last code block", symbol: "chevron.left.forwardslash.chevron.right", confirms: "Copied") { [code = codeSnapshot] in
                 copyMessageText(code)
@@ -1342,11 +1351,12 @@ extension View {
     /// Snapshots only: the popover builder must not capture the
     /// row, so the popover cannot pin the row's state storage after dismiss.
     func messageMenu(text: String, runtime: ThreadRuntime) -> some View {
-        rightClickPopover { [text, runtime] in
+        rightClickPopover { [text, runtime] selection in
             AssistantMessageRow.messageActions(
                 text: text,
                 code: lastCodeBlock(in: text),
-                runtime: runtime
+                runtime: runtime,
+                selection: selection
             )
         }
     }

@@ -15,15 +15,16 @@ struct MCPSettingsPage: View {
         GridItem(.flexible(), spacing: 10),
         GridItem(.flexible(), spacing: 10),
     ]
+    private static let sortedEntries = MCPCatalog.entries.sorted { $0.name < $1.name }
+    private static let catalogSections = MCPCatalog.byCategory
 
     private var connected: [MCPCatalogEntry] {
-        MCPCatalog.entries
+        Self.sortedEntries
             .filter { !celebrating.contains($0.id) && model.mcp.state(for: $0.id).isConnected }
-            .sorted { $0.name < $1.name }
     }
 
     private var visibleSections: [(category: MCPCategory, entries: [MCPCatalogEntry])] {
-        MCPCatalog.byCategory.compactMap { group in
+        Self.catalogSections.compactMap { group in
             let entries = group.entries.filter { entry in
                 (!model.mcp.state(for: entry.id).isConnected || celebrating.contains(entry.id))
                     && Self.matches(entry, query: query)
@@ -33,6 +34,8 @@ struct MCPSettingsPage: View {
     }
 
     var body: some View {
+        let connected = connected
+        let visibleSections = visibleSections
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
             MCPLeadCard()
             if let error = model.mcp.configurationLoadError {
@@ -65,7 +68,7 @@ struct MCPSettingsPage: View {
                         ChromeCard {
                             ForEach(Array(connected.enumerated()), id: \.element.id) { index, entry in
                                 if index > 0 { ChromeRowDivider() }
-                                MCPConnectedRow(entry: entry)
+                                MCPConnectedRow(entry: entry, connection: model.mcp.connection(for: entry.id), state: model.mcp.state(for: entry.id))
                             }
                         }
                     }
@@ -75,7 +78,7 @@ struct MCPSettingsPage: View {
                     ChromeSection(title: section.category.title) {
                         LazyVGrid(columns: Self.columns, spacing: 10) {
                             ForEach(section.entries) { entry in
-                                MCPServerCard(entry: entry, celebrating: celebrating.contains(entry.id))
+                                MCPServerCard(entry: entry, state: model.mcp.state(for: entry.id), celebrating: celebrating.contains(entry.id))
                                     .transition(.scale(scale: 0.9).combined(with: .opacity))
                             }
                         }
@@ -165,18 +168,17 @@ private struct MCPLeadCard: View {
 private struct MCPConnectedRow: View {
     @Environment(AppModel.self) private var model
     let entry: MCPCatalogEntry
+    let connection: MCPConnection?
+    let state: MCPConnectionState
 
     @State private var showMenu = false
     @State private var showTools = false
 
-    private var connection: MCPConnection? { model.mcp.connection(for: entry.id) }
-
-    private var toolCount: Int {
-        if case .connected(let count) = model.mcp.state(for: entry.id) { return count }
-        return connection?.tools.count ?? 0
-    }
-
     var body: some View {
+        let toolCount: Int = {
+            if case .connected(let count) = state { return count }
+            return connection?.tools.count ?? 0
+        }()
         HStack(spacing: 12) {
             MCPIcon(entry: entry, size: 22)
                 .frame(width: 26, alignment: .center)
@@ -190,7 +192,7 @@ private struct MCPConnectedRow: View {
             }
             Spacer(minLength: 12)
             SettingsSwitch(isOn: Binding(
-                get: { model.mcp.connection(for: entry.id)?.isEnabled ?? true },
+                get: { connection?.isEnabled ?? true },
                 set: { model.mcp.setEnabled($0, for: entry) }
             ))
             Button {
@@ -262,11 +264,10 @@ private struct MCPServerCard: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let entry: MCPCatalogEntry
+    let state: MCPConnectionState
     var celebrating = false
 
     @State private var successPopped = false
-
-    private var state: MCPConnectionState { model.mcp.state(for: entry.id) }
 
     private var toolCount: Int {
         if case .connected(let count) = state { return count }
@@ -413,11 +414,13 @@ private struct MCPCustomSection: View {
     @State private var isAdding = false
 
     private var visible: [MCPCustomServer] {
-        model.mcp.customs.filter { MCPSettingsPage.matches($0.catalogEntry(), query: query) }
+        guard !query.trimmed.isEmpty else { return model.mcp.customs }
+        return model.mcp.customs.filter { MCPSettingsPage.matches($0.catalogEntry(), query: query) }
     }
 
     var body: some View {
         let isSearching = !query.trimmed.isEmpty
+        let visible = visible
         if !visible.isEmpty || !isSearching {
             ChromeSection(title: "Custom") {
                 ChromeCard {
@@ -432,7 +435,7 @@ private struct MCPCustomSection: View {
                     } else {
                         ForEach(Array(visible.enumerated()), id: \.element.id) { index, server in
                             if index > 0 { ChromeRowDivider() }
-                            MCPCustomRow(server: server)
+                            MCPCustomRow(server: server, state: model.mcp.state(for: server.id), connection: model.mcp.connection(for: server.id))
                         }
                         ChromeRowDivider()
                     }
@@ -475,13 +478,20 @@ private struct MCPCustomSection: View {
 private struct MCPCustomRow: View {
     @Environment(AppModel.self) private var model
     let server: MCPCustomServer
+    private let entry: MCPCatalogEntry
+    let state: MCPConnectionState
+    let connection: MCPConnection?
 
     @State private var showMenu = false
     @State private var isEditing = false
 
-    private var entry: MCPCatalogEntry { server.catalogEntry() }
-    private var state: MCPConnectionState { model.mcp.state(for: server.id) }
-    private var connection: MCPConnection? { model.mcp.connection(for: server.id) }
+    init(server: MCPCustomServer, state: MCPConnectionState, connection: MCPConnection?) {
+        self.server = server
+        entry = server.catalogEntry()
+        self.state = state
+        self.connection = connection
+    }
+
 
     private var toolCount: Int {
         if case .connected(let count) = state { return count }
@@ -654,6 +664,11 @@ private struct MCPCustomEditor: View {
     private static let sectionSpacing: CGFloat = 12
     private static let outerPadding: CGFloat = 16
     private static let variableRowHeight: CGFloat = 34
+    // Custom icons depend only on the empty asset, not the fields being edited.
+    private static let iconEntry = MCPCustomServer(id: "", name: "", kind: .stdio).catalogEntry()
+    private static let kindOptions: [(MCPCustomServer.Kind, String)] = [
+        (.stdio, "stdio — a command on this Mac"), (.http, "http — a remote server")
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.sectionSpacing) {
@@ -663,7 +678,7 @@ private struct MCPCustomEditor: View {
                     nameField
                     field("Kind") {
                         GlassPickerButton(
-                            options: [(MCPCustomServer.Kind.stdio, "stdio — a command on this Mac"), (.http, "http — a remote server")],
+                            options: Self.kindOptions,
                             selection: $kind,
                             symbol: { $0 == .stdio ? "terminal" : "network" }
                         )
@@ -735,7 +750,7 @@ private struct MCPCustomEditor: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
-            MCPIcon(entry: draft.catalogEntry(), size: 26)
+            MCPIcon(entry: Self.iconEntry, size: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(verbatim: server?.name ?? Chrome.localized("New server"))
                     .font(.ui(size: 14, weight: .semibold))
@@ -869,7 +884,7 @@ private struct MCPCustomEditor: View {
         }
     }
 
-    /// The draft as a server, for the header's icon and for saving. Rows whose key was
+    /// The draft as a server for saving. Rows whose key was
     /// never filled are left out rather than failing validation on an empty key, and the
     /// variable list survives a kind switch: keys typed as env vars read fine as headers.
     private var draft: MCPCustomServer {
@@ -969,13 +984,13 @@ private struct MCPHoverInfoButton<Content: View>: View {
         .focusable(false)
         .accessibilityLabel(Text(verbatim: Chrome.localized(label)))
         .onHover { over in
-            isOverButton = over
+            if isOverButton != over { isOverButton = over }
             reconsider()
         }
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             content
                 .onHover { over in
-                    isOverPopover = over
+                    if isOverPopover != over { isOverPopover = over }
                     reconsider()
                 }
                 .presentedChrome()

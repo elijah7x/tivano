@@ -10,13 +10,13 @@ struct CommandPalette: View {
     /// The rows for the query as the library stands: built when either changes, not on
     /// every arrow key or selection change.
     @State private var items: [Item] = []
+    @State private var threadCandidates: [(thread: ChatThread, searchTitle: String)] = []
+    @State private var projectCandidates: [(project: Project, searchName: String)] = []
     @FocusState private var isFocused: Bool
 
-    private struct ResultsKey: Equatable {
-        var query: String
+    private struct LibraryKey: Equatable {
         var threads: [ChatThread]
         var projects: [Project]
-        var selectedThreadID: UUID?
     }
 
     private struct Item: Identifiable {
@@ -80,7 +80,7 @@ struct CommandPalette: View {
                                 // Hovering moves the selection, so the pointer and the
                                 // arrow keys never disagree about what Return will run.
                                 .onHover { hovering in
-                                    if hovering { selection = index }
+                                    if hovering, selection != index { selection = index }
                                 }
                                 .onTapGesture {
                                     selection = index
@@ -97,11 +97,19 @@ struct CommandPalette: View {
             .padding(.top, 72)
         }
         .onAppear { isFocused = true }
-        .onChange(of: query) { selection = 0 }
-        .onChange(of: ResultsKey(
-            query: query, threads: model.threads, projects: model.projects,
-            selectedThreadID: model.selectedThreadID
+        .onChange(of: query) {
+            selection = 0
+            items = results
+        }
+        .onChange(of: model.selectedThreadID) { items = results }
+        .onChange(of: LibraryKey(
+            threads: model.threads, projects: model.projects
         ), initial: true) { _, _ in
+            threadCandidates = model.threads
+                .filter { $0.isStandaloneListCandidate }
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .map { (thread: $0, searchTitle: $0.title.lowercased()) }
+            projectCandidates = model.projects.map { (project: $0, searchName: $0.name.lowercased()) }
             items = results
         }
     }
@@ -183,20 +191,22 @@ struct CommandPalette: View {
         })
 
         let matchingActions = needle.isEmpty ? actions : actions.filter { $0.title.lowercased().contains(needle) }
-        let threads = model.threads
-            .filter { $0.isStandaloneListCandidate && (needle.isEmpty || $0.title.lowercased().contains(needle)) }
-            .sorted { $0.updatedAt > $1.updatedAt }
+        let threads = threadCandidates.lazy
+            .filter { needle.isEmpty || $0.searchTitle.contains(needle) }
             .prefix(needle.isEmpty ? 6 : 10)
-            .map { thread in
-                Item(id: thread.id.uuidString, title: thread.title, subtitle: model.project(thread.projectID)?.name, symbol: "bubble.left") {
+            .map { candidate in
+                let thread = candidate.thread
+                return Item(id: thread.id.uuidString, title: thread.title, subtitle: model.project(thread.projectID)?.name, symbol: "bubble.left") {
                     WindowManager.shared.hideSettings()
                     model.openThread(thread.id)
                 }
             }
-        let projects = needle.isEmpty ? [] : model.projects
-            .filter { $0.name.lowercased().contains(needle) }
-            .map { project in
-                Item(id: project.id.uuidString, title: String(format: Chrome.localized("New thread in %@"), project.name), subtitle: project.path, icon: project.icon, symbol: "folder") {
+        let projects: [Item] = needle.isEmpty ? [] : projectCandidates
+            .filter { $0.searchName.contains(needle) }
+            .prefix(12)
+            .map { candidate in
+                let project = candidate.project
+                return Item(id: project.id.uuidString, title: String(format: Chrome.localized("New thread in %@"), project.name), subtitle: project.path, icon: project.icon, symbol: "folder") {
                     WindowManager.shared.hideSettings()
                     model.newThread(in: project)
                 }

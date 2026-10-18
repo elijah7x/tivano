@@ -58,6 +58,10 @@ struct ModelEffortButton: View {
     /// again.
     @State private var lockedWidth: CGFloat?
 
+    private var fallbackName: String {
+        thread.model.map { ModelPin(provider: thread.provider, modelID: $0).displayName } ?? thread.provider.displayName
+    }
+
     var body: some View {
         let registry = model.providers
         let current = registry.model(thread.model, for: thread.provider)
@@ -89,7 +93,7 @@ struct ModelEffortButton: View {
                     // the one flexible part of the row, so inside the fixed width below it
                     // is what gets cut; the effort and the marks keep their size. A pair
                     // the user named goes by that name here, in place of the lead's model.
-                    Text(verbatim: pair?.customName ?? current?.chipName ?? thread.model ?? thread.provider.displayName)
+                    Text(verbatim: pair?.customName ?? current?.chipName ?? fallbackName)
                         .foregroundStyle(Chrome.primaryText)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -144,7 +148,7 @@ struct ModelEffortButton: View {
     /// The full model and effort, plus the pair the chat leads with, for the tooltip and
     /// VoiceOver when the chip shows only the icon.
     private func helpText(current: ModelOption?, pair: HydraPair?) -> String {
-        var parts = [current?.shortName ?? thread.model ?? thread.provider.displayName]
+        var parts = [current?.shortName ?? fallbackName]
         if let current, !current.efforts.isEmpty {
             parts.append(Chrome.localized(ModelOption.effortTitle(thread.effort ?? current.defaultEffort ?? "")))
         }
@@ -259,12 +263,13 @@ private struct ModelEffortPanel: View {
 
     private func slider(for thread: ChatThread) -> some View {
         let option = model.providers.model(thread.model, for: thread.provider)
+        let fallbackName = thread.model.map { ModelPin(provider: thread.provider, modelID: $0).displayName } ?? thread.provider.displayName
         // In a pair the slider is the lead's: it wears the pair's fusion, says whose effort
         // it sets, and resets to the pair's lead effort rather than the model's default.
         let pair = model.hydraIsOn(thread) ? model.hydraPair(for: thread) : nil
         let pairLook = pair.map { EffortPairLook($0, registry: model.providers, resolvedHeadsEffort: model.hydraLaunch(for: thread)?.workerEffort) }
         return EffortSliderCard(
-            modelName: option?.shortName ?? thread.model ?? thread.provider.displayName,
+            modelName: option?.shortName ?? fallbackName,
             provider: thread.provider,
             pair: pairLook,
             efforts: option?.efforts ?? [],
@@ -284,12 +289,19 @@ private struct ModelEffortPanel: View {
                     remember(thread.id)
                 }
             ),
+            dshMode: thread.provider == .dsh ? Binding(
+                get: { thread.dshMode ?? .standard },
+                set: { mode in
+                    model.updateThread(thread.id) { $0.dshMode = mode == .standard ? nil : mode }
+                }
+            ) : nil,
             onTitleTap: { page = .models },
             onReset: {
                 let leadEffort = pair?.orchestratorEffort.flatMap { option?.efforts.contains($0) == true ? $0 : nil }
                 model.updateThread(thread.id) {
                     $0.effort = leadEffort
                     $0.fastMode = false
+                    $0.dshMode = nil
                 }
                 remember(thread.id)
             }
@@ -811,6 +823,7 @@ struct EffortSliderCard: View {
     let supportsFast: Bool
     @Binding var effort: String?
     @Binding var fastMode: Bool
+    var dshMode: Binding<DshAgentMode>? = nil
     var onTitleTap: (() -> Void)?
     let onReset: () -> Void
 
@@ -934,6 +947,16 @@ struct EffortSliderCard: View {
                     pair: pair?.brand,
                     accessibilityTitle: title
                 )
+            }
+
+            if let dshMode, provider == .dsh {
+                ChromeRow(title: "Agent mode") {
+                    GlassPickerButton(
+                        options: DshAgentMode.allCases.map { ($0, $0.title) },
+                        selection: dshMode
+                    )
+                    .accessibilityLabel(Text("Agent mode"))
+                }
             }
 
             // Whose effort this is, so a pair's slider is never taken for the heads'.
@@ -1171,7 +1194,7 @@ enum EffortBrand: Hashable {
     init(provider: ProviderKind?) {
         self = switch provider {
         case .claude: .claude
-        case .deepseek: .deepseek
+        case .deepseek, .dsh: .deepseek
         case .meta: .meta
         case .antigravity: .antigravity
         case .codex, .cursor, .grok, .opencode, .devin, .copilot, .commandcode, .pi, .omp, .zai, .kimi: .silver
@@ -1347,6 +1370,7 @@ struct TrackLook: Hashable {
 /// per frame was most of what a frame cost.
 struct TrackEffect: View {
     let look: TrackLook
+    @Environment(\.chatColumnIsShown) private var columnIsShown
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var startedAt = Date.now
@@ -1359,7 +1383,7 @@ struct TrackEffect: View {
             let kind = look.kind
             let spark = look.spark
             let pair = look.pair
-            let paused = reduceMotion || !FrontMonitor.shared.isVisible
+            let paused = reduceMotion || !FrontMonitor.shared.isVisible || !columnIsShown
             TimelineView(.animation(minimumInterval: 1.0 / (kind == .supercharged && pair == nil ? 30 : 60), paused: paused)) { timeline in
                 let time = timeline.date.timeIntervalSince(startedAt)
                 Canvas { context, size in

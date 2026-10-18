@@ -251,9 +251,7 @@ private struct ChromeGlassSurface: ViewModifier {
     /// Whether the glass answers a press; off for a field that takes the caret instead.
     var isInteractive = true
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
-    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @State private var isHovered = false
 
     func body(content: Content) -> some View {
         switch shape {
@@ -268,10 +266,7 @@ private struct ChromeGlassSurface: ViewModifier {
     private func surface<S: InsettableShape>(_ content: Content, in shape: S) -> some View {
         if isOnGlassPanel || performanceMode {
             content
-                .background(shape.fill(Chrome.panelControlFill(isDark: colorScheme == .dark, hovered: isHovered)))
-                .contentShape(shape)
-                .onHover { isHovered = $0 }
-                .animation(performanceMode ? nil : Chrome.hover, value: isHovered)
+                .modifier(ChromePanelControlSurface(shape: shape, performanceMode: performanceMode))
         } else if isInteractive {
             content.glassEffect(.regular.tint(Chrome.glassTint.opacity(0.3)).interactive(), in: shape)
                 .materialActiveAppearance(.active)
@@ -279,6 +274,26 @@ private struct ChromeGlassSurface: ViewModifier {
             content.glassEffect(.regular.tint(Chrome.glassTint.opacity(0.3)), in: shape)
                 .materialActiveAppearance(.active)
         }
+    }
+}
+
+private struct ChromePanelControlSurface<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let performanceMode: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                shape.fill(Chrome.panelControlFill(isDark: colorScheme == .dark, hovered: isHovered))
+                    .animation(performanceMode ? nil : Chrome.hover, value: isHovered)
+            }
+            .contentShape(shape)
+            .onHover { hovering in
+                guard isHovered != hovering else { return }
+                isHovered = hovering
+            }
     }
 }
 
@@ -426,6 +441,44 @@ struct ChromeRevealLayout: Layout {
     }
 }
 
+struct ChromeReveal<Content: View>: View {
+    let isExpanded: Bool
+    private let content: () -> Content
+    @State private var mountID: UUID?
+
+    init(isExpanded: Bool, @ViewBuilder content: @escaping () -> Content) {
+        self.isExpanded = isExpanded
+        self.content = content
+        _mountID = State(initialValue: isExpanded ? UUID() : nil)
+    }
+
+    var body: some View {
+        ChromeRevealLayout(fraction: isExpanded ? 1 : 0) {
+            if isExpanded || mountID != nil {
+                content()
+                    .transition(.identity)
+            }
+        }
+        .onChange(of: isExpanded) { _, expanded in
+            if expanded {
+                withTransaction(Transaction(animation: nil)) {
+                    mountID = UUID()
+                }
+            }
+        }
+        .transaction(value: isExpanded) { transaction in
+            guard !isExpanded, let collapsingID = mountID else { return }
+            // Unmount only after the slide finishes so settled cards do no hidden layout work.
+            transaction.addAnimationCompletion(criteria: .removed) {
+                guard mountID == collapsingID else { return }
+                withTransaction(Transaction(animation: nil)) {
+                    mountID = nil
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Chrome controls
 
 struct ChromeCapsule<Content: View>: View {
@@ -484,6 +537,39 @@ struct ChromeIconLabel: View {
     }
 }
 
+private struct ChromeHoverForeground: ViewModifier {
+    var isActive = false
+    var isEnabled = true
+    var color = Chrome.primaryText
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(color.opacity(isEnabled ? (isHovering || isActive ? 1 : 0.92) : 0.32))
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                withAnimation(Chrome.hover) { isHovering = hovering }
+            }
+    }
+}
+
+private struct ChromeHoverIcon: View {
+    let symbol: String
+    var isEnabled = true
+    var isActive = false
+    var prominent = false
+    var secondary = false
+    @State private var isHovering = false
+
+    var body: some View {
+        ChromeIconLabel(symbol: symbol, isEnabled: isEnabled, isActive: isActive, isHovering: isHovering, prominent: prominent, secondary: secondary)
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                withAnimation(Chrome.hover) { isHovering = hovering }
+            }
+    }
+}
+
 struct ChromeIconButton: View {
     let symbol: String
     var isEnabled = true
@@ -492,17 +578,12 @@ struct ChromeIconButton: View {
     let help: String
     let action: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
         Button(action: action) {
-            ChromeIconLabel(symbol: symbol, isEnabled: isEnabled, isActive: isActive, isHovering: isHovering, prominent: prominent)
+            ChromeHoverIcon(symbol: symbol, isEnabled: isEnabled, isActive: isActive, prominent: prominent)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
         .help(Text(verbatim: Chrome.localized(help)))
         .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
         .background { NoWindowDragArea() }
@@ -527,19 +608,15 @@ struct ChromeMenuButton<Content: View>: View {
     let help: String
     @ViewBuilder var content: Content
 
-    @State private var isHovering = false
     @State private var isPresented = false
 
     var body: some View {
         Button {
             isPresented.toggle()
         } label: {
-            ChromeIconLabel(symbol: symbol, isActive: isPresented, isHovering: isHovering, secondary: secondary)
+            ChromeHoverIcon(symbol: symbol, isActive: isPresented, secondary: secondary)
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
         .help(Text(verbatim: Chrome.localized(help)))
         .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -556,21 +633,16 @@ struct ChromeCircleButton: View {
     let help: String
     let action: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(Chrome.iconFont)
-                .foregroundStyle(Chrome.primaryText.opacity(isHovering ? 1 : 0.92))
                 .frame(width: Chrome.capsuleHeight, height: Chrome.capsuleHeight)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .chromeGlassCircle()
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
+        .modifier(ChromeHoverForeground())
         .help(Text(verbatim: Chrome.localized(help)))
         .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
         .background { NoWindowDragArea() }
@@ -584,7 +656,6 @@ struct ChromeTextMenu<Content: View>: View {
     let help: String
     @ViewBuilder var content: Content
 
-    @State private var isHovering = false
     @State private var isPresented = false
 
     var body: some View {
@@ -601,7 +672,6 @@ struct ChromeTextMenu<Content: View>: View {
                     .font(Chrome.chevronFont)
                     .foregroundStyle(Chrome.secondaryText)
             }
-            .foregroundStyle(Chrome.primaryText.opacity(isHovering || isPresented ? 1 : 0.92))
             .padding(.horizontal, Chrome.capsuleHorizontalPadding)
             .frame(height: Chrome.capsuleContentHeight)
             .padding(.vertical, Chrome.capsuleVerticalPadding)
@@ -610,9 +680,7 @@ struct ChromeTextMenu<Content: View>: View {
         .buttonStyle(.plain)
         .fixedSize()
         .chromeGlassCapsule()
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
+        .modifier(ChromeHoverForeground(isActive: isPresented))
         .help(Text(verbatim: Chrome.localized(help)))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu { content }
@@ -632,8 +700,6 @@ struct ChromeTextButton: View {
     var isDestructive = false
     let action: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
@@ -643,7 +709,6 @@ struct ChromeTextButton: View {
                     .font(.ui(size: 12.5, weight: .medium))
                     .lineLimit(1)
             }
-            .foregroundStyle(foreground)
             .padding(.horizontal, Chrome.capsuleHorizontalPadding)
             .frame(height: Chrome.capsuleContentHeight)
             .padding(.vertical, Chrome.capsuleVerticalPadding)
@@ -653,18 +718,10 @@ struct ChromeTextButton: View {
         .disabled(!isEnabled)
         .fixedSize()
         .chromeGlassCapsule()
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
+        .modifier(ChromeHoverForeground(isEnabled: isEnabled, color: isDestructive && isEnabled ? Chrome.danger : Chrome.primaryText))
         .help(Text(verbatim: Chrome.localized(help)))
         .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
         .background { NoWindowDragArea() }
-    }
-
-    private var foreground: Color {
-        guard isEnabled else { return Chrome.primaryText.opacity(0.32) }
-        if isDestructive { return Chrome.danger.opacity(isHovering ? 1 : 0.92) }
-        return Chrome.primaryText.opacity(isHovering ? 1 : 0.92)
     }
 }
 
@@ -790,8 +847,6 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
     let icon: Icon
     let accessory: (Bool) -> Accessory
 
-    @State private var isHovering = false
-
     init(
         title: String,
         isSelected: Bool = false,
@@ -827,18 +882,37 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
             .padding(.trailing, Chrome.rowHorizontalPadding + accessoryWidth)
             .frame(height: Chrome.rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background { shape.fill(fill).animation(Chrome.hover, value: isSelected) }
             .contentShape(shape)
         }
         .buttonStyle(.plain)
-        .overlay(alignment: .trailing) {
-            accessory(isHovering)
-                .padding(.trailing, 6)
-        }
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
+        .modifier(SidebarRowHighlight(isSelected: isSelected, accessory: accessory))
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+    }
+
+}
+
+private struct SidebarRowHighlight<Accessory: View>: ViewModifier {
+    let isSelected: Bool
+    let accessory: (Bool) -> Accessory
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+                    .fill(fill)
+                    .animation(Chrome.hover, value: isSelected)
+                    .animation(Chrome.hover, value: isHovering)
+            }
+            .overlay(alignment: .trailing) {
+                accessory(isHovering)
+                    .padding(.trailing, 6)
+                    .animation(Chrome.hover, value: isHovering)
+            }
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                isHovering = hovering
+            }
     }
 
     private var fill: Color {
@@ -982,7 +1056,6 @@ struct GlassPickerButton<Value: Hashable>: View {
     var maxWidth: CGFloat? = nil
 
     @State private var isPresented = false
-    @State private var isHovering = false
 
     var body: some View {
         let title = options.first { $0.value == selection }?.title ?? ""
@@ -1009,7 +1082,6 @@ struct GlassPickerButton<Value: Hashable>: View {
                     .font(Chrome.chevronFont)
                     .foregroundStyle(Chrome.secondaryText)
             }
-            .foregroundStyle(Chrome.primaryText.opacity(isHovering || isPresented ? 1 : 0.92))
             .padding(.horizontal, Chrome.capsuleHorizontalPadding)
             .frame(height: Chrome.capsuleContentHeight)
             .contentShape(Capsule(style: .continuous))
@@ -1018,9 +1090,7 @@ struct GlassPickerButton<Value: Hashable>: View {
         .fixedSize(horizontal: maxWidth == nil, vertical: true)
         .chromeGlassCapsule()
         .frame(maxWidth: maxWidth, alignment: .trailing)
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
+        .modifier(ChromeHoverForeground(isActive: isPresented))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu {
                 ForEach(Array(options.enumerated()), id: \.offset) { _, option in

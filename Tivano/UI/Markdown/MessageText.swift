@@ -2,7 +2,7 @@ import Foundation
 
 /// The message as plain text for the clipboard: one walk over the app's own blocks,
 /// no styling. Headings as their text, code blocks verbatim, links as `title (url)`,
-/// the delegation block left out. Used by the row menu's Copy message (see
+/// the delegation block left out. Used by the row menu's Copy (see
 /// `AssistantMessageRow.messageActions`). The file keeps the name of the selectable text
 /// view it used to hold, which left with the whole-reply drag mode; this enum is all that
 /// stayed.

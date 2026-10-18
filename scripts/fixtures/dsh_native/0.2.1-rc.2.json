@@ -1,0 +1,17 @@
+{
+  "version": "0.2.1-rc.2",
+  "protocol": "anthropic-messages",
+  "endpoint_environment": "DEEPSEEK_BASE_URL",
+  "patch": "[]\n",
+  "evidence": "Installed dsh-llm-deepseek resolveAdapterOptions and Messages transport; tool expectations from earlier independent rc.2 stock/Creator/PTC probes, not this run's output.",
+  "tools": {
+    "standard": ["bash", "create_goal", "edit", "exit_plan_mode", "get_goal", "glob", "grep", "interrupt_agent", "job_kill", "job_list", "job_output", "list_agents", "read", "read_image", "send_message", "skill", "subagent", "subagent_fork", "todo_write", "update_goal", "web_fetch", "web_search", "workflow", "working_directory", "write"],
+    "standard+no-delegation": ["bash", "edit", "exit_plan_mode", "glob", "grep", "job_kill", "job_list", "job_output", "read", "read_image", "skill", "todo_write", "web_fetch", "web_search", "working_directory", "write"],
+    "ptc": ["run_code"],
+    "ptc+no-delegation": ["run_code"],
+    "minimal": ["bash"],
+    "minimal+no-delegation": ["bash"],
+    "creator": ["bash", "cordis_inspect_list", "cordis_inspect_query", "create_goal", "edit", "exit_plan_mode", "get_goal", "glob", "grep", "interrupt_agent", "job_kill", "job_list", "job_output", "list_agents", "plugin_manager", "present", "read", "read_image", "send_message", "skill", "subagent", "subagent_fork", "todo_write", "update_goal", "web_fetch", "web_search", "workflow", "working_directory", "write"],
+    "creator+no-delegation": ["bash", "cordis_inspect_list", "cordis_inspect_query", "edit", "exit_plan_mode", "glob", "grep", "job_kill", "job_list", "job_output", "plugin_manager", "present", "read", "read_image", "skill", "todo_write", "web_fetch", "web_search", "working_directory", "write"]
+  }
+}

@@ -55,6 +55,8 @@ struct SessionConfiguration: Sendable {
     /// variants: its rows map the model the thread chose to an id the agent takes before
     /// the agent's own list arrives (Devin sends it only after the session opens).
     var modelCatalog: [ModelOption] = []
+    var dshMode: DshAgentMode = .standard
+    var dshFinalReport = false
 }
 
 /// One exchange of a conversation, for replaying it into a session that starts over.

@@ -66,6 +66,7 @@ struct MCPSetupPanelView: View {
     private var state: MCPConnectionState { model.mcp.state(for: entry.id) }
 
     var body: some View {
+        let state = state
         VStack(alignment: .leading, spacing: 14) {
             header
             if state.isConnected {
@@ -76,8 +77,8 @@ struct MCPSetupPanelView: View {
                     .foregroundStyle(Chrome.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(guide.steps.enumerated()), id: \.offset) { index, step in
-                        stepRow(index + 1, text: Text(verbatim: Chrome.localized(step)))
+                    ForEach(guide.steps.indices, id: \.self) { index in
+                        stepRow(index + 1, text: Text(verbatim: Chrome.localized(guide.steps[index])))
                     }
                 }
                 HStack {
@@ -139,7 +140,7 @@ struct MCPSetupPanelView: View {
             if isConnected {
                 closeAfterConnect = Task { @MainActor in
                     try? await Task.sleep(for: .seconds(1.2))
-                    guard !Task.isCancelled, state.isConnected else { return }
+                    guard !Task.isCancelled, self.state.isConnected else { return }
                     onDone()
                 }
             }

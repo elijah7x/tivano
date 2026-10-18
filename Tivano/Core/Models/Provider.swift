@@ -32,6 +32,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case pi
     case kimi
     case omp
+    case dsh
 
     /// A raw value read from storage; the retired `opencodeGo` means `opencode`.
     init?(storedValue raw: String) {
@@ -69,6 +70,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .pi: "Pi"
         case .omp: "omp"
         case .kimi: "Kimi Code"
+        case .dsh: "DeepSeek Harness"
         }
     }
 
@@ -90,6 +92,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .pi: "Pi CLI"
         case .omp: "omp CLI"
         case .kimi: "Kimi Code CLI"
+        case .dsh: "dsh CLI"
         }
     }
 
@@ -97,7 +100,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var group: ProviderGroup {
         switch self {
         case .deepseek, .meta, .zai: .tivanoCode
-        case .codex, .claude, .cursor, .opencode, .grok, .devin, .antigravity, .copilot, .commandcode, .pi, .kimi, .omp: .agentCLI
+        case .codex, .claude, .cursor, .opencode, .grok, .devin, .antigravity, .copilot, .commandcode, .pi, .kimi, .omp, .dsh: .agentCLI
         }
     }
 
@@ -119,6 +122,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .pi: "Set up in Pi"
         case .omp: "Set up in omp"
         case .kimi: "Kimi membership or API key"
+        case .dsh: "API key"
         }
     }
 
@@ -142,10 +146,11 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .pi: "pi"
         case .omp: "omp"
         case .kimi: "kimi"
+        case .dsh: "dsh"
         }
     }
 
-    var iconName: String { "provider-\(rawValue)" }
+    var iconName: String { self == .dsh ? "provider-deepseek" : "provider-\(rawValue)" }
 
     var loginCommand: String {
         switch self {
@@ -164,6 +169,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .pi: "pi"
         case .omp: "omp login"
         case .kimi: "kimi login"
+        case .dsh: ""
         }
     }
 
@@ -184,6 +190,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .pi: URL(string: "https://pi.dev/docs/latest")!
         case .omp: URL(string: "https://omp.sh")!
         case .kimi: URL(string: "https://www.kimi.com/code/docs/en/kimi-code-cli/")!
+        case .dsh: URL(string: "https://www.deepseek.com/en/harness/")!
         }
     }
 
@@ -191,7 +198,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var isAPIKeyBased: Bool { self == .deepseek || self == .meta || self == .zai }
 
     /// Driven over the Agent Client Protocol by `ACPSession`.
-    var usesACP: Bool { self == .cursor || self == .opencode || self == .grok || self == .devin || self == .kimi }
+    var usesACP: Bool { self == .cursor || self == .opencode || self == .grok || self == .devin || self == .kimi || self == .dsh }
 
     /// Providers with an API key field in Settings: the API-key providers, which need one,
     /// and Command Code, whose CLI takes a Studio key through `COMMAND_CODE_API_KEY` as an
@@ -245,10 +252,15 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     /// Headless stream-json only carries text: the TUI pastes images, but a
     /// streaming session rejects non-text blocks, so image attachments stay off.
-    var supportsImages: Bool { self != .grok && self != .antigravity }
+    var supportsImages: Bool { self != .grok && self != .antigravity && self != .dsh }
 
-    /// Auto requires a provider reviewer; omp has none.
-    func supports(_ mode: RuntimeMode) -> Bool { !(self == .omp && mode == .auto) }
+    func supports(_ mode: RuntimeMode) -> Bool {
+        switch self {
+        case .omp: mode != .auto
+        case .dsh: mode == .autoAcceptEdits || mode == .fullAccess
+        default: true
+        }
+    }
 
     func supported(_ mode: RuntimeMode) -> RuntimeMode { supports(mode) ? mode : .autoAcceptEdits }
 }

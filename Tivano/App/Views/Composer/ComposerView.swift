@@ -680,11 +680,12 @@ private struct PermissionMenu: View {
     let thread: ChatThread
 
     var body: some View {
-        ChromeMenuButton(symbol: thread.runtimeMode.symbol, secondary: true, help: "\(Chrome.localized(thread.runtimeMode.title)) · \(Chrome.localized(thread.runtimeMode.summary))") {
+        let runtimeMode = thread.provider.supported(thread.runtimeMode)
+        ChromeMenuButton(symbol: runtimeMode.symbol, secondary: true, help: "\(Chrome.localized(runtimeMode.title)) · \(Chrome.localized(runtimeMode.summary))") {
             PopoverSectionHeader("Permissions")
             ForEach(RuntimeMode.allCases.filter { thread.provider.supports($0) }) { mode in
-                PopoverItem(mode.title, symbol: mode.symbol, isChecked: thread.runtimeMode == mode) {
-                    model.updateThread(thread.id) { $0.runtimeMode = mode }
+                PopoverItem(mode.title, symbol: mode.symbol, isChecked: runtimeMode == mode) {
+                    model.updateThread(thread.id) { $0.runtimeMode = $0.provider.supported(mode) }
                 }
             }
         }

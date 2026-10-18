@@ -16,11 +16,6 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// The pages the sidebar lists: Alpha only where `AppSettings.alphaAvailable`.
-    static var listed: [SettingsPage] {
-        allCases.filter { $0 != .alpha || AppSettings.alphaAvailable }
-    }
-
     var title: String {
         switch self {
         case .general: "General"
@@ -78,7 +73,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
-        case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "meta", "muse", "spark", "zai", "z.ai", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
+        case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
         case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting"]
         case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "clone", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
         case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "实验室", "实验", "语音", "麦克风", "通话"]
@@ -118,16 +113,17 @@ struct SettingsView: View {
 
     private var visiblePages: [SettingsPage] {
         let query = search.trimmed
-        guard !query.isEmpty else { return SettingsPage.listed }
-        return SettingsPage.listed.filter { page in
+        guard !query.isEmpty else { return SettingsPage.allCases }
+        return SettingsPage.allCases.filter { page in
             page.title.localizedCaseInsensitiveContains(query)
                 || page.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
         }
     }
 
     var body: some View {
+        let visiblePages = self.visiblePages
         HStack(spacing: 0) {
-            sidebar.frame(width: 212)
+            sidebar(visiblePages: visiblePages).frame(width: 212)
             SettingsDetail(page: page, fullWindow: false)
                 .padding(.trailing, Chrome.sheetInset)
                 .padding(.vertical, Chrome.sheetInset)
@@ -148,7 +144,7 @@ struct SettingsView: View {
         }
     }
 
-    private var sidebar: some View {
+    private func sidebar(visiblePages: [SettingsPage]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear
                 .frame(height: Chrome.trafficLightDiameter)
@@ -161,25 +157,8 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(visiblePages) { item in
-                        SidebarRow(title: item.title, isSelected: page == item, action: { page = item }) {
-                            SidebarIconBadge {
-                                if item == .hydra {
-                                    // The Hydra page wears the dragon mark, the same one as the composer button.
-                                    HydraMarkImage()
-                                        .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
-                                } else if item == .alpha {
-                                    AlphaMarkImage()
-                                        .frame(width: Chrome.symbolSize, height: Chrome.symbolSize)
-                                } else {
-                                    SidebarSymbol(item.symbol, scale: item == .general ? 1.15 : 1)
-                                }
-                            }
-                            .overlay(alignment: .topTrailing) {
-                                if item == .about, UpdateChecker.shared.updateAvailable {
-                                    UpdateAvailableDot()
-                                }
-                            }
-                        }
+                        SettingsSidebarRow(page: item, isSelected: page == item) { page = item }
+                            .equatable()
                     }
                     if visiblePages.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
@@ -213,6 +192,47 @@ struct SettingsView: View {
 
 }
 
+private struct SettingsSidebarRow: View, Equatable {
+    let page: SettingsPage
+    let isSelected: Bool
+    let action: () -> Void
+
+    // Each action only selects this row's fixed page in its owning sidebar.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.page == rhs.page && lhs.isSelected == rhs.isSelected
+    }
+
+    var body: some View {
+        SidebarRow(title: page.title, isSelected: isSelected, action: action) {
+            SettingsSidebarIcon(page: page)
+        }
+    }
+}
+
+private struct SettingsSidebarIcon: View {
+    let page: SettingsPage
+
+    var body: some View {
+        SidebarIconBadge {
+            if page == .hydra {
+                // The Hydra page wears the dragon mark, the same one as the composer button.
+                HydraMarkImage()
+                    .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
+            } else if page == .alpha {
+                AlphaMarkImage()
+                    .frame(width: Chrome.symbolSize, height: Chrome.symbolSize)
+            } else {
+                SidebarSymbol(page.symbol, scale: page == .general ? 1.15 : 1)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if page == .about, UpdateChecker.shared.updateAvailable {
+                UpdateAvailableDot()
+            }
+        }
+    }
+}
+
 struct SettingsSidebar: View {
     @Bindable private var navigation = SettingsNavigation.shared
     @State private var search = ""
@@ -222,8 +242,8 @@ struct SettingsSidebar: View {
 
     private var visiblePages: [SettingsPage] {
         let query = search.trimmed
-        guard !query.isEmpty else { return SettingsPage.listed }
-        return SettingsPage.listed.filter { page in
+        guard !query.isEmpty else { return SettingsPage.allCases }
+        return SettingsPage.allCases.filter { page in
             Chrome.localized(page.title).localizedCaseInsensitiveContains(query)
                 || page.title.localizedCaseInsensitiveContains(query)
                 || page.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
@@ -231,6 +251,7 @@ struct SettingsSidebar: View {
     }
 
     var body: some View {
+        let visiblePages = self.visiblePages
         VStack(alignment: .leading, spacing: 0) {
             Color.clear
                 .frame(height: Chrome.trafficLightDiameter)
@@ -249,25 +270,8 @@ struct SettingsSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(visiblePages) { item in
-                        SidebarRow(title: item.title, isSelected: page == item, action: { navigation.page = item }) {
-                            SidebarIconBadge {
-                                if item == .hydra {
-                                    // The Hydra page wears the dragon mark, the same one as the composer button.
-                                    HydraMarkImage()
-                                        .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
-                                } else if item == .alpha {
-                                    AlphaMarkImage()
-                                        .frame(width: Chrome.symbolSize, height: Chrome.symbolSize)
-                                } else {
-                                    SidebarSymbol(item.symbol, scale: item == .general ? 1.15 : 1)
-                                }
-                            }
-                            .overlay(alignment: .topTrailing) {
-                                if item == .about, UpdateChecker.shared.updateAvailable {
-                                    UpdateAvailableDot()
-                                }
-                            }
-                        }
+                        SettingsSidebarRow(page: item, isSelected: page == item) { navigation.page = item }
+                            .equatable()
                     }
                     if visiblePages.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
@@ -307,9 +311,37 @@ struct SettingsSidebar: View {
 }
 
 struct SettingsDetail: View {
-    @Environment(AppModel.self) private var model
     let page: SettingsPage
     var fullWindow = true
+
+    var body: some View {
+        SettingsPageScroll(page: page, fullWindow: fullWindow)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .detailSheet()
+    }
+}
+
+private struct SettingsArchiveDetail<Content: View>: View {
+    @Environment(AppModel.self) private var model
+    let content: Content
+
+    var body: some View {
+        if model.archivedThreads.isEmpty {
+            // An empty archive is one symbol in the middle of the pane: no sentence, no chrome,
+            // no button with nothing to delete.
+            Image(systemName: "archivebox")
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(Chrome.secondaryText.opacity(0.6))
+                .accessibilityLabel(Text("No archived threads"))
+        } else {
+            content
+        }
+    }
+}
+
+private struct SettingsPageScroll: View {
+    let page: SettingsPage
+    let fullWindow: Bool
     @State private var modelSearch = ""
     @State private var mcpSearch = ""
     @State private var scrollChrome = ChromeScrollModel()
@@ -317,19 +349,12 @@ struct SettingsDetail: View {
 
     var body: some View {
         Group {
-            if page == .archive, model.archivedThreads.isEmpty {
-                // An empty archive is one symbol in the middle of the pane: no sentence, no chrome,
-                // no button with nothing to delete.
-                Image(systemName: "archivebox")
-                    .font(.system(size: 44, weight: .light))
-                    .foregroundStyle(Chrome.secondaryText.opacity(0.6))
-                    .accessibilityLabel(Text("No archived threads"))
+            if page == .archive {
+                SettingsArchiveDetail(content: pageScroll)
             } else {
                 pageScroll
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .detailSheet()
         .onDisappear { scrollTracker.end() }
         .onChange(of: page, initial: true) {
             scrollChrome.update(travel: 0)
@@ -372,27 +397,12 @@ struct SettingsDetail: View {
         }
         .chromeEdgeFade(scrollChrome)
         .overlay(alignment: .top) {
-            HStack(spacing: 10) {
-                ChromeCompactTitle(title: page.title, model: scrollChrome)
-                if page == .models {
-                    ChromeSearchField(query: $modelSearch, prompt: "Search models")
-                }
-                if page == .mcp {
-                    ChromeSearchField(query: $mcpSearch, prompt: "Search servers")
-                }
-                if page == .providers {
-                    ProvidersRefreshButton()
-                }
-                if page == .archive {
-                    ArchiveDeleteAllButton()
-                }
-                if page == .about {
-                    AboutUpdateChromeAccessory()
-                }
-            }
-            .frame(minHeight: Chrome.capsuleHeight)
-            .padding(.horizontal, Chrome.chromeHorizontalPadding)
-            .padding(.top, Chrome.chromeTopPadding)
+            SettingsPageChrome(
+                page: page,
+                scrollChrome: scrollChrome,
+                modelSearch: $modelSearch,
+                mcpSearch: $mcpSearch
+            )
         }
     }
 
@@ -423,6 +433,37 @@ struct SettingsDetail: View {
     }
 }
 
+private struct SettingsPageChrome: View {
+    let page: SettingsPage
+    let scrollChrome: ChromeScrollModel
+    @Binding var modelSearch: String
+    @Binding var mcpSearch: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ChromeCompactTitle(title: page.title, model: scrollChrome)
+            if page == .models {
+                ChromeSearchField(query: $modelSearch, prompt: "Search models")
+            }
+            if page == .mcp {
+                ChromeSearchField(query: $mcpSearch, prompt: "Search servers")
+            }
+            if page == .providers {
+                ProvidersRefreshButton()
+            }
+            if page == .archive {
+                ArchiveDeleteAllButton()
+            }
+            if page == .about {
+                AboutUpdateChromeAccessory()
+            }
+        }
+        .frame(minHeight: Chrome.capsuleHeight)
+        .padding(.horizontal, Chrome.chromeHorizontalPadding)
+        .padding(.top, Chrome.chromeTopPadding)
+    }
+}
+
 struct SettingsSwitch: View {
     @Binding var isOn: Bool
 
@@ -436,6 +477,11 @@ struct SettingsSwitch: View {
 
 private struct GeneralSettingsPage: View {
     @Environment(AppModel.self) private var model
+
+    private static let runtimeOptions = RuntimeMode.allCases.map { ($0, $0.title) }
+    private static let workspaceOptions = WorkspaceMode.allCases.map { ($0, $0.title) }
+    private static let hapticOptions = TimelineHapticStyle.allCases.map { ($0, $0.title) }
+    private static let languageOptions = AppLanguage.allCases.map { ($0, $0.title) }
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -451,11 +497,11 @@ private struct GeneralSettingsPage: View {
                 }
                 ChromeRowDivider()
                 ChromeRow(title: "Permissions", detail: settings.defaultRuntimeMode.summary) {
-                    GlassPickerButton(options: RuntimeMode.allCases.map { ($0, $0.title) }, selection: $settings.defaultRuntimeMode, symbol: { $0.symbol })
+                    GlassPickerButton(options: Self.runtimeOptions, selection: $settings.defaultRuntimeMode, symbol: { $0.symbol })
                 }
                 ChromeRowDivider()
                 ChromeRow(title: "Workspace", detail: "Where a new thread makes its changes") {
-                    ChromeVisualPicker(options: WorkspaceMode.allCases.map { ($0, $0.title) }, selection: $settings.defaultWorkspaceMode) { mode in
+                    ChromeVisualPicker(options: Self.workspaceOptions, selection: $settings.defaultWorkspaceMode) { mode in
                         Image(systemName: mode == .local ? "folder" : "arrow.triangle.branch")
                     }
                 }
@@ -478,7 +524,7 @@ private struct GeneralSettingsPage: View {
                     }
                     ChromeRowDivider()
                     ChromeRow(title: "Timeline haptics", detail: "Play haptic feedback when hovering over timeline ticks and progress bars") {
-                        GlassPickerButton(options: TimelineHapticStyle.allCases.map { ($0, $0.title) }, selection: $settings.timelineHapticStyle)
+                        GlassPickerButton(options: Self.hapticOptions, selection: $settings.timelineHapticStyle)
                     }
                     ChromeRowDivider()
                     ChromeRow(title: "Recent downloads", detail: "The attach button offers recent downloads first") {
@@ -521,16 +567,16 @@ private struct GeneralSettingsPage: View {
             ChromeCard {
                 ChromeRow(
                     title: "Prevent sleep while tasks are running",
-                    detail: "Keep your Mac awake while Tivano runs tasks. The display can turn off, and you can still sleep manually or close the lid."
+                    detail: "While tasks run, your Mac won't doze off. Keep Mac awake lets the screen turn off on its own; Keep Mac and screen awake leaves it lit too, which helps when an agent needs to see a front end. Manual sleep and closing the lid still work."
                 ) {
-                    SettingsSwitch(isOn: $settings.preventSleepDuringTasks)
+                    GlassPickerButton(options: TaskSleepMode.allCases.map { ($0, $0.title) }, selection: $settings.taskSleepMode)
                 }
             }
         }
         ChromeSection(title: "Languages") {
             ChromeCard {
                 ChromeRow(title: "App language", detail: "Changes apply after the app restarts.") {
-                    GlassPickerButton(options: AppLanguage.allCases.map { ($0, $0.title) }, selection: $settings.appLanguage)
+                    GlassPickerButton(options: Self.languageOptions, selection: $settings.appLanguage)
                 }
             }
         }
@@ -543,6 +589,8 @@ private struct AppearanceSettingsPage: View {
 
     var body: some View {
         @Bindable var settings = model.settings
+        let performanceMode = settings.performanceMode
+        let clearerUnavailable = performanceMode || WallpaperStore.shared.hasWallpaper
         ChromeSection(title: "Main interface") {
             ChromeCard {
                 ChromeRow(title: "Theme", detail: settings.theme.detail) {
@@ -552,21 +600,21 @@ private struct AppearanceSettingsPage: View {
                 ChromeRow(title: "Transparency", detail: "How much shows through the window") {
                     BackdropOpacitySlider(value: $settings.backdropOpacity)
                 }
-                .disabled(settings.performanceMode)
-                .opacity(settings.performanceMode ? 0.5 : 1)
+                .disabled(performanceMode)
+                .opacity(performanceMode ? 0.5 : 1)
                 ChromeRowDivider()
                 ChromeRow(
                     title: "Clearer glass",
-                    detail: settings.performanceMode
+                    detail: performanceMode
                         ? "Unavailable in Performance Mode"
-                        : WallpaperStore.shared.hasWallpaper
+                        : clearerUnavailable
                             ? "Unavailable while a wallpaper is set"
                             : "Shows more of the desktop through the window with Liquid Glass. Uses more GPU while the window's content changes; off uses a lighter system blur."
                 ) {
                     SettingsSwitch(isOn: $settings.clearerBackdrop)
                 }
-                .disabled(settings.performanceMode || WallpaperStore.shared.hasWallpaper)
-                .opacity(settings.performanceMode || WallpaperStore.shared.hasWallpaper ? 0.5 : 1)
+                .disabled(clearerUnavailable)
+                .opacity(clearerUnavailable ? 0.5 : 1)
                 ChromeRowDivider()
                 ChromeRow(title: "Performance Mode", detail: "Disable window transparency, blurs, glows and background effects for lowest GPU usage") {
                     SettingsSwitch(isOn: $settings.performanceMode)
@@ -721,24 +769,20 @@ private struct ProvidersSettingsPage: View {
     @State private var providerExpansion: [ProviderKind: Bool] = [:]
 
     var body: some View {
-        /// "Configured" means authenticated: a signed-in provider.
-        let configured: (ProviderKind) -> Bool = { provider in
-            if case .signedIn = model.providers.status(provider).auth { return true }
-            return false
-        }
+        let settings = model.settings
         // Eager on purpose: a handful of sections, and lazy ones were rebuilt while scrolling,
         // which reset their fields and re-ran every check they started on appear.
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
-            ProviderSelectionSection(settings: model.settings)
+            ProviderSelectionSection(settings: settings)
             ForEach(ProviderGroup.allCases) { group in
-                let providers = group.providers.filter { model.settings.isEnabled($0) }
+                let providers = group.providers.filter { settings.isEnabled($0) }
                 if !providers.isEmpty {
                     ChromeSection(title: group.title) {
                         ForEach(providers) { provider in
                             ProviderSettingsSection(
                                 provider: provider,
-                                isExpanded: Binding(
-                                    get: { providerExpansion[provider] ?? configured(provider) },
+                                expansionOverride: Binding(
+                                    get: { providerExpansion[provider] },
                                     set: { providerExpansion[provider] = $0 }
                                 )
                             )
@@ -756,63 +800,63 @@ private struct ProvidersSettingsPage: View {
 private struct ProviderSettingsSection: View {
     @Environment(AppModel.self) private var model
     let provider: ProviderKind
-    /// The page's call: its `providerExpansion` override if the header was touched,
-    /// else the auth default (signed-in expands).
-    @Binding var isExpanded: Bool
+    /// Nil follows the auth default; an explicit override lasts for the page's lifetime.
+    @Binding var expansionOverride: Bool?
 
     @State private var binaryPath = ""
     @State private var apiKey = ""
     @State private var showsAPIKey = false
     @State private var keyCheck: Task<Void, Never>?
+    @State private var signInTask: Task<Void, Never>?
+    @State private var signInError: String?
 
-    /// Limits and credits belong to a signed-in account, so a missing or signed-out provider shows none.
-    /// The Providers page also hides them when the page switch is off.
-    private var showsUsage: Bool {
-        guard model.settings.showsProviderUsage else { return false }
-        guard PlanLimitsReader.exposesLimits(provider) || CreditsReader.exposesCredits(provider) else { return false }
-        let status = model.providers.status(provider)
-        return status.isInstalled && status.auth != .signedOut
-    }
-
-    /// Whether the page offers a sign-in row: hidden while the provider is signed in and
-    /// working, and while a check runs, so it never flashes in before the answer.
-    private var showsSignIn: Bool {
-        let status = model.providers.status(provider)
-        if case .signedIn = status.auth { return false }
-        return !status.isChecking
-    }
-
-    private var updateState: ProviderUpdateViewState {
-        let update = model.providers.cliUpdates[provider]
-        let phase: ProviderUpdateViewState.Phase
-        switch update?.phase {
-        case .checking: phase = .checking
-        case .current: phase = .current
-        case nil: phase = model.settings.monitorsUpdates(provider) ? .checking : .current
-        case .available: phase = .available
-        case .waiting: phase = .waiting
-        case .updating: phase = .updating
-        case .updated: phase = .updated
-        case .failed: phase = .failed
-        }
-        return ProviderUpdateViewState(
-            phase: phase,
-            installed: update?.installed ?? model.providers.status(provider).version,
-            latest: update?.latest,
-            command: update?.channel?.command,
-            error: update?.error,
-            updateFailed: update?.updateFailed ?? false,
-            monitoringEnabled: model.providers.monitorsCLIUpdates(provider),
-            customBinaryPath: !model.settings.binaryPath(for: provider).isEmpty,
-            channelKnown: update?.channel != nil
-        )
-    }
+    private static let regionOptions = ZaiRegion.allCases.map { ($0, $0.title) }
 
     var body: some View {
-        let status = model.providers.status(provider)
+        let settings = model.settings
+        let registry = model.providers
+        let status = registry.status(provider)
+        let isSignedIn: Bool = {
+            if case .signedIn = status.auth { return true }
+            return false
+        }()
+        let isExpanded = expansionOverride ?? isSignedIn
+        let expansion = Binding(
+            get: { expansionOverride ?? isSignedIn },
+            set: { expansionOverride = $0 }
+        )
+        let showsUsage = settings.showsProviderUsage
+            && (PlanLimitsReader.exposesLimits(provider) || CreditsReader.exposesCredits(provider))
+            && status.isInstalled && status.auth != .signedOut
         VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
-            CollapsibleProviderHeader(provider: provider, isExpanded: $isExpanded, subject: "provider settings", detail: provider.routeSummary)
-            ChromeRevealLayout(fraction: isExpanded ? 1 : 0) {
+            CollapsibleProviderHeader(provider: provider, isExpanded: expansion, subject: "provider settings", detail: provider.routeSummary)
+            ChromeReveal(isExpanded: isExpanded) {
+                let showsSignIn = !status.isChecking && !isSignedIn && !provider.loginCommand.isEmpty
+                let updateState: ProviderUpdateViewState? = provider.isAPIKeyBased ? nil : {
+                    let update = registry.cliUpdates[provider]
+                    let phase: ProviderUpdateViewState.Phase
+                    switch update?.phase {
+                    case .checking: phase = .checking
+                    case .current: phase = .current
+                    case nil: phase = settings.monitorsUpdates(provider) ? .checking : .current
+                    case .available: phase = .available
+                    case .waiting: phase = .waiting
+                    case .updating: phase = .updating
+                    case .updated: phase = .updated
+                    case .failed: phase = .failed
+                    }
+                    return ProviderUpdateViewState(
+                        phase: phase,
+                        installed: update?.installed ?? status.version,
+                        latest: update?.latest,
+                        command: update?.channel?.command,
+                        error: update?.error,
+                        updateFailed: update?.updateFailed ?? false,
+                        monitoringEnabled: registry.monitorsCLIUpdates(provider),
+                        customBinaryPath: !settings.binaryPath(for: provider).isEmpty,
+                        channelKnown: update?.channel != nil
+                    )
+                }()
                 ChromeCard {
                     HStack(spacing: 12) {
                         ProviderIcon(provider: provider, size: 18)
@@ -821,7 +865,7 @@ private struct ProviderSettingsSection: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(verbatim: Chrome.localized(status.isChecking ? "Checking…" : status.summary))
                                 .font(.ui(size: 13))
-                            if status.isInstalled, !provider.isAPIKeyBased {
+                            if status.isInstalled, let updateState {
                                 ProviderUpdateSubtitle(state: updateState)
                             } else if provider.isAPIKeyBased, status.apiKeyConfigured, let host = provider.apiHost {
                                 Text(verbatim: String(format: Chrome.localized("Native API · %@"), host))
@@ -830,11 +874,11 @@ private struct ProviderSettingsSection: View {
                             }
                         }
                         Spacer()
-                        if status.isInstalled, !provider.isAPIKeyBased {
+                        if status.isInstalled, let updateState {
                             ProviderUpdateAction(
                                 state: updateState,
-                                onCheck: { Task { await model.providers.checkCLIUpdate(provider, force: true) } },
-                                onUpdate: { Task { await model.providers.updateCLI(provider) } }
+                                onCheck: { Task { await registry.checkCLIUpdate(provider, force: true) } },
+                                onUpdate: { Task { await registry.updateCLI(provider) } }
                             )
                         }
                     }
@@ -857,10 +901,16 @@ private struct ProviderSettingsSection: View {
                     if provider == .zai {
                         ChromeRowDivider()
                         ChromeRow(title: "Region", detail: "Where your key was issued. Global uses api.z.ai, China uses open.bigmodel.cn.") {
-                            GlassPickerButton(options: ZaiRegion.allCases.map { ($0, $0.title) }, selection: Binding(
-                                get: { model.settings.zaiRegion },
-                                set: { model.settings.zaiRegion = $0 }
+                            GlassPickerButton(options: Self.regionOptions, selection: Binding(
+                                get: { settings.zaiRegion },
+                                set: { settings.zaiRegion = $0 }
                             ))
+                        }
+                    }
+                    if provider == .dsh, let error = status.catalogError {
+                        ChromeRowDivider()
+                        ChromeRow(title: "Models", detail: error) {
+                            EmptyView()
                         }
                     }
                     if provider.acceptsAPIKey {
@@ -904,11 +954,11 @@ private struct ProviderSettingsSection: View {
                             }
                         }
                     }
-                    if !provider.isAPIKeyBased {
+                    if let updateState {
                         ChromeRowDivider()
                         ProviderUpdateMonitoringRow(state: updateState, isOn: Binding(
-                            get: { model.settings.monitorsUpdates(provider) },
-                            set: { model.settings.setMonitorsUpdates($0, for: provider) }
+                            get: { settings.monitorsUpdates(provider) },
+                            set: { settings.setMonitorsUpdates($0, for: provider) }
                         ))
                         ChromeRowDivider()
                         ChromeRow(title: "Binary path", detail: status.executable?.path) {
@@ -930,13 +980,42 @@ private struct ProviderSettingsSection: View {
                             }
                         } else if showsSignIn {
                             ChromeRowDivider()
-                            ChromeRow(title: "Sign in", detail: "Click here to login again.") {
-                                Button {
-                                    Workspace.openTerminal(running: provider.loginCommand)
-                                } label: {
-                                    Text(verbatim: Chrome.localized("Login")).frame(height: Chrome.rowButtonLabelHeight)
+                            let signInDetail = provider == .dsh
+                                ? (registry.signingIn == .dsh
+                                    ? "Waiting for you to sign in to DeepSeek Harness…"
+                                    : signInError ?? (FileManager.default.fileExists(atPath: "/Applications/DeepSeek Harness.app")
+                                        ? "Opens DeepSeek Harness to sign in to your DeepSeek account."
+                                        : "Opens your browser to sign in to your DeepSeek account."))
+                                : signInError ?? "Click here to login again."
+                            ChromeRow(title: "Sign in", detail: signInDetail) {
+                                if provider == .dsh {
+                                    HStack(spacing: 8) {
+                                        if registry.signingIn == .dsh {
+                                            ProgressView().controlSize(.mini)
+                                            Button("Cancel") { signInTask?.cancel() }
+                                                .disabled(signInTask == nil)
+                                        } else {
+                                            Button {
+                                                signInError = nil
+                                                signInTask = Task {
+                                                    signInError = await registry.signIn(provider)
+                                                    signInTask = nil
+                                                }
+                                            } label: {
+                                                Text(verbatim: Chrome.localized("Login")).frame(height: Chrome.rowButtonLabelHeight)
+                                            }
+                                            .disabled(registry.signingIn != nil)
+                                        }
+                                    }
+                                    .buttonStyle(.glass)
+                                } else {
+                                    Button {
+                                        Workspace.openTerminal(running: provider.loginCommand)
+                                    } label: {
+                                        Text(verbatim: Chrome.localized("Login")).frame(height: Chrome.rowButtonLabelHeight)
+                                    }
+                                    .buttonStyle(.glass)
                                 }
-                                .buttonStyle(.glass)
                             }
                         }
                     }
@@ -949,52 +1028,61 @@ private struct ProviderSettingsSection: View {
             .allowsHitTesting(isExpanded)
             .accessibilityHidden(!isExpanded)
         }
+        .onDisappear { signInTask?.cancel() }
         .onAppear {
-            binaryPath = model.settings.binaryPath(for: provider)
-            if provider.acceptsAPIKey { apiKey = model.settings.apiKeyInput(for: provider) }
+            binaryPath = settings.binaryPath(for: provider)
+            if provider.acceptsAPIKey { apiKey = settings.apiKeyInput(for: provider) }
         }
         .onChange(of: showsUsage, initial: true) { _, shows in
             // Fires once when the page opens on a signed-in account and again when a check signs
             // one in. Sections are eager, so scrolling never re-fires it, and the registry hands
             // back what it read within the last minute instead of asking the provider again.
             guard shows else { return }
-            model.providers.refreshPlanLimits(provider)
-            model.providers.refreshCredits(provider)
+            registry.refreshPlanLimits(provider)
+            registry.refreshCredits(provider)
         }
         .onChange(of: binaryPath) { _, value in
-            guard value != model.settings.binaryPath(for: provider) else { return }
-            model.settings.setBinaryPath(value, for: provider)
+            guard value != settings.binaryPath(for: provider) else { return }
+            settings.setBinaryPath(value, for: provider)
         }
-        .onChange(of: model.settings.zaiRegion) { _, _ in
+        .onChange(of: provider == .zai ? settings.zaiRegion : nil) { _, _ in
             guard provider == .zai else { return }
             Task {
-                await model.providers.refresh(provider)
-                await model.providers.loadCatalog(provider, force: true)
+                await registry.refresh(provider)
+                await registry.loadCatalog(provider, force: true)
             }
         }
-        .onChange(of: model.settings.monitorsUpdates(provider)) { _, _ in
-            model.providers.cliMonitoringChanged(provider)
+        .onChange(of: settings.monitorsUpdates(provider)) { _, _ in
+            registry.cliMonitoringChanged(provider)
         }
-        .onChange(of: model.settings.isEnabled(provider)) { _, _ in
-            model.providers.cliMonitoringChanged(provider)
+        .onChange(of: settings.isEnabled(provider)) { _, enabled in
+            registry.cliMonitoringChanged(provider)
+            if provider == .dsh, enabled {
+                Task {
+                    await registry.refresh(provider)
+                    await registry.loadCatalog(provider)
+                }
+            }
         }
-        .onChange(of: model.settings.binaryPath(for: provider)) { _, _ in
-            model.providers.cliMonitoringChanged(provider)
+        .onChange(of: settings.binaryPath(for: provider)) { _, _ in
+            registry.cliMonitoringChanged(provider)
         }
         .onChange(of: apiKey) { _, value in
             // Only an edit counts: loading the stored key into the field must not save or check it.
-            guard provider.acceptsAPIKey, value != model.settings.apiKeyInput(for: provider) else { return }
-            model.settings.setAPIKeyInput(value, for: provider)
+            guard provider.acceptsAPIKey, value != settings.apiKeyInput(for: provider) else { return }
+            settings.setAPIKeyInput(value, for: provider)
+            // The registry observes DeepSeek changes even when this page is closed.
+            guard provider != .deepseek else { return }
             keyCheck?.cancel()
             keyCheck = Task {
                 try? await Task.sleep(for: .milliseconds(600))
                 guard !Task.isCancelled else { return }
-                await model.providers.refresh(provider)
-                await model.providers.loadCatalog(provider, force: true)
+                await registry.refresh(provider)
+                await registry.loadCatalog(provider, force: true)
             }
         }
-        .onChange(of: model.settings.apiKeyInput(for: provider)) { _, value in
-            guard provider.acceptsAPIKey, value != apiKey else { return }
+        .onChange(of: provider.acceptsAPIKey ? settings.apiKeyInput(for: provider) : nil) { _, value in
+            guard let value, value != apiKey else { return }
             apiKey = value
         }
     }
@@ -1002,6 +1090,8 @@ private struct ProviderSettingsSection: View {
 
 private struct SourceControlSettingsPage: View {
     @Environment(AppModel.self) private var model
+
+    private static let textGenerationOptions = TextGenerationChoice.allCases.map { ($0, $0.title) }
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -1012,7 +1102,7 @@ private struct SourceControlSettingsPage: View {
                     title: "Thread titles and commit messages",
                     detail: "Automatic uses the thread's own provider. Claude uses Haiku, Codex your default model."
                 ) {
-                    GlassPickerButton(options: TextGenerationChoice.allCases.map { ($0, $0.title) }, selection: $settings.textGeneration, asset: { ProviderKind(rawValue: $0.rawValue)?.iconName })
+                    GlassPickerButton(options: Self.textGenerationOptions, selection: $settings.textGeneration, asset: { ProviderKind(rawValue: $0.rawValue)?.iconName })
                 }
             }
         }
@@ -1096,9 +1186,10 @@ private struct ArchiveSettingsPage: View {
 
     var body: some View {
         let archived = model.archivedThreads
+        let firstID = archived.first?.id
         ChromeCard(lazy: true) {
-            ForEach(Array(archived.enumerated()), id: \.element.id) { index, thread in
-                if index > 0 { ChromeRowDivider() }
+            ForEach(archived, id: \.id) { thread in
+                if thread.id != firstID { ChromeRowDivider() }
                 ChromeRow(title: thread.title, detail: model.project(thread.projectID)?.name) {
                     HStack(spacing: 8) {
                         Button("Restore") { model.unarchive(thread.id) }
@@ -1138,6 +1229,8 @@ private struct ArchiveSettingsPage: View {
 
 private struct AboutSettingsPage: View {
     private static let upstreamURL = URL(string: "https://getdroppycode.app")!
+    private static let zeronURL = URL(string: "https://github.com/zeronsh/zeron")!
+    private static let swiftTermURL = URL(string: "https://github.com/migueldeicaza/SwiftTerm")!
 
     var body: some View {
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
@@ -1148,11 +1241,11 @@ private struct AboutSettingsPage: View {
                     UpstreamAttributionRow(url: Self.upstreamURL)
                     ChromeRowDivider()
                     ChromeRow(title: "Working indicators", detail: "Ported from Zeron by Wing, MIT License.") {
-                        CreditLink(title: "zeronsh/zeron", url: URL(string: "https://github.com/zeronsh/zeron")!)
+                        CreditLink(title: "zeronsh/zeron", url: Self.zeronURL)
                     }
                     ChromeRowDivider()
                     ChromeRow(title: "Terminal", detail: "SwiftTerm by Miguel de Icaza, MIT License.") {
-                        CreditLink(title: "SwiftTerm", url: URL(string: "https://github.com/migueldeicaza/SwiftTerm")!)
+                        CreditLink(title: "SwiftTerm", url: Self.swiftTermURL)
                     }
                     ChromeRowDivider()
                     LicensesRow()

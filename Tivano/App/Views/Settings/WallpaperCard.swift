@@ -6,13 +6,12 @@ import UniformTypeIdentifiers
 // sits under the app's glass sheet, and a slider to blur it for readability.
 struct WallpaperCard: View {
     let store = WallpaperStore.shared
-    @State private var isTargeted = false
 
     private var isOffStock: Bool { store.softness > 0.005 }
 
     var body: some View {
         ChromeCard {
-            preview
+            WallpaperPreview(store: store, choose: choose)
             ChromeRowDivider()
             wallpaperRow
             if store.hasWallpaper {
@@ -22,7 +21,102 @@ struct WallpaperCard: View {
         }
     }
 
-    private var preview: some View {
+    private var wallpaperRow: some View {
+        ChromeRow(
+            title: "Wallpaper",
+            detail: store.lastError ?? (store.hasWallpaper
+                ? "Fills the window edge to edge under the glass; the transparency slider lets the desktop show through it"
+                : "A picture of your own behind the glass, mixed with the desktop by the transparency slider")
+        ) {
+            HStack(spacing: 8) {
+                if store.hasWallpaper {
+                    Button("Remove") { store.remove() }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                        .disabled(store.isInstalling)
+                }
+                Button(Chrome.localized(store.hasWallpaper ? "Change…" : "Choose…")) { choose() }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .disabled(store.isInstalling)
+            }
+        }
+    }
+
+    private var softnessRow: some View {
+        ChromeRow(title: "Softness", detail: "Blurs the picture so text stays easy to read") {
+            HStack(spacing: 8) {
+                Image(systemName: "drop")
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .help(Text(verbatim: Chrome.localized("Sharp")))
+                Slider(
+                    value: Binding(get: { store.softness }, set: { if store.softness != $0 { store.softness = $0 } }),
+                    in: 0...1,
+                    onEditingChanged: { editing in
+                        if store.isAdjustingSoftness != editing { store.isAdjustingSoftness = editing }
+                    }
+                )
+                .controlSize(.small)
+                .frame(width: 140)
+                Image(systemName: "drop.fill")
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .help(Text(verbatim: Chrome.localized("Blurred")))
+            }
+            .overlay(alignment: .leading) {
+                if isOffStock {
+                    Button {
+                        store.softness = 0
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.ui(.subheadline, weight: .medium))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .frame(width: 22, height: 22)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help(Text(verbatim: Chrome.localized("Back to sharp")))
+                    .offset(x: -28)
+                    .transition(.opacity.combined(with: .offset(x: 6)))
+                }
+            }
+            .animation(.snappy(duration: 0.2), value: isOffStock)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Text("Wallpaper softness"))
+        }
+    }
+
+    private func choose() {
+        // The sheet must not block, so the picker runs async against the key window.
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = WallpaperStore.acceptedTypes
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = Chrome.localized("Choose a picture for the window")
+        panel.prompt = Chrome.localized("Use as Wallpaper")
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window) { response in
+                if response == .OK, let url = panel.url {
+                    store.install(from: url)
+                }
+            }
+        } else {
+            panel.begin { response in
+                if response == .OK, let url = panel.url {
+                    store.install(from: url)
+                }
+            }
+        }
+    }
+}
+
+private struct WallpaperPreview: View {
+    let store: WallpaperStore
+    let choose: () -> Void
+    @State private var isTargeted = false
+
+    var body: some View {
         Button { choose() } label: {
             ZStack {
                 if let image = store.image {
@@ -96,95 +190,8 @@ struct WallpaperCard: View {
             guard let url = urls.first(where: WallpaperStore.accepts) else { return false }
             store.install(from: url)
             return true
-        }, isTargeted: { isTargeted = $0 })
+        }, isTargeted: { if isTargeted != $0 { isTargeted = $0 } })
         .padding(16)
         .frame(maxWidth: .infinity)
-    }
-
-    private var wallpaperRow: some View {
-        ChromeRow(
-            title: "Wallpaper",
-            detail: store.lastError ?? (store.hasWallpaper
-                ? "Fills the window edge to edge under the glass; the transparency slider lets the desktop show through it"
-                : "A picture of your own behind the glass, mixed with the desktop by the transparency slider")
-        ) {
-            HStack(spacing: 8) {
-                if store.hasWallpaper {
-                    Button("Remove") { store.remove() }
-                        .buttonStyle(.glass)
-                        .controlSize(.small)
-                        .disabled(store.isInstalling)
-                }
-                Button(Chrome.localized(store.hasWallpaper ? "Change…" : "Choose…")) { choose() }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                    .disabled(store.isInstalling)
-            }
-        }
-    }
-
-    private var softnessRow: some View {
-        ChromeRow(title: "Softness", detail: "Blurs the picture so text stays easy to read") {
-            HStack(spacing: 8) {
-                Image(systemName: "drop")
-                    .font(.ui(.subheadline))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .help(Text(verbatim: Chrome.localized("Sharp")))
-                Slider(
-                    value: Binding(get: { store.softness }, set: { store.softness = $0 }),
-                    in: 0...1,
-                    onEditingChanged: { editing in store.isAdjustingSoftness = editing }
-                )
-                .controlSize(.small)
-                .frame(width: 140)
-                Image(systemName: "drop.fill")
-                    .font(.ui(.subheadline))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .help(Text(verbatim: Chrome.localized("Blurred")))
-            }
-            .overlay(alignment: .leading) {
-                if isOffStock {
-                    Button {
-                        store.softness = 0
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.ui(.subheadline, weight: .medium))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .frame(width: 22, height: 22)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .help(Text(verbatim: Chrome.localized("Back to sharp")))
-                    .offset(x: -28)
-                    .transition(.opacity.combined(with: .offset(x: 6)))
-                }
-            }
-            .animation(.snappy(duration: 0.2), value: isOffStock)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(Text("Wallpaper softness"))
-        }
-    }
-
-    private func choose() {
-        // The sheet must not block, so the picker runs async against the key window.
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = WallpaperStore.acceptedTypes
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = Chrome.localized("Choose a picture for the window")
-        panel.prompt = Chrome.localized("Use as Wallpaper")
-        if let window = NSApp.keyWindow {
-            panel.beginSheetModal(for: window) { response in
-                if response == .OK, let url = panel.url {
-                    store.install(from: url)
-                }
-            }
-        } else {
-            panel.begin { response in
-                if response == .OK, let url = panel.url {
-                    store.install(from: url)
-                }
-            }
-        }
     }
 }

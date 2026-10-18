@@ -79,6 +79,7 @@ struct ModelPin: Codable, Hashable, Identifiable, Sendable {
     var modelID: String
 
     var id: String { "\(provider.rawValue)/\(modelID)" }
+    var displayName: String { provider == .dsh ? DshCLI.displayName(forModelID: modelID) : modelID }
 }
 
 /// A user-named heading in the picker's list. It sits before the pin at `position` in
@@ -164,6 +165,7 @@ final class AppSettings {
         static let lastHydraPair = "lastHydraPairID"
         static let textGeneration = "textGeneration"
         static let preventSleepDuringTasks = "preventSleepDuringTasks"
+        static let taskSleepMode = "taskSleepMode"
         static let appLanguage = "appLanguage"
         static let commitInstructions = "commitInstructions"
         static let terminalHeight = "terminalHeight"
@@ -234,9 +236,9 @@ final class AppSettings {
 
     @ObservationIgnored var onSleepPreventionChanged: (() -> Void)?
 
-    var preventSleepDuringTasks: Bool {
+    var taskSleepMode: TaskSleepMode {
         didSet {
-            defaults.set(preventSleepDuringTasks, forKey: Key.preventSleepDuringTasks)
+            defaults.set(taskSleepMode.rawValue, forKey: Key.taskSleepMode)
             onSleepPreventionChanged?()
         }
     }
@@ -346,17 +348,7 @@ final class AppSettings {
         didSet { defaults.set(alphaVoiceEnabled, forKey: Key.alphaVoiceEnabled) }
     }
 
-    /// Alpha is a Dev-edition feature for now: Release has no page to switch it on, and a
-    /// stored preference cannot turn it on either. Shipping it means making this `true`.
-    nonisolated static let alphaAvailable: Bool = {
-        #if DEBUG
-        true
-        #else
-        false
-        #endif
-    }()
-
-    var isVoiceEnabled: Bool { Self.alphaAvailable && alphaEnabled && alphaVoiceEnabled }
+    var isVoiceEnabled: Bool { alphaEnabled && alphaVoiceEnabled }
 
     /// The sidebar lists every thread by when it was last active, instead of by project.
     var sidebarActivityView: Bool {
@@ -819,7 +811,9 @@ final class AppSettings {
         defaultWorkspaceMode = WorkspaceMode(rawValue: defaults.string(forKey: Key.workspaceMode) ?? "") ?? .local
         notifyWhenFinished = defaults.object(forKey: Key.notify) as? Bool ?? true
         chimeWhenFinished = defaults.object(forKey: Key.chime) as? Bool ?? true
-        preventSleepDuringTasks = defaults.object(forKey: Key.preventSleepDuringTasks) as? Bool ?? true
+        // The mode replaced an on/off switch: an earlier "off" stays off, an earlier "on" keeps the Mac awake.
+        taskSleepMode = TaskSleepMode(rawValue: defaults.string(forKey: Key.taskSleepMode) ?? "")
+            ?? (defaults.object(forKey: Key.preventSleepDuringTasks) as? Bool == false ? .off : .system)
         confirmBeforeDeleting = defaults.object(forKey: Key.confirmDelete) as? Bool ?? true
         autoContinueAfterLimit = defaults.object(forKey: Key.autoContinueAfterLimit) as? Bool ?? false
         showReasoning = defaults.object(forKey: Key.showReasoning) as? Bool ?? false
@@ -1154,6 +1148,10 @@ final class AppSettings {
     }
 
     func adoptModelFamilies(_ families: [ModelOption], for provider: ProviderKind) {
+        if provider == .dsh {
+            adoptDshModels(families)
+            return
+        }
         var owners: [String: (family: ModelOption, variant: ModelVariant)] = [:]
         for family in families {
             for variant in family.variants where variant.id != family.id { owners[variant.id] = (family, variant) }
@@ -1188,6 +1186,46 @@ final class AppSettings {
             lastModels[provider.rawValue] = owner.family.id
             if lastEfforts[provider.rawValue] == nil { lastEfforts[provider.rawValue] = owner.variant.effort }
         }
+    }
+
+    private func adoptDshModels(_ models: [ModelOption]) {
+        func resolved(_ pin: ModelPin) -> ModelPin {
+            guard pin.provider == .dsh else { return pin }
+            return ModelPin(provider: .dsh, modelID: DshCLI.resolvedModelID(pin.modelID, in: models))
+        }
+        var items: [ModelListItem] = []
+        for item in modelListItems {
+            let adopted: ModelListItem = if case .pin(let pin) = item { .pin(resolved(pin)) } else { item }
+            if !items.contains(adopted) { items.append(adopted) }
+        }
+        setModelListItems(items)
+        var preferences = modelPreferences
+        for (key, preference) in modelPreferences where key.hasPrefix("dsh/") {
+            let pin = ModelPin(provider: .dsh, modelID: String(key.dropFirst("dsh/".count)))
+            let adopted = resolved(pin)
+            guard adopted != pin else { continue }
+            preferences.removeValue(forKey: key)
+            if preferences[adopted.id] == nil { preferences[adopted.id] = preference }
+        }
+        if preferences != modelPreferences { modelPreferences = preferences }
+        if let last = lastModels[ProviderKind.dsh.rawValue] {
+            let adopted = DshCLI.resolvedModelID(last, in: models)
+            if adopted != last { lastModels[ProviderKind.dsh.rawValue] = adopted }
+        }
+        if let pin = lastNewChatModel, resolved(pin) != pin { lastNewChatModel = resolved(pin) }
+        func resolvedPair(_ pair: HydraPair) -> HydraPair {
+            var pair = pair
+            if pair.provider == .dsh, let model = pair.orchestratorModel {
+                pair.orchestratorModel = DshCLI.resolvedModelID(model, in: models)
+            }
+            if pair.headsProvider == .dsh, let model = pair.workerModel {
+                pair.workerModel = DshCLI.resolvedModelID(model, in: models)
+            }
+            return pair
+        }
+        let pairs = hydraPairs.map(resolvedPair)
+        if pairs != hydraPairs { hydraPairs = pairs }
+        if let pair = lastNewChatPair, resolvedPair(pair) != pair { lastNewChatPair = resolvedPair(pair) }
     }
 
     private func store<Value: Encodable>(_ value: Value, forKey key: String) {

@@ -38,6 +38,7 @@ private struct ShortcutSectionHeader<Accessory: View>: View {
 
 private struct ShortcutSectionCard: View {
     let section: AppShortcut.Section
+    private static let shortcutsBySection = Dictionary(uniqueKeysWithValues: AppShortcut.Section.allCases.map { ($0, $0.shortcuts) })
 
     var body: some View {
         let store = ShortcutStore.shared
@@ -52,8 +53,9 @@ private struct ShortcutSectionCard: View {
                 }
             }
             ChromeCard {
-                ForEach(Array(section.shortcuts.enumerated()), id: \.element) { offset, shortcut in
-                    if offset > 0 {
+                let shortcuts = Self.shortcutsBySection[section] ?? []
+                ForEach(shortcuts, id: \.self) { shortcut in
+                    if shortcut != shortcuts.first {
                         Divider().padding(.leading, ShortcutRowMetrics.dividerLeadingInset)
                     }
                     ShortcutEntryRow(shortcut: shortcut)
@@ -65,7 +67,7 @@ private struct ShortcutSectionCard: View {
 
 /// Keys the composer handles itself. They read like the rows above but cannot be changed.
 private struct FixedShortcutsCard: View {
-    private let rows: [(title: String, detail: String, chord: String)] = [
+    private static let rows: [(title: String, detail: String, chord: String)] = [
         ("Send", "Sends the message in the composer.", "Return"),
         ("New line", "Adds a line without sending.", "⇧ Return"),
         ("Steer a chat", "While a turn runs, stops it and sends right away.", "Return"),
@@ -80,7 +82,8 @@ private struct FixedShortcutsCard: View {
                 EmptyView()
             }
             ChromeCard {
-                ForEach(Array(rows.enumerated()), id: \.offset) { offset, row in
+                ForEach(Self.rows.indices, id: \.self) { offset in
+                    let row = Self.rows[offset]
                     if offset > 0 {
                         Divider().padding(.leading, ShortcutRowMetrics.dividerLeadingInset)
                     }
@@ -261,7 +264,7 @@ private struct ShortcutCombinedControlContent: View {
             .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
             .animation(Chrome.hover, value: isHovering)
             .animation(Chrome.hover, value: isRecording)
-            .onHover { isHovering = $0 }
+            .onHover { if isHovering != $0 { isHovering = $0 } }
     }
 }
 

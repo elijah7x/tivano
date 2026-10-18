@@ -79,7 +79,8 @@ enum TextParityProbe {
             for size in [CGFloat(13), CGFloat(17)] {
                 for width in [CGFloat(420), CGFloat(820)] {
                     for (fixture, source) in fixtures.enumerated() {
-                        guard NSApp.isActive, window.isKeyWindow, window.occlusionState.contains(.visible) else {
+                        guard CommandLine.arguments.contains("--allow-locked-screen")
+                                || (NSApp.isActive && window.isKeyWindow && window.occlusionState.contains(.visible)) else {
                             report["status"] = "blocked"; report["reason"] = "probe lost foreground"; report["cases"] = cases
                             save(); NSApp.terminate(nil); return
                         }

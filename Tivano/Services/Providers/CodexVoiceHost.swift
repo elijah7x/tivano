@@ -16,6 +16,10 @@ import OSLog
 final class CodexVoiceHost: @unchecked Sendable {
     private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "voice-host")
     private static let maxFrame = 128 * 1024
+    private static let replyTypes: Set<String> = [
+        "ready", "runtimeReady", "offer", "transportReady", "transportTimedOut",
+        "deviceList", "devicesOpened", "audioControlsApplied", "audioState", "closed",
+    ]
 
     private let process: Process
     private let input: FileHandle
@@ -123,6 +127,25 @@ final class CodexVoiceHost: @unchecked Sendable {
         return process
     }
 
+    private static func makeNonblocking(_ handle: FileHandle) throws {
+        let flags = fcntl(handle.fileDescriptor, F_GETFL)
+        guard flags >= 0, fcntl(handle.fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw VoiceRejection.nativeRuntimeUnavailable
+        }
+    }
+
+    /// Poll in short slices so cancellation does not depend on the helper (or an
+    /// inherited pipe in a descendant) exiting. The descriptors stay on their I/O queue.
+    private static func waitForIO(_ handle: FileHandle, events: Int16, deadline: DispatchTime, stopped: () -> Bool) -> Bool {
+        while !stopped(), DispatchTime.now() < deadline {
+            var descriptor = pollfd(fd: handle.fileDescriptor, events: events, revents: 0)
+            let result = poll(&descriptor, 1, 100)
+            if result > 0 { return descriptor.revents & (events | Int16(POLLHUP | POLLERR)) != 0 }
+            if result < 0, errno != EINTR { return false }
+        }
+        return false
+    }
+
     /// Starts the helper and its runtime. A helper that cannot start its runtime (a
     /// library that no longer matches its `runtime.json`) exits here: that is the
     /// runtime, not the call.
@@ -139,10 +162,14 @@ final class CodexVoiceHost: @unchecked Sendable {
         process.standardInput = stdin
         process.standardOutput = stdout
         do {
+            try makeNonblocking(stdin.fileHandleForWriting)
+            try makeNonblocking(stdout.fileHandleForReading)
             try process.run()
         } catch {
             throw VoiceRejection.nativeRuntimeUnavailable
         }
+        try? stdin.fileHandleForReading.close()
+        try? stdout.fileHandleForWriting.close()
         let host = CodexVoiceHost(
             process: process,
             input: stdin.fileHandleForWriting,
@@ -165,7 +192,9 @@ final class CodexVoiceHost: @unchecked Sendable {
         let stdout = Pipe()
         process.standardOutput = stdout
         process.standardInput = FileHandle.nullDevice
+        try makeNonblocking(stdout.fileHandleForReading)
         try process.run()
+        try? stdout.fileHandleForWriting.close()
         let watchdog = Task.detached {
             try? await Task.sleep(for: .seconds(5))
             if !Task.isCancelled { Self.terminate(process) }
@@ -173,8 +202,18 @@ final class CodexVoiceHost: @unchecked Sendable {
         defer { watchdog.cancel() }
         let data = await withTaskCancellationHandler {
             await Task.detached {
-                let data = (try? stdout.fileHandleForReading.read(upToCount: 129)) ?? Data()
-                if data.count >= 129 { Self.terminate(process) }
+                let output = stdout.fileHandleForReading
+                defer { try? output.close() }
+                let deadline = DispatchTime.now() + 5
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 129)
+                while data.count < 129, Self.waitForIO(output, events: Int16(POLLIN), deadline: deadline, stopped: { false }) {
+                    let count = Darwin.read(output.fileDescriptor, &buffer, 129 - data.count)
+                    if count > 0 { data.append(contentsOf: buffer.prefix(count)) }
+                    else if count == 0 { break }
+                    else if errno != EINTR, errno != EAGAIN { break }
+                }
+                if data.count >= 129 || DispatchTime.now() >= deadline { Self.terminate(process) }
                 process.waitUntilExit()
                 return data
             }.value
@@ -183,8 +222,9 @@ final class CodexVoiceHost: @unchecked Sendable {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
         guard !Task.isCancelled else { throw CancellationError() }
-        let commit = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard process.terminationStatus == 0, !commit.isEmpty, commit.count <= 128 else {
+        guard let text = String(data: data, encoding: .utf8) else { throw VoiceRejection.nativeRuntimeUnavailable }
+        let commit = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard process.terminationStatus == 0, data.count < 129, !commit.isEmpty, commit.count <= 128 else {
             throw VoiceRejection.nativeRuntimeUnavailable
         }
         return commit
@@ -192,7 +232,7 @@ final class CodexVoiceHost: @unchecked Sendable {
 
     private static func terminate(_ process: Process) {
         guard process.isRunning else { return }
-        process.terminate()
+        kill(process.processIdentifier, SIGTERM)
         // A stuck native runtime must not survive hang-up or app exit.
         DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
@@ -208,7 +248,12 @@ final class CodexVoiceHost: @unchecked Sendable {
         if force, process.isRunning { kill(process.processIdentifier, SIGKILL) }
         guard wasOpen else { return }
         Self.terminate(process)
-        try? input.close()
+        let input = input, output = output, process = process
+        queue.async {
+            try? input.close()
+            try? output.close()
+            process.waitUntilExit()
+        }
     }
 
     // MARK: - Exchanges
@@ -219,6 +264,7 @@ final class CodexVoiceHost: @unchecked Sendable {
         guard !isClosed else { throw VoiceRejection.protocol }
         let payload = JSONValue.object(message).data()
         guard payload.count <= Self.maxFrame else { throw VoiceRejection.overflow }
+        let deadline = DispatchTime.now() + seconds
         let timeout = Task.detached { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             if !Task.isCancelled { self?.close() }
@@ -227,7 +273,9 @@ final class CodexVoiceHost: @unchecked Sendable {
         let result: Result<JSONValue, VoiceRejection> = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 queue.async { [self] in
-                    continuation.resume(returning: roundTrip(payload))
+                    let result = roundTrip(payload, deadline: deadline)
+                    if case .failure = result { close() }
+                    continuation.resume(returning: result)
                 }
             }
         } onCancel: {
@@ -241,28 +289,42 @@ final class CodexVoiceHost: @unchecked Sendable {
         }
     }
 
-    private func roundTrip(_ payload: Data) -> Result<JSONValue, VoiceRejection> {
+    private func roundTrip(_ payload: Data, deadline: DispatchTime) -> Result<JSONValue, VoiceRejection> {
         guard !isClosed else { return .failure(.protocol) }
         var length = UInt32(payload.count).bigEndian
         var frame = Data(bytes: &length, count: 4)
         frame.append(payload)
-        do {
-            try input.write(contentsOf: frame)
-        } catch {
-            return .failure(.protocol)
+        // TivanoApp ignores SIGPIPE before any provider starts; Darwin.write reports
+        // EPIPE and supports partial nonblocking writes without FileHandle exceptions.
+        var written = 0
+        while written < frame.count {
+            guard Self.waitForIO(input, events: Int16(POLLOUT), deadline: deadline, stopped: { isClosed }) else { return .failure(.protocol) }
+            let count = frame.withUnsafeBytes { bytes in
+                Darwin.write(input.fileDescriptor, bytes.baseAddress?.advanced(by: written), bytes.count - written)
+            }
+            if count > 0 { written += count }
+            else if count == 0 || (errno != EINTR && errno != EAGAIN) { return .failure(.protocol) }
         }
-        guard let header = readExactly(4) else { return .failure(.protocol) }
-        let size = header.reduce(0) { $0 << 8 | Int($1) }
-        guard size > 0, size <= Self.maxFrame else { return .failure(.overflow) }
-        guard let body = readExactly(size), let value = JSONValue.parse(body) else { return .failure(.protocol) }
-        return .success(value)
+        while !isClosed, DispatchTime.now() < deadline {
+            guard let header = readExactly(4, deadline: deadline) else { return .failure(.protocol) }
+            let size = header.reduce(0) { $0 << 8 | Int($1) }
+            guard size > 0, size <= Self.maxFrame else { return .failure(.overflow) }
+            guard let body = readExactly(size, deadline: deadline), let value = JSONValue.parse(body) else { return .failure(.protocol) }
+            guard let type = value["type"]?.string, Self.replyTypes.contains(type) else { continue }
+            return .success(value)
+        }
+        return .failure(.protocol)
     }
 
-    private func readExactly(_ count: Int) -> Data? {
+    private func readExactly(_ count: Int, deadline: DispatchTime) -> Data? {
         var data = Data()
+        var buffer = [UInt8](repeating: 0, count: min(count, 8192))
         while data.count < count {
-            guard let chunk = try? output.read(upToCount: count - data.count), !chunk.isEmpty else { return nil }
-            data.append(chunk)
+            guard Self.waitForIO(output, events: Int16(POLLIN), deadline: deadline, stopped: { isClosed }) else { return nil }
+            let requested = min(buffer.count, count - data.count)
+            let size = Darwin.read(output.fileDescriptor, &buffer, requested)
+            if size > 0 { data.append(contentsOf: buffer.prefix(size)) }
+            else if size == 0 || (errno != EINTR && errno != EAGAIN) { return nil }
         }
         return data
     }
