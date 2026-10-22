@@ -43,8 +43,9 @@ final class CopilotSession: ProviderSession {
     private var sessionID: String?
     private var runtimeMode: RuntimeMode
     private var interactionMode: InteractionMode = .build
+    private var interactionModeIsConfirmed = true
     /// The CLI's own permission mode: `manual`, `assisted` or `allow-all`.
-    private var permissionMode = "manual"
+    private var permissionMode: String? = "manual"
     private var model: String?
     private var effort: String?
     private var pendingRequests: [String: PendingRequest] = [:]
@@ -106,11 +107,11 @@ final class CopilotSession: ProviderSession {
         var params = sessionParameters()
         params["sessionId"] = .string(id)
         // Resume fails for an id the CLI no longer has; the thread then starts a fresh session.
-        _ = try await connection.request(configuration.resumeID == nil ? "session.create" : "session.resume", .object(params))
+        _ = try await Self.deadlineRequest(connection, configuration.resumeID == nil ? "session.create" : "session.resume", .object(params))
         sessionID = id
         // A resumed session comes back in interactive mode with manual permissions
         // (verified live), so the thread's modes are applied either way.
-        await applyModes(runtime: configuration.runtimeMode, interaction: configuration.interactionMode)
+        try await applyModes(runtime: configuration.runtimeMode, interaction: configuration.interactionMode)
         loadCommands()
         return id
     }
@@ -157,7 +158,7 @@ final class CopilotSession: ProviderSession {
 
     func send(_ input: TurnInput) async throws {
         guard let connection, !connection.isClosed else { throw ProviderError.notRunning }
-        await applyModes(runtime: input.runtimeMode, interaction: input.interactionMode)
+        try await applyModes(runtime: input.runtimeMode, interaction: input.interactionMode)
         await applySelection(model: input.model, effort: input.effort)
         beginTurn()
         do {
@@ -194,12 +195,13 @@ final class CopilotSession: ProviderSession {
             ["type": "file", "path": .string(image.path), "displayName": .string(image.name), "mimeType": .string(image.mimeType)]
         }
         if !attachments.isEmpty { params["attachments"] = .array(attachments) }
+        // The reply lands when the turn does, so this one request carries no deadline.
         _ = try await connection.request("session.send", .object(params))
     }
 
     private func invokeCommand(_ name: String, input: String) async throws {
         guard let connection, let sessionID else { throw ProviderError.notRunning }
-        let result = try await connection.request("session.commands.invoke", [
+        let result = try await Self.deadlineRequest(connection, "session.commands.invoke", [
             "sessionId": .string(sessionID),
             "name": .string(name),
             "input": .string(input),
@@ -237,25 +239,30 @@ final class CopilotSession: ProviderSession {
         guard turnActive, let connection, let sessionID else { return }
         interruptRequested = true
         cancelPendingRequests()
-        _ = try? await connection.request("session.abort", ["sessionId": .string(sessionID), "reason": "user_initiated"])
+        do {
+            _ = try await Self.deadlineRequest(connection, "session.abort", ["sessionId": .string(sessionID), "reason": "user_initiated"], seconds: 5)
+        } catch {
+            // A CLI that cannot answer abort is wedged: closing ends the turn and lets the next send restart it.
+            connection.close()
+        }
     }
 
     func compact() async throws {
         guard let connection, let sessionID else { throw ProviderError.notRunning }
-        _ = try await connection.request("session.history.compact", ["sessionId": .string(sessionID), "trigger": "manual"])
+        _ = try await Self.deadlineRequest(connection, "session.history.compact", ["sessionId": .string(sessionID), "trigger": "manual"])
     }
 
     /// Drops the most recent turns from Copilot's own history. Files stay as they
     /// are: Tivano restores those from its checkpoints.
     func rollback(turns: Int) async throws {
         guard let connection, let sessionID, turns > 0 else { return }
-        let listed = try await connection.request("session.history.listRewindPoints", ["sessionId": .string(sessionID)])
+        let listed = try await Self.deadlineRequest(connection, "session.history.listRewindPoints", ["sessionId": .string(sessionID)])
         let points = listed["points"]?.array ?? []
         // One point per user message; rewinding to a point drops that message and everything after it.
         guard points.count >= turns, let eventID = points[points.count - turns]["eventId"]?.string else {
             throw ProviderError.failed("Copilot has no rewind point for that turn.")
         }
-        let result = try await connection.request("session.history.rewind", [
+        let result = try await Self.deadlineRequest(connection, "session.history.rewind", [
             "sessionId": .string(sessionID),
             "eventId": .string(eventID),
             "mode": "conversation",
@@ -312,7 +319,7 @@ final class CopilotSession: ProviderSession {
         guard let connection, !connection.isClosed else { return }
         // A shutdown lets the CLI flush the session's event log; the close after it is the backstop.
         Task {
-            _ = try? await connection.request("runtime.shutdown")
+            _ = try? await Self.deadlineRequest(connection, "runtime.shutdown", seconds: 5)
             connection.close()
         }
         Task {
@@ -323,26 +330,38 @@ final class CopilotSession: ProviderSession {
 
     // MARK: - Modes and selection
 
-    private func applyModes(runtime: RuntimeMode, interaction: InteractionMode) async {
-        guard let connection, let sessionID else { return }
-        runtimeMode = runtime
+    private func applyModes(runtime: RuntimeMode, interaction: InteractionMode) async throws {
+        guard let connection, !connection.isClosed, let sessionID else { throw ProviderError.notRunning }
         let wanted = Self.permissionModeName(runtime)
         if wanted != permissionMode {
-            // `assisted` is refused outside experimental mode; the reply says which mode holds,
-            // and in `manual` every request reaches the app's own rules instead.
-            let result = try? await connection.request("session.permissions.setMode", [
+            // Failure to receive a reply leaves the remote mode unknown, not unchanged.
+            permissionMode = nil
+            let result = try await Self.deadlineRequest(connection, "session.permissions.setMode", [
                 "sessionId": .string(sessionID),
                 "mode": .string(wanted),
                 "source": "rpc",
             ])
-            permissionMode = result?["mode"]?.string ?? permissionMode
+            guard let confirmed = result["mode"]?.string,
+                  ["manual", "assisted", "allow-all"].contains(confirmed) else {
+                permissionMode = nil
+                throw ProviderError.failed(AppText.localized("Copilot did not confirm the requested permission mode."))
+            }
+            permissionMode = confirmed
+            // In `manual`, Auto still uses `automaticDecision`; anything it cannot
+            // approve reaches the app's approval UI instead of bypassing permission checks.
+            guard confirmed == wanted || (wanted == "assisted" && confirmed == "manual") else {
+                throw ProviderError.failed(AppText.localized("Copilot did not confirm the requested permission mode."))
+            }
         }
-        if interaction != interactionMode {
-            _ = try? await connection.request("session.mode.set", [
+        runtimeMode = runtime
+        if interaction != interactionMode || !interactionModeIsConfirmed {
+            interactionModeIsConfirmed = false
+            _ = try await Self.deadlineRequest(connection, "session.mode.set", [
                 "sessionId": .string(sessionID),
                 "mode": .string(interaction == .plan ? "plan" : "interactive"),
             ])
             interactionMode = interaction
+            interactionModeIsConfirmed = true
         }
     }
 
@@ -351,13 +370,13 @@ final class CopilotSession: ProviderSession {
         if let model, !model.isEmpty, model != self.model {
             var params: [String: JSONValue] = ["sessionId": .string(sessionID), "modelId": .string(model)]
             if let effort, !effort.isEmpty { params["reasoningEffort"] = .string(effort) }
-            if (try? await connection.request("session.model.switchTo", .object(params))) != nil {
+            if (try? await Self.deadlineRequest(connection, "session.model.switchTo", .object(params))) != nil {
                 self.model = model
                 if let effort, !effort.isEmpty { self.effort = effort }
             }
         }
         if let effort, !effort.isEmpty, effort != self.effort {
-            if (try? await connection.request("session.model.setReasoningEffort", [
+            if (try? await Self.deadlineRequest(connection, "session.model.setReasoningEffort", [
                 "sessionId": .string(sessionID),
                 "reasoningEffort": .string(effort),
             ])) != nil {
@@ -380,7 +399,7 @@ final class CopilotSession: ProviderSession {
     private func loadCommands() {
         guard let connection, let sessionID else { return }
         Task { [weak self] in
-            guard let self, let result = try? await connection.request("session.commands.list", ["sessionId": .string(sessionID)]) else { return }
+            guard let self, let result = try? await Self.deadlineRequest(connection, "session.commands.list", ["sessionId": .string(sessionID)]) else { return }
             var names: Set<String> = []
             var commands: [SlashCommand] = []
             for entry in result["commands"]?.array ?? [] {
@@ -400,7 +419,7 @@ final class CopilotSession: ProviderSession {
     static func listModels(executable: URL, environment: [String: String]) async throws -> [ModelOption] {
         let connection = try await connect(executable: executable, directory: FileManager.default.temporaryDirectory, environment: environment) { _ in }
         defer { connection.close() }
-        let result = try await connection.request("models.list", [:])
+        let result = try await deadlineRequest(connection, "models.list", [:])
         var models = [ProviderRegistry.copilotAuto]
         for model in result["models"]?.array ?? [] {
             guard let id = model["id"]?.string, model["policy"]?["state"]?.string != "disabled" else { continue }
@@ -428,7 +447,7 @@ final class CopilotSession: ProviderSession {
             return .unknown
         }
         defer { connection.close() }
-        guard let result = try? await connection.request("account.getCurrentAuth", [:]) else { return .unknown }
+        guard let result = try? await deadlineRequest(connection, "account.getCurrentAuth", [:]) else { return .unknown }
         guard let auth = result["authInfo"], !auth.isNull else { return .signedOut }
         var account = auth["login"]?.string
         // Signed in to GitHub without a Copilot plan: the turn would fail with HTTP 403.
@@ -442,7 +461,7 @@ final class CopilotSession: ProviderSession {
     static func readPlanLimits(executable: URL, environment: [String: String]) async throws -> PlanLimits? {
         let connection = try await connect(executable: executable, directory: FileManager.default.temporaryDirectory, environment: environment) { _ in }
         defer { connection.close() }
-        let quota = try await connection.request("account.getQuota", [:])
+        let quota = try await deadlineRequest(connection, "account.getQuota", [:])
         let titles = [("premium_interactions", "Premium requests"), ("chat", "Chat messages"), ("completions", "Code completions")]
         var windows: [PlanLimits.Window] = []
         for (key, title) in titles {
@@ -460,7 +479,7 @@ final class CopilotSession: ProviderSession {
             ))
         }
         guard !windows.isEmpty else { return nil }
-        let auth = try? await connection.request("account.getCurrentAuth", [:])
+        let auth = try? await deadlineRequest(connection, "account.getCurrentAuth", [:])
         let plan = auth?["authInfo"]?["copilotUser"]?["copilot_plan"]?.string
         return PlanLimits(planName: PlanLimitsReader.planName(plan).map { "Copilot \($0)" }, windows: windows)
     }
@@ -489,12 +508,19 @@ final class CopilotSession: ProviderSession {
         let connection = JSONRPCConnection(process: process, sendsVersion: true)
         configure(connection)
         try connection.start()
-        let pong = try await connection.request("ping", ["message": "tivano"])
+        let pong = try await deadlineRequest(connection, "ping", ["message": "tivano"])
         guard pong["protocolVersion"]?.int != nil else {
             connection.close()
             throw ProviderError.failed("This `copilot` does not speak the SDK protocol. Update it with `copilot update`.")
         }
         return connection
+    }
+
+    /// Every request gets a deadline but `session.send`, whose reply is the turn itself.
+    private static func deadlineRequest(_ connection: JSONRPCConnection, _ method: String, _ params: JSONValue = .null, seconds: Int = 45) async throws -> JSONValue {
+        try await withDeadline(seconds: seconds, provider: ProviderKind.copilot.displayName, operation: method) {
+            try await connection.request(method, params)
+        }
     }
 
     // MARK: - Notifications
@@ -808,11 +834,13 @@ final class CopilotSession: ProviderSession {
         case .fullAccess:
             return approve
         case .autoAcceptEdits:
-            return kind == "write" || kind == "read" ? approve : nil
+            if kind == "write" || kind == "read" { return approve }
+            return nil
         case .auto:
             if kind == "write" || kind == "read" { return approve }
             let recommendation = prompt?["assistedApproval"]?["recommendation"]?.string ?? request["assistedApproval"]?["recommendation"]?.string
-            return recommendation == "approve" ? approve : nil
+            if recommendation == "approve" { return approve }
+            return nil
         case .supervised:
             return nil
         }
@@ -899,7 +927,7 @@ final class CopilotSession: ProviderSession {
     private func respondPermission(_ requestID: String, _ decision: JSONValue) {
         guard let connection, let sessionID else { return }
         Task {
-            _ = try? await connection.request("session.permissions.handlePendingPermissionRequest", [
+            _ = try? await Self.deadlineRequest(connection, "session.permissions.handlePendingPermissionRequest", [
                 "sessionId": .string(sessionID),
                 "requestId": .string(requestID),
                 "result": decision,

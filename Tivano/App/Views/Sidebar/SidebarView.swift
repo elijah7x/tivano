@@ -10,7 +10,6 @@ struct SidebarView: View {
     var dismiss: (() -> Void)? = nil
 
     @State private var search = ""
-    @State private var isAddingProject = false
     @State private var renaming: ChatThread?
     @State private var renameText = ""
     /// The thread whose delete popover is open, by id: the popover's binding compares two
@@ -68,7 +67,7 @@ struct SidebarView: View {
     /// The list's own coordinate space: the rows report their frames in it and the drag
     /// gesture reads its locations in it, whatever the scroll position.
     private nonisolated static let listSpace = "sidebar-list"
-    private nonisolated static let listTopInset: CGFloat = 12
+    private nonisolated static let listTopInset: CGFloat = 0
 
     var body: some View {
         // Where every thread sits, worked out once per pass: the grouping and the list below
@@ -77,53 +76,83 @@ struct SidebarView: View {
         let helpers = helpersByParent(placements: placements)
         VStack(alignment: .leading, spacing: 0) {
             if !inPopover {
-                HStack {
+                HStack(spacing: model.settings.showsSkylightNow ? 6 : nil) {
                     Spacer(minLength: Chrome.trafficLightLeading + Chrome.trafficLightsWidth + Chrome.trafficLightClearance)
-                    SidebarToggleButton()
+                    if model.settings.showsSkylightNow {
+                        ChromeIconButton(
+                            symbol: "asset:today-ring",
+                            isActive: model.settings.sidebarActivityView,
+                            prominent: true,
+                            glyphSize: SidebarHeaderLayout.glyphWidth,
+                            help: model.settings.sidebarActivityView ? "Show all threads" : "Focus on today"
+                        ) {
+                            withAnimation(Chrome.panelSlide) { model.settings.sidebarActivityView.toggle() }
+                        }
+                        .accessibilityValue(Text(verbatim: Chrome.localized(model.settings.sidebarActivityView ? "On" : "Off")))
+                        SidebarHeaderButton(symbol: "magnifyingglass", help: "Search threads") {
+                            model.isCommandPalettePresented = true
+                        }
+                    }
+                    SidebarToggleButton(inSidebar: true)
                 }
                 .padding(.trailing, Chrome.chromeHorizontalPadding)
                 .frame(height: Chrome.capsuleHeight)
                 .padding(.top, Chrome.chromeTopPadding)
+
+                if model.settings.showsSkylightNow {
+                    SidebarHero()
+                        .padding(.top, 2)
+                        .padding(.bottom, 6)
+                }
             }
 
-            HStack(spacing: 6) {
-                if inPopover {
-                    SidebarSearchField(
-                        text: $search,
-                        prompt: Chrome.localized("Search threads"),
-                        onSubmit: {
-                            if let first = searchResults(helpers: helpers).first?.threads.first {
-                                model.openThread(first.id)
+            if inPopover || !model.settings.showsSkylightNow {
+                HStack(spacing: 6) {
+                    if inPopover {
+                        SidebarSearchField(
+                            text: $search,
+                            prompt: Chrome.localized("Search threads"),
+                            onSubmit: {
+                                if let first = searchResults(helpers: helpers).first?.threads.first {
+                                    model.openThread(first.id)
+                                }
+                            },
+                            onMove: { moveSearchSelection(by: $0, helpers: helpers) }
+                        )
+                    } else {
+                        Text(verbatim: Chrome.localized("Thread list"))
+                            .font(.ui(.body, weight: .semibold))
+                            .foregroundStyle(Chrome.primaryText.opacity(0.85))
+                        Spacer()
+                        if !model.settings.showsSkylightNow {
+                            SidebarHeaderButton(symbol: "plus.bubble", help: Chrome.localized("New thread") + ShortcutStore.hint(for: .newThread)) {
+                                model.newThread()
                             }
-                        },
-                        onMove: { moveSearchSelection(by: $0, helpers: helpers) }
-                    )
-                } else {
-                    ChromeIconButton(symbol: "plus.bubble", prominent: true, help: Chrome.localized("New thread") + ShortcutStore.hint(for: .newThread)) {
-                        model.newThread()
-                    }
-                    ChromeIconButton(symbol: "magnifyingglass", prominent: true, help: "Search threads") {
-                        model.isCommandPalettePresented = true
+                        }
+                        ChromeIconButton(
+                            symbol: "asset:today-ring",
+                            isActive: model.settings.sidebarActivityView,
+                            prominent: true,
+                            glyphSize: SidebarHeaderLayout.glyphWidth,
+                            help: model.settings.sidebarActivityView ? "Show all threads" : "Focus on today"
+                        ) {
+                            withAnimation(Chrome.panelSlide) { model.settings.sidebarActivityView.toggle() }
+                        }
+                        .accessibilityValue(Text(verbatim: Chrome.localized(model.settings.sidebarActivityView ? "On" : "Off")))
+                        SidebarHeaderButton(symbol: "magnifyingglass", help: "Search threads") {
+                            model.isCommandPalettePresented = true
+                        }
                     }
                 }
-                ActivityViewToggle(isOn: Binding(
-                    get: { model.settings.sidebarActivityView },
-                    set: { model.settings.sidebarActivityView = $0 }
-                ))
-                if !inPopover {
-                    Spacer(minLength: Chrome.trafficLightClearance)
-                }
+                .padding(.leading, inPopover ? Chrome.listInset : Chrome.listInset + Chrome.rowHorizontalPadding)
+                .padding(.trailing, inPopover ? Chrome.listInset : Chrome.listInset + Chrome.rowHorizontalPadding - (Chrome.capsuleHeight - SidebarHeaderLayout.glyphWidth) / 2)
+                .padding(.top, inPopover ? 12 : 18)
             }
-            .padding(.leading, inPopover ? Chrome.listInset : Chrome.listInset + Chrome.rowHorizontalPadding + (Chrome.iconSize - Chrome.capsuleHeight) / 2)
-            .padding(.trailing, Chrome.listInset)
-            .padding(.top, inPopover ? 12 : 0)
 
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         if query.isEmpty {
-                            // One list for both layouts: a thread keeps its row when the layout changes, so the
-                            // row grows or shrinks and slides to its new place instead of being replaced.
                             ForEach(listItems(placements: placements, helpers: helpers)) { item in
                                 itemView(item)
                                     .transition(rowTransition(item))
@@ -162,7 +191,7 @@ struct SidebarView: View {
                                 dragEnded()
                                 projectDragEnded()
                             },
-                        isEnabled: query.isEmpty
+                        isEnabled: query.isEmpty && !model.settings.sidebarActivityView
                     )
                 }
                 .scrollIndicators(.never)
@@ -197,22 +226,6 @@ struct SidebarView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 VoiceSidebarTrigger()
-                SidebarRow(title: "Add project", action: { isAddingProject.toggle() }) {
-                    SidebarIconBadge { SidebarSymbol("plus") }
-                }
-                .popover(isPresented: $isAddingProject, arrowEdge: .bottom) {
-                    PopoverMenu {
-                        PopoverItem("Choose a folder…", symbol: "folder") {
-                            isAddingProject = false
-                            addProject()
-                        }
-                        PopoverDivider()
-                        PopoverItem("Clone from GitHub…", leading: AnyView(Image("mcp-github").resizable().scaledToFit().frame(width: 12, height: 12))) {
-                            isAddingProject = false
-                            GitHubClonePanel.shared.present(model: model)
-                        }
-                    }
-                }
                 SidebarRow(title: "Settings", action: { WindowManager.shared.showSettings() }) {
                     SidebarIconBadge { SidebarSymbol("gear", scale: 1.15) }
                         .overlay(alignment: .topTrailing) {
@@ -226,6 +239,7 @@ struct SidebarView: View {
             .padding(.bottom, 12)
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .animation(Chrome.panelSlide, value: model.settings.showsSkylightNow)
         .background { if !inPopover { WindowDragArea() } }
         .popover(isPresented: Binding(
             get: { pendingProjectDeletionID != nil },
@@ -440,6 +454,23 @@ struct SidebarView: View {
         switch item.kind {
         case .gap(let height):
             Color.clear.frame(height: height)
+        case .section(let section):
+            sectionHeader(section, isFirstInList: section == .projects)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { rowHeights.note(item.id, $0) }
+        case .todayHeader:
+            Text(verbatim: Chrome.localized("Today"))
+                .font(.ui(.callout, weight: .semibold))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(.horizontal, Chrome.rowHorizontalPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: Chrome.rowHeight)
+                .modifier(SidebarHeaderLayout(topSpacing: 8))
+        case .empty(let title):
+            Text(verbatim: Chrome.localized(title))
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(.horizontal, Chrome.rowHorizontalPadding)
+                .padding(.vertical, 4)
         case .project(let project, let count):
             let isDragged = projectDrag.id == project.id
             ProjectRow(snapshot: project, count: count, isDragged: isDragged)
@@ -450,8 +481,8 @@ struct SidebarView: View {
                 .onDisappear { projectFrames.forget(project.id) }
                 .offset(y: isDragged ? projectDrag.visualOffset : 0)
                 .zIndex(isDragged ? 1 : 0)
-        case .header(let title, let isFirst):
-            ActivityHeader(title: title, isFirst: isFirst)
+        case .header(let title, _):
+            ActivityHeader(title: title)
         case .thread(let thread, let projectName, let projectIcon, let peers, let hasHelpers):
             reorderableRow(thread, projectName: projectName, projectIcon: projectIcon, peers: peers, hasHelpers: hasHelpers, isNested: item.isNested)
                 .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.listSpace)) }) { frame in
@@ -493,6 +524,55 @@ struct SidebarView: View {
                 .padding(.leading, item.isNested ? ThreadRowMetrics.folderIndent : 0)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { rowHeights.note(item.id, $0) }
                 .modifier(RidesWithDraggedParent(parentID: parent.id, drag: drag))
+        }
+    }
+
+    private func sectionHeader(_ section: SidebarSection, isFirstInList: Bool = false) -> some View {
+        let collapsed = section == .projects ? model.settings.sidebarProjectsCollapsed : model.settings.sidebarTasksCollapsed
+        return Button {
+            withAnimation(Chrome.panelSlide) {
+                switch section {
+                case .projects: model.settings.sidebarProjectsCollapsed.toggle()
+                case .tasks: model.settings.sidebarTasksCollapsed.toggle()
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .accessibilityHidden(true)
+                Text(verbatim: Chrome.localized(section.title))
+                    .font(.ui(.callout, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Chrome.secondaryText)
+            .padding(.leading, Chrome.rowHorizontalPadding)
+            .padding(.trailing, Chrome.rowHorizontalPadding + Chrome.iconSize)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: Chrome.rowHeight)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: Chrome.localized(section.title)))
+        .accessibilityValue(Text(verbatim: Chrome.localized(collapsed ? "Collapsed" : "Expanded")))
+        .overlay(alignment: .trailing) {
+            SidebarHeaderButton(
+                symbol: "plus",
+                hitSize: Chrome.iconSize,
+                help: section == .projects ? "Add project" : "New task"
+            ) { add(to: section) }
+                .padding(.trailing, Chrome.rowHorizontalPadding - (Chrome.iconSize - SidebarHeaderLayout.glyphWidth) / 2)
+        }
+        .modifier(SidebarHeaderLayout(
+            topSpacing: isFirstInList ? (section == .projects && !inPopover ? 0 : 8) : 7
+        ))
+    }
+
+    private func add(to section: SidebarSection) {
+        switch section {
+        case .projects: addProject()
+        case .tasks: model.newThread(affiliation: .standalone)
         }
     }
 
@@ -539,30 +619,61 @@ struct SidebarView: View {
         }
     }
 
-    /// The list in the current layout, built only when something that places a row has
-    /// changed: where the threads sit (`ThreadPlacement`), the projects, which threads need
-    /// attention (they head the activity layout), or the layout flag. A
+    /// The two sections, built only when placements, projects or task attention change. A
     /// title or a head's progress note reaches its row through the model's per-thread cell
     /// (see `SidebarThreadRow.thread`) without the list being built again.
     private func listItems(placements: [ThreadPlacement], helpers: [UUID: [ChatThread]]) -> [SidebarItem] {
-        let activity = model.settings.sidebarActivityView
-        let autoHidesIdleHeads = model.settings.hydraAutoHidesIdleHeads
-        let parentsShowingHeads = autoHidesIdleHeads
-            ? Set(helpers.compactMap { parent, heads in hasRunningHead(heads) ? parent : nil })
-            : []
-        let attention = activity ? Set(model.threads.lazy.filter { needsAttention($0) }.map(\.id)) : []
+        let todayFocus = model.settings.sidebarActivityView
+        let tasks = todayFocus ? [] : itemCache.tasks(for: placements) { model.standaloneTasks }
+        let parentsShowingHeads: Set<UUID> = todayFocus ? [] : Set(helpers.compactMap { parent, heads in hasRunningHead(heads) ? parent : nil })
+        let attention = Set(tasks.lazy.filter { needsAttention($0) }.map(\.id))
         let key = SidebarItemCache.Key(
             placements: placements,
             projects: model.projects,
             reordersProjects: projectDrag.id != nil,
+            todayFocus: todayFocus,
+            todayTick: todayFocus ? MinuteClock.shared.now : nil,
+            projectsCollapsed: model.settings.sidebarProjectsCollapsed,
+            tasksCollapsed: model.settings.sidebarTasksCollapsed,
             attention: attention,
-            activityView: activity,
-            activityThreadStyle: model.settings.activityThreadStyle,
-            autoHidesIdleHeads: autoHidesIdleHeads,
             parentsShowingHeads: parentsShowingHeads
         )
         return itemCache.items(for: key) {
-            activity ? activityItems(helpers: helpers, attentionIDs: attention) : projectItems(helpers: helpers)
+            if key.todayFocus {
+                let now = Date.now
+                let cutoff = Calendar.current.startOfDay(for: now)
+                let threads = model.threads.filter {
+                    !$0.isArchived && !$0.isHelper && !$0.isInPanel && $0.updatedAt >= cutoff && $0.updatedAt <= now
+                }.sorted { $0.updatedAt > $1.updatedAt }
+                var items = [SidebarItem(id: "section-today", kind: .todayHeader)]
+                items.append(contentsOf: threads.map { thread in
+                    SidebarItem(
+                        id: SidebarItem.id(for: thread),
+                        kind: .thread(thread, projectName: nil, projectIcon: nil, peers: nil, hasHelpers: false)
+                    )
+                })
+                if threads.isEmpty {
+                    items.append(SidebarItem(id: "empty-today", kind: .empty("Nothing active today")))
+                }
+                return items
+            }
+            var items = [SidebarItem(id: "section-projects", kind: .section(.projects))]
+            if !key.projectsCollapsed {
+                items.append(contentsOf: projectItems(helpers: helpers))
+                if model.projects.isEmpty {
+                    items.append(SidebarItem(id: "empty-projects", kind: .empty("No projects yet")))
+                }
+            }
+            items.append(SidebarItem(id: "section-tasks", kind: .section(.tasks)))
+            if !key.tasksCollapsed {
+                let taskItems = activityItems(tasks: tasks, helpers: helpers, attentionIDs: attention)
+                if taskItems.isEmpty {
+                    items.append(SidebarItem(id: "empty-tasks", kind: .empty("No tasks yet")))
+                } else {
+                    items.append(contentsOf: taskItems)
+                }
+            }
+            return items
         }
     }
 
@@ -572,16 +683,22 @@ struct SidebarView: View {
         heads.contains { (model.thread($0.id) ?? $0).hydra?.status == .running }
     }
 
+    private func visibleHelpers(_ helpers: [ChatThread]) -> [ChatThread] {
+        guard !hasRunningHead(helpers.filter(\.isHydraHead)) else { return helpers }
+        return helpers.filter { !$0.isHydraHead }
+    }
+
     /// The helpers under a thread: one small row each, or a single line naming them while
     /// they are folded away.
     private func helperItems(under thread: ChatThread, helpers: [ChatThread], isNested: Bool = false) -> [SidebarItem] {
+        let helpers = visibleHelpers(helpers)
         guard !helpers.isEmpty else { return [] }
         if thread.foldsHelpers {
             return [SidebarItem(id: "helpers-\(thread.id)", kind: .helperStub(parent: thread, helpers: helpers), isNested: isNested)]
         }
         let plain = helpers.filter { !$0.isHydraHead }
         let heads = Self.orderedHeads(helpers.filter(\.isHydraHead))
-        let showsHeads = !heads.isEmpty && !(model.settings.hydraAutoHidesIdleHeads && !hasRunningHead(heads))
+        let showsHeads = !heads.isEmpty
         var items = plain.map { helper in
             SidebarItem(id: helper.id.uuidString, kind: .helper(helper, isLast: helper.id == plain.last?.id && !showsHeads), isNested: isNested)
         }
@@ -633,8 +750,9 @@ struct SidebarView: View {
                 items.append(SidebarItem(id: "gap-\(project.id)", kind: .gap(Chrome.groupGap)))
             }
             let projectThreads = model.threads(in: project)
-            // The count a folded project shows: its threads and everything under them.
-            let count = projectThreads.reduce(0) { $0 + 1 + (helpers[$1.id]?.count ?? 0) }
+            // The count a folded project shows: the chats it lists expanded, meaning its
+            // top-level threads — the helpers and heads nested under them are not chats.
+            let count = projectThreads.count
             items.append(SidebarItem(id: "project-\(project.id)", kind: .project(project, count: count)))
             guard project.isExpanded, projectDrag.id == nil else { continue }
             // Pinned threads lead each project's list.
@@ -654,14 +772,9 @@ struct SidebarView: View {
 
     // MARK: Activity layout
 
-    private func activityItems(helpers: [UUID: [ChatThread]], attentionIDs: Set<UUID>) -> [SidebarItem] {
-        let shown = model.threads.filter(\.isStandaloneListCandidate)
-        // An ordinary helper whose parent is here sits under it (see helperItems); one
-        // whose parent is gone or archived stands on its own. Heads only sit under leads.
-        let shownIDs = Set(shown.map(\.id))
-        let active = shown.filter { $0.parentThreadID.map { !shownIDs.contains($0) } ?? true }
-        let attention = Self.placed(active.filter { attentionIDs.contains($0.id) })
-        let rest = active.filter { !attentionIDs.contains($0.id) }
+    private func activityItems(tasks: [ChatThread], helpers: [UUID: [ChatThread]], attentionIDs: Set<UUID>) -> [SidebarItem] {
+        let attention = Self.placed(tasks.filter { attentionIDs.contains($0.id) })
+        let rest = tasks.filter { !attentionIDs.contains($0.id) }
         var items: [SidebarItem] = []
         if !attention.isEmpty {
             items.append(SidebarItem(id: "attention", kind: .header("Needs attention", isFirst: true)))
@@ -674,8 +787,6 @@ struct SidebarView: View {
             items.append(contentsOf: activityThreadItems(pinned, helpers: helpers))
         }
         for group in Self.activityGroups(rest.filter { !$0.isPinned }) {
-            // Without an attention section the day header is the first row, so it takes the tighter top padding.
-            items.append(SidebarItem(id: "day-\(group.title)", kind: .header(group.title, isFirst: items.isEmpty)))
             items.append(contentsOf: activityThreadItems(group.threads, helpers: helpers))
         }
         return items
@@ -687,23 +798,11 @@ struct SidebarView: View {
         let peers = threads.map(\.id)
         return threads.flatMap { thread in
             let own = helpers[thread.id] ?? []
-            let project = model.project(thread.projectID)
-            let compact = model.settings.activityThreadStyle == .icon
             return [SidebarItem(
                 id: thread.id.uuidString,
-                kind: .thread(thread, projectName: compact ? nil : (project?.name ?? ""), projectIcon: activityMark(project, compact: compact), peers: peers, hasHelpers: !own.isEmpty)
+                kind: .thread(thread, projectName: nil, projectIcon: nil, peers: peers, hasHelpers: !own.isEmpty)
             )] + helperItems(under: thread, helpers: own)
         }
-    }
-
-    /// A thread's project mark in the activity layout. In the icon style the slot in front
-    /// of the title belongs to the project — the mark picked for it, or the folder mark
-    /// until one is — so no thread wears a provider badge there and the thread's own state
-    /// reads at the back instead. The project-name style shows no marks at all: every row
-    /// carries the folder line with the project's name, whether a mark was picked or not.
-    private func activityMark(_ project: Project?, compact: Bool) -> ProjectIcon? {
-        guard compact else { return nil }
-        return project?.icon ?? .symbol("folder.fill")
     }
 
     private func needsAttention(_ thread: ChatThread) -> Bool {
@@ -733,21 +832,7 @@ struct SidebarView: View {
 
     /// Newest first, except threads dragged into place, which keep that place for the rest of their day.
     private static func placed(_ threads: [ChatThread]) -> [ChatThread] {
-        let calendar = Calendar.current
-        func order(_ thread: ChatThread) -> Double? {
-            guard let order = thread.activityOrder, let day = thread.activityOrderDay,
-                  calendar.isDate(day, inSameDayAs: thread.updatedAt) else { return nil }
-            return order
-        }
-        return threads.sorted { lhs, rhs in
-            switch (order(lhs), order(rhs)) {
-            case let (left?, right?) where left != right: return left < right
-            // Threads that became active after a reorder have no place yet and stay on top.
-            case (nil, .some): return true
-            case (.some, nil): return false
-            default: return lhs.updatedAt > rhs.updatedAt
-            }
-        }
+        ChatThread.orderedByActivity(threads)
     }
 
     private static func dayTitle(for date: Date, calendar: Calendar) -> String {
@@ -778,13 +863,27 @@ struct SidebarView: View {
             .padding(.horizontal, 8)
             .padding(.top, 14)
         } else {
-            ForEach(Array(results.enumerated()), id: \.element.project.id) { index, result in
-                if index > 0 {
+            ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
+                if index > 0, result.project != nil {
                     Color.clear.frame(height: Chrome.groupGap)
                 }
-                ProjectRow(snapshot: result.project, count: result.count, togglesExpansion: false)
-                ForEach(result.threads, id: \.id) { thread in
-                    threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !(helpers[thread.id] ?? []).isEmpty, isNested: true)
+                if let project = result.project {
+                    ProjectRow(snapshot: project, count: result.count, togglesExpansion: false)
+                    ForEach(result.threads, id: \.id) { thread in
+                        threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !(helpers[thread.id] ?? []).isEmpty, isNested: true)
+                    }
+                } else {
+                    sectionHeader(.tasks, isFirstInList: index == 0)
+                    if !model.settings.sidebarTasksCollapsed {
+                        let matchedIDs = Set(result.threads.map(\.id))
+                        ForEach(result.threads.filter { !$0.isHelper && !$0.isHydraHead }, id: \.id) { thread in
+                            let own = (helpers[thread.id] ?? []).filter { matchedIDs.contains($0.id) }
+                            threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !own.isEmpty)
+                            ForEach(helperItems(under: thread, helpers: own)) { item in
+                                itemView(item)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -813,13 +912,28 @@ struct SidebarView: View {
         let key = SidebarItemCache.SearchKey(threads: model.threads, projects: model.projects, query: query)
         return itemCache.search(for: key) { titles in
             let needle = query.lowercased()
-            return model.projects.compactMap { project in
-                let all = model.threads(in: project).flatMap { [$0] + (helpers[$0.id] ?? []) }
+            var results: [SidebarSearchResult] = model.projects.compactMap { project in
+                let topLevel = model.threads(in: project)
+                let all = topLevel.flatMap { [$0] + (helpers[$0.id] ?? []) }
                 let threads = project.name.lowercased().contains(needle)
                     ? all
                     : all.filter { titles[$0.id]?.contains(needle) ?? $0.title.lowercased().contains(needle) }
-                return threads.isEmpty ? nil : SidebarSearchResult(project: project, threads: threads, count: all.count)
+                return threads.isEmpty ? nil : SidebarSearchResult(project: project, threads: threads, count: topLevel.count)
             }
+            let tasks = model.standaloneTasks
+            let matchesSection = "Tasks".lowercased().contains(needle) || Chrome.localized("Tasks").lowercased().contains(needle)
+            let matches: [ChatThread] = tasks.flatMap { thread in
+                let own = helpers[thread.id] ?? []
+                if matchesSection || (titles[thread.id]?.contains(needle) ?? thread.title.lowercased().contains(needle)) {
+                    return [thread] + own
+                }
+                let children = own.filter { titles[$0.id]?.contains(needle) ?? $0.title.lowercased().contains(needle) }
+                return children.isEmpty ? [] : [thread] + children
+            }
+            if !matches.isEmpty {
+                results.append(SidebarSearchResult(project: nil, threads: matches, count: tasks.count))
+            }
+            return results
         }
     }
 
@@ -856,14 +970,20 @@ struct SidebarView: View {
         guard let snapshot = dragPeers else { return }
         let (order, group) = (snapshot.order, snapshot.group)
         let moved = drag.settle(order: order, heights: snapshot.heights, fallbackHeight: Chrome.rowHeight + 1) { neighbour, placeAfter in
+            guard let moving = model.thread(id), let target = model.thread(neighbour),
+                  moving.affiliation == target.affiliation else { return false }
             // The neighbour slides and the grabbed row's slot moves in the same animation
             // as its compensation, so it stays put under the pointer while the list flows
             // around it.
-            withAnimation(Self.slide) {
+            return withAnimation(Self.slide) {
                 if let group {
-                    model.moveInActivity(id, to: neighbour, placeAfter: placeAfter, among: group)
+                    guard sameTaskGroup(moving, target) else { return false }
+                    let validGroup = group.filter { peer in
+                        model.thread(peer).map { sameTaskGroup(moving, $0) } ?? false
+                    }
+                    return model.moveInActivity(id, to: neighbour, placeAfter: placeAfter, among: validGroup)
                 } else {
-                    model.moveThread(id, to: neighbour, placeAfter: placeAfter)
+                    return model.moveThread(id, to: neighbour, placeAfter: placeAfter)
                 }
             }
         }
@@ -887,7 +1007,7 @@ struct SidebarView: View {
         if projectDrag.id != id {
             guard let expandedTop = projectFrames.frame(of: id)?.minY,
                   let index = model.projects.firstIndex(where: { $0.id == id }) else { return }
-            let collapsedTop = Self.listTopInset + model.projects.prefix(index).reduce(CGFloat.zero) {
+            let collapsedTop = Self.listTopInset + (rowHeights.values["section-projects"] ?? Chrome.rowHeight) + 1 + model.projects.prefix(index).reduce(CGFloat.zero) {
                 $0 + (rowHeights.values["project-\($1.id)"] ?? Chrome.rowHeight) + 1
             } + CGFloat(index) * (Chrome.groupGap + 1)
             var grab = RowDrag<UUID>(id: id)
@@ -929,7 +1049,8 @@ struct SidebarView: View {
     /// The threads a row can be reordered among, in their current order: its activity group
     /// (returned as `group` too, for the move) or its project's top-level threads.
     private func peers(of id: UUID) -> (order: [UUID], group: [UUID]?) {
-        if model.settings.sidebarActivityView {
+        guard let thread = model.thread(id) else { return ([], nil) }
+        if thread.affiliation == .standalone {
             let placements = threadPlacements
             for item in listItems(placements: placements, helpers: helpersByParent(placements: placements)) {
                 if case .thread(let thread, _, _, let peers, _) = item.kind, thread.id == id, let peers {
@@ -938,8 +1059,19 @@ struct SidebarView: View {
             }
             return ([], nil)
         }
-        guard let thread = model.thread(id), let project = model.project(thread.projectID) else { return ([], nil) }
+        guard let project = model.project(thread.projectID) else { return ([], nil) }
         return (model.threads(in: project).map(\.id), nil)
+    }
+
+    private func sameTaskGroup(_ lhs: ChatThread, _ rhs: ChatThread) -> Bool {
+        guard lhs.affiliation == .standalone, rhs.affiliation == .standalone,
+              lhs.isStandaloneListCandidate, rhs.isStandaloneListCandidate,
+              !lhs.isHelper, !rhs.isHelper else { return false }
+        let attention = needsAttention(lhs)
+        guard attention == needsAttention(rhs) else { return false }
+        if attention { return true }
+        guard lhs.isPinned == rhs.isPinned else { return false }
+        return lhs.isPinned || Calendar.current.isDate(lhs.updatedAt, inSameDayAs: rhs.updatedAt)
     }
 
     /// Each peer's slot: its row, the helper rows or folded line under it, and the list's
@@ -949,7 +1081,7 @@ struct SidebarView: View {
         var heights: [UUID: CGFloat] = [:]
         for id in order {
             var height = (rowHeights.values[id.uuidString] ?? Chrome.rowHeight) + 1
-            let helpers = grouped[id] ?? []
+            let helpers = visibleHelpers(grouped[id] ?? [])
             if !helpers.isEmpty {
                 if model.thread(id)?.foldsHelpers == true {
                     height += (rowHeights.values["helpers-\(id)"] ?? ThreadRowMetrics.helperHeight) + 1
@@ -957,9 +1089,7 @@ struct SidebarView: View {
                     for helper in helpers where !helper.isHydraHead {
                         height += (rowHeights.values[helper.id.uuidString] ?? ThreadRowMetrics.helperHeight) + 1
                     }
-                    let headCount = model.settings.hydraAutoHidesIdleHeads && !hasRunningHead(helpers.filter(\.isHydraHead))
-                        ? 0
-                        : helpers.count(where: \.isHydraHead)
+                    let headCount = helpers.count(where: \.isHydraHead)
                     if headCount > 0 {
                         let rows = (headCount + 5) / 6
                         height += (rowHeights.values["heads-\(id)"] ?? ThreadRowMetrics.headCardHeight(rows: rows)) + 1
@@ -985,6 +1115,12 @@ struct SidebarView: View {
         }
     }
 
+    /// Today focus mixes projects and tasks, so each row names where it belongs in the time's place.
+    private func todayTag(for thread: ChatThread) -> String? {
+        guard model.settings.sidebarActivityView, !inPopover else { return nil }
+        return model.project(thread.projectID)?.name ?? Chrome.localized("Task")
+    }
+
     private func threadRow(_ thread: ChatThread, projectName: String?, projectIcon: ProjectIcon?, hasHelpers: Bool, isDragged: Bool = false, isNested: Bool = false) -> some View {
         // A thread with helpers under it gets the fold button.
         // `.equatable()` skips the parent's re-evaluation for rows whose value inputs did
@@ -993,6 +1129,7 @@ struct SidebarView: View {
             snapshot: thread,
             projectName: projectName,
             projectIcon: projectIcon,
+            tag: todayTag(for: thread),
             menuRequests: menuRequests,
             isDragged: isDragged,
             onToggleFold: hasHelpers ? { fold(thread.id) } : nil,
@@ -1031,11 +1168,12 @@ struct RemoveProjectPopover: View {
 }
 
 struct SidebarToggleButton: View {
+    let inSidebar: Bool
     @Environment(AppModel.self) private var model
 
     var body: some View {
         if !SettingsNavigation.shared.isPresented {
-            ChromeCircleButton(symbol: "sidebar.left", help: Chrome.localized("Toggle sidebar") + ShortcutStore.hint(for: .toggleSidebar)) {
+            ChromeCircleButton(symbol: "sidebar.left", help: Chrome.localized("Toggle sidebar") + ShortcutStore.hint(for: .toggleSidebar), glass: !inSidebar) {
                 model.sidebar.toggle()
             }
         }
@@ -1169,10 +1307,25 @@ private struct RenameThreadPopover: View {
     }
 }
 
-/// One entry of the sidebar list. Thread entries use the thread's id in both layouts.
+private enum SidebarSection {
+    case projects
+    case tasks
+
+    var title: String {
+        switch self {
+        case .projects: "Projects"
+        case .tasks: "Tasks"
+        }
+    }
+}
+
+/// One entry of the sidebar list. Thread entries keep their id across affiliations.
 private struct SidebarItem: Identifiable {
     enum Kind {
         case gap(CGFloat)
+        case section(SidebarSection)
+        case todayHeader
+        case empty(String)
         /// A project, with what a folded one shows: its threads and their helpers.
         case project(Project, count: Int)
         case header(String, isFirst: Bool)
@@ -1222,12 +1375,11 @@ private struct ProjectRow: View {
     var isDragged = false
 
     @State private var isMenuPresented = false
+    @State private var iconEditor = ProjectIconEditorRequest()
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     var body: some View {
-        // The global switch in Settings activates every project at once; only a project
-        // explicitly switched here keeps its own choice, and shows dimmed while off.
-        let isActive = model.settings.isProjectActive(project.id)
+        @Bindable var iconEditor = iconEditor
         let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
         SidebarRow(
             title: project.name,
@@ -1243,14 +1395,14 @@ private struct ProjectRow: View {
                     if let icon = project.icon {
                         ProjectIconMark(icon: icon, size: 12)
                     } else {
-                        SidebarSymbol("folder.fill")
+                        SidebarSymbol("asset:sidebar-folder")
                     }
                 }
             },
             accessory: { hovering in
                 if (hovering || isMenuPresented) && !isDragged {
                     HStack(spacing: 0) {
-                        RowActionsButton(actions: actions(isActive: isActive), isPresented: $isMenuPresented)
+                        RowActionsButton(actions: actions(), isPresented: $isMenuPresented)
                         Button {
                             model.newThread(in: project)
                         } label: {
@@ -1263,11 +1415,10 @@ private struct ProjectRow: View {
                     Text(verbatim: "\(count)")
                         .font(.ui(.subheadline).monospacedDigit())
                         .foregroundStyle(Chrome.secondaryText)
-                        .padding(.trailing, 4)
+                        .padding(.trailing, Chrome.rowHorizontalPadding - 6)
                 }
             }
         )
-        .opacity(isActive ? 1 : 0.55)
         .background {
             if isDragged {
                 shape
@@ -1277,18 +1428,20 @@ private struct ProjectRow: View {
         }
         .scaleEffect(isDragged ? 1.02 : 1)
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isDragged)
+        .popover(isPresented: $iconEditor.isPresented, arrowEdge: .bottom) {
+            if let projectID = iconEditor.projectID, projectID == snapshot.id {
+                ProjectIconPicker(icon: Self.iconBinding(for: projectID, model: model))
+            }
+        }
         // Snapshots only: the menu builder must not capture the row, so the AppKit menu it
         // builds cannot pin the row's state storage (and its responder with it) after dismiss.
-        .contextMenu { [project, model] in
+        .contextMenu { [project, model, iconEditor] in
             let projectSnapshot = project
             let modelSnapshot = model
-            let activeSnapshot = modelSnapshot.settings.isProjectActive(projectSnapshot.id)
-            let overrideSnapshot = modelSnapshot.settings.hasProjectActivationOverride(for: projectSnapshot.id)
             RowActionMenuButtons(actions: Self.contextMenuActions(
                 project: projectSnapshot,
-                isActive: activeSnapshot,
-                hasOverride: overrideSnapshot,
-                model: modelSnapshot
+                model: modelSnapshot,
+                iconEditor: iconEditor
             ))
             // The pair that new chats in this project start on. The menu shows only when
             // there is a pair to choose. Value snapshots only, as above.
@@ -1308,10 +1461,9 @@ private struct ProjectRow: View {
 
     /// The context menu's items, built from value snapshots with weak model captures: the
     /// AppKit menu outlives the right-click, so its callbacks must not retain the row.
-    /// (The ellipsis popover keeps `actions(isActive:)`; it is not an AppKit menu.)
-    private static func contextMenuActions(project: Project, isActive: Bool, hasOverride: Bool, model: AppModel) -> [RowAction] {
-        let projectID = project.id
-        var items = [
+    /// (The ellipsis popover keeps `actions()`; it is not an AppKit menu.)
+    private static func contextMenuActions(project: Project, model: AppModel, iconEditor: ProjectIconEditorRequest) -> [RowAction] {
+        [
             RowAction(title: "New thread", symbol: "plus.bubble") { [weak model, project] in
                 guard let model else { return }
                 model.newThread(in: project)
@@ -1324,53 +1476,51 @@ private struct ProjectRow: View {
                 guard model != nil else { return }
                 Workspace.revealInFinder(path)
             },
+            changeIconAction(projectID: project.id, model: model, iconEditor: iconEditor),
             RowAction(title: "Remove project", symbol: "trash", isDestructive: true, startsGroup: true) { [weak model, project] in
                 guard let model else { return }
                 model.requestProjectDeletion(project)
             },
         ]
-        items.append(RowAction(
-            title: isActive ? "Deactivate project" : "Activate project",
-            symbol: "power",
-            startsGroup: true
-        ) { [weak model, projectID, isActive] in
-            guard let model else { return }
-            model.settings.setProjectActive(!isActive, for: projectID)
-        })
-        if hasOverride {
-            items.append(RowAction(title: "Follow global setting", symbol: "arrow.uturn.backward") { [weak model, projectID] in
-                guard let model else { return }
-                model.settings.clearProjectActivationOverride(for: projectID)
-            })
-        }
-        return items
     }
 
-    private func actions(isActive: Bool) -> [RowAction] {
-        var items = [
+    private func actions() -> [RowAction] {
+        [
             RowAction(title: "New thread", symbol: "plus.bubble") { model.newThread(in: project) },
             RowAction(title: "New thread in worktree", symbol: "square.stack.3d.up") {
                 model.newThread(in: project, workspace: .worktree)
             },
             RowAction(title: "Reveal in Finder", symbol: "folder", startsGroup: true) { Workspace.revealInFinder(project.path) },
+            Self.changeIconAction(projectID: project.id, model: model, iconEditor: iconEditor),
             RowAction(title: "Remove project", symbol: "trash", isDestructive: true, startsGroup: true) {
                 model.requestProjectDeletion(project)
             },
         ]
-        items.append(RowAction(
-            title: isActive ? "Deactivate project" : "Activate project",
-            symbol: "power",
-            startsGroup: true
-        ) {
-            model.settings.setProjectActive(!isActive, for: project.id)
-        })
-        if model.settings.hasProjectActivationOverride(for: project.id) {
-            items.append(RowAction(title: "Follow global setting", symbol: "arrow.uturn.backward") {
-                model.settings.clearProjectActivationOverride(for: project.id)
-            })
-        }
-        return items
     }
+
+    private static func iconBinding(for projectID: UUID, model: AppModel) -> Binding<ProjectIcon?> {
+        Binding(
+            get: { [weak model] in model?.project(projectID)?.icon },
+            set: { [weak model] icon in model?.updateProject(projectID) { $0.icon = icon } }
+        )
+    }
+
+    private static func changeIconAction(projectID: UUID, model: AppModel, iconEditor: ProjectIconEditorRequest) -> RowAction {
+        RowAction(title: "Change icon…", symbol: "face.smiling") { [weak model, weak iconEditor] in
+            // Let the menu dismiss before presenting from the persistent project row.
+            Task { @MainActor [weak model, weak iconEditor] in
+                guard model?.project(projectID) != nil, let iconEditor else { return }
+                iconEditor.projectID = projectID
+                iconEditor.isPresented = true
+            }
+        }
+    }
+}
+
+@Observable
+private final class ProjectIconEditorRequest {
+    var projectID: UUID?
+    var isPresented = false
 }
 
 /// One pair as the submenu shows it: its id and its title.
@@ -1850,6 +2000,8 @@ private struct SidebarThreadRow: View, Equatable {
     /// The project's mark in the icon style: the folder or the picked emoji or symbol, in
     /// the slot in front of the title. Nil in the project-name style and the project layout.
     let projectIcon: ProjectIcon?
+    /// Where the thread belongs, in the time's place at the row's end; set in today focus only.
+    var tag: String? = nil
     /// Carries rename/delete intents out of the AppKit menu without retaining row state.
     /// Held strongly: the box is the list's, not the row's, so holding it pins no row
     /// state, and a weak one could go nil under a menu still on screen.
@@ -1877,6 +2029,7 @@ private struct SidebarThreadRow: View, Equatable {
         SidebarThreadInteraction(
             isSelected: isSelected,
             isDetailed: isDetailed,
+            tag: tag,
             isPinned: thread.isPinned,
             isDragged: isDragged,
             foldsHelpers: thread.foldsHelpers,
@@ -1933,6 +2086,7 @@ private struct SidebarThreadRow: View, Equatable {
             && lhs.snapshot.updatedAt == rhs.snapshot.updatedAt
             && lhs.snapshot.isPinned == rhs.snapshot.isPinned
             && lhs.projectName == rhs.projectName
+            && lhs.tag == rhs.tag
             && lhs.isDragged == rhs.isDragged
             && (lhs.onToggleFold != nil) == (rhs.onToggleFold != nil)
     }
@@ -1968,6 +2122,7 @@ private struct SidebarThreadRow: View, Equatable {
 private struct SidebarThreadInteraction<Label: View>: View {
     let isSelected: Bool
     let isDetailed: Bool
+    let tag: String?
     let isPinned: Bool
     let isDragged: Bool
     let foldsHelpers: Bool
@@ -1986,7 +2141,7 @@ private struct SidebarThreadInteraction<Label: View>: View {
     var body: some View {
         let showsActions = (isHovering || isMenuPresented) && !isDragged
         let showsFold = showsActions && onToggleFold != nil
-        let clearance: CGFloat = showsActions ? 52 + (showsFold ? 20 : 0) : (isDetailed ? 18 : 52)
+        let clearance: CGFloat = showsActions ? 52 + (showsFold ? 20 : 0) : (isDetailed ? 18 : tag != nil ? SidebarTagLabel.maxWidth + 12 : 52)
         let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
         Button(action: onSelect) {
             label.padding(.trailing, clearance)
@@ -2017,6 +2172,8 @@ private struct SidebarThreadInteraction<Label: View>: View {
                         .help(Text(verbatim: Chrome.localized("Archive thread")))
                         RowActionsButton(actions: actions(), isPresented: $isMenuPresented)
                     }
+                } else if let tag {
+                    SidebarTagLabel(text: tag, date: updatedAt)
                 } else if !isDetailed {
                     RelativeTimeLabel(date: updatedAt)
                 }
@@ -2230,37 +2387,67 @@ private enum ThreadActions {
     }
 }
 
-/// The bell beside the search field that switches the sidebar between projects and activity.
-private struct ActivityViewToggle: View {
-    @Binding var isOn: Bool
+private struct SidebarHeaderLayout: ViewModifier {
+    static let glyphWidth: CGFloat = 13
+    var topSpacing: CGFloat = 17
+
+    func body(content: Content) -> some View {
+        content
+            // The list contributes the remaining 1pt between items.
+            .padding(.top, topSpacing)
+            .padding(.bottom, 3)
+    }
+}
+
+private struct SidebarHeaderButton: View {
+    let symbol: String
+    var hitSize: CGFloat = Chrome.capsuleHeight
+    let help: String
+    let action: () -> Void
+    @State private var isHovering = false
 
     var body: some View {
-        let chord = ShortcutStore.shared.chord(for: .toggleActivityView).map { " (\($0.description))" } ?? ""
-        ChromeIconButton(symbol: "bell", isActive: isOn, prominent: true, help: (isOn ? Chrome.localized("Turn off activity view") : Chrome.localized("Turn on activity view")) + chord) {
-            withAnimation(Chrome.panelSlide) { isOn.toggle() }
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(Chrome.iconFont)
+                // The same ink as the toolbar's other glyphs (ChromeIconLabel, ChromeCircleButton).
+                .foregroundStyle(Chrome.primaryText.opacity(isHovering ? 1 : 0.92))
+                .frame(width: hitSize, height: hitSize)
+                .background {
+                    if isHovering, hitSize == Chrome.capsuleHeight {
+                        Circle()
+                            .fill(Chrome.overlay(0.08))
+                            .shadow(color: Chrome.primaryText.opacity(0.1), radius: Chrome.capsuleVerticalPadding * 2, y: Chrome.capsuleVerticalPadding)
+                            .padding(1)
+                    }
+                }
+                .contentShape(.rect)
         }
-        .accessibilityLabel(Text("Activity view"))
-        .accessibilityValue(Text(verbatim: isOn ? Chrome.localized("On") : Chrome.localized("Off")))
+        .buttonStyle(.plain)
+        .help(Text(verbatim: Chrome.localized(help)))
+        .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
+        .background { NoWindowDragArea() }
+        .onHover { hovering in
+            withAnimation(Chrome.hover) { isHovering = hovering }
+        }
     }
 }
 
 private struct ActivityHeader: View {
     let title: String
-    let isFirst: Bool
 
     var body: some View {
         Text(verbatim: Chrome.localized(title))
             .font(.ui(.callout, weight: .semibold))
             .foregroundStyle(Chrome.secondaryText)
             .padding(.horizontal, Chrome.rowHorizontalPadding)
-            .padding(.top, isFirst ? 2 : 14)
-            .padding(.bottom, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(SidebarHeaderLayout())
     }
 }
 
 @MainActor
-private func threadActivityStatus(_ thread: ChatThread, runtime: ThreadRuntime?) -> ThreadActivityStatus {
+func threadActivityStatus(_ thread: ChatThread, runtime: ThreadRuntime?) -> ThreadActivityStatus {
     ThreadActivityStatus.resolve(
         lastStatus: thread.unreadStatus ?? thread.lastStatus,
         hasUnread: thread.hasUnread,
@@ -2318,11 +2505,13 @@ private final class RowFrames {
     }
 }
 
-/// One project's search hits: the threads matching, and how many it has in all.
-private struct SidebarSearchResult {
-    let project: Project
+/// Search hits belonging to a project, or to Tasks when the project is nil.
+private struct SidebarSearchResult: Identifiable {
+    let project: Project?
     let threads: [ChatThread]
     let count: Int
+
+    var id: String { project.map { "project-\($0.id)" } ?? "tasks" }
 }
 
 /// An unchanged thread revision skips the full fingerprint. On a metadata change the
@@ -2330,7 +2519,7 @@ private struct SidebarSearchResult {
 private final class PlacementCache {
     private struct Fingerprint: Equatable {
         let id: UUID
-        let projectID: UUID
+        let projectID: UUID?
         let parentThreadID: UUID?
         let isArchived: Bool
         let isInPanel: Bool
@@ -2392,7 +2581,7 @@ private final class PlacementCache {
 /// them through the model's per-thread cells instead.
 private struct ThreadPlacement: Equatable {
     let id: UUID
-    let projectID: UUID
+    let projectID: UUID?
     let parentThreadID: UUID?
     let isArchived: Bool
     let isInPanel: Bool
@@ -2437,12 +2626,13 @@ private final class SidebarItemCache {
         var placements: [ThreadPlacement]
         var projects: [Project]
         var reordersProjects: Bool
-        /// The threads heading the activity layout under "Needs attention".
+        var todayFocus: Bool
+        var todayTick: Date?
+        var projectsCollapsed: Bool
+        var tasksCollapsed: Bool
+        /// The tasks heading their section under "Needs attention".
         var attention: Set<UUID>
-        var activityView: Bool
-        var activityThreadStyle: ActivityThreadStyle
-        /// The sidebar's head-card option, and the parents that still draw a card under it.
-        var autoHidesIdleHeads: Bool
+        /// Parents whose cards or folded summaries include heads.
         var parentsShowingHeads: Set<UUID>
     }
 
@@ -2456,6 +2646,8 @@ private final class SidebarItemCache {
     private var built: [SidebarItem] = []
     private var helpersFor: [ThreadPlacement]?
     private var helpers: [UUID: [ChatThread]] = [:]
+    private var tasksFor: [ThreadPlacement]?
+    private var standaloneTasks: [ChatThread] = []
     private var searchKey: SearchKey?
     private var found: [SidebarSearchResult] = []
     /// Each thread's title lowercased once, for the search to match against; a thread
@@ -2468,6 +2660,13 @@ private final class SidebarItemCache {
         built = build()
         key = wanted
         return built
+    }
+
+    func tasks(for placements: [ThreadPlacement], find: () -> [ChatThread]) -> [ChatThread] {
+        if placements == tasksFor { return standaloneTasks }
+        standaloneTasks = find()
+        tasksFor = placements
+        return standaloneTasks
     }
 
     /// The helper grouping, kept while the placements stand; `group` runs only when they changed.
@@ -2527,6 +2726,25 @@ final class MinuteClock {
     }
 }
 
+/// The project or task a thread belongs to, at the trailing end of its row in today focus.
+/// The time it was last active moves to the tooltip.
+private struct SidebarTagLabel: View {
+    static let maxWidth: CGFloat = 76
+    let text: String
+    let date: Date
+
+    var body: some View {
+        Text(verbatim: text)
+            .font(.ui(.subheadline))
+            .foregroundStyle(Chrome.secondaryText.opacity(0.8))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: Self.maxWidth, alignment: .trailing)
+            .padding(.trailing, Chrome.rowHorizontalPadding - 6)
+            .help(Text(verbatim: "\(text) · \(RelativeTime.short(date, now: .now))"))
+    }
+}
+
 /// How long ago a thread was last active, at the trailing end of its row. A view of its own,
 /// so the minute's tick re-renders this label alone.
 private struct RelativeTimeLabel: View {
@@ -2536,6 +2754,6 @@ private struct RelativeTimeLabel: View {
         Text(verbatim: RelativeTime.short(date, now: MinuteClock.shared.now))
             .font(.ui(.subheadline).monospacedDigit())
             .foregroundStyle(Chrome.secondaryText.opacity(0.8))
-            .padding(.trailing, 4)
+            .padding(.trailing, Chrome.rowHorizontalPadding - 6)
     }
 }

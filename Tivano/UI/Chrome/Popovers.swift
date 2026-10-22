@@ -203,6 +203,9 @@ struct PopoverItem: View {
     /// What the row says once tapped ("Copied"), in place with a checkmark, before the
     /// popover closes on its own. The action runs at once, so it must not present anything.
     var confirmation: String?
+    /// Off for a title that is display text rather than a localization key (a theme's
+    /// name, which stays in English).
+    var localizesTitle = true
     let action: @MainActor () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -212,6 +215,8 @@ struct PopoverItem: View {
 
     /// How long the confirmation shows before the popover closes.
     private static let confirmationHold: Duration = .milliseconds(650)
+
+    private var localizedTitle: String { localizesTitle ? Chrome.localized(title) : title }
 
     init(
         _ title: String,
@@ -224,6 +229,7 @@ struct PopoverItem: View {
         isEnabled: Bool = true,
         isDestructive: Bool = false,
         confirmation: String? = nil,
+        localizesTitle: Bool = true,
         action: @escaping @MainActor () -> Void
     ) {
         self.title = title
@@ -236,6 +242,7 @@ struct PopoverItem: View {
         self.isEnabled = isEnabled
         self.isDestructive = isDestructive
         self.confirmation = confirmation
+        self.localizesTitle = localizesTitle
         self.action = action
     }
 
@@ -304,7 +311,7 @@ struct PopoverItem: View {
                         .frame(width: 16)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
-                (isConfirmed ? Text(verbatim: Chrome.localized(confirmation ?? title)) : (titleText ?? Text(verbatim: Chrome.localized(title))))
+                (isConfirmed ? Text(verbatim: confirmation.map(Chrome.localized) ?? localizedTitle) : (titleText ?? Text(verbatim: localizedTitle)))
                     .font(.ui(.body))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -329,7 +336,7 @@ struct PopoverItem: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
-        .accessibilityLabel(Text(verbatim: detail.map { "\(Chrome.localized(title)), \(Chrome.localized($0))" } ?? Chrome.localized(title)))
+        .accessibilityLabel(Text(verbatim: detail.map { "\(localizedTitle), \(Chrome.localized($0))" } ?? localizedTitle))
         .onHover { hovering in
             guard isHovering != hovering else { return }
             withAnimation(Chrome.hover) { isHovering = hovering }
@@ -395,6 +402,7 @@ struct RowActionsButton: View {
         }
         .buttonStyle(.plain)
         .help(Text(verbatim: Chrome.localized("More")))
+        .accessibilityLabel(Text(verbatim: Chrome.localized("More")))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu { RowActionItems(actions: actions) }
         }

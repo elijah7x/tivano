@@ -165,6 +165,9 @@ enum HangWatchdog {
         var body = ""
         do {
             try process.run()
+            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(sampleSeconds + 30)) {
+                if process.isRunning { process.terminate() }
+            }
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             body = String(decoding: data, as: UTF8.self)

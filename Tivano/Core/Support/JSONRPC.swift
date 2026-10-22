@@ -48,13 +48,16 @@ final class JSONRPCConnection {
     private(set) var isClosed = false
     private let process: StdioProcess
     private let sendsVersion: Bool
+    private let strictResponses: Bool
+    private var protocolFailure: String?
     private var nextID = 1
     private var pending: [RPCID: CheckedContinuation<JSONValue, Error>] = [:]
     private var readTask: Task<Void, Never>?
 
-    init(process: StdioProcess, sendsVersion: Bool) {
+    init(process: StdioProcess, sendsVersion: Bool, strictResponses: Bool = false) {
         self.process = process
         self.sendsVersion = sendsVersion
+        self.strictResponses = strictResponses
     }
 
     func start() throws {
@@ -72,7 +75,7 @@ final class JSONRPCConnection {
 
     func request(_ method: String, _ params: JSONValue = .null) async throws -> JSONValue {
         if isClosed {
-            throw RPCError(code: -32000, message: "The agent process is not running.")
+            throw RPCError(code: -32000, message: AppText.localized("The agent process is not running."))
         }
         let id = RPCID.int(nextID)
         nextID += 1
@@ -129,6 +132,12 @@ final class JSONRPCConnection {
     }
 
     private func handle(_ message: JSONValue) {
+        if strictResponses, !Self.isValidEnvelope(message) {
+            protocolFailure = AppText.localized("The agent sent an invalid JSON-RPC message.")
+            process.terminate()
+            didClose()
+            return
+        }
         guard let object = message.object else { return }
         if let method = object["method"]?.string {
             let params = object["params"] ?? .null
@@ -143,24 +152,61 @@ final class JSONRPCConnection {
             }
             return
         }
-        guard let rawID = object["id"], let id = RPCID(rawID),
-              let continuation = pending.removeValue(forKey: id) else { return }
+        guard let rawID = object["id"] else { return }
+        if rawID == .null {
+            // A server that never read the request's id answers an error with `"id":
+            // null`. With one request in flight it can only be that request's answer.
+            guard let error = object["error"], !error.isNull else { return }
+            let failure = Self.rpcError(error)
+            if pending.count == 1, let only = pending.first {
+                pending.removeValue(forKey: only.key)
+                only.value.resume(throwing: failure)
+            } else {
+                NSLog("Tivano ignored a JSON-RPC error with a null response id (code %d): %@", failure.code, failure.message)
+            }
+            return
+        }
+        guard let id = RPCID(rawID), let continuation = pending.removeValue(forKey: id) else { return }
         if let error = object["error"], !error.isNull {
-            continuation.resume(throwing: RPCError(
-                code: error["code"]?.int ?? -32603,
-                message: error["message"]?.string ?? "The agent returned an error.",
-                data: error["data"]
-            ))
+            continuation.resume(throwing: Self.rpcError(error))
         } else {
             continuation.resume(returning: object["result"] ?? .null)
         }
     }
 
+    /// Opt-in validation leaves legacy CLI dialects unchanged. Unknown methods and late
+    /// responses remain forward-compatible; malformed envelopes do not become null results.
+    private static func isValidEnvelope(_ message: JSONValue) -> Bool {
+        guard let object = message.object, object["jsonrpc"]?.string == "2.0" else { return false }
+        if let method = object["method"]?.string {
+            guard !method.isEmpty, object["result"] == nil, object["error"] == nil else { return false }
+            return object["id"].map { RPCID($0) != nil } ?? true
+        }
+        let hasResult = object["result"] != nil
+        let error = object["error"]
+        let hasError = error != nil && error != .null
+        // An error may answer with `"id": null` when the request's own id was never read.
+        guard let id = object["id"], RPCID(id) != nil || (id == .null && hasError) else { return false }
+        guard hasResult != hasError else { return false }
+        return !hasError || (error?["code"]?.int != nil && error?["message"]?.string != nil)
+    }
+
+    private static func rpcError(_ error: JSONValue) -> RPCError {
+        RPCError(
+            code: error["code"]?.int ?? -32603,
+            message: error["message"]?.string ?? "The agent returned an error.",
+            data: error["data"]
+        )
+    }
+
     private func didClose() {
         guard !isClosed else { return }
         isClosed = true
-        let tail = process.failureReason ?? process.errorTail.trimmed
-        let failure = RPCError(code: -32000, message: tail.isEmpty ? "The agent process exited." : tail)
+        var tail = protocolFailure ?? process.failureReason ?? process.errorTail.trimmed
+        if strictResponses, tail.isEmpty, let status = process.exitStatus, status != 0 {
+            tail = String(format: AppText.localized("The agent exited with status %d."), status)
+        }
+        let failure = RPCError(code: -32000, message: tail.isEmpty ? AppText.localized("The agent process exited.") : tail)
         let waiting = Array(pending.values)
         pending.removeAll()
         for continuation in waiting { continuation.resume(throwing: failure) }

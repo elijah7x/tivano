@@ -1,6 +1,9 @@
 // Stable edition; advances only when the owner requests a release/catch-up.
-MARKETING_VERSION = 1.4.0
-CURRENT_PROJECT_VERSION = 27
+MARKETING_VERSION = 2.0.0
+CURRENT_PROJECT_VERSION = 28
 
 // Public Developer ID signing; no credentials are stored here.
 DEVELOPMENT_TEAM = 5WF7HRPLRX
+
+// Custom Release builds must not inherit Xcode's debugger entitlement.
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO

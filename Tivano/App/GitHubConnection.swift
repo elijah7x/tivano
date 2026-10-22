@@ -14,30 +14,11 @@ final class GitHubConnection {
     private(set) var phase: Phase = .checking
     private(set) var user: GitHubUser?
     private(set) var source: GitHubTokenSource?
-    private(set) var repositories: [GitHubRepository] = []
-    private(set) var isLoadingRepositories = false
     private(set) var cliIsSignedIn = false
-    private(set) var cloningFullName: String?
     var errorMessage: String?
 
-    @ObservationIgnored private var token: String?
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private var connectionGeneration = UUID()
-    private var storedCloneDirectory: URL = {
-        if let path = UserDefaults.standard.string(forKey: "GitHubCloneDirectory") {
-            return URL(fileURLWithPath: path).standardizedFileURL
-        }
-        return URL(fileURLWithPath: LoginEnvironment.homeDirectory).appendingPathComponent("Developer")
-    }()
-
-    var cloneDirectory: URL {
-        get { storedCloneDirectory }
-        set {
-            storedCloneDirectory = newValue.standardizedFileURL
-            UserDefaults.standard.set(storedCloneDirectory.path, forKey: "GitHubCloneDirectory")
-        }
-    }
-
     var isConnected: Bool { phase == .connected }
     var canSignInWithBrowser: Bool { !GitHubAPI.clientID.isEmpty }
 
@@ -48,7 +29,6 @@ final class GitHubConnection {
         }
         let generation = connectionGeneration
         if let storedToken = GitHubCredentials.storedToken() {
-            token = storedToken
             source = .tivano
             LoginEnvironment.setOverlay(GitHubCredentials.environment(token: storedToken))
             if let data = UserDefaults.standard.data(forKey: "GitHubUser") {
@@ -85,10 +65,8 @@ final class GitHubConnection {
     }
 
     private func finish(token: String, user: GitHubUser, source: GitHubTokenSource) {
-        self.token = token
         self.user = user
         self.source = source
-        repositories = []
         LoginEnvironment.setOverlay(GitHubCredentials.environment(token: token))
         if let data = try? JSONEncoder().encode(user) {
             UserDefaults.standard.set(data, forKey: "GitHubUser")
@@ -178,10 +156,8 @@ final class GitHubConnection {
         if source == .tivano { GitHubCredentials.remove() }
         if source == .githubCLI { UserDefaults.standard.set(true, forKey: "GitHubCLIDeclined") }
         LoginEnvironment.setOverlay([:])
-        token = nil
         user = nil
         source = nil
-        repositories = []
         UserDefaults.standard.removeObject(forKey: "GitHubUser")
         phase = .disconnected
     }
@@ -198,48 +174,4 @@ final class GitHubConnection {
         cliIsSignedIn = (await GitHubCredentials.cliToken()) != nil
     }
 
-    func loadRepositories(force: Bool = false) async {
-        guard let token, !isLoadingRepositories else { return }
-        guard force || repositories.isEmpty else { return }
-        let generation = connectionGeneration
-        isLoadingRepositories = true
-        defer { isLoadingRepositories = false }
-        do {
-            let loaded = try await GitHubAPI.repositories(token: token)
-            guard connectionGeneration == generation else { return }
-            repositories = loaded
-        } catch {
-            guard connectionGeneration == generation else { return }
-            if (error as? GitHubError) == .unauthorized {
-                expireSignIn()
-            } else {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    func clone(_ fullName: String, model: AppModel) async throws -> Project {
-        let name = String(fullName.split(separator: "/").last ?? Substring(fullName))
-        let directory = cloneDirectory
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        var destination = directory.appendingPathComponent(name)
-        cloningFullName = fullName
-        defer { cloningFullName = nil }
-        if FileManager.default.fileExists(atPath: destination.path) {
-            if let origin = await GitHubClone.originURL(at: destination),
-               GitHubRepoReference.fullName(from: origin)?.caseInsensitiveCompare(fullName) == .orderedSame {
-                return model.addProject(at: destination)
-            }
-            var suffix = 2
-            repeat {
-                destination = directory.appendingPathComponent("\(name)-\(suffix)")
-                suffix += 1
-            } while FileManager.default.fileExists(atPath: destination.path)
-        }
-        try await GitHubClone.clone(fullName, into: destination, token: token)
-        if let user {
-            await GitHubClone.configureIdentity(at: destination, user: user)
-        }
-        return model.addProject(at: destination)
-    }
 }

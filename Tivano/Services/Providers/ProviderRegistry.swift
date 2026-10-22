@@ -480,6 +480,10 @@ final class ProviderRegistry {
         case .omp:
             let home = LoginEnvironment.homeDirectory
             return ["\(home)/.bun/bin/omp", "\(home)/.npm-global/bin/omp", "/opt/homebrew/bin/omp", "/usr/local/bin/omp", "\(home)/.local/bin/omp", "\(home)/.volta/bin/omp"].map { URL(fileURLWithPath: $0) }
+        case .minimaxCode:
+            let home = LoginEnvironment.homeDirectory
+            // Official standalone installer first, then documented npm/user-prefix locations.
+            return ["\(home)/.minimax-code/bin/mcode", "\(home)/.npm-global/bin/mcode", "/opt/homebrew/bin/mcode", "/usr/local/bin/mcode", "\(home)/.local/bin/mcode", "\(home)/.volta/bin/mcode"].map { URL(fileURLWithPath: $0) }
         case .pi, .kimi, .dsh:
             let home = LoginEnvironment.homeDirectory
             let name = provider.executableName
@@ -654,6 +658,12 @@ final class ProviderRegistry {
         // was two processes per provider at the same moment, on top of every other
         // provider being checked alongside.
         let version = await Self.version(executable, environment)
+        if provider == .minimaxCode {
+            let authentication = await ACPSession.minimaxCodeAuthentication(executable: executable, environment: environment)
+            setStatus(ProviderStatus(executable: executable, version: version, auth: authentication.auth,
+                                     authMessage: authentication.message, catalogError: statuses[provider]?.catalogError), for: provider)
+            return
+        }
         let auth = await Self.auth(provider, executable, environment)
         guard provider != .dsh || (dshRevision == dshAuthenticationRevision && !Task.isCancelled) else { return }
         let authMessage = provider == .dsh && auth == .signedOut
@@ -836,6 +846,8 @@ final class ProviderRegistry {
         case .commandcode: try? await CommandCodeAPI.listModels(executable: executable, environment: environment)
         case .pi: try? await PiCLI.listModels(executable: executable, environment: environment)
         case .omp: try? await OmpCLI.listModels(executable: executable, environment: environment)
+        case .minimaxCode:
+            await loadMiniMaxCodeCatalog(executable: executable, environment: environment)
         case .cursor, .grok, .devin, .kimi, .dsh: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
         case .opencode: await openCodeCatalog(force: force, executable: executable, environment: environment)
         case .deepseek, .meta, .zai: nil
@@ -848,6 +860,24 @@ final class ProviderRegistry {
             // nothing (a cold CLI losing to its handshake timeout, say) is tried again
             // on the next ask rather than leaving the provider empty for the whole run.
             attemptedCatalogs.insert(provider)
+        }
+    }
+
+    private func loadMiniMaxCodeCatalog(executable: URL, environment: [String: String]) async -> [ModelOption]? {
+        do {
+            let list = try await ACPSession.probeModels(provider: .minimaxCode, executable: executable, environment: environment)
+            var status = statuses[.minimaxCode] ?? ProviderStatus(executable: executable)
+            status.catalogError = list.isEmpty ? AppText.localized("MiniMax Code did not advertise any models. Configure a provider in mcode, then refresh.") : nil
+            setStatus(status, for: .minimaxCode)
+            return list
+        } catch is CancellationError {
+            return nil
+        } catch {
+            // Keep the last advertised catalogue, but never present a failed read as a fresh one.
+            var status = statuses[.minimaxCode] ?? ProviderStatus(executable: executable)
+            status.catalogError = error.localizedDescription
+            setStatus(status, for: .minimaxCode)
+            return nil
         }
     }
 
@@ -878,7 +908,8 @@ final class ProviderRegistry {
                 return try await ACPSession.probeModels(provider: .dsh, executable: executable, environment: environment)
             } catch {
                 guard !Task.isCancelled, self.dshCatalogGeneration == generation else { return nil }
-                self.setDshCatalogError(AppText.localized("Could not load DeepSeek Harness models. Check your sign-in and connection, then retry."))
+                NSLog("DeepSeek Harness catalog probe failed: %@", error.localizedDescription)
+                self.setDshCatalogError(String(format: AppText.localized("Could not load DeepSeek Harness models. %@"), error.localizedDescription))
                 return nil
             }
         }
@@ -1096,11 +1127,19 @@ final class ProviderRegistry {
         // list keeps the scales the probe walked, see `mergedACPCatalog`.
         let list = switch provider {
         case .claude: Self.mergedClaudeCatalog(list)
+        // MiniMax supplies complete snapshots; an empty current scale revokes old values.
+        case .minimaxCode: list
         case _ where provider.namesModelVariants: Self.mergedACPCatalog(ModelFamilies.collapsed(list), over: catalogs[provider] ?? [], provider: provider)
         case _ where provider.usesACP: Self.mergedACPCatalog(list, over: catalogs[provider] ?? [], provider: provider)
         default: list
         }
-        guard !list.isEmpty, list != catalogs[provider] else { return }
+        // A delivered list retires an earlier load failure: the error and its Retry
+        // belong to a refresh that produced nothing, which this list just disproved.
+        if !list.isEmpty, var status = statuses[provider], status.catalogError != nil {
+            status.catalogError = nil
+            setStatus(status, for: provider)
+        }
+        guard (!list.isEmpty || provider == .minimaxCode), list != catalogs[provider] else { return }
         catalogs[provider] = list
         if provider.namesModelVariants || provider == .dsh { settings.adoptModelFamilies(list, for: provider) }
         guard !CaptureRun.isEnabled else { return }
@@ -1225,19 +1264,10 @@ final class ProviderRegistry {
             return (environment["DEEPSEEK_API_KEY"] ?? "").isEmpty ? .signedOut : .signedIn(AppText.localized("API key"))
         case .opencode:
             guard let result = try? await Shell.run(executable, ["auth", "list"], environment: environment, timeout: 20) else { return .unknown }
-            let text = TextCleanup.stripANSI(result.output + result.errorOutput)
-            let credentialText = text.components(separatedBy: "\n").prefix { !$0.contains("Environment") }.joined(separator: "\n")
-            let credentials = credentialText.components(separatedBy: "\n").compactMap { line -> String? in
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                guard trimmed.hasPrefix("\u{25CF}") else { return nil }
-                var name = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
-                for suffix in [" api", " oauth"] where name.lowercased().hasSuffix(suffix) {
-                    name = String(name.dropLast(suffix.count))
-                }
-                return name.isEmpty ? nil : name
-            }
+            guard result.succeeded else { return .unknown }
+            let credentials = Self.opencodeCredentialNames(from: result.output + result.errorOutput)
             if let name = credentials.first { return .signedIn(name) }
-            return result.succeeded ? .signedOut : .unknown
+            return .signedOut
         case .grok:
             let url = URL(fileURLWithPath: (LoginEnvironment.homeDirectory as NSString).appendingPathComponent(".grok/auth.json"))
             guard let data = try? Data(contentsOf: url), let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .unknown }
@@ -1250,8 +1280,31 @@ final class ProviderRegistry {
                 return .signedIn(name)
             }
             return .signedIn(nil)
-        case .deepseek, .meta, .zai:
+        case .deepseek, .meta, .zai, .minimaxCode:
             return .unknown
+        }
+    }
+
+    // Accept legacy ● credential lines and V2 provider / credential / source table rows.
+    static func opencodeCredentialNames(from output: String) -> [String] {
+        let text = TextCleanup.stripANSI(output)
+        var inLegacyEnvironment = false
+        return text.components(separatedBy: "\n").compactMap { line -> String? in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !trimmed.hasPrefix("\u{25CF}") {
+                let columns = trimmed.replacingOccurrences(of: #"\s{2,}|\t+"#, with: "\t", options: .regularExpression)
+                    .components(separatedBy: "\t")
+                if columns.count == 3, columns.allSatisfy({ !$0.isEmpty }) {
+                    return columns[2].lowercased() == "stored" ? columns[0] : nil
+                }
+            }
+            if line.contains("Environment") { inLegacyEnvironment = true }
+            guard !inLegacyEnvironment, trimmed.hasPrefix("\u{25CF}") else { return nil }
+            var name = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+            for suffix in [" api", " oauth"] where name.lowercased().hasSuffix(suffix) {
+                name = String(name.dropLast(suffix.count))
+            }
+            return name.isEmpty ? nil : name
         }
     }
 

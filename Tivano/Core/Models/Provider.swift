@@ -33,6 +33,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case kimi
     case omp
     case dsh
+    case minimaxCode
 
     /// A raw value read from storage; the retired `opencodeGo` means `opencode`.
     init?(storedValue raw: String) {
@@ -71,6 +72,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .omp: "omp"
         case .kimi: "Kimi Code"
         case .dsh: "DeepSeek Harness"
+        case .minimaxCode: "MiniMax Code"
         }
     }
 
@@ -93,6 +95,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .omp: "omp CLI"
         case .kimi: "Kimi Code CLI"
         case .dsh: "dsh CLI"
+        case .minimaxCode: "MiniMax Code CLI"
         }
     }
 
@@ -100,7 +103,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var group: ProviderGroup {
         switch self {
         case .deepseek, .meta, .zai: .tivanoCode
-        case .codex, .claude, .cursor, .opencode, .grok, .devin, .antigravity, .copilot, .commandcode, .pi, .kimi, .omp, .dsh: .agentCLI
+        case .codex, .claude, .cursor, .opencode, .grok, .devin, .antigravity, .copilot, .commandcode, .pi, .kimi, .omp, .dsh, .minimaxCode: .agentCLI
         }
     }
 
@@ -123,6 +126,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .omp: "Set up in omp"
         case .kimi: "Kimi membership or API key"
         case .dsh: "API key"
+        case .minimaxCode: "Token Plan or API key"
         }
     }
 
@@ -147,6 +151,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .omp: "omp"
         case .kimi: "kimi"
         case .dsh: "dsh"
+        case .minimaxCode: "mcode"
         }
     }
 
@@ -170,6 +175,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .omp: "omp login"
         case .kimi: "kimi login"
         case .dsh: ""
+        case .minimaxCode: "mcode login"
         }
     }
 
@@ -191,6 +197,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .omp: URL(string: "https://omp.sh")!
         case .kimi: URL(string: "https://www.kimi.com/code/docs/en/kimi-code-cli/")!
         case .dsh: URL(string: "https://www.deepseek.com/en/harness/")!
+        case .minimaxCode: URL(string: "https://agent.minimax.io/docs/cli/quick-start")!
         }
     }
 
@@ -198,7 +205,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var isAPIKeyBased: Bool { self == .deepseek || self == .meta || self == .zai }
 
     /// Driven over the Agent Client Protocol by `ACPSession`.
-    var usesACP: Bool { self == .cursor || self == .opencode || self == .grok || self == .devin || self == .kimi || self == .dsh }
+    var usesACP: Bool { self == .cursor || self == .opencode || self == .grok || self == .devin || self == .kimi || self == .dsh || self == .minimaxCode }
 
     /// Providers with an API key field in Settings: the API-key providers, which need one,
     /// and Command Code, whose CLI takes a Studio key through `COMMAND_CODE_API_KEY` as an
@@ -252,7 +259,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     /// Headless stream-json only carries text: the TUI pastes images, but a
     /// streaming session rejects non-text blocks, so image attachments stay off.
-    var supportsImages: Bool { self != .grok && self != .antigravity && self != .dsh }
+    var supportsImages: Bool { self != .grok && self != .antigravity && self != .dsh && self != .minimaxCode }
 
     func supports(_ mode: RuntimeMode) -> Bool {
         switch self {

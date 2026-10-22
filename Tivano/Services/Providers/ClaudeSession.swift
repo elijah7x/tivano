@@ -29,6 +29,7 @@ final class ClaudeSession: ProviderSession {
     private var readTask: Task<Void, Never>?
     private var sessionID: String?
     private var permissionMode: String
+    private var permissionModeIsConfirmed = true
     private var runtimeMode: RuntimeMode
     private var model: String?
     private var controlCounter = 0
@@ -200,12 +201,15 @@ final class ClaudeSession: ProviderSession {
 
     func send(_ input: TurnInput) async throws {
         guard let process, process.isRunning else { throw ProviderError.notRunning }
-        runtimeMode = input.runtimeMode
         let mode = Self.modeName(input.runtimeMode, input.interactionMode)
-        if mode != permissionMode {
-            _ = try? await control(["subtype": "set_permission_mode", "mode": .string(mode)])
+        if mode != permissionMode || !permissionModeIsConfirmed {
+            // A lost reply can hide a successful change, so the old mode also needs reconfirmation.
+            permissionModeIsConfirmed = false
+            _ = try await control(["subtype": "set_permission_mode", "mode": .string(mode)])
             permissionMode = mode
+            permissionModeIsConfirmed = true
         }
+        runtimeMode = input.runtimeMode
         if input.model != model {
             let wire = input.model == "default" ? nil : input.model
             _ = try? await control(["subtype": "set_model", "model": .optional(wire)])
@@ -264,10 +268,22 @@ final class ClaudeSession: ProviderSession {
                     self.onEvent?(.requestResolved(id: requestID))
                 }
                 if allowed, pending.name == "ExitPlanMode", !self.hasClosed, !self.isStopping {
-                    self.onEvent?(.modeChanged(.build))
                     let mode = Self.modeName(self.runtimeMode, .build)
-                    self.permissionMode = mode
-                    Task { _ = try? await self.control(["subtype": "set_permission_mode", "mode": .string(mode)]) }
+                    Task {
+                        guard !self.hasClosed, !self.isStopping else { return }
+                        do {
+                            self.permissionModeIsConfirmed = false
+                            _ = try await self.control(["subtype": "set_permission_mode", "mode": .string(mode)])
+                            guard !self.hasClosed, !self.isStopping else { return }
+                            self.permissionMode = mode
+                            self.permissionModeIsConfirmed = true
+                            self.onEvent?(.modeChanged(.build))
+                        } catch {
+                            guard !self.hasClosed, !self.isStopping else { return }
+                            self.stop()
+                            self.onEvent?(.exited(error: error.localizedDescription))
+                        }
+                    }
                 }
             }
             delivered(succeeded)
@@ -384,10 +400,13 @@ final class ClaudeSession: ProviderSession {
         case "control_response":
             let response = message["response"] ?? .null
             guard let requestID = response["request_id"]?.string else { return }
-            if response["subtype"]?.string == "error" {
-                pendingControl.fail(requestID, ProviderError.failed(response["error"]?.string ?? "Claude rejected the request."))
-            } else {
+            switch response["subtype"]?.string {
+            case "success":
                 pendingControl.resolve(requestID, response["response"] ?? .null)
+            case "error":
+                pendingControl.fail(requestID, ProviderError.failed(response["error"]?.string ?? "Claude rejected the request."))
+            default:
+                pendingControl.fail(requestID, ProviderError.failed("Claude rejected the request."))
             }
         case "control_request":
             handleControlRequest(message)

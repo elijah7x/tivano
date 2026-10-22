@@ -60,65 +60,6 @@ struct HydraSettingsPage: View {
             }
         }
         Group {
-            ChromeSection(title: "Heads", accessory: AnyView(InfoHoverButton(help: "How heads work") { HydraInfoPopover(topic: .heads) })) {
-                ChromeCard {
-                    ChromeRow(
-                        title: "Checkout",
-                        detail: settings.hydraIsolateHeads
-                            ? "Each head works in a copy of its own; its changes land in the chat's checkout when it reports."
-                            : "Heads work in the chat's checkout itself."
-                    ) {
-                        ChromeVisualPicker(options: Self.checkoutOptions, selection: $settings.hydraIsolateHeads) { isolated in
-                            Image(systemName: isolated ? "doc.on.doc" : "folder")
-                        }
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(
-                        title: "Heads at once",
-                        detail: settings.hydraMaxHeads.map { String(format: Chrome.localized("At most %lld heads in parallel."), $0) } ?? "As many heads as the job needs."
-                    ) {
-                        ChromeSegmentedPicker(
-                            options: Self.maxHeadsOptions,
-                            selection: $settings.hydraMaxHeads
-                        )
-                    }
-                    ChromeRowDivider()
-                    toggleRow("Clear finished heads", detail: "A finished head moves from the panel to the sidebar.", isOn: $settings.hydraAutoClearFinished)
-                    ChromeRowDivider()
-                    toggleRow("Auto-hide heads in the sidebar", detail: "A chat's heads show in the sidebar while one of them runs; the whole card leaves once every head of that chat has finished, and comes back on its own when one starts again.", isOn: $settings.hydraAutoHidesIdleHeads)
-                    ChromeRowDivider()
-                    ChromeRow(title: "Head panel", detail: "The head's progress bar, or each of its steps as it goes.") {
-                        ChromeVisualPicker(options: Self.detailOptions, selection: $settings.hydraShowsHeadDetails) { showsSteps in
-                            Image(systemName: showsSteps ? "list.number" : "chart.bar")
-                        }
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(
-                        title: "Heads' panels",
-                        detail: settings.hydraAutoPopsHeads ? "Each head after the first gets a panel of its own beside the chat while there is room, left and right until each side is full." : "One panel over the chat lists every head."
-                    ) {
-                        ChromeVisualPicker(options: Self.panelOptions, selection: $settings.hydraAutoPopsHeads) { popped in
-                            Image(systemName: popped ? "square.grid.2x2" : "rectangle")
-                        }
-                    }
-                    ChromeRowDivider()
-                    toggleRow("Heads work at a working effort", detail: "A lead thinking above medium sends its heads out at medium on the same model — on a scale without a medium (Z.ai), at the scale's own middle rung; a pair that names the heads' effort keeps it.", isOn: $settings.hydraTempersHeadEffort)
-                }
-            }
-            ChromeSection(title: "Messages") {
-                ChromeCard {
-                    toggleRow("Queued follow-ups start on heads", detail: "A prompt queued behind a running turn goes out at once.", isOn: $settings.hydraQueueHeads, blockedBy: settings.hydraAlwaysHeads ? "Every message already goes to a head." : nil)
-                    ChromeRowDivider()
-                    toggleRow("Every message goes to a head", detail: "The lead only hears the reports.", isOn: $settings.hydraAlwaysHeads)
-                }
-            }
-            ChromeSection(title: "When the team is done") {
-                ChromeCard {
-                    toggleRow("Lead checks the heads' work", detail: "Reads every changed file and corrects it. Slower, more careful.", isOn: $settings.hydraReviewHeads)
-                    ChromeRowDivider()
-                    toggleRow("Merge automatically", detail: "The team's changes go out as a merge request and are merged.", isOn: $settings.hydraAutoMerge)
-                }
-            }
             // The cookbook opens from the section's header, at its far right: the card
             // below keeps its width for the words.
             ChromeSection(title: "Pairs", trailing: AnyView(HydraCookbookButton())) {
@@ -194,64 +135,83 @@ struct HydraSettingsPage: View {
                         drag = RowDrag()
                     }
                 }
-                Text("Pairs sit at the top of the model picker: a tap puts the chat in one. Right-click a project in the sidebar to start each of its new chats on one pair.")
+                Text("Pairs sit at the top of the model picker: a tap puts the chat in one. A pair can use lead and head models from different providers. Right-click a project in the sidebar to start each of its new chats on one pair.")
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
                     .padding(.horizontal, 4)
+            }
+            ChromeSection(title: "Heads", accessory: AnyView(InfoHoverButton(help: "How heads work") { HydraInfoPopover(topic: .heads) })) {
+                ChromeCard {
+                    ChromeRow(
+                        title: "Checkout",
+                        detail: settings.hydraIsolateHeads
+                            ? "Each head works in a copy of its own; its changes land in the chat's checkout when it reports."
+                            : "Heads work in the chat's checkout itself."
+                    ) {
+                        ChromeVisualPicker(options: Self.checkoutOptions, selection: $settings.hydraIsolateHeads) { isolated in
+                            Image(systemName: isolated ? "doc.on.doc" : "folder")
+                        }
+                    }
+                    ChromeRowDivider()
+                    ChromeRow(
+                        title: "Heads at once per chat",
+                        detail: "The lower of this limit and the preset's limit applies. No cap adds no limit here."
+                    ) {
+                        ChromeSegmentedPicker(
+                            options: Self.maxHeadsOptions,
+                            selection: $settings.hydraMaxHeads
+                        )
+                    }
+                    ChromeRowDivider()
+                    ChromeRow(title: "Head panel", detail: "The head's progress bar, or each of its steps as it goes.") {
+                        ChromeVisualPicker(options: Self.detailOptions, selection: $settings.hydraShowsHeadDetails) { showsSteps in
+                            Image(systemName: showsSteps ? "list.number" : "chart.bar")
+                        }
+                    }
+                    ChromeRowDivider()
+                    ChromeRow(
+                        title: "Heads' panels",
+                        detail: settings.hydraAutoPopsHeads ? "Each head after the first gets a panel of its own beside the chat while there is room, left and right until each side is full." : "One panel over the chat lists every head."
+                    ) {
+                        ChromeVisualPicker(options: Self.panelOptions, selection: $settings.hydraAutoPopsHeads) { popped in
+                            Image(systemName: popped ? "square.grid.2x2" : "rectangle")
+                        }
+                    }
+                    ChromeRowDivider()
+                    toggleRow("Lower the default reasoning effort for heads", detail: "Effort set in a pair is unaffected. When no effort is specified and the head uses the same provider as the lead, the head stays at the standard effort (usually medium); if the lead uses a lower effort, the head inherits it.", isOn: $settings.hydraTempersHeadEffort)
+                }
+            }
+            ChromeSection(title: "Messages") {
+                ChromeCard {
+                    toggleRow("Send queued follow-ups to heads", detail: "Each one goes to a head as soon as there is room, instead of waiting for the lead.", isOn: $settings.hydraQueueHeads, blockedBy: settings.hydraAlwaysHeads ? "Heads are already preferred for messages." : nil)
+                    ChromeRowDivider()
+                    toggleRow("Prefer heads for messages", detail: "Use heads when there is room. Commands and messages that cannot be delegated stay with the lead.", isOn: $settings.hydraAlwaysHeads)
+                }
+            }
+            ChromeSection(title: "When the team is done") {
+                ChromeCard {
+                    toggleRow("Ask the lead to review heads' changes", detail: "Adds a review step before the lead finishes. This uses additional time and tokens.", isOn: $settings.hydraReviewHeads)
+                    ChromeRowDivider()
+                    toggleRow("Automatically publish and merge team changes", detail: "Commits and pushes the team's changes, opens a pull/merge request, and attempts to merge it. Requires a configured remote and access.", isOn: $settings.hydraAutoMerge)
+                }
             }
         }
         .disabled(!settings.hydraEnabled)
         .opacity(settings.hydraEnabled ? 1 : 0.5)
         .animation(.smooth(duration: 0.2), value: settings.hydraEnabled)
-        ChromeSection(title: "Provider history") {
+        ChromeSection(title: "Codex head history", accessory: AnyView(InfoHoverButton(help: "About Codex head history") { HydraInfoPopover(topic: .history) })) {
             ChromeCard {
-                ChromeRow(
-                    title: "Codex local session history",
-                    detail: "For new delegated Tivano-run Codex heads after successful completion. Archived sessions keep their IDs and resume on the next message. Lead chats, older sessions and heads with user follow-ups stay visible."
-                ) {
+                ChromeRow(title: "After completion", detail: nil) {
                     ChromeVisualPicker(options: Self.historyOptions, selection: $settings.hydraArchivesCodexHeads) { archive in
                         Image(systemName: archive ? "archivebox" : "eye")
                     }
                 }
-                ChromeRowDivider()
-                ChromeRow(title: "Claude Code and Antigravity", detail: "Keep visible. Their connected streaming CLIs do not expose a verified archive operation that preserves resume history.") {
-                    Text("Unavailable")
-                        .foregroundStyle(Chrome.secondaryText)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Permanent deletion", detail: "Disabled. Codex deletion also deletes descendant sessions, without an atomic safeguard against newly active work. Claude Code and Antigravity have no verified deletion operation for these connected sessions.") {
-                    Text("Unavailable")
-                        .foregroundStyle(Chrome.secondaryText)
-                }
             }
-            Text("These controls affect Codex's local CLI/app session history, independently of Tivano's sidebar. They do not manage conversations on provider websites. Heads with descendants or an unconfirmed idle state are not archived. Changing this setting never sweeps existing history.")
+            Text("Automatically archive head sessions that finish successfully, and restore them when you need to continue. This only affects Codex's local history; it does not clean up existing records or delete sessions.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
                 .padding(.horizontal, 4)
             HydraProviderHistoryIssues()
-        }
-        ChromeSection(title: "Where heads run") {
-            ChromeCard {
-                ChromeRow(title: "Claude, Codex and Copilot", detail: "In the provider's own session, through the lead's own agent tools.") {
-                    HStack(alignment: .center, spacing: 6) {
-                        ProviderIcon(provider: .claude, size: 14)
-                        ProviderIcon(provider: .codex, size: 14)
-                        // Copilot's mark is wider than tall, so it fills less of a
-                        // square frame; size it up to share the same optical height.
-                        ProviderIcon(provider: .copilot, size: 16.75)
-                    }
-                    .foregroundStyle(Chrome.secondaryText)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Other providers", detail: "As threads of their own, asked for at the end of the lead's reply.") {
-                    EmptyView()
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Across providers", detail: "A pair can lead on one provider and run its heads on another.") {
-                    HydraPairMark(lead: .claude, heads: .antigravity, leadSize: 14)
-                    .foregroundStyle(Chrome.secondaryText)
-                }
-            }
         }
     }
 
@@ -436,10 +396,7 @@ private struct HydraPairRow: View {
             ?? (pair.sendsHeadsElsewhere
                 ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName)
                 : Chrome.localized("Same as the chat"))
-        let headEffort = namedEffort(pair.workerEffort)
-            ?? (pair.sendsHeadsElsewhere
-                ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName)
-                : Chrome.localized(model.settings.hydraTempersHeadEffort ? "Automatic" : "Same as the chat"))
+        let headEffort = namedEffort(pair.workerEffort) ?? Chrome.localized("Automatic")
         let effectiveCap = [pair.maxHeads, model.settings.hydraMaxHeads].compactMap { $0 }.min()
         let cap = effectiveCap.map { String(format: Chrome.localized("Up to %lld"), $0) } ?? Chrome.localized("No cap")
         var line = String(format: Chrome.localized("Lead: %@ - %@ | Head: %@ - %@ - %@"), leadModel, leadEffort, headModel, headEffort, cap)
@@ -673,7 +630,7 @@ struct HydraPairEditor: View {
                 editorRow("Effort") {
                     effortPicker(
                         efforts: workerEfforts,
-                        inherit: pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat",
+                        inherit: "Automatic",
                         selection: Binding(
                             get: { pair.workerEffort },
                             set: { effort in update { $0.workerEffort = effort } }
@@ -681,7 +638,7 @@ struct HydraPairEditor: View {
                     )
                 }
             }
-            editorRow("At once") {
+            editorRow("Heads at once per chat") {
                 GlassPickerButton(
                     options: Self.maxHeadsOptions,
                     selection: Binding(

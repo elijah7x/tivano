@@ -6,6 +6,8 @@ struct MergeRequestLink: Equatable, Sendable {
     enum Forge: Sendable {
         case gitlab
         case github
+        /// Cursor Origin pull requests use the official `origin` CLI.
+        case cursorOrigin
         /// Gitea and its forks, Forgejo and Codeberg among them: one CLI, `tea`, serves them all.
         case gitea
     }
@@ -22,7 +24,14 @@ struct MergeRequestLink: Equatable, Sendable {
     /// or `owner/repo/pulls/95` (Gitea, Forgejo, Codeberg).
     init?(url: URL) {
         let parts = url.pathComponents.filter { $0 != "/" }
-        if let index = parts.firstIndex(of: "merge_requests"), index >= 1, index + 1 < parts.count,
+        let isCursor = ["cursor.com", "www.cursor.com"].contains(url.host?.lowercased() ?? "")
+        if isCursor, parts.count >= 5, parts[0] == "codebase", parts[3] == "pull",
+           let number = Int(parts[4]), number > 0 {
+            forge = .cursorOrigin
+            self.number = number
+        } else if isCursor {
+            return nil
+        } else if let index = parts.firstIndex(of: "merge_requests"), index >= 1, index + 1 < parts.count,
            let number = Int(parts[index + 1]), number > 0 {
             forge = .gitlab
             self.number = number
@@ -38,6 +47,13 @@ struct MergeRequestLink: Equatable, Sendable {
         self.url = url
     }
 
+    var originRepository: String? {
+        guard forge == .cursorOrigin else { return nil }
+        let parts = url.pathComponents.filter { $0 != "/" }
+        guard parts.count >= 5, parts[0] == "codebase", parts[3] == "pull" else { return nil }
+        return "\(parts[1])/\(parts[2])"
+    }
+
     /// The helper's title: the same words as the popover's row.
     var title: String { "Merge \(label)" }
 
@@ -50,6 +66,8 @@ struct MergeRequestLink: Equatable, Sendable {
             "Use glab from this directory: `glab mr merge \(number) --yes`. If GitLab answers that the request is still being checked (a 405), wait a few seconds and try again; if it reports conflicts, stop and say so instead of resolving them."
         case .github:
             "Use gh from this directory: `gh pr merge \(number) --merge`. If GitHub reports the pull request is not mergeable, stop and say so instead of resolving it."
+        case .cursorOrigin:
+            "Use origin from this directory: `origin pr merge \(number) -R \(originRepository ?? "")`. Confirm this repository matches the checkout's origin remote before merging. If origin is not installed or not signed in, tell the user to install it and run `origin auth login`, then stop. If the change is not mergeable, stop and say so instead of working around it. Never push to the base branch directly. Confirm the request is merged with `origin pr view \(number) -R \(originRepository ?? "") --json status,mergedAt` before syncing."
         case .gitea:
             "Use tea from this directory: `tea pulls merge \(number)`. If tea is not installed or signed in to this host, or the pull request is not mergeable, stop and say so instead of working around it."
         }
@@ -58,5 +76,31 @@ struct MergeRequestLink: Equatable, Sendable {
 
         \(land) Once it is merged, sync the checkout: if this directory is on main with a clean working tree, run `git pull --ff-only`; otherwise leave the working tree alone and say so. Do not rebuild, install or relaunch anything. Reply in a few lines with the merged commit and the request's link.
         """
+    }
+}
+
+/// The repository identity shared by Cursor Origin's SSH and HTTPS remotes.
+struct CursorOriginRemote: Equatable, Sendable {
+    let owner: String
+    let repo: String
+    var fullName: String { "\(owner)/\(repo)" }
+    var webURL: URL {
+        URL(string: "https://cursor.com/codebase")!
+            .appendingPathComponent(owner).appendingPathComponent(repo)
+    }
+
+    init?(remote: String) {
+        var normalized = remote.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalized.contains("://"), let colon = normalized.firstIndex(of: ":") {
+            normalized = "ssh://" + normalized[..<colon] + "/" + normalized[normalized.index(after: colon)...]
+        }
+        guard let url = URL(string: normalized), url.host?.lowercased() == "origin.cursor.com" else { return nil }
+        var parts = url.pathComponents.filter { $0 != "/" }
+        if parts.count == 3, parts.first == "git" { parts.removeFirst() }
+        guard parts.count == 2 else { return nil }
+        if parts[1].hasSuffix(".git") { parts[1].removeLast(4) }
+        guard parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") }) else { return nil }
+        owner = parts[0]
+        repo = parts[1]
     }
 }

@@ -5,7 +5,21 @@ struct TerminalPanel: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     let runtime: ThreadRuntime
-    let directory: String
+
+    @State private var directoryError: String?
+    @State private var preparedLocation: Location?
+
+    private struct Location: Equatable {
+        let threadID: UUID
+        let affiliation: ThreadAffiliation?
+        let directory: String?
+    }
+
+    private var location: Location {
+        let thread = model.thread(runtime.threadID)
+        return Location(threadID: runtime.threadID, affiliation: thread?.affiliation,
+                        directory: thread.flatMap { try? model.executionDirectory(for: $0) })
+    }
 
     @State private var dragOrigin: Double?
     /// The height while the edge is being dragged. Settings take it on release, so a drag
@@ -14,8 +28,9 @@ struct TerminalPanel: View {
 
     var body: some View {
         let terminals = model.terminals
-        let sessions = terminals.sessions(for: runtime.threadID)
-        let selected = terminals.selected(for: runtime.threadID)
+        let isPrepared = preparedLocation == location
+        let sessions = isPrepared ? terminals.sessions(for: runtime.threadID) : []
+        let selected = isPrepared ? terminals.selected(for: runtime.threadID) : nil
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -25,7 +40,7 @@ struct TerminalPanel: View {
                                 session: session,
                                 isSelected: session.id == selected?.id,
                                 select: { terminals.selection[runtime.threadID] = session.id },
-                                restart: { terminals.restart(session) },
+                                restart: { openTerminal(restarting: session) },
                                 close: { terminals.close(session) }
                             )
                         }
@@ -33,7 +48,7 @@ struct TerminalPanel: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 Button {
-                    terminals.open(threadID: runtime.threadID, directory: directory)
+                    openTerminal()
                 } label: {
                     Image(systemName: "plus")
                         .font(Chrome.iconFont)
@@ -65,11 +80,17 @@ struct TerminalPanel: View {
                 // Every tab closed leaves the drawer open with nothing in it; the way
                 // back is here rather than only on the plus in the corner.
                 VStack(spacing: 10) {
+                    if let directoryError {
+                        Text(verbatim: directoryError)
+                            .font(.ui(.callout))
+                            .foregroundStyle(Chrome.danger)
+                            .textSelection(.enabled)
+                    }
                     Text("No shell open in this thread")
                         .font(.system(.body))
                         .foregroundStyle(Chrome.secondaryText)
                     Button("New shell") {
-                        terminals.open(threadID: runtime.threadID, directory: directory)
+                        openTerminal()
                     }
                     .buttonStyle(.glass)
                     .controlSize(.small)
@@ -106,7 +127,36 @@ struct TerminalPanel: View {
             )
             .fill(colorScheme == .dark ? Color(white: 0.08) : Color(white: 0.985))
         )
-        .onAppear { terminals.ensureTerminal(threadID: runtime.threadID, directory: directory) }
+        .task(id: location) { openTerminal(onlyIfNeeded: true) }
+    }
+
+    private func openTerminal(onlyIfNeeded: Bool = false, restarting session: TerminalSession? = nil) {
+        guard let thread = model.thread(runtime.threadID) else { return }
+        do {
+            let directory = try model.ensureExecutionDirectory(for: thread)
+            var isDirectory: ObjCBool = false
+            guard !directory.isEmpty,
+                  FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw ProviderError.failed(Chrome.localized("The working directory is unavailable."))
+            }
+            let terminals = model.terminals
+            if terminals.sessions(for: thread.id).contains(where: { $0.directory != directory }) {
+                terminals.closeAll(for: thread.id)
+            }
+            if let session, terminals.sessions(for: thread.id).contains(where: { $0.id == session.id }) {
+                terminals.restart(session)
+            } else if onlyIfNeeded {
+                terminals.ensureTerminal(threadID: thread.id, directory: directory)
+            } else {
+                terminals.open(threadID: thread.id, directory: directory)
+            }
+            directoryError = nil
+            preparedLocation = location
+        } catch {
+            preparedLocation = nil
+            directoryError = error.localizedDescription
+            model.alert = AppAlert(title: "Could not open task workspace", message: error.localizedDescription)
+        }
     }
 }
 

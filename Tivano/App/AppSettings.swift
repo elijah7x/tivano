@@ -73,6 +73,24 @@ enum ActivityThreadStyle: String, CaseIterable, Identifiable {
     }
 }
 
+struct NewThreadModelSelection: Codable, Hashable {
+    let provider: ProviderKind
+    let modelID: String
+    /// The reasoning effort new chats start on; nil leaves the model's default.
+    let effort: String?
+
+    init(provider: ProviderKind, modelID: String, effort: String? = nil) {
+        self.provider = provider
+        self.modelID = modelID
+        self.effort = effort
+    }
+}
+
+enum NewThreadLocation: String, Codable, CaseIterable {
+    case recent
+    case standalone
+}
+
 /// A model the composer's picker offers.
 struct ModelPin: Codable, Hashable, Identifiable, Sendable {
     var provider: ProviderKind
@@ -134,6 +152,8 @@ final class AppSettings {
         static let defaultProvider = "defaultProvider"
         static let runtimeMode = "defaultRuntimeMode"
         static let workspaceMode = "defaultWorkspaceMode"
+        static let newThreadModelSelection = "newThreadModelSelection"
+        static let newThreadLocation = "newThreadLocation"
         static let notify = "notifyWhenFinished"
         static let chime = "chimeWhenFinished"
         static let confirmDelete = "confirmBeforeDeleting"
@@ -146,9 +166,14 @@ final class AppSettings {
         static let contentFontSize = "contentFontSize"
         static let codeFontSize = "codeFontSize"
         static let sidebarActivityView = "sidebarActivityView"
+        static let sidebarProjectsCollapsed = "sidebarProjectsCollapsed"
+        static let sidebarTasksCollapsed = "sidebarTasksCollapsed"
+        static let showsSkylight = "showsSkylight"
         static let codexVoice = "codexVoice"
         static let alphaEnabled = "alphaEnabled"
         static let alphaVoiceEnabled = "alphaVoiceEnabled"
+        static let externalControlEnabled = "externalControlEnabled"
+        static let cliInstallationTarget = "cliInstallationTarget"
         static let appTheme = "appTheme"
         static let backdropOpacity = "backdropOpacity"
         static let appearance = "appearance"
@@ -178,6 +203,7 @@ final class AppSettings {
         static let dismissedModelGroupsTip = "dismissedModelGroupsTip"
         static let recentDownloadsPicker = "recentDownloadsPicker"
         static let lastProjectID = "lastProjectID"
+        static let lastThreadAffiliation = "lastThreadAffiliation"
         static let projectsEnabled = "projectsEnabled"
         static let projectActivationOverrides = "projectActivationOverrides"
         static let deepseekAPIKey = "deepseekAPIKey"
@@ -193,8 +219,6 @@ final class AppSettings {
         static let hydraIsolateHeads = "hydraIsolateHeads"
         static let hydraAutoMerge = "hydraAutoMerge"
         static let hydraReviewHeads = "hydraReviewHeads"
-        static let hydraAutoClearFinished = "hydraAutoClearFinished"
-        static let hydraAutoHidesIdleHeads = "hydraAutoHidesIdleHeads"
         static let hydraArchivesCodexHeads = "hydraArchivesCodexHeads"
         static let hydraShowsHeadDetails = "hydraShowsHeadDetails"
         static let hydraAutoPopsHeads = "hydraAutoPopsHeads"
@@ -225,6 +249,14 @@ final class AppSettings {
         didSet { defaults.set(defaultWorkspaceMode.rawValue, forKey: Key.workspaceMode) }
     }
 
+    var newThreadModelSelection: NewThreadModelSelection? {
+        didSet { store(newThreadModelSelection, forKey: Key.newThreadModelSelection) }
+    }
+
+    var newThreadLocation: NewThreadLocation {
+        didSet { defaults.set(newThreadLocation.rawValue, forKey: Key.newThreadLocation) }
+    }
+
     var notifyWhenFinished: Bool {
         didSet { defaults.set(notifyWhenFinished, forKey: Key.notify) }
     }
@@ -235,6 +267,7 @@ final class AppSettings {
     }
 
     @ObservationIgnored var onSleepPreventionChanged: (() -> Void)?
+    @ObservationIgnored var onExternalControlChanged: (() -> Void)?
 
     var taskSleepMode: TaskSleepMode {
         didSet {
@@ -340,7 +373,10 @@ final class AppSettings {
 
     /// Alpha's master switch: off hides every experimental feature, whatever its own switch.
     var alphaEnabled: Bool {
-        didSet { defaults.set(alphaEnabled, forKey: Key.alphaEnabled) }
+        didSet {
+            defaults.set(alphaEnabled, forKey: Key.alphaEnabled)
+            onExternalControlChanged?()
+        }
     }
 
     /// Codex realtime voice, an Alpha feature.
@@ -350,10 +386,38 @@ final class AppSettings {
 
     var isVoiceEnabled: Bool { alphaEnabled && alphaVoiceEnabled }
 
+    /// Dedicated, default-false permission. Installing the command never changes it.
+    var externalControlEnabled: Bool {
+        didSet {
+            defaults.set(externalControlEnabled, forKey: Key.externalControlEnabled)
+            onExternalControlChanged?()
+        }
+    }
+    var isExternalControlEnabled: Bool { alphaEnabled && externalControlEnabled }
+
+    /// Receipt for user-action-only PATH repair/removal; not an authorization gate.
+    var cliInstallationTarget: String? {
+        didSet { defaults.set(cliInstallationTarget, forKey: Key.cliInstallationTarget) }
+    }
+
     /// The sidebar lists every thread by when it was last active, instead of by project.
     var sidebarActivityView: Bool {
         didSet { defaults.set(sidebarActivityView, forKey: Key.sidebarActivityView) }
     }
+
+    var sidebarProjectsCollapsed: Bool {
+        didSet { defaults.set(sidebarProjectsCollapsed, forKey: Key.sidebarProjectsCollapsed) }
+    }
+
+    var sidebarTasksCollapsed: Bool {
+        didSet { defaults.set(sidebarTasksCollapsed, forKey: Key.sidebarTasksCollapsed) }
+    }
+
+    var showsSkylight: Bool {
+        didSet { defaults.set(showsSkylight, forKey: Key.showsSkylight) }
+    }
+
+    var showsSkylightNow: Bool { showsSkylight && !performanceMode }
 
     /// The activity list always shows the project's name under the thread title.
     let activityThreadStyle: ActivityThreadStyle = .projectName
@@ -395,8 +459,8 @@ final class AppSettings {
     /// Disables window transparency, blurs, glows and background effects for lowest GPU usage.
     var performanceMode: Bool {
         didSet {
+            // Clearer glass keeps its own value: the backdrop ignores it while this is on.
             defaults.set(performanceMode, forKey: Key.performanceMode)
-            if performanceMode { clearerBackdrop = false }
         }
     }
 
@@ -433,6 +497,13 @@ final class AppSettings {
         }
     }
 
+    var lastThreadAffiliation: ThreadAffiliation? {
+        didSet {
+            if let lastThreadAffiliation { store(lastThreadAffiliation, forKey: Key.lastThreadAffiliation) }
+            else { defaults.removeObject(forKey: Key.lastThreadAffiliation) }
+        }
+    }
+
     /// Whether projects are active app-wide. This is the default every project follows:
     /// with it on, all projects are active without any per-project step; a project the
     /// user explicitly switched off (or on) keeps its own choice.
@@ -448,7 +519,7 @@ final class AppSettings {
 
     /// Whether a project is active: its own explicit choice, else the global switch.
     func isProjectActive(_ id: UUID) -> Bool {
-        projectActivationOverrides[id.uuidString] ?? projectsEnabled
+        true
     }
 
     /// Explicitly switch a project on or off, overriding the global switch.
@@ -467,7 +538,7 @@ final class AppSettings {
     }
 
     /// DeepSeek talks to its cloud API directly, so it needs an API key instead of a CLI login.
-    /// Stored in the Keychain when available, with a UserDefaults fallback for migration.
+    /// Stored in the Keychain; older plaintext defaults are migrated when read.
     /// Read once, on the first ask, and cached: a Keychain query on every render made
     /// Settings lag, and two of them before the window exists made launch wait on securityd.
     var deepseekAPIKeyInput: String {
@@ -478,7 +549,7 @@ final class AppSettings {
 
     /// Meta Model API (Muse Spark) talks to https://api.meta.ai/v1 directly,
     /// so it needs a MODEL_API_KEY instead of a CLI login.
-    /// Stored in the Keychain when available, with a UserDefaults fallback for migration.
+    /// Stored in the Keychain; older plaintext defaults are migrated when read.
     var metaAPIKeyInput: String {
         didSet {
             storeAPIKeyChange(metaAPIKeyInput, from: oldValue, provider: .meta, fallbackKey: Key.metaAPIKey)
@@ -491,7 +562,7 @@ final class AppSettings {
 
     /// Z.ai's GLM Coding Plan talks to api.z.ai or open.bigmodel.cn by region,
     /// so it needs a ZAI_API_KEY instead of a CLI login.
-    /// Stored in the Keychain when available, with a UserDefaults fallback for migration.
+    /// Stored in the Keychain; older plaintext defaults are migrated when read.
     /// Read once, on the first ask, and cached: a Keychain query on every render made
     /// Settings lag, and two of them before the window exists made launch wait on securityd.
     var zaiAPIKeyInput: String {
@@ -501,12 +572,20 @@ final class AppSettings {
     }
 
     /// Command Code signs in with `cmd login`; a Studio API key here is the alternative,
-    /// handed to the CLI as `COMMAND_CODE_API_KEY`. Stored in the Keychain when available,
-    /// with a UserDefaults fallback for a Mac whose Keychain refused it.
+    /// handed to the CLI as `COMMAND_CODE_API_KEY`. Stored in the Keychain.
     var commandcodeAPIKeyInput: String {
         didSet {
             storeAPIKeyChange(commandcodeAPIKeyInput, from: oldValue, provider: .commandcode, fallbackKey: Key.commandcodeAPIKey)
         }
+    }
+
+    private(set) var apiKeyStoreErrors: [ProviderKind: String] = [:]
+    private(set) var apiKeyMigrationFailures: Set<ProviderKind> = []
+
+    enum APIKeySource {
+        case settings
+        case environment(String)
+        case none
     }
 
     @ObservationIgnored private var didReadKeychain = false
@@ -517,6 +596,7 @@ final class AppSettings {
     private struct StoredKey: Sendable {
         var value: String
         var inKeychain: Bool
+        var migrationError: String?
 
         init(keychain: String, fallback: String) {
             inKeychain = !keychain.isEmpty
@@ -540,7 +620,7 @@ final class AppSettings {
         )
     }
 
-    /// One Keychain round trip per key.
+    /// Reads stored keys and migrates any legacy plaintext defaults.
     private nonisolated static func readKeys(fallbacks: (deepseek: String, meta: String, zai: String, commandcode: String)) -> StoredKeys {
         StoredKeys(
             deepseek: storedKey(for: .deepseek, fallback: fallbacks.deepseek),
@@ -551,12 +631,17 @@ final class AppSettings {
     }
 
     private nonisolated static func storedKey(for provider: ProviderKind, fallback: String) -> StoredKey {
-        StoredKey(keychain: APIKeychain.key(for: provider, fallback: ""), fallback: fallback)
+        guard !CaptureRun.isEnabled else { return StoredKey(keychain: "", fallback: "") }
+        var key = StoredKey(keychain: APIKeychain.key(for: provider, fallback: ""), fallback: fallback)
+        if !key.inKeychain, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            key.migrationError = APIKeychain.store(fallback, for: provider)
+            key.inKeychain = key.migrationError == nil
+        }
+        return key
     }
 
     /// The stored keys, from the Keychain the first time anything asks for one. The fill
-    /// bypasses the observers above, which write keys back to the Keychain and the
-    /// fallback: the fallback must never receive a key it did not already hold.
+    /// bypasses the observers above, which write edited keys back to the Keychain.
     private func readKeychainIfNeeded() {
         guard !didReadKeychain else { return }
         fillKeys(Self.readKeys(fallbacks: keyFallbacks))
@@ -580,30 +665,29 @@ final class AppSettings {
         zaiAPIKeyInput = keys.zai.value
         commandcodeAPIKeyInput = keys.commandcode.value
         isReadingKeychain = false
-        // Earlier builds kept a plaintext copy of every key in the defaults; one the
-        // Keychain holds needs none.
-        if keys.deepseek.inKeychain { defaults.removeObject(forKey: Key.deepseekAPIKey) }
-        if keys.meta.inKeychain { defaults.removeObject(forKey: Key.metaAPIKey) }
-        if keys.zai.inKeychain { defaults.removeObject(forKey: Key.zaiAPIKey) }
-        if keys.commandcode.inKeychain { defaults.removeObject(forKey: Key.commandcodeAPIKey) }
+        for (provider, key, fallbackKey) in [
+            (ProviderKind.deepseek, keys.deepseek, Key.deepseekAPIKey),
+            (.meta, keys.meta, Key.metaAPIKey),
+            (.zai, keys.zai, Key.zaiAPIKey),
+            (.commandcode, keys.commandcode, Key.commandcodeAPIKey),
+        ] {
+            if key.inKeychain { defaults.removeObject(forKey: fallbackKey) }
+            if let error = key.migrationError {
+                apiKeyStoreErrors[provider] = error
+                apiKeyMigrationFailures.insert(provider)
+            }
+        }
     }
 
-    /// One provider key changed: hand it to the Keychain and keep a plaintext copy in
-    /// the defaults only for a Mac whose Keychain refused it.
+    /// Failed writes keep the edited key in memory without creating a plaintext copy.
     private func storeAPIKeyChange(_ value: String, from oldValue: String, provider: ProviderKind, fallbackKey: String) {
-        guard !isReadingKeychain, value != oldValue else { return }
-        let kept = APIKeychain.setKey(value, for: provider)
-        storeAPIKeyFallback(kept ? "" : value, forKey: fallbackKey)
-    }
-
-    /// The plaintext copy in defaults, for a Mac whose Keychain refused the key; an empty
-    /// value removes it, so a key the Keychain holds never sits in the defaults too.
-    private func storeAPIKeyFallback(_ value: String, forKey key: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            defaults.removeObject(forKey: key)
+        guard !isReadingKeychain, value != oldValue, !CaptureRun.isEnabled else { return }
+        apiKeyMigrationFailures.remove(provider)
+        if let error = APIKeychain.store(value, for: provider) {
+            apiKeyStoreErrors[provider] = error
         } else {
-            defaults.set(trimmed, forKey: key)
+            apiKeyStoreErrors.removeValue(forKey: provider)
+            defaults.removeObject(forKey: fallbackKey)
         }
     }
 
@@ -737,19 +821,6 @@ final class AppSettings {
         didSet { defaults.set(hydraReviewHeads, forKey: Key.hydraReviewHeads) }
     }
 
-    /// A head that finishes leaves the Hydra panel on its own, for the sidebar under its
-    /// lead, instead of waiting for "Clear finished heads".
-    var hydraAutoClearFinished: Bool {
-        didSet { defaults.set(hydraAutoClearFinished, forKey: Key.hydraAutoClearFinished) }
-    }
-
-    /// Finished heads leave the sidebar with their card: a chat's heads show there while one
-    /// of them runs, and the card goes once every head of that chat has finished. Off by
-    /// default, so the heads stay in the sidebar until it is asked for.
-    var hydraAutoHidesIdleHeads: Bool {
-        didSet { defaults.set(hydraAutoHidesIdleHeads, forKey: Key.hydraAutoHidesIdleHeads) }
-    }
-
     /// Provider-side history, independent of Tivano's sidebar. Never sweeps old heads.
     var hydraArchivesCodexHeads: Bool {
         didSet { defaults.set(hydraArchivesCodexHeads, forKey: Key.hydraArchivesCodexHeads) }
@@ -809,6 +880,8 @@ final class AppSettings {
         defaultProvider = ProviderKind(storedValue: defaults.string(forKey: Key.defaultProvider) ?? "") ?? .codex
         defaultRuntimeMode = RuntimeMode(rawValue: defaults.string(forKey: Key.runtimeMode) ?? "") ?? .fullAccess
         defaultWorkspaceMode = WorkspaceMode(rawValue: defaults.string(forKey: Key.workspaceMode) ?? "") ?? .local
+        newThreadModelSelection = Self.load(NewThreadModelSelection.self, forKey: Key.newThreadModelSelection)
+        newThreadLocation = NewThreadLocation(rawValue: defaults.string(forKey: Key.newThreadLocation) ?? "") ?? .recent
         notifyWhenFinished = defaults.object(forKey: Key.notify) as? Bool ?? true
         chimeWhenFinished = defaults.object(forKey: Key.chime) as? Bool ?? true
         // The mode replaced an on/off switch: an earlier "off" stays off, an earlier "on" keeps the Mac awake.
@@ -825,17 +898,17 @@ final class AppSettings {
         contentFontSize = Self.clampedFontSize(defaults, key: Key.contentFontSize, stock: TypeScale.defaultContent, range: TypeScale.contentRange)
         codeFontSize = Self.clampedFontSize(defaults, key: Key.codeFontSize, stock: TypeScale.defaultCode, range: TypeScale.codeRange)
         sidebarActivityView = defaults.bool(forKey: Key.sidebarActivityView)
+        sidebarProjectsCollapsed = defaults.bool(forKey: Key.sidebarProjectsCollapsed)
+        sidebarTasksCollapsed = defaults.bool(forKey: Key.sidebarTasksCollapsed)
+        showsSkylight = defaults.object(forKey: Key.showsSkylight) as? Bool ?? true
         codexVoice = defaults.string(forKey: Key.codexVoice)
         alphaEnabled = defaults.bool(forKey: Key.alphaEnabled)
         alphaVoiceEnabled = defaults.bool(forKey: Key.alphaVoiceEnabled)
+        externalControlEnabled = defaults.bool(forKey: Key.externalControlEnabled)
+        cliInstallationTarget = defaults.string(forKey: Key.cliInstallationTarget)
         backdropOpacity = defaults.object(forKey: Key.backdropOpacity) as? Double ?? Self.defaultBackdropOpacity
         clearerBackdrop = defaults.object(forKey: Key.clearerBackdrop) as? Bool ?? true
-        let initialPerformanceMode = defaults.bool(forKey: Key.performanceMode)
-        performanceMode = initialPerformanceMode
-        if initialPerformanceMode {
-            clearerBackdrop = false
-            defaults.set(false, forKey: Key.clearerBackdrop)
-        }
+        performanceMode = defaults.bool(forKey: Key.performanceMode)
         autoHideTopControls = defaults.bool(forKey: Key.autoHideTopControls)
         // The old System/Light/Dark choice maps straight onto the same themes.
         let initialTheme = AppTheme(rawValue: defaults.string(forKey: Key.appTheme) ?? "")
@@ -852,6 +925,12 @@ final class AppSettings {
             lastProjectID = UUID(uuidString: stored)
         } else {
             lastProjectID = nil
+        }
+        if let data = defaults.data(forKey: Key.lastThreadAffiliation) {
+            lastThreadAffiliation = try? JSONDecoder().decode(ThreadAffiliation.self, from: data)
+        } else {
+            lastThreadAffiliation = defaults.string(forKey: Key.lastProjectID)
+                .flatMap(UUID.init(uuidString:)).map(ThreadAffiliation.project)
         }
         projectsEnabled = defaults.object(forKey: Key.projectsEnabled) as? Bool ?? true
         projectActivationOverrides = Self.load([String: Bool].self, forKey: Key.projectActivationOverrides) ?? [:]
@@ -886,8 +965,6 @@ final class AppSettings {
         hydraMaxHeads = HydraPair.clampedCap(defaults.object(forKey: Key.hydraMaxHeads) as? Int)
         hydraAutoMerge = defaults.object(forKey: Key.hydraAutoMerge) as? Bool ?? false
         hydraReviewHeads = defaults.object(forKey: Key.hydraReviewHeads) as? Bool ?? false
-        hydraAutoClearFinished = defaults.object(forKey: Key.hydraAutoClearFinished) as? Bool ?? false
-        hydraAutoHidesIdleHeads = defaults.object(forKey: Key.hydraAutoHidesIdleHeads) as? Bool ?? false
         hydraArchivesCodexHeads = defaults.object(forKey: Key.hydraArchivesCodexHeads) as? Bool ?? false
         hydraShowsHeadDetails = defaults.object(forKey: Key.hydraShowsHeadDetails) as? Bool ?? false
         hydraAutoPopsHeads = defaults.object(forKey: Key.hydraAutoPopsHeads) as? Bool ?? false
@@ -1293,6 +1370,17 @@ final class AppSettings {
         if !stored.isEmpty { return stored }
         guard provider.acceptsAPIKey, let envVar = provider.apiKeyEnvVar else { return "" }
         return (LoginEnvironment.current[envVar] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func apiKeySource(for provider: ProviderKind) -> APIKeySource {
+        if !apiKeyInput(for: provider).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .settings
+        }
+        if provider.acceptsAPIKey, let name = provider.apiKeyEnvVar,
+           !(LoginEnvironment.current[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .environment(name)
+        }
+        return .none
     }
 
     func hasAPIKey(for provider: ProviderKind) -> Bool {

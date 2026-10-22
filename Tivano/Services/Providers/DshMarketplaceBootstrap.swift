@@ -276,7 +276,25 @@ enum DshMarketplaceBootstrap {
         disposeProxy = await installProxyFromEnvironment(environment, () => {});
         await ctx.loader.create({ id: 'include', name: 'cordis:include', config: { path: pathToFileURL(path.join(run, 'cordis.yml')).href, patches: [{ insert: rows }] } });
         await ctx.loader.await();
-        await boot.auditStartupEntries(ctx, 'dsh', () => fail(message('activation')));
+        await boot.auditStartupEntries(ctx, 'dsh');
+        // An enabled entry left pending waits on services a headless ACP host never
+        // provides — desktop-only plugins like the Inspector — and its inactive
+        // context later breaks session setup with -32603. Removing the entry
+        // matches stock dsh's absent-bundle shape; real failures still reject below.
+        const pending = [];
+        for (const entry of ctx.loader.entries()) {
+            try { if (entry.disabled) continue; } catch { fail(message('activation')); }
+            if (entry.id.includes(':') && entry.fiber !== undefined && entry.fiber.state === 0) pending.push(entry);
+        }
+        for (const entry of pending) {
+            const missing = Object.keys(entry.fiber.inject).filter(service => entry.fiber.ctx.get(service) === undefined);
+            process.stderr.write(`dsh: dropping ${entry.options.id} (${entry.options.name}); an ACP host provides no ${missing.join(', ') || 'required services'}\n`);
+            await entry.parent.remove(entry.options.id);
+        }
+        for (const entry of ctx.loader.entries()) {
+            try { if (entry.disabled) continue; } catch { fail(message('activation')); }
+            if (entry.fiber === undefined || entry.fiber.state !== 2) fail(message('activation'));
+        }
         unchanged();
         if (ctx.fiber.state !== 2 || !ctx.get('loader')) fail(message('stopped'));
         ready = true;

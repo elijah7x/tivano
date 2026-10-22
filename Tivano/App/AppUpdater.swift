@@ -459,9 +459,16 @@ final class AppUpdater {
         process.standardOutput = try FileHandle(forWritingTo: log)
         process.standardError = process.standardOutput
         guard WindowManager.shared.model.flushForQuit() else {
+            if WindowManager.shared.model.localControl.hasPendingMutations {
+                throw UpdateInstallError(Chrome.localized("Wait for accepted local-control operations to end before quitting or updating."))
+            }
             throw UpdateInstallError(Chrome.localized("Tivano couldn't save your chats. The update was not installed. Resolve the disk error and try again."))
         }
-        try process.run()
+        do { try process.run() }
+        catch {
+            WindowManager.shared.model.localControl.restoreAfterFailedShutdown()
+            throw error
+        }
         UserDefaults.standard.set(version, forKey: Self.relaunchVersionKey)
         progress.noteHandoff()
         // If the quit is refused the installer gives up on its own; the pill goes back too.
@@ -469,6 +476,7 @@ final class AppUpdater {
             try? await Task.sleep(for: .seconds(Self.handoffTimeout))
             guard UpdateInstallProgress.shared.phase == .handoff else { return }
             UserDefaults.standard.removeObject(forKey: Self.relaunchVersionKey)
+            WindowManager.shared.model.localControl.restoreAfterFailedShutdown()
             UpdateInstallProgress.shared.fail()
         }
         // Do not yield after the merge check: a new merge must not start between

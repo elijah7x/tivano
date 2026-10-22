@@ -167,6 +167,7 @@ struct MCPSetupPanelView: View {
                     .foregroundStyle(Chrome.secondaryText)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(Text(verbatim: Chrome.localized("Close")))
         }
     }
 

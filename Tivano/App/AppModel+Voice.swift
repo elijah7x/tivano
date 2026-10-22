@@ -3,12 +3,11 @@ import Foundation
 extension AppModel {
     /// The only place that chooses the project and creates the call's home chat.
     func voiceHomeThread() -> ChatThread? {
-        guard let project = currentProject else { return nil }
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+        let affiliation = currentAffiliation
+        if let id = affiliation.projectID, project(id) == nil { return nil }
         let current = selectedThread?.provider == .codex ? selectedThread : nil
         var thread = ChatThread(
-            projectID: project.id,
+            projectID: affiliation.projectID,
             provider: .codex,
             model: current?.model ?? providers.defaultModel(for: .codex)?.id,
             effort: current?.effort ?? settings.lastEffort(for: .codex),
@@ -18,6 +17,14 @@ extension AppModel {
         thread.title = NSLocalizedString(VoiceCatalog.orchestratorTitle, comment: "")
         thread.isVoiceSession = true
         thread.hasCustomTitle = true
+        do {
+            let directory = try ensureExecutionDirectory(for: thread)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+        } catch {
+            alert = AppAlert(title: "Could not open task workspace", message: error.localizedDescription)
+            return nil
+        }
         insertVoiceHomeThread(thread)
         return thread
     }
@@ -34,11 +41,11 @@ extension AppModel {
     }
 
     private func voiceCallContext(for threadID: UUID) -> VoiceOrchestratorContext? {
-        guard let thread = thread(threadID), let project = project(thread.projectID) else { return nil }
+        guard let thread = thread(threadID), (try? executionDirectory(for: thread)) != nil else { return nil }
         let hydra = hydraLaunch(for: thread)
         return VoiceOrchestratorContext(
             hydra: hydra != nil,
-            projectName: project.name,
+            projectName: project(thread.projectID)?.name ?? Chrome.localized("Task"),
             hydraPolicy: hydra.map { HydraPrompts.fallbackPolicy($0) }
         )
     }

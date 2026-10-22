@@ -28,6 +28,7 @@ struct LinkParagraphView: NSViewRepresentable {
         let view = LinkTextView()
         view.delegate = context.coordinator
         view.mergeTarget = context.environment.mergeRequestTarget
+        view.selectionOwner = context.environment.markdownSelectionOwner
         view.passesProseThrough = !context.environment.markdownBlockSelection
         view.onOpenHead = onOpenHead
         onHost?(view)
@@ -35,6 +36,7 @@ struct LinkParagraphView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: LinkTextView, context: Context) {
+        view.selectionOwner = context.environment.markdownSelectionOwner
         view.passesProseThrough = !context.environment.markdownBlockSelection
         view.onOpenHead = onOpenHead
         // Read so a favicon-load bump rebuilds the string with icons.
@@ -81,6 +83,7 @@ struct LinkParagraphView: NSViewRepresentable {
     static func dismantleNSView(_ view: LinkTextView, coordinator: Coordinator) {
         view.delegate = nil
         view.mergeTarget = nil
+        view.selectionOwner = nil
         view.streamVeil.detach(view)
     }
 
@@ -88,6 +91,7 @@ struct LinkParagraphView: NSViewRepresentable {
         // The last inputs built into a string, so repeat updates with nothing new skip it.
         weak var lastRenderScope: VeilRenderScope?
         var lastSource: String?
+        var lastBlocks: [MarkdownBlock]?
         var lastPointSize: CGFloat = 0
         var lastCodePointSize: CGFloat = 0
         var lastDimmed = false
@@ -276,6 +280,9 @@ private struct MergeRequestTargetKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
+    /// Identity of the enclosing message menu; unrelated to the rendered text or frame.
+    @Entry var markdownSelectionOwner: UUID? = nil
+
     var mergeRequestTarget: MergeRequestTarget? {
         get { self[MergeRequestTargetKey.self] }
         set { self[MergeRequestTargetKey.self] = newValue }
@@ -300,6 +307,9 @@ final class LinkTextView: NSTextView {
     /// Receives a merge or pull request link when its popover's Merge row is chosen. Nil
     /// leaves Merge off every link's popover.
     var mergeTarget: MergeRequestTarget?
+
+    /// Value-only identity supplied by the message menu, never a row or runtime reference.
+    var selectionOwner: UUID?
 
     /// Inside a finished reply the prose passes the mouse through to SwiftUI, whose drag
     /// swaps in the whole-reply selection; links still take the click and open.

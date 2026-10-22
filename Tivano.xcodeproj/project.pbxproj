@@ -7,19 +7,53 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2799F635321BB07235EA4668 /* TivanoCLI in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 97D3068AEF99F2C36529A7AF /* TivanoCLI */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		4AE99A4344211D6226FCD53D /* LocalControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38FAD7D3C687F15354810FEB /* LocalControl.swift */; };
 		66150B032B0A2F63128D32DE /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 7EF5D7A5F2BCB1B4A7CE9FDC /* THIRD_PARTY_NOTICES.md */; };
+		6D57024FE990C90C2708ACA6 /* ControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31901B34478275FE113E1012 /* ControlClient.swift */; };
+		73200EC4DA4006C8962F6D61 /* ControlSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97E3DEC0844CD55D2D67B93B /* ControlSocket.swift */; };
 		915BC9D74CE232FBDABFBB8E /* TRADEMARK.md in Resources */ = {isa = PBXBuildFile; fileRef = 1848AA624F0711C172CFCD75 /* TRADEMARK.md */; };
 		BB209BEC93886291B34DD10E /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 82D4543374B57973BE9D85C8 /* LICENSE */; };
+		EE0A9F237FBA40658CB83452 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07D3EA361BA0B58C520BBB40 /* main.swift */; };
 		FD12D8348E4FEC49B311BFA4 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 72A50E21088ED8B1A8BF1CFC /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		8005A464C11426403000E35E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6A6DD5A08D75A78AA31268E3 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 247AC111726684C1F2206E78;
+			remoteInfo = TivanoCLI;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		02D763150312DE92BA707739 /* Embed Dependencies */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (
+				2799F635321BB07235EA4668 /* TivanoCLI in Embed Dependencies */,
+			);
+			name = "Embed Dependencies";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		07D3EA361BA0B58C520BBB40 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		10147330396E8517DCC9E0AE /* release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = release.xcconfig; sourceTree = "<group>"; };
 		1848AA624F0711C172CFCD75 /* TRADEMARK.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TRADEMARK.md; sourceTree = "<group>"; };
+		31901B34478275FE113E1012 /* ControlClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlClient.swift; sourceTree = "<group>"; };
+		38FAD7D3C687F15354810FEB /* LocalControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalControl.swift; sourceTree = "<group>"; };
 		400B8D67EB14EE2781F1C2A1 /* Tivano.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tivano.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7EF5D7A5F2BCB1B4A7CE9FDC /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
 		82D4543374B57973BE9D85C8 /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		84A7141984F863F1549E43ED /* dev.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = dev.xcconfig; sourceTree = "<group>"; };
+		97D3068AEF99F2C36529A7AF /* TivanoCLI */ = {isa = PBXFileReference; includeInIndex = 0; path = TivanoCLI; sourceTree = BUILT_PRODUCTS_DIR; };
+		97E3DEC0844CD55D2D67B93B /* ControlSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSocket.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -46,6 +80,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		18CEAAF9219014869B2280BD /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				A78DCB0A15AD4C37D2D737E9 /* Models */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
 		5FFF308050810B53DE146987 /* config */ = {
 			isa = PBXGroup;
 			children = (
@@ -55,6 +97,14 @@
 			path = config;
 			sourceTree = "<group>";
 		};
+		65CB9F928D4731538BFF53FA /* TivanoCLI */ = {
+			isa = PBXGroup;
+			children = (
+				07D3EA361BA0B58C520BBB40 /* main.swift */,
+			);
+			path = TivanoCLI;
+			sourceTree = "<group>";
+		};
 		76B56C591C26030E8DC61439 = {
 			isa = PBXGroup;
 			children = (
@@ -62,17 +112,54 @@
 				7EF5D7A5F2BCB1B4A7CE9FDC /* THIRD_PARTY_NOTICES.md */,
 				1848AA624F0711C172CFCD75 /* TRADEMARK.md */,
 				5FFF308050810B53DE146987 /* config */,
+				8556AD5508CD46C8E7FE551C /* Tivano */,
 				1A7E243D5B9026283601666B /* Tivano */,
+				65CB9F928D4731538BFF53FA /* TivanoCLI */,
 				877473FDF3CE87A538BC50D9 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		8556AD5508CD46C8E7FE551C /* Tivano */ = {
+			isa = PBXGroup;
+			children = (
+				18CEAAF9219014869B2280BD /* Core */,
+				DACF3E9269A9F9FDEF121388 /* Services */,
+			);
+			path = Tivano;
 			sourceTree = "<group>";
 		};
 		877473FDF3CE87A538BC50D9 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				400B8D67EB14EE2781F1C2A1 /* Tivano.app */,
+				97D3068AEF99F2C36529A7AF /* TivanoCLI */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A78DCB0A15AD4C37D2D737E9 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				38FAD7D3C687F15354810FEB /* LocalControl.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		DACF3E9269A9F9FDEF121388 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				E5212EE52C8E32F667C4D64F /* Control */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		E5212EE52C8E32F667C4D64F /* Control */ = {
+			isa = PBXGroup;
+			children = (
+				31901B34478275FE113E1012 /* ControlClient.swift */,
+				97E3DEC0844CD55D2D67B93B /* ControlSocket.swift */,
+			);
+			path = Control;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -85,10 +172,12 @@
 				D3BAF714771E031E72CC36E7 /* Sources */,
 				5088E591E6AB7532B09AFE4A /* Resources */,
 				C21842E57545D6E01FA7EB0B /* Frameworks */,
+				02D763150312DE92BA707739 /* Embed Dependencies */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				AA7DE7018519031FAB88E81D /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				1A7E243D5B9026283601666B /* Tivano */,
@@ -101,6 +190,23 @@
 			productReference = 400B8D67EB14EE2781F1C2A1 /* Tivano.app */;
 			productType = "com.apple.product-type.application";
 		};
+		247AC111726684C1F2206E78 /* TivanoCLI */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 79D1922554C3918396D19EA6 /* Build configuration list for PBXNativeTarget "TivanoCLI" */;
+			buildPhases = (
+				B5A2C937D5C47F5689BEF67F /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TivanoCLI;
+			packageProductDependencies = (
+			);
+			productName = TivanoCLI;
+			productReference = 97D3068AEF99F2C36529A7AF /* TivanoCLI */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -111,6 +217,10 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					1AA8F9F74D86EEC5CF76ED63 = {
+						DevelopmentTeam = 5WF7HRPLRX;
+						ProvisioningStyle = Manual;
+					};
+					247AC111726684C1F2206E78 = {
 						DevelopmentTeam = 5WF7HRPLRX;
 						ProvisioningStyle = Manual;
 					};
@@ -134,6 +244,7 @@
 			projectRoot = "";
 			targets = (
 				1AA8F9F74D86EEC5CF76ED63 /* Tivano */,
+				247AC111726684C1F2206E78 /* TivanoCLI */,
 			);
 		};
 /* End PBXProject section */
@@ -152,6 +263,17 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		B5A2C937D5C47F5689BEF67F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6D57024FE990C90C2708ACA6 /* ControlClient.swift in Sources */,
+				73200EC4DA4006C8962F6D61 /* ControlSocket.swift in Sources */,
+				4AE99A4344211D6226FCD53D /* LocalControl.swift in Sources */,
+				EE0A9F237FBA40658CB83452 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D3BAF714771E031E72CC36E7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -161,7 +283,39 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		AA7DE7018519031FAB88E81D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 247AC111726684C1F2206E78 /* TivanoCLI */;
+			targetProxy = 8005A464C11426403000E35E /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		8AB8A8D482A28B03AF6B3753 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 84A7141984F863F1549E43ED /* dev.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.tivano.Tivano.CLI.dev;
+				PRODUCT_MODULE_NAME = TivanoCLI;
+				PRODUCT_NAME = "tivano-control";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
 		916E3A67362CC1268FB82C2B /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -255,6 +409,7 @@
 			baseConfigurationReference = 10147330396E8517DCC9E0AE /* release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = config/release.entitlements;
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -345,9 +500,42 @@
 			};
 			name = Debug;
 		};
+		E9064A78CFF4DFE2677BC82B /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 10147330396E8517DCC9E0AE /* release.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.tivano.Tivano.CLI;
+				PRODUCT_MODULE_NAME = TivanoCLI;
+				PRODUCT_NAME = "tivano-control";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		79D1922554C3918396D19EA6 /* Build configuration list for PBXNativeTarget "TivanoCLI" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8AB8A8D482A28B03AF6B3753 /* Debug */,
+				E9064A78CFF4DFE2677BC82B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		C8B981E37F6E5349A3F0AC06 /* Build configuration list for PBXNativeTarget "Tivano" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -32,6 +32,9 @@ struct HydraProgressBar: View {
     /// The last events, staves and counts, so an evaluation where nothing changed
     /// redraws without walking every entry again.
     @State private var cache = StaveCache()
+    @State private var sweepRegistration = UUID()
+    @State private var isMounted = false
+    @Environment(\.chatColumnIsShown) private var chatColumnIsShown
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
@@ -72,6 +75,10 @@ struct HydraProgressBar: View {
         private var events: [Stave] = []
         private var staves: [Stave] = []
         private var counts = Counts(of: [])
+
+        var snapshot: (events: [Stave], staves: [Stave], counts: Counts) {
+            (events, staves, counts)
+        }
 
         func resolve(entries: [TimelineEntry], capacity: Int) -> (events: [Stave], staves: [Stave], counts: Counts) {
             // Compared against the stored keys in place, not against an array built first:
@@ -117,14 +124,17 @@ struct HydraProgressBar: View {
 
     var body: some View {
         let capacity = max(1, Int(((width + Self.gap) / Self.pitch).rounded(.down)))
-        let resolved = cache.resolve(entries: entries ?? runtime.entries, capacity: capacity)
+        let resolved = chatColumnIsShown
+            ? cache.resolve(entries: entries ?? runtime.entries, capacity: capacity)
+            : cache.snapshot
         let staves = resolved.staves
         let counts = resolved.counts
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let isRunning = status == .running
         let elapsed = RelativeTime.duration((isRunning ? Date.now : finishedAt ?? .now).timeIntervalSince(startedAt))
-        let sweeps = isRunning && !reduceMotion && !performanceMode && SweepBudget.shared.sweeps(ObjectIdentifier(runtime))
-        let isScrolling = ScrollActivity.shared.isScrolling
+        let sweepRuntime = chatColumnIsShown && isRunning ? ObjectIdentifier(runtime) : nil
+        let sweeps = chatColumnIsShown && isRunning && !reduceMotion && !performanceMode && SweepBudget.shared.sweeps(ObjectIdentifier(runtime))
+        let isScrolling = chatColumnIsShown && ScrollActivity.shared.isScrolling
         let colors = HydraStaveColors(tint: tint, colorScheme: colorScheme)
         VStack(alignment: .leading, spacing: 6) {
             HydraStaves(
@@ -132,16 +142,18 @@ struct HydraProgressBar: View {
                 capacity: capacity,
                 colors: colors,
                 status: status,
-                hoveredIndex: hoveredIndex,
+                hoveredIndex: chatColumnIsShown ? hoveredIndex : nil,
                 isSweeping: sweeps,
                 reduceMotion: reduceMotion || performanceMode,
-                isScrolling: isScrolling
+                isScrolling: isScrolling,
+                isColumnShown: chatColumnIsShown
             )
             .frame(height: Self.height)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             // The pointer picks the stave whose slot it is over; the slots past the
             // filled ones name nothing.
             .onContinuousHover(coordinateSpace: .local) { phase in
+                guard chatColumnIsShown else { return }
                 let index: Int? = switch phase {
                 case .active(let point):
                     point.x >= 0 && point.y >= 0 && point.y <= Self.height
@@ -161,7 +173,7 @@ struct HydraProgressBar: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if let hoveredIndex, hoveredIndex < staves.count {
+                if chatColumnIsShown, let hoveredIndex, hoveredIndex < staves.count {
                     stepsCard(for: staves[hoveredIndex], at: hoveredIndex)
                 }
             }
@@ -173,16 +185,33 @@ struct HydraProgressBar: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        // A running bar asks for a sweep slot; it gives the slot back when it stops or
-        // leaves the screen, and the next bar in line takes it.
-        .task(id: isRunning) {
-            let id = ObjectIdentifier(runtime)
-            guard isRunning else { SweepBudget.shared.leave(id); return }
-            SweepBudget.shared.join(id)
+        // Each mounted copy owns its registration, while slots remain per runtime.
+        .onAppear {
+            isMounted = true
+            updateSweepRegistration(sweepRuntime)
         }
-        .onDisappear { SweepBudget.shared.leave(ObjectIdentifier(runtime)) }
+        .onChange(of: sweepRuntime) { _, runtimeID in
+            guard isMounted else { return }
+            updateSweepRegistration(runtimeID)
+        }
+        .onChange(of: chatColumnIsShown) { _, shown in
+            if !shown { hoveredIndex = nil }
+        }
+        .onDisappear {
+            isMounted = false
+            hoveredIndex = nil
+            SweepBudget.shared.leave(registration: sweepRegistration)
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: String(format: Chrome.localized(isRunning ? "%@, %@ so far" : "%@, %@"), counts.sentence, elapsed)))
+    }
+
+    private func updateSweepRegistration(_ runtimeID: ObjectIdentifier?) {
+        if let runtimeID {
+            SweepBudget.shared.join(runtimeID, registration: sweepRegistration)
+        } else {
+            SweepBudget.shared.leave(registration: sweepRegistration)
+        }
     }
 
     /// The step a stave stands for, on the rail's card. Sits just above the bar, centred on
@@ -355,6 +384,7 @@ private struct HydraStaves: NSViewRepresentable {
     let reduceMotion: Bool
     /// The reader is scrolling somewhere: the sweep holds still until it lands.
     let isScrolling: Bool
+    let isColumnShown: Bool
 
     func makeNSView(context: Context) -> HydraStavesLayerView {
         let view = HydraStavesLayerView()
@@ -366,7 +396,8 @@ private struct HydraStaves: NSViewRepresentable {
             hoveredIndex: hoveredIndex,
             isSweeping: isSweeping,
             reduceMotion: reduceMotion,
-            isScrolling: isScrolling
+            isScrolling: isScrolling,
+            isColumnShown: isColumnShown
         )
         return view
     }
@@ -380,7 +411,8 @@ private struct HydraStaves: NSViewRepresentable {
             hoveredIndex: hoveredIndex,
             isSweeping: isSweeping,
             reduceMotion: reduceMotion,
-            isScrolling: isScrolling
+            isScrolling: isScrolling,
+            isColumnShown: isColumnShown
         )
     }
 
@@ -420,6 +452,7 @@ private final class HydraStavesLayerView: NSView {
     private var isSweeping = false
     private var reduceMotion = false
     private var isScrolling = false
+    private var isColumnShown = false
     private var filledWidth: CGFloat = 0
     private var band: CGFloat = 24
     private var lastContentBounds: CGRect?
@@ -487,8 +520,15 @@ private final class HydraStavesLayerView: NSView {
         hoveredIndex: Int?,
         isSweeping: Bool,
         reduceMotion: Bool,
-        isScrolling: Bool
+        isScrolling: Bool,
+        isColumnShown: Bool
     ) {
+        guard isColumnShown else {
+            suspendColumn()
+            return
+        }
+        let resumed = !self.isColumnShown
+        self.isColumnShown = true
         let stavesChanged = !matches(staves)
         let colorsChanged = colors != self.colors
         let statusChanged = status != self.status
@@ -507,7 +547,7 @@ private final class HydraStavesLayerView: NSView {
 
         // A hover move, a scroll flip or a slot freeing up changes nothing about the
         // staves: only what they affect is looked at again.
-        if stavesChanged || colorsChanged || statusChanged || capacityChanged {
+        if resumed || stavesChanged || colorsChanged || statusChanged || capacityChanged {
             applyContent()
         } else if hoverChanged {
             CATransaction.begin()
@@ -515,7 +555,28 @@ private final class HydraStavesLayerView: NSView {
             applyHoverLayer()
             CATransaction.commit()
         }
-        if sweepChanged || stavesChanged || capacityChanged { refreshAnimations() }
+        if resumed || sweepChanged || stavesChanged || capacityChanged { refreshAnimations() }
+    }
+
+    private func suspendColumn() {
+        guard isColumnShown else { return }
+        isColumnShown = false
+        hoveredIndex = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        setPaused(true, on: stavesLayer)
+        setPaused(true, on: sweepClip)
+        hoverLayer.path = nil
+        hoverLayer.removeFromSuperlayer()
+        sweep.removeAnimation(forKey: Self.sweepKey)
+        sweepClip.isHidden = true
+        // A column can stay mounted indefinitely. Rebuild rises from arrival time
+        // when it returns, rather than resuming an old presentation-layer clock.
+        for slot in staveSlots {
+            slot.shape.removeAnimation(forKey: Self.riseKey)
+            slot.mask.removeAnimation(forKey: Self.riseKey)
+        }
+        CATransaction.commit()
     }
 
     /// Whether `staves` is the list the layers were last built for, walked in place and
@@ -558,7 +619,7 @@ private final class HydraStavesLayerView: NSView {
     /// Everything but the sweep's own state: the staves, the empty slots, the highlight
     /// and the sweep's geometry, all set with actions off so a re-render moves nothing.
     private func applyContent() {
-        guard bounds.width > 0, bounds.height > 0 else { return }
+        guard isColumnShown, bounds.width > 0, bounds.height > 0 else { return }
         lastContentBounds = bounds
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -735,6 +796,7 @@ private final class HydraStavesLayerView: NSView {
     /// phase when it starts, then its parent holds that phase through scrolling and
     /// time away from the window.
     private func refreshAnimations() {
+        guard isColumnShown else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -931,13 +993,19 @@ private struct ProgressCardSurface: ViewModifier {
 final class SweepBudget {
     static let shared = SweepBudget()
     private(set) var sweepers: [ObjectIdentifier] = []
+    @ObservationIgnored private var registrations: [UUID: ObjectIdentifier] = [:]
 
-    func join(_ id: ObjectIdentifier) {
+    func join(_ id: ObjectIdentifier, registration: UUID) {
+        guard registrations[registration] != id else { return }
+        leave(registration: registration)
+        registrations[registration] = id
         guard !sweepers.contains(id) else { return }
         sweepers.append(id)
     }
 
-    func leave(_ id: ObjectIdentifier) {
+    func leave(registration: UUID) {
+        guard let id = registrations.removeValue(forKey: registration),
+              !registrations.values.contains(id) else { return }
         guard let index = sweepers.firstIndex(of: id) else { return }
         sweepers.remove(at: index)
     }

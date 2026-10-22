@@ -89,8 +89,24 @@ struct HydraIntroPopover: View {
 }
 
 struct HydraInfoPopover: View {
-    enum Topic { case hydra, heads }
+    enum Topic { case hydra, heads, history }
     let topic: Topic
+
+    private var title: String {
+        switch topic {
+        case .hydra: "Hydra"
+        case .heads: "Heads"
+        case .history: "Codex head history"
+        }
+    }
+
+    private var subtitle: String {
+        switch topic {
+        case .hydra: "One chat leads a team of heads on big jobs."
+        case .heads: "The helpers a chat sends out, one brief each."
+        case .history: "Archive completed heads and keep the option to continue."
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -101,15 +117,16 @@ struct HydraInfoPopover: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: topic == .hydra ? "Hydra" : Chrome.localized("Heads"))
+                    Text(verbatim: Chrome.localized(title))
                         .font(.ui(.title3, weight: .semibold))
-                    Text(verbatim: Chrome.localized(topic == .hydra ? "One chat leads a team of heads on big jobs." : "The helpers a chat sends out, one brief each."))
+                    Text(verbatim: Chrome.localized(subtitle))
                         .font(.ui(.callout))
                         .foregroundStyle(Chrome.secondaryText)
                 }
             }
             VStack(alignment: .leading, spacing: 12) {
-                if topic == .hydra {
+                switch topic {
+                case .hydra:
                     hydraIntroStep(
                         glyph: AnyView(HydraMarkImage().foregroundStyle(Chrome.primaryText).frame(width: 18, height: 18)),
                         title: "You ask, the chat leads",
@@ -121,14 +138,14 @@ struct HydraInfoPopover: View {
                             HydraGlyph(persona: HydraRoster.persona(at: 1), size: 24)
                         }),
                         title: "Heads go out in parallel",
-                        line: "Each head gets one brief and a panel of its own beside the chat, all working at the same time."
+                        line: "Each head gets one brief and a panel of its own beside the chat, all working at the same time. Heads use the selected models to do their tasks, then return their reports to the lead chat."
                     )
                     hydraIntroStep(
                         glyph: AnyView(Image(systemName: "checkmark.circle").font(.ui(size: 20)).foregroundStyle(Chrome.success)),
                         title: "Reports come back, the lead finishes",
                         line: "The lead checks their work, fixes what needs fixing and answers you. Their changes land as one merge."
                     )
-                } else {
+                case .heads:
                     hydraIntroStep(
                         glyph: AnyView(HydraGlyph(persona: HydraRoster.persona(at: 0), size: 24)),
                         title: "One brief, one panel",
@@ -142,7 +159,23 @@ struct HydraInfoPopover: View {
                     hydraIntroStep(
                         glyph: AnyView(Image(systemName: "arrow.uturn.backward.circle").font(.ui(size: 20)).foregroundStyle(Chrome.success)),
                         title: "Reports back to the lead",
-                        line: "A finished head hands its report to the lead, which checks the work and answers you. Cleared heads move from the panel to the sidebar."
+                        line: "A finished head hands its report to the lead, which checks the work and answers you. Completed heads collapse automatically; their reports stay in completion cards in the chat."
+                    )
+                case .history:
+                    hydraIntroStep(
+                        glyph: AnyView(Image(systemName: "checkmark.circle").font(.ui(size: 20)).foregroundStyle(Chrome.success)),
+                        title: "Only newly dispatched heads",
+                        line: "Only newly dispatched Codex heads managed by Tivano can be archived after successful completion. Lead chats, older sessions, heads with user follow-ups or descendant sessions, and heads not confirmed idle stay visible."
+                    )
+                    hydraIntroStep(
+                        glyph: AnyView(Image(systemName: "arrow.uturn.backward.circle").font(.ui(size: 20)).foregroundStyle(Chrome.success)),
+                        title: "Continue when needed",
+                        line: "Archived sessions keep their IDs and can be resumed. Archiving does not affect Tivano's sidebar or history on provider websites."
+                    )
+                    hydraIntroStep(
+                        glyph: AnyView(Image(systemName: "archivebox").font(.ui(size: 18)).foregroundStyle(Chrome.primaryText)),
+                        title: "Codex only, no permanent deletion",
+                        line: "Other providers do not currently offer this archive option. Permanent deletion is unavailable to avoid also deleting child sessions."
                     )
                 }
             }

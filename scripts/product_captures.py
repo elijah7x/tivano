@@ -3,24 +3,26 @@
 
 Run only when explicitly authorized to launch a capture instance. Mock conversations,
 independent storage/defaults and a generated backdrop keep production data separate.
-Raw stills, JSON framing sidecars and resized PNGs stay in build.noindex/product-captures;
-nothing is imported into the application's asset catalog.
+Raw stills, JSON framing sidecars and resized PNGs stay in a new external run directory;
+nothing is imported into the application's asset catalog. See docs/operations/product-captures.md.
 
 Needs Pillow: uv run --with Pillow scripts/product_captures.py
 """
 
+import argparse
+from datetime import datetime, timezone
 import json
+import os
 import pathlib
+import secrets
 import shutil
 import subprocess
 import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CAPTURES = ROOT / "build.noindex" / "product-captures"
 DERIVED = ROOT / "build.noindex" / "product-captures-build"
 APP = DERIVED / "Build/Products/Debug/Tivano Dev.app"
-PROCESSED = CAPTURES / "processed"
 
 WIDTH = 1320
 HEIGHT = 824
@@ -46,6 +48,41 @@ WINDOW_SIZES = {
     "capture-theme-rosePine": (960, 600),
 }
 THEME_ORDER = ["tokyoNight", "gruvbox", "catppuccinLatte", "rosePine"]
+
+
+def reject_source_path(path, source_roots):
+    lexical = pathlib.Path(os.path.abspath(path))
+    resolved = path.resolve()
+    for source in source_roots:
+        if lexical.is_relative_to(source) or resolved.is_relative_to(source):
+            raise ValueError(f"Output paths must be outside source checkouts: {path}")
+
+
+def select_output_dir(output_dir=None):
+    common_dir = pathlib.Path(subprocess.run([
+        "git", "-C", str(ROOT), "rev-parse", "--path-format=absolute", "--git-common-dir",
+    ], check=True, capture_output=True, text=True).stdout.strip()).resolve()
+    source_roots = (ROOT, common_dir.parent)
+    override = os.environ.get("TIVANO_ARTIFACTS_ROOT")
+    artifact_root = pathlib.Path(override) if override is not None else common_dir.parent.parent
+    if not artifact_root.is_absolute():
+        raise ValueError("TIVANO_ARTIFACTS_ROOT must be an absolute path")
+    reject_source_path(artifact_root, source_roots)
+    artifact_root = artifact_root.resolve()
+    run_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S.%fZ}-{os.getpid()}-{secrets.token_hex(4)}"
+    captures = pathlib.Path(output_dir) if output_dir is not None else artifact_root / "private-artifacts" / "product-captures" / run_id
+    captures = pathlib.Path(os.path.abspath(captures))
+    reject_source_path(captures, source_roots)
+    if captures.exists() or captures.is_symlink():
+        raise ValueError(f"Output directory already exists (including symlinks): {captures}")
+    return captures.resolve()
+
+
+def create_output_dir(captures):
+    try:
+        captures.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as error:
+        raise ValueError(f"Output directory already exists; nothing was overwritten: {captures}") from error
 
 
 def window_box(name):
@@ -81,15 +118,13 @@ def build():
         sys.exit("Build failed")
 
 
-def capture():
+def capture(captures):
     step("Capturing the product scenes")
-    shutil.rmtree(CAPTURES, ignore_errors=True)
-    CAPTURES.mkdir(parents=True)
     # Through LaunchServices, not the binary: an app launched from a shell is refused
     # activation, and the captures need the key window of the active app. Not waited on:
     # the run is force-killed at its budget, so a stall can never leave it running.
-    marker = "website-captures " + str(CAPTURES)
-    subprocess.run(["open", "-n", str(APP), "--args", "-AppleLanguages", "(en)", "--website-captures", str(CAPTURES)], check=True)
+    marker = "website-captures " + str(captures)
+    subprocess.run(["open", "-n", str(APP), "--args", "-AppleLanguages", "(en)", "--website-captures", str(captures)], check=True)
     deadline = time.time() + 630
     while time.time() < deadline:
         time.sleep(2)
@@ -99,7 +134,7 @@ def capture():
     else:
         subprocess.run(["pkill", "-9", "-f", marker])
         print("  the run overran its budget and was killed")
-    log = CAPTURES / "run.log"
+    log = captures / "run.log"
     if log.exists():
         print("  " + log.read_text().strip().splitlines()[-1])
 
@@ -121,14 +156,14 @@ def fit(image, width, height):
     return image.resize((width, height), Image.LANCZOS)
 
 
-def write_image(name, image):
-    PROCESSED.mkdir(parents=True, exist_ok=True)
-    path = PROCESSED / f"{name}.png"
+def write_image(processed, name, image):
+    processed.mkdir(parents=True, exist_ok=True)
+    path = processed / f"{name}.png"
     image.save(path, "PNG")
-    print(f"  {path.relative_to(ROOT)}")
+    print(f"  {path}")
 
 
-def interior(name, inset=8):
+def interior(captures, name, inset=8):
     """The window's inside, `inset` points in from its edges: the screenshot card rounds its own
     corners, so a picture that still showed the window's corners would draw a second,
     tighter corner inside them.
@@ -139,8 +174,8 @@ def interior(name, inset=8):
     the box in the wrong place. Older runs without the sidecar fall back to the size
     table, which is exact only for window-only stills."""
     from PIL import Image
-    image = Image.open(CAPTURES / f"{name}.png").convert("RGB")
-    sidecar = CAPTURES / f"{name}.json"
+    image = Image.open(captures / f"{name}.png").convert("RGB")
+    sidecar = captures / f"{name}.json"
     if sidecar.exists():
         frames = json.loads(sidecar.read_text())
         _, _, rect_w, rect_h = frames["rect"]
@@ -182,14 +217,14 @@ def focus_box(inner, focus, aspect=WIDTH / HEIGHT, min_share=0.55):
     return (left, top, left + w, top + h)
 
 
-def frame(name, inset=8):
+def frame(captures, name, inset=8):
     """The product screenshot: the window's inside, zoomed on the still's focus when the
     sidecar names one (see `focus_box`); `interior` otherwise."""
     from PIL import Image
-    sidecar = CAPTURES / f"{name}.json"
+    sidecar = captures / f"{name}.json"
     if not sidecar.exists():
-        return interior(name, inset)
-    image = Image.open(CAPTURES / f"{name}.png").convert("RGB")
+        return interior(captures, name, inset)
+    image = Image.open(captures / f"{name}.png").convert("RGB")
     frames = json.loads(sidecar.read_text())
     _, _, rect_w, rect_h = frames["rect"]
     x, y, w, h = frames["window"]
@@ -207,10 +242,10 @@ def frame(name, inset=8):
     return image.crop(tuple(round(scale * v) for v in box))
 
 
-def theme_mosaic():
+def theme_mosaic(captures):
     """The four theme windows' insides, two by two with a thin dark seam, for the screenshots."""
     from PIL import Image
-    tiles = [interior(f"capture-theme-{theme}", inset=8) for theme in THEME_ORDER]
+    tiles = [interior(captures, f"capture-theme-{theme}", inset=8) for theme in THEME_ORDER]
     gap = 6
     tile_w = (WIDTH - gap) // 2
     tile_h = (HEIGHT - gap) // 2
@@ -220,25 +255,43 @@ def theme_mosaic():
     return mosaic
 
 
-def encode():
+def encode(captures):
     from PIL import Image
+    processed = captures / "processed"
     step("Resizing screenshots")
     # The welcome page is its own scene: the whole window with the sidebar open, no
     # popover, so the first page is the overview and not the hero's close-up.
     for name, source in [("capture-welcome", "capture-welcome"), ("capture-hydra", "capture-hydra"), ("capture-pairs", "capture-pairs"),
                          ("capture-slider", "capture-slider"), ("capture-threads", "capture-threads"), ("capture-recipes", "capture-recipes"), ("capture-panels", "capture-panels")]:
-        if not (CAPTURES / f"{source}.png").exists():
-            sys.exit(f"The capture run wrote no {source}.png; see {CAPTURES / 'run.log'}")
-        write_image(name, fit(frame(source), WIDTH, HEIGHT))
-    write_image("capture-themes", fit(theme_mosaic(), WIDTH, HEIGHT))
+        if not (captures / f"{source}.png").exists():
+            sys.exit(f"The capture run wrote no {source}.png; see {captures / 'run.log'}")
+        write_image(processed, name, fit(frame(captures, source), WIDTH, HEIGHT))
+    write_image(processed, "capture-themes", fit(theme_mosaic(captures), WIDTH, HEIGHT))
 
 
-if __name__ == "__main__":
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", help="A new output directory outside source checkouts; existing paths are refused")
+    args = parser.parse_args(argv)
+    try:
+        captures = select_output_dir(args.output_dir)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        parser.error(str(error))
     try:
         import PIL
     except ImportError:
         sys.exit("Pillow is required: uv run --with Pillow scripts/product_captures.py")
+    try:
+        create_output_dir(captures)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
+    print(f"Output: {captures}", flush=True)
     build()
-    capture()
-    encode()
-    print(f"\nReady: {PROCESSED}")
+    capture(captures)
+    encode(captures)
+    print(f"\nReady: {captures / 'processed'}")
+
+
+if __name__ == "__main__":
+    main()
+

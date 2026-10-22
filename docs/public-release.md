@@ -118,9 +118,11 @@ The release build also requires Xcode and XcodeGen.
 - Keep the maintainer's Team ID consistent in `config/release.xcconfig`,
   `scripts/release.sh`, and `AppUpdater`'s signature requirement. Keep the Developer ID,
   hardened-runtime, timestamp, bundle-ID, Team-ID, and Gatekeeper checks.
-- Publish only the reviewed local `main` revision. Dev and task worktrees are
-  not release sources. Sync the approved main branch with origin only after
-  explicit push authorization; an uploaded tag does not update the main branch.
+- The approved complete local `dev` is the code source; do not select task
+  commits for a release. Build from its fixed prepared commit. After a squash
+  PR produces an exact-tree `main`, run `publish_release.sh` from the reviewed
+  main checkout. Sync main with origin only with explicit push authorization
+  or as part of an explicit release request; a tag does not update main.
 - Release takes Dev's version (`scripts/set_version.py release catch-up-dev`,
   done by `scripts/ship.sh`). Dev's version advances with every merge into dev,
   so it is already newer than the last release. Do not advance Dev merely to
@@ -161,14 +163,37 @@ An explicit release request runs the whole sequence from the dev checkout:
 scripts/ship.sh
 ```
 
-It prepares the version and changelog on dev, runs `scripts/release.sh` on that
-commit, opens and squash-merges a GitHub pull request whose tree is dev's exact
-tree, fast-forwards local main and runs `scripts/publish_release.sh`. It stops
-when Dev's version is not newer than the last release in main's history, when
-`[Unreleased]` is empty, or when merged main's tree differs from dev's. Every
-step skips once done, so a failed run can be repeated.
+It prepares the version and changelog on dev, fixes that dev commit as the
+build source and runs `scripts/release.sh` on it. It opens and squash-merges a
+GitHub pull request whose tree exactly matches that commit, fast-forwards local
+main and runs `scripts/publish_release.sh` from the reviewed main checkout. It
+stops when Dev's version is not newer than the last release in main's history,
+when `[Unreleased]` is empty, or when merged main's tree differs from the fixed
+dev tree. A failed run can be retried subject to the artifact and publication
+checks below; this does not promise recovery of an interrupted notarization.
 
-Packaging is separate from a GitHub publication and repository visibility change.
+A permanent main checkout is not required. `ship.sh` may reuse an existing clean
+main checkout, but does not take ownership of it or automatically clean it up;
+otherwise it creates a temporary one. The release worktree root is
+`$COMMON_DIR/tivano-worktrees.noindex`, derived from the physical Git common-dir.
+It is not Git's `$COMMON_DIR/worktrees` registration directory. Ordinary Hydra
+worktrees remain managed by the app's existing mechanism; this is not an
+app-wide path migration. On success, only safe worktrees created by this run
+are removed. On failure, remaining worktrees and artifacts are preserved;
+reused worktrees are never automatically removed. Releases sharing a common-dir
+are serialized with a temporary lock. A hard interruption may leave that lock;
+confirm no release process remains before removing it, rather than reclaiming it
+automatically. Git inspection failures stop the release or retain the affected
+worktree instead of being treated as a clean state.
+
+Local Dev packaging uses the same source checkout; no separate source directory
+is needed. Packaging, installation, launching, GitHub publication and repository
+visibility changes retain their separate authorization requirements. A merge
+does not authorize packaging or installation. An explicit local package request
+authorizes installing the requested edition, not launching it; a Dev package
+request also authorizes quitting Dev first. Release must not be overwritten
+while running without explicit quit authorization. Public release does not
+install or launch the app, or authorize a visibility change.
 After the owner authorizes publication, `scripts/publish_release.sh` checks
 notes and credits, verifies the stapled DMG, tags the agreed revision, and
 uploads the DMG and release notes. An existing empty, stable draft for the same

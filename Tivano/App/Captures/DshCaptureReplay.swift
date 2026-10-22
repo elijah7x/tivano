@@ -87,12 +87,12 @@ enum DshCaptureReplay {
             var documents: [ThreadDocument] = []
             for row in rows {
                 let matches = original.threads.filter { $0.id == row.threadID }
-                guard matches.count == 1, let thread = matches.first,
+                guard matches.count == 1, let thread = matches.first, let projectID = thread.projectID,
                       thread.provider == .dsh, thread.dshMode?.rawValue == row.mode,
                       thread.title == "DSH probe: \(row.mode)",
                       original.projects.contains(where: { $0.id == thread.projectID && $0.name == "DSH integration probe" })
                 else { throw Failure.missingHistory }
-                if documents.isEmpty { project.id = thread.projectID }
+                if documents.isEmpty { project.id = projectID }
                 let document = try loadDocument(row.threadID, source: source)
                 try validateSynthetic(document)
                 documents.append(document)

@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct GitHubSettingsSection: View {
-    @Environment(AppModel.self) private var model
     private var connection: GitHubConnection { .shared }
 
     var body: some View {
@@ -29,14 +28,6 @@ struct GitHubSettingsSection: View {
                     .padding(.leading, 16)
                     .padding(.trailing, Chrome.rowControlTrailingPadding)
                     .padding(.vertical, 11)
-                    ChromeRowDivider()
-                    ChromeRow(title: "Clone a repository", detail: "Clone one of your repositories and start a thread in it.") {
-                        Button("Clone…") { GitHubClonePanel.shared.present(model: model) }.buttonStyle(.glass)
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(title: "Clone into", detail: (connection.cloneDirectory.path as NSString).abbreviatingWithTildeInPath) {
-                        Button("Change…") { GitHubClonePanel.chooseCloneDirectory() }.buttonStyle(.glass)
-                    }
                 } else if case .checking = connection.phase {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -44,7 +35,7 @@ struct GitHubSettingsSection: View {
                     }
                     .padding(16)
                 } else {
-                    ChromeRow(title: "Connect GitHub", detail: "Clone your repositories and let agents push and open pull requests.") {
+                    ChromeRow(title: "Connect GitHub", detail: "Let agents push and open pull requests.") {
                         EmptyView()
                     }
                     GitHubConnectView().padding(.horizontal, 16).padding(.bottom, 11)

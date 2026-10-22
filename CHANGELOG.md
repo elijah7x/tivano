@@ -8,6 +8,162 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-22
+
+### English
+
+### New features
+
+- New chats can follow the recent model or use a fixed provider and model, and either follow the latest chat's location or start in Tasks. Explicit project creation and project Hydra presets keep their priority.
+- MiniMax Code is available as a CLI provider, using its existing Token Plan login or configured API key. Choose the model's advertised reasoning levels, with the official MCODE vector logo in settings and the composer.
+- Keepsakes in Settings preserves an Early Supporter keepsake on this Mac. Open it to see its line drawing up close, then tap the drop of light hanging above the card: it falls along the ribbon onto the ring and the colour spreads from there across the card, which turns over once to show its back. Open it again any time to read its story and earned date, and click to flip it. The earned timestamp is stored in the edition's app data and Keychain; recovery keeps the earlier timestamp. No account or email binding is required.
+- Cursor Origin repositories can open and merge pull requests with the origin CLI. Source control settings show its sign-in status.
+- Archive search and chat-type and project filters make archived chats easier to find. Chats are grouped by project, and Delete all applies to the filtered selection.
+- Control Tivano from the CLI with Local control in Alpha, off by default. Manually install the command-line entry to browse projects, chats and history, create regular chats, send or continue tasks in idle chats, interrupt active tasks, and read or change a limited set of settings. You can also call it over SSH using the same macOS account; Tivano must already be running with local control enabled.
+- Skylight brings a weather doll to the sidebar, reflecting running, waiting, completed and failed chats. It is drawn as an engraved specimen plate: corner brackets and digit-free ruler ticks frame the doll, a fine crescent shades its head, and a small engraved tag beside it names the weather (Still, Breeze, Overcast, Fair, Drizzle). While awaiting input, a hairline thought cloud drifts in; wind sways the doll and its tag downwind and makes the skirt billow like cloth, and in rain the cloth wilts. The plate's title starts a new chat, and the whole plate highlights on hover and responds to a click. The Thread list title row is gone: focus and search move next to the sidebar button. Turn it off in Appearance > Main Interface to keep a compact new-chat button. Animation pauses when hidden. Skylight hides itself in Performance Mode, and its setting shows it is unavailable there.
+- Today focus: the today-ring button to the left of search at the top of the sidebar shows only threads active since midnight today in your time zone, newest first, each labeled with its project or Task in place of the time (the time stays in the tooltip). Click again to return to Projects and Tasks.
+- The sidebar separates Projects and Tasks. Start a task without choosing a project, with its own persistent workspace, or choose the project for a new chat before sending its first message. New chats remember the current project or task context.
+- The default model in Settings › New chat can also set a reasoning effort, which new chats start with.
+- Name a worktree's branch when you create it from the branch menu, prefilled from the chat title, and rename it later with Rename branch…. Names may use letters (Chinese included), digits and - _ . / up to 60 characters; renaming a pushed branch asks first, since the remote branch and any pull request keep the old name.
+
+### Bug fixes
+
+- MCP secrets no longer appear in process arguments, generated MCP config files are readable only by you, and the local MCP proxy rejects requests from web pages.
+- Copilot requests time out, stopping a reply has a forced-close backstop on every ACP provider and Copilot, and approval cards left by an exited provider are cleared.
+- A library missing its core lists stays read-only instead of being overwritten, recovery saves once, damaged turn files are set aside instead of failing every save, and changes made while MCP shuts down are written on quit.
+- The MCP guide panel no longer swallows Escape from other windows, Push is disabled on a detached checkout, icon-only buttons have VoiceOver labels, and duplicate entries no longer crash the Models page.
+- Chats with damaged workspace records remain in the library, with the affected workspace blocked from running. Recovery preserves the original file and damaged records before saving; repaired chats are not counted as skipped.
+- Project counts in the sidebar only count the chats it shows, no longer helpers or Hydra heads. DeepSeek Harness and other ACP providers no longer report that models could not load when they did.
+- Tool titles, context-compaction notices and agent-process errors from Codex, Command Code, ACP and OpenAI-compatible providers now appear in Chinese when the app language is Chinese.
+- While chats are running, About's install-update button is disabled with a tooltip and becomes available when they finish. A provider that does not start within 90 seconds now fails the turn with a message so it can be sent again.
+- The local MCP proxy limits concurrent connections and request read time, ends upstream forwarding when the local client disconnects, and no longer reports a failed stream as a clean end.
+- MiniMax Code no longer leaves Tivano's permission mode in mcode's global config: Tivano records your own mode before changing it and restores it when its last MiniMax session ends, also after a crash. Model probes no longer touch it, and one failing model no longer fails the whole MiniMax catalog.
+- Deleting an unfinished or unlanded Hydra head now keeps its work as a patch and removes its worktree instead of leaving an orphaned copy.
+- Deleting a chat while a CLI task starts in it releases that task, so quitting and updating are no longer blocked; finished external turns no longer recreate a deleted chat's file.
+- A model picked while the catalog loads is no longer replaced by the default, and reverting a chat with duplicate entries no longer crashes.
+- Expanded work groups in the tree activity view stay open when new replies arrive and keep their page when scrolled back.
+- Skylight stops animating while the sidebar is collapsed or covered by Settings, and count changes no longer restart its loop. An expanded keepsake no longer drifts when the Settings page scrolls.
+- Keepsakes are not granted or overwritten while Keychain cannot be read; damaged copies are backed up before repair. A ready CLI worktree whose checkout is missing fails instead of running in the project folder.
+- The default-model picker opens one provider's models at a time, keeps cached models usable when refresh fails, and shows complete errors with a retry action.
+- Claude and Copilot stop before sending when permission changes cannot be confirmed; Pi stops when its permission gate cannot be saved. Copilot actions that need approval now reach the approval UI instead of sending a null decision.
+- Add to reply now quotes the text selected when its menu opens, falling back to the full message only when no valid selection belongs to that message. Different fragments can be quoted separately, while duplicate fragments are ignored.
+- MiniMax Code 0.6.12 Token Plan sessions avoid invalid empty model variants. Model changes clear unavailable reasoning levels, and startup failures appear once with actionable guidance.
+- Recognize OpenCode's newer credential table, clarify Z.ai's GLM Coding Plan key requirements, and preserve Command Code's credit-error details.
+- The built-in terminal selects a genuinely monospaced font, keeping Latin characters, Chinese text and the cursor aligned.
+- Offline source-directory migration preserves file permissions and empty directories when run by a private background task, including when restoring local changes or rolling back.
+- An interrupted checkout migration can restore local edits before its recovery worktree exists, and briefly waits for transient repository access to finish before checking the frozen snapshot again.
+- Migration verification leaves Git's index unchanged, avoiding false alarms from its own file-stat refreshes.
+- API keys are no longer saved unencrypted when the Keychain refuses them. Settings shows the failure, keys an earlier version left unencrypted move into the Keychain, and a key read from your shell environment is labeled as such.
+- A library file with a few unreadable entries loads everything else, keeping the original and the unreadable entries in separate files; a damaged file falls back to the copy saved at the last launch.
+- Fixed queued follow-ups churning while a local-control task waited, headings and lists keeping old formatting when only their structure changed, stopped API replies being recorded as complete, multi-line events in OpenAI-compatible streams, and conflict file names with unusual characters after a Hydra landing.
+- Performance Mode no longer turns Clearer glass off permanently.
+- DeepSeek Harness no longer fails to load models or start chats with “Internal error” when its desktop profile includes the Inspector plugin; Tivano drops plugins that need desktop-only services. Its errors now include the underlying reason.
+- Collapsing or opening the sidebar no longer flashes a second sidebar button at the window's left edge.
+- Locally packaged Release builds no longer carry Xcode's debugger entitlement, and keep microphone access for voice input through explicit Release entitlements.
+
+### Refinements
+
+- Skylight skips its status scan while hidden, and status, activity-tree and working-indicator summaries now use a single pass, reducing main-thread work.
+- After downgrading from 2.0 to 1.x, standalone tasks disappear from the sidebar; their data stays on disk and returns after upgrading again.
+- Settings pages breathe more: sections sit further apart, each provider and model group reads as its own unit, and headers stay close to what they title. About gains a Version information heading, and a new release's card pushes the rest down instead of leaving a gap. Popovers keep their compact spacing.
+- Theme names always show their English names, and provider cards show version and update notes as plain secondary text without orange or bold.
+- Project icons now offer 155 curated emoji in eight categories, with Chinese and English keyword search, search examples and a clear no-results message.
+- Text generation settings now sit in General above Power. GitHub repository cloning and its entry points have been removed; GitHub sign-in remains available.
+- Local packages, install backups and product captures now stay outside source checkouts. Each capture uses a fresh output directory without clearing earlier runs; design candidates and historical deliveries are archived separately from maintained assets.
+- Projects and Tasks each collapse from their headers and remember their state. Sidebar section headers share one type style and aligned left and right edges, with tighter spacing between sections. Use the + beside Projects to add a project; the bottom Add project row is removed. Tasks are no longer grouped by day. The sidebar toggle is smaller inside the sidebar and keeps its round tray in the toolbar when the sidebar is hidden.
+- Project names in new chats use the theme color to make switching clearer. Edit project icons from the sidebar context menu; existing icons are preserved, and the old project activation and marks settings are removed.
+
+- Cached chats keep their layout while hidden, avoiding repeated message measurement when the sidebar opens or closes. Hidden composers pause change-stat refreshes, and hidden Hydra progress bars pause their animation and release animation slots.
+- Hydra settings now put model pairs before head options and clarify when the default reasoning-effort limit applies. Codex history keeps its archive choice on the page, with restrictions in help; static run-location cards have been removed.
+- Finished Hydra heads now leave their panels automatically, and their sidebar cards and folded counts disappear when the whole team finishes. Reports remain in the chat’s completion cards; the two display settings have been removed.
+- Local development and releases can share one long-lived source checkout. Offline consolidation preserves local work and project bindings with backups and a rollback path.
+- Long replies finish without parsing their text again on the main thread, and the newest replies are prepared first when a long chat opens. Idle chats save in the background before they are released.
+- Keepsakes stops animating once still and respects Performance Mode. Finished network transfers and MCP proxy connections close promptly, with limits on oversized requests and responses.
+- Settings search understands Chinese page names, and the Hydra, model, CLI update, archive, shortcut and Alpha descriptions say more precisely what they do. Today no longer lists helper and panel chats.
+- The sidebar always opens at launch; the Open the sidebar at launch setting is removed. Closing it lasts for the session.
+- The sidebar header's today ring, search and sidebar buttons share one optical size and line weight, and the sidebar button gets the same hover circle. Every glyph in the sidebar and chat toolbars uses the same ink color. Projects without a custom icon use a lighter two-tone folder.
+- Clickable parts of Keepsakes show the pointing-hand cursor, and Skylight's hover wash has square corners matching its corner brackets.
+- A keepsake now opens from and returns to the branch smoothly, without a jump on landing. The branch sways for a few seconds after you open Keepsakes, then rests and stops redrawing until you hover the keepsake.
+
+### 简体中文
+
+### 新功能
+
+- 新对话可沿用最近选择或固定使用指定服务商和模型，并选择跟随最近会话的位置或创建独立任务；明确从项目新建及项目 Hydra 预设仍优先。
+- 新增 MiniMax Code CLI 服务商，沿用现有 Token Plan 登录态或已配置的 API key。可选择模型实际提供的推理档位，设置与输入框使用官方 MCODE 矢量 Logo。
+- 设置新增“信物”，在本机保存早期支持者信物。打开后可先细看线稿，再点卡片上方悬着的那滴光：它沿飘带落到挂环上，颜色从那里在卡片上晕开，随后卡片自动翻面一次展示背面。之后随时打开可查看描述与获得日期，点击即可翻面。获得时间同时保存在当前版本的应用数据和钥匙串中，恢复时保留较早的时间戳，无需账号或绑定邮箱。
+- Cursor Origin 仓库可通过 origin CLI 创建和合并拉取请求，源代码管理设置中可查看登录状态。
+- 归档页新增搜索、对话类型和项目筛选，并按项目分组；“全部删除”仅作用于筛选后显示的对话。
+- 实验室新增 CLI 本机外部控制，默认关闭。手动安装命令入口后，可查看项目、会话与历史，创建普通会话，向空闲会话发送或继续任务，中断活动任务，以及读取或修改少量配置。也可通过 SSH 使用同一 macOS 账户调用；Tivano 必须已运行且开启本机外部控制。
+- 侧栏新增“晴天窗”，晴天娃娃用天气提示对话的运行、待处理、完成和出错状态。画面是一张铜版雕刻风格的标本板：四角括线与无数字刻度框住娃娃，头部以一弯细月牙表现明暗，旁边的手刻小吊牌写着当前天气（Still、Breeze、Overcast、Fair、Drizzle）。等待输入时，细线思绪云缓缓飘入；风吹时娃娃和吊牌顺风摇摆，裙摆像布料一样鼓起，下雨时布料湿垂。左上角的“新对话”可开启新对话，悬停时整块标本板高亮，点击任意位置均可。原“对话列表”标题行已移除，聚焦和搜索移到侧栏按钮旁。可在“外观 > 主界面”关闭，关闭后保留新对话图标。不可见时暂停动画；性能模式下自动隐藏，设置中也会提示此时不可用。
+- 今日聚焦：侧栏顶部搜索左侧的今日环按钮只显示系统时区今天 0 点以来活跃的对话，按最新排序，右侧以项目名或“任务”标签代替时间（悬停可查看时间）；再点一次回到项目和任务。
+- 侧边栏分为“项目”和“任务”。无需选择项目即可创建任务，并拥有持久保留的独立工作目录；新会话可在发送第一条消息前选择项目或独立任务，后续新建会话沿用当前归属。
+- 设置 › 新对话的默认模型可同时设置推理强度，新对话将以该强度开始。
+- 从分支菜单新建 worktree 时可为分支命名（默认取自对话标题），之后也可通过“重命名分支…”修改。名称可包含字母（含中文）、数字和 - _ . /，最多 60 个字符；重命名已推送的分支前会先确认，因为远端分支和拉取请求仍保留旧名称。
+
+### 问题修复
+
+- MCP 密钥不再出现在进程参数里，生成的 MCP 配置文件只对当前用户可读；本地 MCP 代理拒绝来自网页的请求。
+- Copilot 请求增加超时，停止回复在所有 ACP provider 和 Copilot 上都有强制关闭兜底；provider 退出后残留的确认卡片会被收起。
+- 资料库缺失关键字段时保持只读而不是被覆盖，恢复后只保存一次；损坏的轮次文件会被移到一旁，不再让对话一直保存失败；退出时 MCP 关闭期间的改动也会写入。
+- MCP 引导面板不再吞掉其他窗口的 Escape；detached 状态下禁用推送；图标按钮补齐读屏标签；模型设置页遇到重复数据不再崩溃。
+- workspace 记录损坏时保留会话，并阻止异常 workspace 执行。恢复前保留原文件及损坏记录，已恢复的会话不再计入跳过数量。
+- 项目旁的数字只统计侧栏里可见的对话，不再把子智能体和 Hydra head 算进去。DeepSeek Harness 等 ACP provider 在模型已加载时不再误报“无法加载模型”。
+- 补齐了 Codex、Command Code、ACP 和 OpenAI 兼容接口里的工具标题、上下文压缩提示与 Agent 进程错误等文案的中文。
+- 有对话在进行时，关于页的安装更新按钮置灰并提示原因，对话结束后可用。Provider 启动超过 90 秒没响应时，这一轮会报错结束，可以直接重发。
+- 本地 MCP 代理限制同时连接数和请求读取时间，本地连接断开时一并结束上游转发；上游中途出错时不再假装正常结束。
+- MiniMax Code 不再把 Tivano 的权限模式留在 mcode 全局配置里：修改前先记下你原来的模式，最后一个 MiniMax 会话结束时写回，崩溃后也会补写。探测模型不再改动它；单个模型探测失败也不再让整个模型列表加载失败。
+- 删除未完成或未落地的 Hydra head 时，会先把改动存为补丁再删除其 worktree，不再留下孤立副本。
+- CLI 任务启动途中删除对话会释放该任务，退出和更新不再被一直挡住；外部回合结束也不会再重建已删除对话的文件。
+- 模型列表加载期间手动选的模型不再被默认模型覆盖；回退含重复记录的对话不再崩溃。
+- 树状活动视图里手动展开的工作组，收到新回复时保持展开，滚动回来时保留已加载的步骤。
+- 侧栏收起或被设置页遮住时 Skylight 停止动画，数量变化不再让动画从头开始。设置页滚动时，放大的纪念物不再错位。
+- 钥匙串无法读取时不会发放或覆盖纪念物，损坏的副本会先备份再修复。CLI 创建的 worktree 显示已就绪但目录丢失时，会报错而不是在项目目录里执行。
+- 默认模型选择器按服务商分步加载；刷新失败时仍可选择已载入模型，错误提示完整换行，并提供重试。
+- Claude、Copilot 权限切换未获确认时停止发送，Pi 权限门禁保存失败时也不再继续发送；同时修复 Copilot 未正确进入人工审批的问题。
+- “添加到回复”现在引用打开菜单时选中的文字；没有属于当前消息的有效选区时才引用全文。同一消息的不同片段可以分别引用，重复片段不会再次添加。
+- MiniMax Code 0.6.12 的 Token Plan 会话会避开无效的空模型变体；切换模型时清除已不可用的推理档位，启动失败仅提示一次，并给出处理建议。
+- 兼容 OpenCode 新版凭据表格，明确 Z.ai 的 GLM Coding Plan 密钥要求，并保留 Command Code 返回的额度错误详情。
+- 内置终端选择真正的等宽字体，让英文字符、中文和光标保持对齐。
+- 离线源码目录迁移通过后台任务运行时，会保留文件权限和空目录；恢复本地改动和回退时也会精确保留这些信息。
+- 源码目录迁移即使在恢复工作树创建前中断，也能还原本地改动；短暂的仓库访问结束后，会重新核对冻结快照再继续。
+- 迁移校验不会改写 Git 索引，避免因自身刷新文件状态而误判有外部改动。
+- 钥匙串拒绝保存时，API 密钥不再以明文保存；设置中会提示失败，旧版本留下的明文密钥会迁入钥匙串，来自 shell 环境的密钥也会注明来源。
+- 资料库文件中个别条目无法读取时，其余内容照常加载，原文件和无法读取的条目分别另存；文件整体损坏时，改用上次启动时保存的副本。
+- 修复：本地控制任务等待时排队追加消息反复空转；仅结构变化的标题和列表保留旧格式；已停止的 API 回复被记为完成；OpenAI 兼容流式接口的多行事件；Hydra 落地后含特殊字符的冲突文件名。
+- 性能模式不再永久关闭“更通透的玻璃”。
+- DeepSeek Harness 的桌面配置包含 Inspector 插件时，不再出现模型加载失败或对话报“Internal error”；Tivano 会跳过依赖桌面端服务的插件，错误信息也会附带具体原因。
+- 收起或展开侧栏时，窗口左侧不再闪现第二个侧栏按钮。
+- 本地打包的 Release 版本不再带有 Xcode 的调试器授权，并通过显式 Release 授权文件保留语音输入所需的麦克风权限。
+
+### 优化改进
+
+- 侧栏 Skylight 在隐藏时不再计算状态，状态汇总与活动树、进行中指示器改为一次遍历，减少主线程开销。
+- 从 2.0 降级回 1.x 后，独立任务会从侧栏消失；数据仍保留在磁盘上，可重新升级找回。
+- 设置页更有呼吸感：板块之间间距加大，每个服务商和模型分组自成一组，标题紧贴所属内容。“关于”新增“版本信息”标题，有新版本时更新卡片会把下方内容推下去，不再留下空白。弹出层保持原有的紧凑间距。
+- 主题名称始终显示英文原名；provider 卡片里的版本与更新说明改为普通灰色文字，不再橙色高亮或加粗。
+- 项目图标精选扩充至 155 个 emoji，按八类用途分组，支持中英文关键词搜索，并提供搜索示例和明确的无结果提示。
+- 文本生成设置移到“通用”的“电源”上方。移除 GitHub 仓库克隆功能及所有入口，保留 GitHub 登录。
+- 本地安装包、安装备份和产品截图改存源码目录外。每次截图使用全新目录，不再清空历史记录；设计候选稿和历史交付资料与维护中的正式资源分开归档。
+- “项目”和“任务”均可点击标题折叠，并记住展开状态。侧栏各分区标题统一字样、左右边缘对齐，分区间距更紧凑。添加项目统一使用“项目”旁的 +，移除底部“添加项目”行；任务不再按日期分组。侧栏内的收起按钮更小，侧栏隐藏时，工具栏中的按钮仍保留圆形底托。
+- 新会话中的项目名使用主题色，切换入口更明显。项目图标改从侧栏右键菜单编辑，保留已有图标，并移除原项目启停和标记设置。
+
+- 缓存会话隐藏时保留布局，减少侧边栏展开、收起时的消息重复测量。隐藏输入框暂停改动统计刷新，隐藏 Hydra 进度条暂停动画并释放动画名额。
+- Hydra 设置将“组合”移到子智能体选项前，并说明默认推理强度限制的生效条件。Codex 历史仅保留归档选项，限制说明移入帮助弹窗，移除了常驻的运行位置说明卡片。
+- Hydra 子智能体完成后自动收起面板，团队全部结束后，侧边栏卡片和折叠数量摘要也会隐藏。工作报告仍可从聊天中的完成卡片查看，并移除了对应的两个显示设置。
+- 本地开发与发版可共用一个长期源码目录。离线迁移会备份并保留本地工作和项目绑定，同时提供回退入口。
+- 长回复结束时不再在主线程重新解析全文，打开长对话时优先准备最新回复；闲置对话在后台保存后再释放。
+- 信物页静止后停止动画并遵循性能模式；网络传输和 MCP 代理连接结束后及时关闭，并限制过大的请求和响应。
+- 设置搜索支持中文页面名称，Hydra、模型、CLI 更新、归档、快捷键和实验室的说明更准确；今日聚焦不再列出辅助对话和面板对话。
+- 侧栏每次启动都会展开，移除“启动时展开侧栏”设置；手动收起只在本次运行内有效。
+- 侧栏顶部的今日环、搜索和侧栏按钮统一视觉尺寸与线重，侧栏按钮也有相同的悬停圆底；侧栏与对话顶栏的所有图标颜色一致。未设置图标的项目改用更轻的双色文件夹。
+- 信物页可点击处显示手形光标；晴天窗的悬停底色改为直角，与四角刻线对齐。
+- 信物展开和收回时从枝条上平滑起落，落回时不再跳动。进入信物页后枝条只摆动几秒便静止并停止重绘，鼠标移到信物上会再次轻摆。
+
+### Thanks
+
+- No outside contributors.
+
 ## [1.4.0] - 2026-10-18
 
 ### English

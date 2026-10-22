@@ -91,6 +91,7 @@ struct QuestionSheet: View {
                                 .frame(width: index == page ? 18 : 6, height: 6)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("Question %lld of %lld"), index + 1, count)))
                     }
                     Spacer()
                     Text(verbatim: String(format: Chrome.localized("%d of %d"), page + 1, count))
@@ -129,6 +130,7 @@ struct QuestionSheet: View {
                     .buttonStyle(.bordered)
                     .disabled(page == 0)
                     .help("Previous question")
+                    .accessibilityLabel(Text(verbatim: Chrome.localized("Previous question")))
                 }
                 if unanswered > 0 {
                     Text(verbatim: unanswered == 1 ? Chrome.localized("1 question still to answer") : String(format: Chrome.localized("%d questions still to answer"), unanswered))

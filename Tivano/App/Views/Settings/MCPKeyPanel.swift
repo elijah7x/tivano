@@ -82,6 +82,7 @@ struct MCPKeyPanelView: View {
                     .foregroundStyle(Chrome.secondaryText)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(Text(verbatim: Chrome.localized("Close")))
         }
     }
 
@@ -150,6 +151,7 @@ struct MCPKeyPanelView: View {
                             .foregroundStyle(Chrome.secondaryText)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(Text(verbatim: Chrome.localized("Choose a file or folder")))
                 }
             }
             .padding(.horizontal, 8)

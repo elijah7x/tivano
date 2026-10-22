@@ -403,14 +403,14 @@ private struct HydraHeadTranscript: View {
     var body: some View {
         let runtime = model.runtime(for: head.id)
         let project = model.project(head.projectID)
-        let directory = project.map { head.executionDirectory(projectPath: $0.path) } ?? workingDirectory
+        let directory = (try? model.executionDirectory(for: head)).flatMap { $0.isEmpty ? nil : $0 }
         Group {
             if model.settings.hydraShowsHeadDetails {
                 ThreadTimeline(
                     runtime: runtime,
                     scrollChrome: scrollChrome,
                     scrollState: scrollState,
-                    projectName: project?.name ?? projectName,
+                    projectName: project?.name ?? (head.affiliation == .standalone ? Chrome.localized("Task") : nil),
                     workingDirectory: directory,
                     supportsRewind: false,
                     columnHeight: height,
@@ -433,6 +433,7 @@ private struct HydraHeadTranscript: View {
                         JumpToLatestButton(scrollState: scrollState)
                     }
             } else if let stored = head.hydra {
+                ThreadDirectoryError(threadID: head.id)
                 HydraHeadFooter(info: HydraLiveInfo.shown(stored, runtime))
                     .overlay(alignment: .top) {
                         JumpToLatestButton(scrollState: scrollState)

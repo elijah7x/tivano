@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tivano · 信物</title>
+<style>
+
+*{box-sizing:border-box}body{margin:0;padding:32px;background:#d6dad6;color:#252727;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif}button{font:inherit;color:inherit;cursor:pointer}button:focus-visible{outline:2px solid #7ba58f;outline-offset:5px}.toolbar{width:900px;max-width:100%;margin:0 auto 12px;display:flex;justify-content:flex-end}.glass{font-size:12px;border:1px solid #7ba58f55;border-radius:99px;padding:7px 12px;background:#7ba58f35;box-shadow:inset 0 1px #ffffff30}.window{position:relative;display:flex;width:900px;max-width:100%;height:720px;margin:auto;overflow:hidden;border-radius:16px;border:1px solid #ffffffaa;background:linear-gradient(140deg,#e4ebe6,#f5f6f3 65%,#e8ede8);box-shadow:0 16px 40px #24362b18;--text:#252727;--secondary:rgba(37,39,39,.7);--card:#ffffff40;--edge:#ffffff90;--divider:#25272712;--ink:#647e6e;--veil:#eef2ed60;color:var(--text)}.window.dark{background:linear-gradient(140deg,#29332e,#1e1e20 65%,#242b27);--text:#f0f0ee;--secondary:rgba(240,240,238,.7);--card:#ffffff07;--edge:#ffffff12;--divider:#ffffff12;--ink:#a2bbaa;--veil:#20292360;border-color:#ffffff20}.sidebar{width:212px;flex-shrink:0;padding:16px 10px;background:#7ba58f08}.traffic{display:flex;gap:9px;padding-left:8px;height:28px}.traffic i{width:14px;height:14px;border-radius:50%;background:#ff6058}.traffic i:nth-child(2){background:#ffbd2e}.traffic i:nth-child(3){background:#28c840}.search{height:28px;margin-top:14px;padding:6px 10px;border-radius:7px;background:var(--divider);color:var(--secondary);font-size:12px}.nav{list-style:none;padding:0;margin:12px 0}.nav li{height:28px;padding:4px 8px;margin-bottom:1px;font-size:13px;display:flex;align-items:center;gap:9px;border-radius:7px}.nav .selected{background:#7ba58f30}.nav svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;opacity:.75}.detail{min-width:0;padding:26px 24px 24px;flex:1;background:#ffffff20}.dark .detail{background:#00000018}h1{font-size:22px;font-weight:600;line-height:28px;margin:0 0 12px}.intro{font-size:12px;color:var(--secondary);margin:0}.overlay{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:var(--veil);backdrop-filter:blur(0px);opacity:0;transition:opacity .38s ease,backdrop-filter .38s ease}.overlay[hidden]{display:none}.overlay.open{opacity:1;backdrop-filter:blur(12px)}.viewer{width:320px;text-align:center}.flight{width:320px;height:320px;transform-origin:center}.flip{display:block;width:100%;height:100%;border:0;padding:0;background:none;perspective:1100px;border-radius:16px}.faces{position:relative;display:block;width:100%;height:100%;transform-style:preserve-3d;transition:transform .7s ease}.flipped .faces{transform:rotateY(180deg)}.face{position:absolute;inset:0;width:100%;height:100%;backface-visibility:hidden;-webkit-backface-visibility:hidden;pointer-events:none}.back{transform:rotateY(180deg)}.metadata{margin-top:10px;opacity:0;transition:opacity .3s ease}.open .metadata{opacity:1;transition-delay:.25s}.name{font-size:13px;font-weight:500;margin:0 0 8px}.date{font-size:11px;color:var(--secondary);margin:0}.hint{font-size:11px;color:var(--secondary);margin:22px 0 0;opacity:0;transition:opacity .8s ease}.hint.visible{opacity:1}.close{position:absolute;top:18px;right:18px;width:28px;height:28px;border:1px solid var(--divider);border-radius:50%;background:var(--card);color:var(--secondary);font-size:18px;line-height:24px}.closing .metadata{opacity:0;transition-delay:0s}@media(max-width:700px){body{padding:16px}.sidebar{width:158px}.detail{padding:26px 16px}.card{padding:0 18px}.nav li{font-size:12px}.window{min-width:520px}.toolbar{min-width:520px}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important}.flight{will-change:auto}}
+
+
+h1{margin-bottom:10px}.intro{line-height:18px}.note{font-size:11px;line-height:16px;color:var(--secondary);opacity:.75;margin:7px 0 0}
+.card{position:relative;isolation:isolate;height:420px;margin-top:20px;overflow:hidden;border-radius:16px;border:1px solid var(--edge);background:linear-gradient(145deg,#fffef940,#e5eee51a 60%,#d7e3d329)}
+.dark .card{background:linear-gradient(145deg,#c6d4bd05,#758e7506 60%,#a1b8990b)}
+.scene,.dots{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;color:var(--ink)}
+.dots{color:#71856a}.dark .dots{color:#c0d4b5}
+.scene path,.scene ellipse{vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}
+.sketch{fill:none;stroke:currentColor;stroke-width:.65;opacity:.09}.dark .sketch{opacity:.12}
+.branch{fill:currentColor;opacity:.76}.branch .pencil{fill:none;stroke:currentColor;stroke-width:.6;opacity:.19}
+.attached{fill:currentColor;opacity:.65}.attached .midrib{fill:none;stroke:#edf2e9;stroke-width:.65;opacity:.65}.dark .attached .midrib{stroke:#dce8d9;opacity:.55}
+.wind{fill:none;stroke:currentColor;stroke-width:.7;opacity:.13}.loose{fill:currentColor;fill-opacity:.14;stroke:currentColor;stroke-width:.75;opacity:.35;transform-box:fill-box;transform-origin:center}
+.drift-one{animation:drift 18s ease-in-out -3s infinite}.drift-two{animation:drift 20s ease-in-out -12s infinite}
+@keyframes drift{from{transform:translate(-9px,-22px) rotate(-12deg)}to{transform:translate(19px,66px) rotate(34deg)}}
+.hanging{position:absolute;left:44%;top:calc(100% * 133 / 420);width:116px;height:143px;margin-left:-58px;transform-origin:58px 0;animation:sway 3s ease-in-out infinite alternate;will-change:transform}
+.ribbon{position:absolute;top:0;left:58px;width:1px;height:33px;background:var(--ink);opacity:.48}
+.thumbnail{position:absolute;left:0;top:27px;width:116px;height:116px;padding:0;border:0;background:none}.thumbnail img{display:block;width:100%;height:100%}
+@keyframes sway{from{transform:rotate(-3deg)}to{transform:rotate(3deg)}}
+.branch-tip{transform-origin:0px 133px;animation:tip-sway 3s ease-in-out infinite alternate}
+@keyframes tip-sway{from{transform:rotate(-.35deg)}to{transform:rotate(.35deg)}}
+
+@keyframes draw{to{stroke-dashoffset:0}}
+.description{font-size:11px;line-height:19px;color:var(--secondary);margin:12px 0 0}.hint{margin-top:20px}.flip{border-radius:0}
+body:not(.kbd) :focus-visible{outline:none}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}.hanging{will-change:auto}}
+</style>
+</head>
+<body>
+<div class="toolbar"><button class="glass" id="theme" aria-pressed="false">深色外观</button></div>
+<div class="window" id="window">
+<aside class="sidebar" aria-label="设置导航"><div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div><div class="search">搜索设置</div><ul class="nav" id="nav"></ul></aside>
+<main class="detail"><h1>信物</h1><p class="intro">保存一路相伴的信物。</p><p class="note">点开可查看每一枚的描述</p><section class="card" aria-label="枝头悬挂的信物">
+<svg class="dots" viewBox="0 0 638 420" preserveAspectRatio="none" aria-hidden="true"><defs><radialGradient id="fade" cx="100%" cy="100%" r="85%"><stop stop-color="white" stop-opacity=".65"/><stop offset=".8" stop-color="white" stop-opacity="0"/></radialGradient><mask id="dot-fade"><rect width="638" height="420" fill="url(#fade)"/></mask></defs><g id="dot-field" fill="currentColor" mask="url(#dot-fade)"></g></svg>
+<svg class="scene" viewBox="0 0 638 420" preserveAspectRatio="none" aria-hidden="true">
+<g class="sketch"><path d="M-12 331 Q171 298 320 318 T661 292 M21 338 Q204 313 343 326 M116 70 Q278 27 443 102 M123 73 Q261 39 347 67 M482 265 Q448 333 507 396 M502 263 Q476 333 527 373"/><path d="M43 273 L99 279 M72 251 L69 304 M377 56 L391 84"/></g>
+<g class="branch-tip">
+<g class="branch">
+<path d="M-12 141 C26 136 57 134 88 130 L92 128 L96 130 C124 123 155 124 182 126 L188 125 L191 127 C220 130 247 131 270 131 Q281 132 292 131 C314 128 337 133 353 135 L358 134 L361 136 Q394 139 435 132 Q398 143 360 139 L355 140 L351 138 C330 137 313 132 292 135 Q281 134 270 135 C243 136 217 133 191 132 L186 133 L181 131 C150 129 124 130 97 135 L92 137 L88 136 C54 142 23 143 -12 150 Z"/>
+<path d="M89 133 Q101 116 103 104 L102 88 Q105 96 106 101 Q110 97 118 93 Q112 100 107 105 Q104 122 94 135 Z M207 130 Q221 117 229 105 L237 91 Q234 102 230 109 Q237 108 245 108 Q237 111 228 113 Q223 124 211 133 Z M350 136 Q365 150 380 155 Q364 154 352 140 Z"/>
+<path class="pencil" d="M-5 152 Q55 142 92 140 Q138 130 179 134 M195 135 Q237 139 267 138 Q282 137 297 138 Q323 135 343 140"/>
+</g>
+<g class="attached"><path d="M105 104 Q88 102 91 88 Q103 89 105 104 M118 93 Q117 77 131 76 Q131 87 118 93 M231 104 Q223 90 237 85 Q243 98 231 104 M380 155 Q394 147 402 160 Q389 166 380 155"/><path class="midrib" d="M104 102 Q98 97 94 92 M119 91 Q125 85 128 80 M232 102 Q235 95 236 89 M383 155 Q390 158 398 159"/></g>
+</g>
+<g class="wind"><path d="M339 197 Q390 177 443 188 T558 178 M400 241 Q455 216 499 223 T618 208 M464 295 Q522 270 597 279"/></g>
+<g class="loose drift-one"><path d="M401 188 Q408 172 423 179 Q418 193 401 188 M402 187 L419 180"/></g>
+<g class="loose drift-two"><path d="M533 256 Q548 244 556 257 Q544 265 533 256 M535 256 L552 256"/></g>
+<defs><linearGradient id="wrist-ink" gradientUnits="userSpaceOnUse" x1="420" y1="375" x2="461" y2="418"><stop stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0"/></linearGradient><mask id="wrist-fade" maskUnits="userSpaceOnUse" x="338" y="288" width="146" height="136"><rect x="338" y="288" width="146" height="136" fill="url(#wrist-ink)"/></mask></defs>
+
+</svg>
+<div class="hanging"><span class="ribbon" aria-hidden="true"></span><button class="thumbnail" id="thumbnail" aria-haspopup="dialog" aria-label="查看早期支持者信物，获得于 2026 年 10 月 20 日"><img data-face="front" src="../early-supporter/front-lit.svg" alt="早期支持者信物"></button></div>
+</section></main>
+<div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-labelledby="badge-name" aria-describedby="badge-description" hidden><button class="close" id="close" aria-label="关闭徽章">×</button><div class="viewer"><div class="flight" id="flight"><button class="flip" id="flip" aria-label="翻看徽章背面"><span class="faces"><img class="face front" data-face="front" src="../early-supporter/front-lit.svg" alt="早期支持者徽章正面"><img class="face back" data-face="back" src="../early-supporter/back-lit.svg" alt="早期支持者徽章背面"></span></button></div><div class="metadata"><p class="name" id="badge-name">早期支持者</p><p class="date">获得于 2026 年 10 月 20 日</p><p class="description" id="badge-description">赠予 2026 年最早同行的人。风还没起，你已经在这里。</p><p class="hint" id="hint">点击翻面</p></div></div></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const win=$('window'),overlay=$('overlay'),thumb=$('thumbnail'),flight=$('flight'),flip=$('flip'),hint=$('hint');
+const reduce=matchMedia('(prefers-reduced-motion: reduce)');
+let busy=false,hintTimer,flightAnimation,opener=thumb;
+for(const name of ['通用','外观','提供商','模型','Hydra','MCP','源代码管理','快捷键','归档','实验室','信物','关于']){
+ const li=document.createElement('li');
+ li.innerHTML='<svg viewBox="0 0 20 20" aria-hidden="true">'+(name==='信物'?'<path d="M7 3h6l4 5v9H3V8Z M10 5v3"/>':'<rect x="4" y="4" width="12" height="12" rx="3"/>')+'</svg>';
+ li.append(name);if(name==='信物'){li.className='selected';li.setAttribute('aria-current','page')}$('nav').append(li);
+}
+const field=$('dot-field');
+for(let y=168;y<420;y+=10){for(let x=198;x<638;x+=10){
+ const dot=document.createElementNS('http://www.w3.org/2000/svg','circle');
+ const strength=Math.max(0,1-Math.hypot((638-x)/440,(420-y)/300));
+ dot.setAttribute('cx',x);dot.setAttribute('cy',y);dot.setAttribute('r',.3+strength*.85);dot.setAttribute('opacity',.12+strength*.2);field.append(dot);
+}}
+$('theme').onclick=()=>{const dark=win.classList.toggle('dark');$('theme').textContent=dark?'浅色外观':'深色外观';$('theme').setAttribute('aria-pressed',String(dark));document.querySelectorAll('[data-face]').forEach(img=>{img.src='../early-supporter/'+img.dataset.face+'-lit'+(dark?'-dark':'')+'.svg'})};
+const root=document.documentElement,hanging=document.querySelector('.hanging');
+function syncVisibility(){
+ root.classList.toggle('page-hidden',document.hidden);
+ if(flightAnimation&&['running','paused'].includes(flightAnimation.playState)){
+  if(document.hidden)flightAnimation.pause();else flightAnimation.play();
+ }
+}
+document.addEventListener('visibilitychange',syncVisibility);syncVisibility();
+reduce.addEventListener('change',()=>{if(reduce.matches&&flightAnimation)flightAnimation.finish()});
+function thumbnailTransform(){
+ const a=thumb.getBoundingClientRect(),b=flight.getBoundingClientRect();
+ const matrix=new DOMMatrixReadOnly(getComputedStyle(hanging).transform);
+ const angle=Math.atan2(matrix.b,matrix.a)*180/Math.PI;
+ return `translate(${a.x+a.width/2-b.x-b.width/2}px,${a.y+a.height/2-b.y-b.height/2}px) rotate(${angle}deg) scale(${thumb.offsetWidth/flight.offsetWidth})`;
+}
+function setBackgroundInert(value){document.querySelector('.sidebar').inert=value;document.querySelector('.detail').inert=value;$('theme').disabled=value}
+async function openBadge(event){
+ if(busy)return;opener=event.currentTarget;busy=true;root.classList.add('badge-open');overlay.hidden=false;flip.classList.remove('flipped');flip.setAttribute('aria-label','翻看徽章背面');
+ const start=thumbnailTransform();thumb.style.visibility='hidden';setBackgroundInert(true);
+ overlay.classList.add('open');flip.focus();
+ flightAnimation=flight.animate([{transform:start},{transform:'none'}],{duration:reduce.matches?0:520,easing:'cubic-bezier(.22,.7,.2,1)'});
+ syncVisibility();await flightAnimation.finished;busy=false;hint.classList.add('visible');hintTimer=setTimeout(()=>hint.classList.remove('visible'),3000);
+};
+thumb.onclick=openBadge;
+async function closeBadge(){
+ if(overlay.hidden||busy)return;busy=true;clearTimeout(hintTimer);hint.classList.remove('visible');overlay.classList.add('closing');overlay.classList.remove('open');
+ flip.classList.remove('flipped');
+ const target=thumbnailTransform();flightAnimation=flight.animate([{transform:'none'},{transform:target}],{duration:reduce.matches?0:520,easing:'cubic-bezier(.4,0,.2,1)',fill:'forwards'});
+ syncVisibility();await flightAnimation.finished;overlay.hidden=true;flightAnimation.cancel();overlay.classList.remove('closing');thumb.style.visibility='';root.classList.remove('badge-open');setBackgroundInert(false);opener.focus();busy=false;
+}
+flip.onclick=()=>{if(busy)return;const back=flip.classList.toggle('flipped');flip.setAttribute('aria-label',back?'翻看徽章正面':'翻看徽章背面');hint.classList.remove('visible');clearTimeout(hintTimer)};
+$('close').onclick=closeBadge;overlay.onclick=e=>{if(!e.target.closest('.viewer')&&!e.target.closest('.close'))closeBadge()};
+document.addEventListener('keydown',e=>{if(overlay.hidden)return;if(e.key==='Escape'){e.preventDefault();closeBadge()}if(e.key==='Tab'){e.preventDefault();(document.activeElement===flip?$('close'):flip).focus()}});
+
+document.addEventListener('keydown',e=>{if(e.key==='Tab')document.body.classList.add('kbd')});document.addEventListener('mousedown',()=>document.body.classList.remove('kbd'));
+</script>
+</body>
+</html>

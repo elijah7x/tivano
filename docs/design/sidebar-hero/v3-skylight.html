@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hero v3 · Skylight</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100dvh;padding:32px 24px;color:#26323c;font:13px -apple-system,'PingFang SC',sans-serif;background:#8dbbd4}body::before{content:'';position:fixed;inset:0;z-index:-1;background:radial-gradient(ellipse at 75% 90%,#ffe3c2 0,transparent 36%),radial-gradient(ellipse at 35% 70%,#a9adae 0,transparent 42%),radial-gradient(ellipse at 80% 18%,#dcebf1 0,transparent 45%),linear-gradient(130deg,#629bb9,#b9def1 48%,#8197a8)}body[data-wall=warm]::before{background:radial-gradient(ellipse at 75% 65%,#fff0d4,transparent 44%),radial-gradient(ellipse at 20% 80%,#b27367,transparent 55%),linear-gradient(130deg,#d19b84,#f1c59d)}body[data-wall=night]::before{background:radial-gradient(ellipse at 80% 90%,#4e5964,transparent 55%),radial-gradient(ellipse at 30% 25%,#294058,transparent 45%),linear-gradient(120deg,#101c2a,#24292e)}main{max-width:1000px;margin:auto}header{color:#24313b}h1{font-size:17px;font-weight:600;margin:0 0 17px}h1 small{font-size:12px;font-weight:400;margin-left:12px}.controls{display:flex;gap:12px 18px;flex-wrap:wrap;margin-bottom:22px}.segment{display:flex;align-items:center;gap:3px}.segment>span{margin-right:5px;opacity:.65;font-size:12px}button{font:inherit;cursor:pointer}.controls button{padding:5px 8px;border:0;border-radius:6px;background:transparent;color:inherit}.controls button[aria-pressed=true]{background:#ffffff70}.controls button:hover{background:#ffffff45}button:focus-visible{outline:2px solid #6086a4;outline-offset:3px}.window{height:640px;display:grid;grid-template-columns:300px 1fr;border-radius:26px;overflow:hidden;box-shadow:0 24px 80px #12233238,0 0 0 1px #ffffff45;--primary:rgba(0,0,0,.82);--secondary:rgba(0,0,0,.42);--outline:rgba(0,0,0,.2);--sun-disc:#dfbb77;color:var(--primary)}.sidebar{background:#ffffff8c;backdrop-filter:blur(30px) saturate(1.4);-webkit-backdrop-filter:blur(30px) saturate(1.4)}.content{background:#f8f9fae8;border-left:1px solid #00000008;position:relative}.content-label{position:absolute;top:23px;left:26px;color:var(--secondary);font-size:12px}.content-center{position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:var(--secondary);font-size:13px;white-space:nowrap}.windowbar{height:56px;position:relative}.lights{display:flex;gap:8px;position:absolute;left:20px;top:20px}.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}.plain{border:0;background:none;padding:0;color:var(--secondary);display:inline-flex}.toggle{position:absolute;right:20px;top:18px}.icon{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}.hero{display:block;width:268px;height:88px;margin:0 16px;padding:0;border:0;background:transparent;color:var(--secondary);position:relative}.hero svg{display:block;width:100%;height:100%;overflow:hidden}.section{display:flex;align-items:center;gap:15px;margin:23px 20px 15px;color:var(--secondary)}.section strong{font-size:13px;font-weight:600;flex:1}.threads{padding:0 12px}.folder{display:flex;align-items:center;gap:8px;height:34px;padding-left:8px;font-weight:500}.row{display:flex;align-items:center;height:34px;padding:0 9px 0 29px;gap:8px}.row span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.row time{font-size:11px;color:var(--secondary)}.children{padding:1px 0 9px 37px;font-size:12px;color:var(--secondary)}footer{padding:21px 3px 0;color:#263644;line-height:1.8;font-size:12px}footer p{margin:0}body[data-wall=night] header,body[data-wall=night] footer{color:#e0e7ed}body[data-appearance=dark] .window{--primary:rgba(255,255,255,.86);--secondary:rgba(255,255,255,.45);--outline:rgba(255,255,255,.2);--sun-disc:#d5b77e}body[data-appearance=dark] .sidebar{background:#1e1e1e8c}body[data-appearance=dark] .content{background:#202225ed;border-color:#ffffff08}body[data-mode=transparent] .sidebar{background:#ffffff2e;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}body[data-mode=transparent][data-appearance=dark] .sidebar{background:#1e1e1e2e}body[data-mode=performance] .sidebar{background:#ececec;backdrop-filter:none;-webkit-backdrop-filter:none}body[data-mode=performance][data-appearance=dark] .sidebar{background:#1f1f1f}body[data-mode=transparent] .atmosphere{opacity:1} .atmosphere{opacity:.85}
+.hero{width:300px;height:84px;margin:0;color:var(--label);--label:0,0,0;--hair:.28;--annotation:.55;--edge:.2;--weather:1;--lit:#eeeee6;--mid:#e3e5de;--shadow:#cdd3cc;--head-lit:#f4f3ec;--head-mid:#e9eae3;--head-shadow:#c9cfc8;--cloud-fill:.4;--cloud-edge:.65;--overcast:#777f87;--overcast-peak:.10;--sun-disc:#dfbb77}
+body[data-appearance=dark] .window .hero,.study.dark .hero{--label:255,255,255;--lit:#c9cbc4;--mid:#bdc0b9;--shadow:#a3a9a2;--head-lit:#d2d4cd;--head-mid:#c4c7c0;--head-shadow:#9fa59e;--cloud-fill:.16;--cloud-edge:.3;--overcast:#263644;--overcast-peak:.06;--sun-disc:#d5b77e}
+body[data-mode=transparent] .window .hero{--hair:.38;--annotation:.65;--edge:.3;--weather:1.4}
+.hero svg{width:300px;height:84px}.hair{fill:none;stroke:rgba(var(--label),var(--hair));stroke-width:.5}.annotation{fill:rgba(var(--label),var(--annotation));font:9px ui-monospace,monospace;font-variant-numeric:tabular-nums}.cloth-outline{stroke:rgba(var(--label),var(--edge));stroke-width:.5}.weather{opacity:var(--weather)}
+.layer{opacity:0;pointer-events:none;transition:opacity .4s ease}.layer.visible{opacity:1}.rot-a,.rot-b{transform-origin:195px 8px}.lift-doll{transition:transform .18s ease}.entry-label{fill:rgba(var(--label),.85);font-size:13px;font-weight:500}.entry-hover{fill:rgba(var(--label),.06);opacity:0;transition:opacity .18s ease}.row{border-radius:8px}.row:hover{background:rgba(0,0,0,.06)}body[data-appearance=dark] .row:hover{background:rgba(255,255,255,.06)}
+.hero:hover .entry-hover,.hero:focus-visible .entry-hover,body[data-hover=true] .entry-hover{opacity:1}.hero:hover .entry-label,.hero:focus-visible .entry-label,body[data-hover=true] .entry-label{fill:rgba(var(--label),1)}.hero:hover .lift-doll,.hero:focus-visible .lift-doll,body[data-hover=true] .lift-doll{transform:translateY(-3px)}
+.fabric-motion{animation-play-state:paused!important}body[data-state=running] .fabric-motion{animation-play-state:running!important}
+body[data-state=running] .rot-a{animation:sway-a 2.4s ease-in-out infinite}body[data-state=running] .rot-b{animation:sway-b 3.7s ease-in-out infinite}body[data-state=running] .moving-axis{animation:axis 2s linear infinite}
+@keyframes sway-a{0%,50%,100%{transform:rotate(-7deg)}25%{transform:rotate(-11deg)}75%{transform:rotate(-3deg)}}@keyframes sway-b{0%,50%,100%{transform:rotate(0deg)}25%{transform:rotate(1deg)}75%{transform:rotate(-1deg)}}@keyframes axis{to{stroke-dashoffset:-16}}
+body[data-state=running] .wind{animation:wind var(--duration) linear infinite;animation-delay:var(--delay)}@keyframes wind{0%{transform:translateX(-40px);opacity:0}20%,75%{opacity:1}100%{transform:translateX(90px);opacity:0}}
+body[data-state=running] .air-band{animation:air 7s ease-in-out infinite;animation-delay:var(--delay)}@keyframes air{0%,100%{transform:translateX(-12px);opacity:.65}50%{transform:translateX(12px);opacity:1}}
+body[data-state=fail] .rain{animation:rain var(--duration) linear infinite;animation-delay:var(--delay)}@keyframes rain{0%{transform:translate(0,-12px);opacity:0}20%,70%{opacity:1}100%{transform:translate(-10px,49px);opacity:0}}
+body[data-state=done] .sun-rays{transform-origin:258px 5px;animation:sun 30s linear infinite}body[data-state=done] .sun-rise{animation:rise 1.2s ease-out both}@keyframes sun{to{transform:rotate(360deg)}}@keyframes rise{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
+body[data-state=wait] .cloud-enter{animation:cloud 1.2s ease-out both}@keyframes cloud{from{transform:translateX(-24px);opacity:0}to{transform:none;opacity:1}}
+.hero[data-static=true] *{animation:none!important;transition:none!important}.hero[data-static=true] .rot-a,.hero[data-static=true] .rot-b{transform:none}body[data-state=running] .hero[data-static=true] .rot-a{transform:rotate(-7deg)}.hero[data-static=true] .rain{transform:translate(var(--rain-x),var(--rain-y));opacity:.65}
+.enlargements{margin-top:28px;display:grid;gap:24px}.study{margin:0;overflow-x:auto}.study figcaption{margin-bottom:8px;font:12px ui-monospace,monospace}.study .stage{width:900px;height:252px;background:#ffffff8c}.study.dark .stage{background:#1e1e1ed9}.study .hero,.study .hero svg{width:900px;height:252px}body[data-wall=night] .study figcaption{color:#e0e7ed}
+@media(max-width:720px){body{padding:22px 12px}.window{grid-template-columns:300px minmax(120px,1fr);height:600px}.content-center{display:none}h1 small{display:block;margin:5px 0 0}}
+</style></head><body data-state="idle" data-mode="normal" data-appearance="light" data-wall="blue" data-hover="false" data-static="false"><main><header><h1>Skylight <small>v3 · 天气落在玻璃上</small></h1><div class="controls" id="controls"></div></header><div class="window"><aside class="sidebar"><div class="windowbar"><div class="lights" aria-hidden="true"><i></i><i></i><i></i></div><span class="plain toggle" id="toggle"></span></div><div id="hero"></div><div class="section"><strong>对话列表</strong><span class="plain" id="search"></span><span class="plain" id="bell"></span></div><div class="threads"><div class="folder" id="folder"></div><div class="row"><span>Composer: draft ph…</span><time>3分钟</time></div><div class="row"><span>Settings overview f…</span><time>3分钟</time></div><div class="children">› 3 个子智能体</div><div class="row"><span>Attachment strip in…</span><time>6分钟</time></div><div class="row"><span>Timeline final answer</span><time>11分钟</time></div><div class="row"><span>Final answer card</span><time>26分钟</time></div></div></aside><section class="content"><div class="content-label">Tivano</div><div class="content-center" id="feedback" role="status" aria-live="polite"></div></section></div><section class="enlargements" aria-label="Hero 三倍细节"><figure class="study light"><figcaption>浅色 · 普通 · 3× · 当前状态</figcaption><div class="stage" id="zoom-light"></div></figure><figure class="study dark"><figcaption>深色 · 普通 · 3× · 当前状态</figcaption><div class="stage" id="zoom-dark"></div></figure></section><footer><p>300 × 84px 的天窗直接落在侧栏玻璃上；细线与 9px 标注保持原尺寸，布偶按原几何的 0.84 倍绘制。</p><p>细线 28%、标注 55%、布边 20%；透明模式分别增加 10 个百分点，天气浓度增加 40%。</p><p>完成透入暖光，出错落下冷雨，待处理薄云飘入后静止；运行时风带、布褶与摆角同步变化。</p><p>空闲完全静止；新对话与列表文字对齐，悬停只点亮入口行并轻抬布偶，整片天窗均可点击。</p><p>性能模式取消所有动画并即时换景；下方浅深两幅为普通模式的三倍细节，同步当前状态。</p></footer></main><script>
+// Rounded gathers feed one continuous hem; alternating low ridges and high valleys.
+const cloth={
+body:'M182 47 C179 51 176 57.5 172 64 C168 71 163.5 78 161 81.5 C162.5 85.5 166 88 169.5 88 C172 88 173 85.5 175 85.5 C177 85.5 179 91 183 91 C186.5 91 188 87.5 190 87.5 C192.5 87.5 195 90 198.5 89.5 C202 89 202 84.5 204.5 84.5 C207 84.5 211 86.5 214 83 C215 82 215.5 80 215 79 C210 72.5 203 65.5 198.5 59.5 C194 54 192.5 49.5 190 47 C187.5 46 184.5 46 182 47 Z',
+valley1:'M183 49 C181.5 58 176 74.5 175 85.5 C174 86 173 87.5 172 88 C173 77.5 179 58 183 49 Z',
+valley2:'M185.5 49 C186 61.5 189.5 78.5 190 87.5 C189 87.5 188 88.5 187 89.5 C187.5 78 184 61 185.5 49 Z',
+valley3:'M188 49 C191 60 201.5 75.5 204.5 84.5 C203 84.5 202.5 86.5 201.5 88 C198.5 77 189.5 61 188 49 Z',
+valley4:'M190 49 C196 60 210 74 215 79 C215.5 80 215 82 214 83 C208.5 76.5 195 61.5 190 49 Z',
+ridge1:'M181.5 50 C177.5 61 167.5 78 164 83 C164.5 85 166 86.5 168 87 C169 76 178.5 59 181.5 50 Z',
+ridge2:'M184 50 C181 62 177.5 79.5 179 87.5 C180 89 181.5 90 183 90 C181 78 183.5 62 184 50 Z',
+ridge3:'M186.5 50 C187 62.5 193 79.5 194 88 C195 88.5 196.5 89 198 88.5 C195 77.5 189 61 186.5 50 Z',
+ridge4:'M189 50 C193.5 61.5 205 77 208 84 C209.5 84.5 211 84.5 212 83.5 C207 76 195 60.5 189 50 Z'
+};
+// Event-time construction only: every cubic control point travels with its cloth panel.
+const half=n=>Math.round(n*2)/2;
+const dollTop=8+(19-8)*.84/.9;
+function drape(path,pose){return path.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g,(_,sx,sy)=>{
+ const x=Number(sx),y=Number(sy),t=Math.max(0,(y-49)/42);
+ let dx=0,dy=0;
+ if(pose==='done'){dx=2*t*t;dy=-(2+Math.max(0,x-184)*.18)*t*t}
+ if(pose==='fail'){dx=(187-x)*.4*t;dy=5*t*t}
+ // Preserve the existing wet hem limit.
+ return `${195+(half(186+(x+dx-186)*(1+.15*Math.min(1,t)))-186)*.84} ${dollTop+(Math.min(half(y+dy),90.5)-23)*.84}`;
+})}
+const keys=Object.fromEntries(Object.entries(cloth).map(([name,d])=>[name,[drape(d,'A'),drape(d,'done')]]));
+const running=Object.fromEntries(Object.entries({
+  "body": [
+    "M182 47 C179 51 176 57.5 172 64 C168 71.5 163 79 160.5 82.5 C162 86.5 166.5 89.5 170.5 89.5 C173.5 89 174 86.5 176.5 86.5 C179 86 181.5 92 186.5 91.5 C190.5 91 192 87 194.5 87 C197.5 86.5 201.5 88 206 87 C210.5 86 209 82 212 81.5 C215 81.5 221 82.5 223 79.5 C224 78.5 224 77 223 76 C215 71 205.5 65 199.5 59.5 C194.5 54 192.5 49.5 190 47 C187.5 46 184.5 46 182 47 Z",
+    "M182 47 C179 51 176 57.5 172.5 64 C168.5 71 164 78 161.5 81.5 C163.5 85.5 167.5 88 171.5 88.5 C174.5 88.5 175.5 86 178 86.5 C180 86.5 183.5 92.5 188 92.5 C192.5 92.5 193.5 88.5 196 88.5 C199.5 88 204 90 208.5 88.5 C213 87 211 83 214.5 82.5 C217.5 81.5 223.5 82.5 226 79 C226.5 78 226 76.5 225 75.5 C216 71 206 65 200 59.5 C194.5 54 192.5 49.5 190 47 C187.5 46 184.5 46 182 47 Z",
+    "M182 47 C179 51 176 57.5 172 64 C168 70.5 163 77 160.5 80.5 C162 84.5 166.5 86.5 170.5 86.5 C173.5 87 174 84.5 176.5 84.5 C179 85 181.5 90 186.5 90.5 C190.5 91 192 87.5 194.5 87.5 C197.5 87.5 201.5 90 206 89.5 C210.5 88.5 209 84 212 84 C215 83.5 221 85 223 81.5 C224 80.5 224 78.5 223 77.5 C215 72 205.5 65.5 199.5 59.5 C194.5 54 192.5 49.5 190 47 C187.5 46 184.5 46 182 47 Z",
+    "M182 47 C179 51 176 57.5 171.5 64 C167.5 71 162 78 159.5 81.5 C161 85.5 165 88 169 87.5 C171.5 87.5 173 85 175 84.5 C177.5 84.5 180 89.5 184.5 89.5 C188.5 89.5 190 86 192.5 86 C195.5 86 199 88.5 203 88 C207.5 87.5 206.5 83.5 209.5 83.5 C212.5 83.5 217.5 85.5 220.5 82 C221 81.5 221.5 79.5 220.5 78.5 C213.5 72 204.5 65.5 199 59.5 C194 54 192.5 49.5 190 47 C187.5 46 184.5 46 182 47 Z"
+  ],
+  "valley1": [
+    "M183 49 C181.5 58 177 75 176.5 86.5 C175.5 87 174.5 88.5 173.5 89 C173.5 78 179 58 183 49 Z",
+    "M183 49 C182 58 177.5 75 178 86.5 C176.5 87 175.5 88.5 174.5 88.5 C174.5 78 179.5 58 183 49 Z",
+    "M183 49 C181.5 58 177 74 176.5 84.5 C175.5 85 174.5 86.5 173.5 87 C173.5 77 179 58 183 49 Z",
+    "M183 49 C181.5 58 176 74 175 84.5 C174 85 173 86.5 171.5 87.5 C172.5 77 179 58 183 49 Z"
+  ],
+  "valley2": [
+    "M185.5 49 C186.5 61.5 192.5 78 194.5 87 C193.5 87 192 88 191 89.5 C190 78 184.5 61 185.5 49 Z",
+    "M185.5 49 C186.5 61.5 193.5 79 196 88.5 C195 88.5 194 89.5 192.5 91 C191 78.5 184.5 61 185.5 49 Z",
+    "M185.5 49 C186.5 61.5 192.5 78.5 194.5 87.5 C193.5 87.5 192 88.5 191 89.5 C190 78 184.5 61 185.5 49 Z",
+    "M185.5 49 C186.5 61.5 191 77.5 192.5 86 C191.5 86 190 87 189 88 C189 77 184 61 185.5 49 Z"
+  ],
+  "valley3": [
+    "M188 49 C191.5 60 206 74 212 81.5 C210 82 210 83.5 209.5 85 C202.5 76 190 61 188 49 Z",
+    "M188 49 C192 60 207 74.5 214.5 82.5 C212.5 82.5 212.5 84.5 212 86 C204 76.5 190.5 61 188 49 Z",
+    "M188 49 C191.5 60 206 75.5 212 84 C210 84 210 86 209.5 87.5 C202.5 77 190 61 188 49 Z",
+    "M188 49 C191.5 60 204.5 75 209.5 83.5 C207.5 83.5 207.5 85 206.5 86.5 C201 76 190 61 188 49 Z"
+  ],
+  "valley4": [
+    "M190 49 C197 60 215.5 72.5 223 76 C224 77 224 78.5 223 79.5 C214.5 74.5 196 61.5 190 49 Z",
+    "M190 49 C197 60 216.5 72.5 225 75.5 C226 76.5 226.5 78 226 79 C216 74.5 196.5 61.5 190 49 Z",
+    "M190 49 C197 60 215.5 73.5 223 77.5 C224 78.5 224 80.5 223 81.5 C214.5 76 196 61.5 190 49 Z",
+    "M190 49 C196.5 60 213.5 73.5 220.5 78.5 C221.5 79.5 221 81.5 220.5 82 C212.5 76 195.5 61.5 190 49 Z"
+  ],
+  "ridge1": [
+    "M181.5 50 C177.5 61 167.5 78.5 164 84 C164.5 86 166 88 168.5 88.5 C169 76.5 178.5 59 181.5 50 Z",
+    "M181.5 50 C178 61 168.5 78 165 83 C165.5 85 167.5 86.5 170 87.5 C170 76 179 59 181.5 50 Z",
+    "M181.5 50 C177.5 61 167.5 77.5 164 82 C164.5 84 166 85 168.5 85.5 C169 75.5 178.5 59 181.5 50 Z",
+    "M181.5 50 C177.5 61 166.5 78 162.5 83 C163 85 165 86.5 167 86.5 C168.5 76 178.5 59 181.5 50 Z"
+  ],
+  "ridge2": [
+    "M184 50 C181.5 62 179 80 181.5 88 C182.5 89.5 184.5 90.5 186.5 90.5 C182.5 78.5 184 62 184 50 Z",
+    "M184 50 C181.5 62 180 80 182.5 88.5 C184 90.5 186 91.5 188 91.5 C183.5 78.5 184 62 184 50 Z",
+    "M184 50 C181.5 62 179 79 181.5 87 C182.5 88.5 184.5 89.5 186.5 89.5 C182.5 77.5 184 62 184 50 Z",
+    "M184 50 C181 62 177.5 79 179.5 86.5 C181 87.5 182.5 88.5 184.5 88.5 C181.5 77.5 183.5 62 184 50 Z"
+  ],
+  "ridge3": [
+    "M186.5 50 C187.5 62.5 196.5 78.5 200 86.5 C201 87 203 87 205 86 C198.5 76.5 189.5 61 186.5 50 Z",
+    "M186.5 50 C188 62.5 198 79.5 201.5 88 C203.5 88.5 205.5 88.5 207.5 87.5 C200 77.5 190 61 186.5 50 Z",
+    "M186.5 50 C187.5 62.5 196.5 79.5 200 88 C201 88.5 203 89 205 88.5 C198.5 77.5 189.5 61 186.5 50 Z",
+    "M186.5 50 C187.5 62.5 195 78.5 197.5 86.5 C198.5 87 200.5 87.5 202.5 87 C197.5 76.5 189.5 61 186.5 50 Z"
+  ],
+  "ridge4": [
+    "M189 50 C194.5 61.5 210.5 75 216 81 C218.5 81 220 81 221 80 C212.5 74 196 60.5 189 50 Z",
+    "M189 50 C195 61.5 212 75.5 218.5 81 C220.5 81 222.5 81 223.5 79.5 C214 74.5 196 60.5 189 50 Z",
+    "M189 50 C194.5 61.5 210.5 76.5 216 83 C218.5 83.5 220 83 221 82 C212.5 75.5 196 60.5 189 50 Z",
+    "M189 50 C194 61.5 208.5 76.5 213.5 83 C215.5 83.5 217 83.5 218 82.5 C210.5 75.5 195.5 60.5 189 50 Z"
+  ]
+}).map(([name,paths])=>[name,paths.map(geometry)]));
+const wet=Object.fromEntries(Object.entries(cloth).map(([name,d])=>[name,drape(d,'fail')]));
+
+const icon=(path)=>`<svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="${path}"/></svg>`;
+const search=icon('M13.5 13.5 L17 17 M15 9 A6 6 0 1 1 3 9 A6 6 0 1 1 15 9');
+const bell=icon('M6 14 L3.5 14 C5 12 5 11 5 8 C5 2 15 2 15 8 C15 11 15 12 16.5 14 Z M8 17 C9 18 11 18 12 17');
+
+const style=document.createElement('style');
+style.textContent=Object.entries(running).map(([name,paths])=>`@keyframes fabric-${name}{${paths.map((d,i)=>`${i*25}%{d:path('${d}')}`).join('')}100%{d:path('${paths[0]}')}}.fabric-${name}{animation:fabric-${name} 2.4s ease-in-out infinite}`).join('');document.head.append(style);
+
+function geometry(path){return path.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g,(_,x,y)=>`${195+(Number(x)-186)*.84} ${dollTop+(Number(y)-23)*.84}`)}
+function fabric(id,state){return Object.keys(cloth).map(name=>{const tone=name==='body'?'mid':name.startsWith('ridge')?'lit':'shadow';return `<path class="${name==='body'?'cloth-outline ':''}${state==='running'?'fabric-motion fabric-'+name:''}" d="${state==='fail'?wet[name]:state==='done'?keys[name][1]:state==='running'?running[name][0]:keys[name][0]}" fill="url(#cloth-${tone}-${id})"/>`}).join('')}
+function hero(id){
+ const fade=(name,x1,y1,x2,y2,stops)=>`<linearGradient id="${name}-${id}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${stops.map(([at,opacity])=>`<stop offset="${at}" stop-color="rgba(var(--label),var(--hair))" stop-opacity="${opacity}"/>`).join('')}</linearGradient>`;
+ const wash=(name,color,peak)=>`<radialGradient id="${name}-${id}"><stop stop-color="${color}" stop-opacity="${peak}"/><stop offset=".8" stop-color="${color}" stop-opacity="0"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></radialGradient>`;
+ return `<button class="hero" aria-label="新建会话" data-static="false"><svg viewBox="0 0 300 84" aria-hidden="true"><defs>
+ ${fade('frame',0,8,300,8,[[0,0],[40/300,1],[260/300,1],[1,0]])}
+ ${fade('vertical',22,0,22,58,[[0,1],[42/58,1],[1,0]])}
+ ${fade('axis',195,0,195,84,[[0,0],[.12,1],[.8,1],[1,0]])}
+ ${fade('arc',213,70,295,70,[[0,0],[.25,1],[.75,1],[1,0]])}
+ ${fade('wind',90,0,136,0,[[0,0],[.35,1],[.65,1],[1,0]])}
+ ${wash('warm','#e9b25a',.14)}${wash('cool','#526b85',.14)}${wash('overcast','var(--overcast)','var(--overcast-peak)')}${wash('air','#a4b9bd',.07)}
+ <linearGradient id="sun-mask-${id}" x1="0" y1="0" x2="0" y2="1"><stop stop-color="white"/><stop offset=".42" stop-color="white"/><stop offset="1" stop-color="black"/></linearGradient>
+ <mask id="sun-fade-${id}" maskUnits="userSpaceOnUse" x="238" y="-14" width="40" height="40"><path d="M238 -14H278V26H238Z" fill="url(#sun-mask-${id})"/></mask>
+ <radialGradient id="head-${id}" cx="30%" cy="25%" r="85%"><stop stop-color="var(--head-lit)"/><stop offset=".5" stop-color="var(--head-mid)"/><stop offset="1" stop-color="var(--head-shadow)"/></radialGradient>
+ ${['mid','lit','shadow'].map(tone=>`<linearGradient id="cloth-${tone}-${id}" x2="100%" y2="80%"><stop stop-color="var(--${tone==='shadow'?'mid':'lit'})"/><stop offset="1" stop-color="var(--${tone==='lit'?'mid':'shadow'})"/></linearGradient>`).join('')}
+ <radialGradient id="contact-${id}"><stop stop-color="var(--shadow)" stop-opacity=".65"/><stop offset="1" stop-color="var(--shadow)" stop-opacity="0"/></radialGradient>
+ </defs>
+ <g class="weather"><g class="layer" data-for="done"><path d="M-65 0a65 19 0 1 0 130 0a65 19 0 1 0-130 0" transform="translate(224 34) rotate(-29)" fill="url(#warm-${id})"/></g>
+ <g class="layer" data-for="fail"><path d="M119 42a76 36 0 1 0 152 0a76 36 0 1 0-152 0" fill="url(#cool-${id})"/></g>
+ <g class="layer" data-for="wait"><path d="M102 37a85 32 0 1 0 170 0a85 32 0 1 0-170 0" fill="url(#overcast-${id})"/></g>
+ <g class="layer" data-for="running">${[24,43,62].map((y,i)=>`<path class="air-band" style="--delay:-${i*2}s" d="M90 ${y}a82 12 0 1 0 164 0a82 12 0 1 0-164 0" fill="url(#air-${id})"/>`).join('')}</g></g>
+ <g fill="none" stroke-width=".5"><path d="M0 8H300" stroke="url(#frame-${id})"/><path d="M22 0V58" stroke="url(#vertical-${id})"/><path class="moving-axis" d="M195 0V84" stroke="url(#axis-${id})" stroke-dasharray="4 4"/><path d="M213 82C234 61 268 60 295 79" stroke="url(#arc-${id})"/></g>
+ <path class="hair" d="M34 22H100 M38 19V25 M96 19V25 M34 38H70 M38 35V41 M66 35V41"/>
+ <g class="annotation"><text x="45" y="18">ø173</text><text class="angle" x="78" y="41">0.0°</text><text x="252" y="64">R269</text></g>
+ <g class="layer" data-for="running" fill="none" stroke-width=".5" stroke="url(#wind-${id})">${[23,35,48,59].map((y,i)=>`<path class="wind" style="--duration:${1.8+i*.3}s;--delay:-${i*.53}s" d="M90 ${y}H136"/>`).join('')}</g>
+ <g class="layer" data-for="fail">${Array.from({length:12},(_,i)=>`<path class="rain hair" style="--duration:${[2.2,2.8,3.4][i%3]}s;--delay:-${i*.47+.3}s;--rain-x:-${i%4*2}px;--rain-y:${i*17%43}px" d="M${138+i*10} 14l-2 ${6+i%3*2}"/>`).join('')}</g>
+ <g class="layer" data-for="done"><g class="sun-rise"><g mask="url(#sun-fade-${id})"><path d="M267 5a9 9 0 1 0-18 0a9 9 0 1 0 18 0" fill="var(--sun-disc)"/><g class="sun-rays" stroke="var(--sun-disc)" stroke-width="1.5" stroke-linecap="round" opacity=".7">${Array.from({length:12},(_,i)=>`<path transform="rotate(${i*30} 258 5)" d="M258 -7V-10"/>`).join('')}</g></g></g></g>
+ <g class="layer" data-for="wait"><g class="cloud-enter"><g transform="translate(0 10)"><path d="M122 27 C114 27 114 16 121 14 C120 6 132 2 137 9 C142 0 156 2 158 12 C168 9 176 24 168 27 Z" fill="white" opacity="var(--cloud-fill)"/><path d="M116.5 21 C116 17 118 15 121 14 C120 6 132 2 137 9 C142 0 156 2 158 12 C164 10 171 17 172 21" fill="none" stroke="white" stroke-width=".75" opacity="var(--cloud-edge)"/></g></g></g>
+ <g class="rot-a"><g class="rot-b"><path class="hair" d="M195 8V${dollTop}"/><g class="lift-doll">
+ ${['idle','running','done','fail'].map(state=>`<g class="layer" data-for="${state==='idle'?'idle wait':state}">${fabric(id,state)}</g>`).join('')}
+ <path d="${geometry('M194 48 C194 50 190.5 52 186 52 C181.5 52 178 50 178 48 C178 46 181.5 44 186 44 C190.5 44 194 46 194 48 Z')}" fill="url(#contact-${id})"/>
+ <path class="cloth-outline" d="${geometry('M198 35 C198 41.5 192.5 47 186 47 C179.5 47 174 41.5 174 35 C174 28.5 179.5 23 186 23 C192.5 23 198 28.5 198 35 Z')}" fill="url(#head-${id})"/>
+ <path d="${geometry('M182 47.1 C184.2 48 187.8 48 190 47.1 M189.8 47.3 C190.7 48 190.9 49.3 190.6 50.6')}" fill="none" stroke="var(--shadow)" stroke-width=".54" stroke-linecap="round"/>
+ </g></g></g>
+ <path class="entry-hover" d="M20 60H142Q150 60 150 68V76Q150 84 142 84H20Q12 84 12 76V68Q12 60 20 60Z"/><g class="entry-label"><text x="24" y="77">+</text><text x="41" y="77">新对话</text></g>
+ </svg></button>`}
+document.querySelector('#hero').innerHTML=hero('skylight');
+document.querySelector('#zoom-light').innerHTML=hero('zoom-light');
+document.querySelector('#zoom-dark').innerHTML=hero('zoom-dark');
+document.querySelector('#toggle').innerHTML=icon('M3 3.5H17V16.5H3Z M8 3.5V16.5');
+document.querySelector('#search').innerHTML=search;document.querySelector('#bell').innerHTML=bell;
+document.querySelector('#folder').innerHTML=icon('M2 6V16H18V6Z M2 6V3.5H8L10 6')+'Tivano';
+const groups=[['mode','模式',[['normal','普通'],['transparent','透明'],['performance','性能']]],['appearance','外观',[['light','浅'],['dark','深']]],['wall','桌面',[['blue','蓝'],['warm','暖'],['night','暗']]],['state','状态',[['fail','出错'],['wait','待处理'],['running','运行中'],['done','完成'],['idle','空闲']]]];
+const controls=document.querySelector('#controls');
+groups.forEach(([key,label,options])=>{const segment=document.createElement('div');segment.className='segment';segment.setAttribute('role','group');segment.setAttribute('aria-label',label);segment.innerHTML=`<span>${label}</span>`+options.map(([value,text])=>`<button data-key="${key}" data-value="${value}" aria-pressed="${document.body.dataset[key]===value}">${text}</button>`).join('');controls.append(segment)});
+controls.insertAdjacentHTML('beforeend','<button id="hover" aria-pressed="false">hover</button>');
+const media=matchMedia('(prefers-reduced-motion: reduce)');let timer=null;
+function angle(){document.querySelectorAll('.hero').forEach(card=>{const rotation=el=>{const t=getComputedStyle(el).transform;if(t==='none')return 0;const m=new DOMMatrixReadOnly(t);return Math.atan2(m.b,m.a)*180/Math.PI};const value=rotation(card.querySelector('.rot-a'))+rotation(card.querySelector('.rot-b'));card.querySelector('.angle').textContent=(Math.abs(value)<.05?'0.0':Math.abs(value).toFixed(1))+'°'})}
+function update(){const s=document.body.dataset.state;document.querySelectorAll('.hero').forEach(card=>{card.dataset.static=String(media.matches||(card.closest('.window')&&document.body.dataset.mode==='performance'));card.querySelector('.moving-axis').setAttribute('stroke-dasharray',s==='wait'?'none':'4 4')});document.querySelectorAll('.layer').forEach(el=>el.classList.toggle('visible',el.dataset.for.split(' ').includes(s)));clearInterval(timer);angle();if(s==='running'&&!media.matches)timer=setInterval(angle,100)}
+controls.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.id==='hover'){document.body.dataset.hover=String(document.body.dataset.hover!=='true');b.setAttribute('aria-pressed',document.body.dataset.hover);return}document.body.dataset[b.dataset.key]=b.dataset.value;controls.querySelectorAll(`button[data-key="${b.dataset.key}"]`).forEach(other=>other.setAttribute('aria-pressed',String(other===b)));update()});
+let count=0;document.querySelectorAll('.hero').forEach(card=>card.addEventListener('click',()=>{count++;document.querySelector('#feedback').textContent=`已新建对话 · ${count}（演示）`}));media.addEventListener('change',update);update();
+</script></body></html>

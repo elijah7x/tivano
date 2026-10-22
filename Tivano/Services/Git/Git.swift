@@ -19,9 +19,11 @@ struct GitBranch: Identifiable, Hashable, Sendable {
 
 enum GitError: LocalizedError, Sendable {
     case timedOut(command: String)
+    case cursorOriginSetup
 
     var errorDescription: String? {
         switch self {
+        case .cursorOriginSetup: AppText.localized("Cursor Origin needs the origin CLI. Install it and run `origin auth login`.")
         case .timedOut(let command): String(format: AppText.localized("Timed out running %@."), command)
         }
     }
@@ -211,6 +213,14 @@ struct Git: Sendable {
         try Self.check(await run(["switch", "-c", name]))
     }
 
+    func renameBranch(_ old: String, to new: String) async throws {
+        try Self.check(await run(["branch", "-m", old, new]))
+    }
+
+    func isValidBranchName(_ name: String) async -> Bool {
+        (try? await run(["check-ref-format", "--branch", name]))?.succeeded == true
+    }
+
     func addWorktree(at path: String, branch: String, base: String?) async throws {
         var arguments = ["worktree", "add", "-b", branch, path]
         if let base { arguments.append(base) }
@@ -229,6 +239,7 @@ struct Git: Sendable {
     /// The https page for the origin remote, when it is a hosted repository.
     func remoteWebURL() async -> URL? {
         guard var remote = await remoteURL() else { return nil }
+        if let origin = CursorOriginRemote(remote: remote) { return origin.webURL }
         if remote.hasSuffix(".git") { remote.removeLast(4) }
         if remote.hasPrefix("git@"), let colon = remote.firstIndex(of: ":") {
             let host = remote[remote.index(remote.startIndex, offsetBy: 4)..<colon]
@@ -267,6 +278,41 @@ struct Git: Sendable {
     func createPullRequest(title: String, body: String, source: String? = nil, target: String? = nil) async throws -> URL? {
         let result: ShellResult
         switch await forge() {
+        case .cursorOrigin:
+            guard let remote = await remoteURL(), let origin = CursorOriginRemote(remote: remote) else {
+                throw ShellError(AppText.localized("The Cursor Origin repository could not be identified."))
+            }
+            var arguments = ["pr", "create", "-R", origin.fullName, "--title", title, "--body-file", "-", "--status", "open"]
+            if let source { arguments += ["--head", source] }
+            if let target { arguments += ["--base", target] }
+            let created = try await runOrigin(arguments, input: Data(body.utf8))
+            if created.succeeded,
+               let url = Self.originRequestURL(in: created.output + "\n" + created.errorOutput, repository: origin.fullName) {
+                return url
+            }
+            let text = (created.output + created.errorOutput).lowercased()
+            guard created.succeeded || text.contains("already exist") || text.contains("already has") else {
+                try Self.check(created)
+                return nil
+            }
+            let branch: String
+            if let source { branch = source }
+            else { branch = try await output(["branch", "--show-current"]).trimmed }
+            guard !branch.isEmpty else {
+                throw ShellError(AppText.localized("Cursor Origin did not return a pull request URL."))
+            }
+            let viewed = try await runOrigin(["pr", "view", branch, "-R", origin.fullName, "--json", "url,status"])
+            try Self.check(viewed)
+            guard let request = try? JSONDecoder().decode(OriginRequest.self, from: viewed.stdout) else {
+                throw ShellError(AppText.localized("Cursor Origin did not return a pull request URL."))
+            }
+            if !created.succeeded, !["open", "draft"].contains(request.status?.lowercased() ?? "") {
+                try Self.check(created)
+            }
+            guard let address = request.url, let url = Self.originRequestURL(in: address, repository: origin.fullName) else {
+                throw ShellError(AppText.localized("Cursor Origin did not return a pull request URL."))
+            }
+            return url
         case .gitlab:
             var arguments = ["mr", "create", "--title", title, "--description", body, "--yes"]
             if let source { arguments += ["--source-branch", source] }
@@ -314,6 +360,7 @@ struct Git: Sendable {
     /// Gitea's family (tea serves them all) for anything else.
     func forge() async -> MergeRequestLink.Forge {
         let remote = (await remoteURL() ?? "").lowercased()
+        if CursorOriginRemote(remote: remote) != nil { return .cursorOrigin }
         if remote.contains("gitlab") { return .gitlab }
         if remote.contains("github") { return .github }
         return .gitea
@@ -327,6 +374,21 @@ struct Git: Sendable {
         for attempt in 0..<6 {
             let result: ShellResult
             switch link.forge {
+            case .cursorOrigin:
+                guard let repository = link.originRepository,
+                      let remote = await remoteURL(),
+                      CursorOriginRemote(remote: remote)?.fullName == repository else {
+                    throw ShellError(AppText.localized("The Cursor Origin pull request does not match this repository."))
+                }
+                let merged = try await runOrigin(["pr", "merge", number, "-R", repository])
+                try Self.check(merged)
+                let viewed = try await runOrigin(["pr", "view", number, "-R", repository, "--json", "status,mergedAt"])
+                try Self.check(viewed)
+                guard let request = try? JSONDecoder().decode(OriginRequest.self, from: viewed.stdout),
+                      request.status?.lowercased() == "merged" || request.mergedAt != nil else {
+                    throw ShellError(AppText.localized("Cursor Origin has not confirmed that the pull request was merged."))
+                }
+                return
             case .gitlab: result = try await Shell.run(tool: "glab", ["mr", "merge", number, "--yes", "--squash", "--remove-source-branch"], in: directory, timeout: 300)
             case .github: result = try await Shell.run(tool: "gh", ["pr", "merge", number, "--merge"], in: directory, timeout: 300)
             case .gitea: result = try await Shell.run(tool: "tea", ["pulls", "merge", number], in: directory, timeout: 300)
@@ -338,6 +400,35 @@ struct Git: Sendable {
             try? await Task.sleep(for: .seconds(3 + attempt * 2))
         }
         throw ShellError(lastFailure)
+    }
+
+    private struct OriginRequest: Decodable {
+        var url: String?
+        var status: String?
+        var mergedAt: String?
+    }
+
+    private static func originRequestURL(in text: String, repository: String) -> URL? {
+        for match in text.matches(of: #/https://(?:www\.)?cursor\.com/codebase/[^\s/]+/[^\s/]+/pull/[0-9]+/#) {
+            if let url = URL(string: String(match.output)),
+               let link = MergeRequestLink(url: url), link.originRepository == repository {
+                return url
+            }
+        }
+        return nil
+    }
+
+    private func runOrigin(_ arguments: [String], input: Data? = nil) async throws -> ShellResult {
+        guard LoginEnvironment.which("origin") != nil else { throw GitError.cursorOriginSetup }
+        let result = try await Shell.run(tool: "origin", arguments, in: directory, input: input, timeout: 300)
+        if !result.succeeded {
+            let text = (result.output + result.errorOutput).lowercased()
+            if text.contains("not signed in") || text.contains("not logged in") || text.contains("not authenticated")
+                || text.contains("unauthorized") || text.contains("authentication required") || text.contains("origin auth login") {
+                throw GitError.cursorOriginSetup
+            }
+        }
+        return result
     }
 
     // MARK: - Landing a team's work
@@ -949,9 +1040,13 @@ struct Git: Sendable {
         try Self.check(await run(["add", "-A", "--", "."], environment: environment, timeout: 300, lane: .checkpoint))
         let merged = try await run(["apply", "--3way", "--binary", "--whitespace=nowarn", "-"], environment: environment, input: data, lane: .checkpoint)
         if merged.succeeded { return [] }
-        // "U path" names each file left with markers; without one, nothing was applied.
-        let conflicts = merged.errorOutput.split(separator: "\n").compactMap { line -> String? in
-            line.hasPrefix("U ") ? String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces) : nil
+        let unmerged = try await run(["diff", "--name-only", "--diff-filter=U", "-z"], environment: environment, lane: .checkpoint)
+        var conflicts = unmerged.output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+        if conflicts.isEmpty {
+            // "U path" names each file left with markers; without one, nothing was applied.
+            conflicts = merged.errorOutput.split(separator: "\n").compactMap { line -> String? in
+                line.hasPrefix("U ") ? String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces) : nil
+            }
         }
         guard !conflicts.isEmpty else { throw ShellError(merged.failureMessage) }
         return conflicts

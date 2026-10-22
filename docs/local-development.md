@@ -5,6 +5,25 @@ team. Their bundle IDs remain distinct and stable: `dev.tivano.Tivano.dev`
 and `dev.tivano.Tivano`. See [packaging](packaging.md) for the package-and-install
 contract and independently versioned editions.
 
+Keep one long-lived source checkout, normally on local `dev`; do not code
+directly in it. On the owner host, develop each task in its own worktree based
+on local `dev` or an explicitly agreed base, then squash it into dev as one
+commit with the user-facing `[Unreleased]` entry and Dev version bump. Package
+Dev with `scripts/package_local.sh --dev` only when explicitly requested; it
+does not need a separate source directory. Run `scripts/ship.sh` only for an
+explicit public release request. This source-layout contract does not mean a
+physical directory migration has already been completed.
+
+Offline checkout consolidation keeps its runtime and backups outside every
+registered worktree. The background worker may use a private umask; Git child
+processes use normal source permissions, while recovered local work and rollback
+restore exact file modes from the verified snapshot. Original directories,
+including empty ones, are preserved. Git diff's automatic index refresh is
+disabled for the worker so verification cannot change its own checkpoint.
+Never delete lock files to bypass an
+offline check. Run `python3 scripts/consolidate_checkout_checks.py` for clean
+and dirty migration/rollback fixtures, including a private `0077` worker umask.
+
 ## One-time setup
 
 Install the team's Developer ID Application certificate and matching private
@@ -43,7 +62,11 @@ scripts/quick_run.sh
 This quits Dev if it is running, packages and verifies the new app, then
 installs/relaunches `/Applications/Tivano Dev.app`. It is only for an explicitly
 requested run/relaunch. Packaging alone uses `scripts/package_local.sh` and
-never launches or quits apps. Keep stable install paths and bundle IDs;
+installs only on explicit request, without launching. An explicit Dev package
+request also authorizes quitting Dev first; confirm it has exited before
+replacing its bundle. Release packaging requires explicit quit authorization
+if Release is running. A merge or public release does not authorize local
+packaging or installation. Keep stable install paths and bundle IDs;
 the editions use [independent production and test stores](shared-library.md).
 
 Keychain recognizes updated code by its designated requirement rather than

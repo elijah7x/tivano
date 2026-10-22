@@ -112,6 +112,10 @@ extension AppModel {
         guard persistenceEnabled, settings.hydraAutoMerge, let waiting = thread(leadID), hydraIsOn(waiting),
               let queued = existingRuntime(for: leadID), !queued.isHydraMerging, !queued.isHydraMergeQueued,
               queued.isReadyForHydraMerge else { return }
+        if waiting.projectID == nil {
+            guard let directory = try? executionDirectory(for: waiting),
+                  !hydraExplicitCheckouts(of: leadID, besides: directory).isEmpty else { return }
+        }
         let owner = ObjectIdentifier(self)
         guard HydraMergeActivity.owners[owner]?.values.contains(where: { $0.leadID == leadID }) != true else { return }
         let activityID = UUID()
@@ -134,7 +138,8 @@ extension AppModel {
         }
         // Everything is read again after the wait, and the flag below is set with no
         // suspension after this guard, so of several waiters exactly one goes.
-        guard persistenceEnabled, settings.hydraAutoMerge, let lead = thread(leadID), hydraIsOn(lead), let project = project(lead.projectID),
+        guard persistenceEnabled, settings.hydraAutoMerge, let lead = thread(leadID), hydraIsOn(lead),
+              let ownCheckout = try? executionDirectory(for: lead),
               let runtime = existingRuntime(for: leadID), runtime === queued,
               !runtime.isHydraMerging, !hasActiveHydraMerge, !Task.isCancelled,
               runtime.isReadyForHydraMerge else { return }
@@ -165,16 +170,17 @@ extension AppModel {
         // under no sidebar project at all stay out. What the records do not hold in one
         // of those other checkouts cannot be told apart from a sibling's work there and
         // stays behind without a word: none of it was this merge's to take.
-        let ownCheckout = lead.worktreePath ?? project.path
+        let project = project(lead.projectID)
         // A head sent to another checkout of this same project is its own merge. Its
         // files are not part of the lead checkout's group, and that group does not
         // fast-forward the project folder on the way past.
         let explicitGroups = hydraExplicitCheckouts(of: leadID, besides: ownCheckout)
         let explicitCheckouts = explicitGroups.map(\.checkout)
-        let own = await hydraWork(of: leadID, runtime: runtime, checkout: ownCheckout, git: Git(ownCheckout), projectID: project.id, leadCheckout: ownCheckout, leadProjectID: project.id, sweepsCheckout: true, otherCheckouts: explicitCheckouts)
-        var groups: [(project: Project, checkout: String, work: HydraWork, syncsProjectCheckout: Bool)] = [(project, ownCheckout, own, true)]
+        let own = await hydraWork(of: leadID, runtime: runtime, checkout: ownCheckout, git: Git(ownCheckout), projectID: project?.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: true, otherCheckouts: explicitCheckouts)
+        var groups: [(project: Project, checkout: String, work: HydraWork, syncsProjectCheckout: Bool)] = []
+        if let project { groups.append((project, ownCheckout, own, true)) }
         for extra in explicitGroups {
-            let work = await hydraWork(of: leadID, runtime: runtime, checkout: extra.checkout, git: Git(extra.checkout), projectID: extra.project.id, leadCheckout: ownCheckout, leadProjectID: project.id, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
+            let work = await hydraWork(of: leadID, runtime: runtime, checkout: extra.checkout, git: Git(extra.checkout), projectID: extra.project.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
             groups.append((extra.project, extra.checkout, work, false))
         }
         // An outside path belongs to the sidebar project with the longest path that
@@ -182,12 +188,12 @@ extension AppModel {
         // by an explicit checkout stays with that checkout's group.
         var owners: [String: Project] = [:]
         for path in own.outside where !explicitCheckouts.contains(where: { TouchedPaths.relative(path, root: $0) != nil }) {
-            if let holder = projects.filter({ $0.id != project.id && TouchedPaths.relative(path, root: $0.path) != nil }).max(by: { $0.path.count < $1.path.count }) {
+            if let holder = projects.filter({ $0.id != project?.id && TouchedPaths.relative(path, root: $0.path) != nil }).max(by: { $0.path.count < $1.path.count }) {
                 owners[path] = holder
             }
         }
-        for other in projects where other.id != project.id && owners.values.contains(where: { $0.id == other.id }) {
-            let work = await hydraWork(of: leadID, runtime: runtime, checkout: other.path, git: Git(other.path), projectID: other.id, leadCheckout: ownCheckout, leadProjectID: project.id, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
+        for other in projects where other.id != project?.id && owners.values.contains(where: { $0.id == other.id }) {
+            let work = await hydraWork(of: leadID, runtime: runtime, checkout: other.path, git: Git(other.path), projectID: other.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
             groups.append((other, other.path, work, true))
         }
         // A head's scratch (a throwaway script in /tmp, a stray write into its own copy)
@@ -211,6 +217,7 @@ extension AppModel {
             // does not prove that an interrupted merge reached the remote.
             if recovering, stray.isEmpty { return }
             guard !stray.isEmpty else {
+                guard project != nil else { return }
                 // Nothing to send and nothing outside a project: whatever the turns
                 // recorded is already on the branch, ignored, build output, or gone. Mark
                 // it spent, or the merge note counts those files forever.
@@ -453,6 +460,8 @@ extension AppModel {
             let requestURL: URL?
             do {
                 requestURL = try await hydraCreateMergeRequest(git: git, title: subject, body: body, source: branch, target: target)
+            } catch GitError.cursorOriginSetup {
+                return fail("Hydra pushed \(branch) but could not open a merge request.", GitError.cursorOriginSetup.localizedDescription)
             } catch let error as HydraMergeRequestError {
                 if case .gitLabAuth = error {
                     return fail("Hydra pushed \(branch) but could not open a merge request.", error.localizedDescription)
@@ -468,6 +477,8 @@ extension AppModel {
             advance(.merging)
             do {
                 try await git.mergePullRequest(link)
+            } catch GitError.cursorOriginSetup {
+                return fail("Hydra opened \(link.label) but could not merge it.", "\(url.absoluteString)\n\n\(GitError.cursorOriginSetup.localizedDescription)", label: link.label, url: url)
             } catch {
                 return fail("Hydra opened \(link.label) but could not merge it.", "\(url.absoluteString)\n\n\(error.localizedDescription)\n\nThe next try brings the request up to date with `\(target)` and merges it.", label: link.label, url: url, retryable: true)
             }
@@ -646,7 +657,7 @@ extension AppModel {
     /// The checkout a head's landed paths are relative to. An explicit target wins.
     /// Otherwise a head in the lead's project landed in the lead's checkout, and a head
     /// sent to another project landed in that project's folder.
-    private func hydraHeadLandingRoot(_ head: ChatThread, leadCheckout: String, leadProjectID: UUID) -> String {
+    private func hydraHeadLandingRoot(_ head: ChatThread, leadCheckout: String, leadProjectID: UUID?) -> String {
         if let target = head.hydra?.targetCheckout, !target.isEmpty { return target }
         if head.projectID == leadProjectID { return leadCheckout }
         return project(head.projectID)?.path ?? leadCheckout
@@ -658,11 +669,11 @@ extension AppModel {
         if let target = thread.hydra?.targetCheckout, !target.isEmpty { return target }
         if thread.isHydraHead, let parentID = thread.parentThreadID, let lead = self.thread(parentID) {
             if thread.projectID == lead.projectID {
-                return lead.worktreePath ?? project(lead.projectID)?.path
+                return try? executionDirectory(for: lead)
             }
             return project(thread.projectID)?.path
         }
-        return thread.worktreePath ?? project(thread.projectID)?.path
+        return try? executionDirectory(for: thread)
     }
 
     /// The files a lead's job changed, gathered three ways because no one way sees them
@@ -683,7 +694,7 @@ extension AppModel {
     /// Paths outside the checkout are dropped rather than passed on: a lead writes to its
     /// own memory files, and `git add -A -- <path>` on one of those fails outright and
     /// takes the whole merge with it.
-    private func hydraWork(of leadID: UUID, runtime: ThreadRuntime, checkout: String, git: Git, projectID: UUID, leadCheckout: String, leadProjectID: UUID, sweepsCheckout: Bool, otherCheckouts: [String] = []) async -> HydraWork {
+    private func hydraWork(of leadID: UUID, runtime: ThreadRuntime, checkout: String, git: Git, projectID: UUID?, leadCheckout: String, leadProjectID: UUID?, sweepsCheckout: Bool, otherCheckouts: [String] = []) async -> HydraWork {
         let turns = runtime.hydraUnmergedTurns
         // Turn paths are stored relative to the lead's checkout. Anchored there, they
         // match this pass only when this pass is that checkout, not a sibling worktree
@@ -844,8 +855,9 @@ extension AppModel {
         // Old rows can carry a sibling's write; a head's own copy remains its own evidence.
         paths.subtract(CheckoutClaims.foreign(paths.subtracting(copyPaths), root: checkout, owner: leadID, since: .distantPast))
         paths = paths.filter { !TouchedPaths.isBuildOutput($0) }
-        paths.subtract(await git.ignoredPaths(among: paths.sorted()))
-        let tracked = await git.trackedPaths(among: paths.sorted())
+        let isRepository = await git.isRepository()
+        if isRepository { paths.subtract(await git.ignoredPaths(among: paths.sorted())) }
+        let tracked = isRepository ? await git.trackedPaths(among: paths.sorted()) : Set<String>()
         let fileManager = FileManager.default
         let checkoutURL = URL(fileURLWithPath: checkout)
         let missing = Set(paths.filter { path in
@@ -878,7 +890,7 @@ extension AppModel {
     /// (`canStillMerge`). A head left unmarked by an older merge - its lead merged again
     /// since, or the job is long over - used to go on claiming its files forever, and
     /// every chat that later touched one of them went out empty, without a word.
-    private func siblingOwnedPaths(in checkout: String, projectID: UUID, excluding leadID: UUID) -> (reserved: [String: String], blocking: [String: String]) {
+    private func siblingOwnedPaths(in checkout: String, projectID: UUID?, excluding leadID: UUID) -> (reserved: [String: String], blocking: [String: String]) {
         let team = Set(hydraTeam(of: leadID).map(\.id))
         var reserved: [String: String] = [:]
         var blocking: [String: String] = [:]

@@ -201,6 +201,7 @@ struct UserMessageRow: View {
                         .buttonStyle(.borderless)
                         .foregroundStyle(isEditing ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                         .help("Edit message")
+                        .accessibilityLabel(Text(verbatim: Chrome.localized("Edit message")))
                         // The pointer settling on the pencil is the editor about to open: its
                         // file preview starts now, so the click finds it done or nearly so.
                         .onHover { hovering in
@@ -750,7 +751,7 @@ struct HydraDelegationBlock: View {
                         .font(.chat(.callout, weight: .medium))
                         .foregroundStyle(.green)
                         .transition(.scale.combined(with: .opacity))
-                        .accessibilityLabel("sent")
+                        .accessibilityLabel(Text(verbatim: Chrome.localized("Sent")))
                 }
             }
             if !delegations.isEmpty {
@@ -1328,7 +1329,7 @@ struct AssistantMessageRow: View {
     /// The context menu's items, from value snapshots with weak captures: the AppKit menu
     /// outlives the right-click, so its callbacks must not retain the row.
     static func messageActions(text: String, code: String?, runtime: ThreadRuntime, selection: SelectionCopy) -> [RowAction] {
-        let textSnapshot = text
+        let quoteSnapshot = selection.text ?? text
         let codeSnapshot = code
         var items = copyActions(text: text, selection: selection)
         if let codeSnapshot {
@@ -1338,8 +1339,8 @@ struct AssistantMessageRow: View {
         }
         items.append(RowAction(title: "Add to reply", symbol: "arrow.turn.down.left", startsGroup: true, confirms: "Added") { [weak runtime] in
             guard let runtime else { return }
-            guard !runtime.draft.quotes.contains(where: { $0.text == textSnapshot }) else { return }
-            runtime.draft.quotes.append(ReplyQuote(text: textSnapshot))
+            guard !runtime.draft.quotes.contains(where: { $0.text == quoteSnapshot }) else { return }
+            runtime.draft.quotes.append(ReplyQuote(text: quoteSnapshot))
         })
         return items
     }

@@ -359,16 +359,11 @@ final class SidebarLayout {
 
     private enum Key {
         static let width = "sidebarWidth"
-        static let startsOpen = "sidebarStartsOpen"
     }
 
     private(set) var width: CGFloat
-    private(set) var isVisible: Bool
-    /// Whether the sidebar is open when the app starts (Settings → Appearance → Other).
-    /// Open by default; toggling the sidebar only changes the current session.
-    var startsOpen: Bool {
-        didSet { persist() }
-    }
+    /// Open at every launch; closing it only lasts for the session.
+    private(set) var isVisible = true
     /// Whether the sidebar, as laid out this frame, is wide enough to hold the window buttons
     /// in its top corner. Until it is (while it slides open, or is dragged out from the edge)
     /// they stay over the chat's chrome, and the chrome keeps their room; the moment it is,
@@ -383,6 +378,12 @@ final class SidebarLayout {
     /// How much the chat pane's width changes over the current slide: negative while the
     /// sidebar opens, positive while it closes. Zero outside a slide.
     private(set) var slideDelta: CGFloat = 0
+    private(set) var slideGeneration = 0
+    private(set) var slideTargetWidth: CGFloat = 0
+    /// A column restored partway through a slide needs only its remaining displacement.
+    var remainingSlideDelta: CGFloat {
+        (lastLaidOutWidth >= 0 ? lastLaidOutWidth : renderedWidth) - slideTargetWidth
+    }
     @ObservationIgnored private var slideTask: Task<Void, Never>?
 
     /// The width from which the buttons fit beside the sidebar's edge with their usual clearance.
@@ -403,10 +404,7 @@ final class SidebarLayout {
         let stored = (defaults.object(forKey: Key.width) as? Double).map { CGFloat($0) } ?? Self.defaultWidth
         restingWidth = min(Self.maximumWidth, max(Self.minimumWidth, stored))
         width = restingWidth
-        let visible = defaults.object(forKey: Key.startsOpen) as? Bool ?? true
-        startsOpen = visible
-        isVisible = visible
-        holdsTrafficLights = visible
+        holdsTrafficLights = true
     }
 
     var renderedWidth: CGFloat { isVisible ? width : 0 }
@@ -421,8 +419,10 @@ final class SidebarLayout {
         if fits != holdsTrafficLights { holdsTrafficLights = fits }
     }
 
-    private func beginSlide(delta: CGFloat) {
-        slideDelta = delta
+    private func beginSlide(targetWidth: CGFloat) {
+        slideTargetWidth = targetWidth
+        slideDelta = remainingSlideDelta
+        slideGeneration += 1
         isSliding = true
         slideTask?.cancel()
         slideTask = Task { @MainActor [weak self] in
@@ -457,12 +457,13 @@ final class SidebarLayout {
 
     func endDrag() {
         if width < Self.collapseThreshold {
-            beginSlide(delta: width)
+            beginSlide(targetWidth: 0)
             withAnimation(Chrome.panelSlide) { isVisible = false }
             width = restingWidth
         } else {
             let settled = max(Self.minimumWidth, width)
             restingWidth = settled
+            if settled != width { beginSlide(targetWidth: settled) }
             withAnimation(Chrome.panelSlide) { width = settled }
         }
         persist()
@@ -472,7 +473,7 @@ final class SidebarLayout {
     func toggle() {
         let opening = !isVisible
         if opening { width = restingWidth }
-        beginSlide(delta: opening ? -restingWidth : width)
+        beginSlide(targetWidth: opening ? restingWidth : 0)
         withAnimation(Chrome.panelSlide) { isVisible.toggle() }
         persist()
     }
@@ -480,7 +481,6 @@ final class SidebarLayout {
     private func persist() {
         let defaults = CaptureRun.defaults ?? .standard
         defaults.set(Double(restingWidth), forKey: Key.width)
-        defaults.set(startsOpen, forKey: Key.startsOpen)
     }
 }
 

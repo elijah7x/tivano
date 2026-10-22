@@ -36,7 +36,7 @@ struct MCPSettingsPage: View {
     var body: some View {
         let connected = connected
         let visibleSections = visibleSections
-        VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+        VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
             MCPLeadCard()
             if let error = model.mcp.configurationLoadError {
                 ChromeSection(title: "MCP configuration could not be loaded") {
@@ -206,6 +206,7 @@ private struct MCPConnectedRow: View {
             }
             .buttonStyle(.plain)
             .help(Text(verbatim: Chrome.localized("Server options")))
+            .accessibilityLabel(Text(verbatim: Chrome.localized("Server options")))
             .popover(isPresented: $showMenu, arrowEdge: .bottom) {
                 PopoverMenu {
                     PopoverItem("Refresh", symbol: "arrow.clockwise") {
@@ -590,6 +591,7 @@ private struct MCPCustomRow: View {
         }
         .buttonStyle(.plain)
         .help(Text(verbatim: Chrome.localized("Server options")))
+        .accessibilityLabel(Text(verbatim: Chrome.localized("Server options")))
         .popover(isPresented: $showMenu, arrowEdge: .bottom) {
             PopoverMenu {
                 PopoverItem("Edit", symbol: "pencil") {
@@ -857,6 +859,7 @@ private struct MCPCustomEditor: View {
                     }
                     .buttonStyle(.plain)
                     .help(Text(verbatim: Chrome.localized(variable.isSecret ? "Kept in the Keychain" : "Stored in mcp.json; click to keep it in the Keychain instead")))
+                    .accessibilityLabel(Text(verbatim: Chrome.localized(variable.isSecret ? "Kept in the Keychain" : "Stored in mcp.json; click to keep it in the Keychain instead")))
                     Button {
                         variables.removeAll { $0.id == variable.id }
                     } label: {
@@ -868,6 +871,7 @@ private struct MCPCustomEditor: View {
                     }
                     .buttonStyle(.plain)
                     .help(Text(verbatim: Chrome.localized("Remove this variable")))
+                    .accessibilityLabel(Text(verbatim: Chrome.localized("Remove this variable")))
                 }
             }
             Button {

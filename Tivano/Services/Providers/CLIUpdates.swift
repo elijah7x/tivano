@@ -248,7 +248,7 @@ enum CLIUpdates {
         environment: [String: String],
         probe: CLIProbe = .live
     ) async throws -> CLIInstallChannel? {
-        if provider.isAPIKeyBased || provider == .omp { return nil }
+        if provider.isAPIKeyBased || provider == .omp || provider == .minimaxCode { return nil }
         let original = probe.standardize(executable.path)
         let resolved = probe.standardize(probe.resolve(executable).path)
         guard !isProtected(resolved) else { return nil }
@@ -285,6 +285,8 @@ enum CLIUpdates {
             }
         }
         switch provider {
+        case .minimaxCode:
+            return AppText.localized("Update MiniMax Code with its official installer or the documented npm command.")
         case .omp:
             return String(localized: "omp is managed by Tern. Update it in Tern.")
         case .devin:
@@ -631,6 +633,7 @@ enum CLIUpdates {
         case .opencode: return nil
         case .pi: return try await registryVersion("@earendil-works/pi-coding-agent", tag: "latest", probe: probe)
         case .omp: return nil
+        case .minimaxCode: return try await registryVersion("@minimax-ai/code", tag: "latest", probe: probe)
         case .kimi: return try await registryVersion("@moonshot-ai/kimi-code", tag: "latest", probe: probe)
         case .dsh: return try await registryVersion(DshCLI.packageName, tag: "latest", probe: probe)
         case .commandcode: return try await registryVersion("command-code", tag: "latest", probe: probe)

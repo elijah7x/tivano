@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 
 /// The font the embedded terminal draws with: the running terminal's configured font,
 /// so a Starship prompt's Nerd Font glyphs render instead of landing as empty boxes.
@@ -7,9 +8,13 @@ enum TerminalFont {
     /// The configured terminal font that carries the icons, or the closest thing to it.
     static func preferred(fallbackSize: CGFloat = 12) -> NSFont {
         let configured = configuredFonts()
-        if let match = configured.first(where: hasNerdGlyphs) { return match }
+        for font in configured where hasNerdGlyphs(font) {
+            if let sibling = nerdSibling(of: font) { return sibling }
+            if isTerminalFont(font) { return font }
+        }
         if let first = configured.first {
-            return nerdSibling(of: first) ?? firstInstalledNerdFont(size: first.pointSize) ?? first
+            return nerdSibling(of: first) ?? firstInstalledNerdFont(size: first.pointSize)
+                ?? (isTerminalFont(first) ? first : NSFont.monospacedSystemFont(ofSize: first.pointSize, weight: .regular))
         }
         return firstInstalledNerdFont(size: fallbackSize)
             ?? NSFont.monospacedSystemFont(ofSize: fallbackSize, weight: .regular)
@@ -100,22 +105,52 @@ enum TerminalFont {
         return nerdProbes.allSatisfy { covered.contains($0) }
     }
 
-    /// The Nerd Font sibling of a family, so a configured "Geist Mono" keeps its look with
-    /// the icons added ("GeistMono Nerd Font").
+    // SwiftTerm 1.20.0, AppleTerminalView.computeFontDimensions, uses the named W
+    // glyph's advance for every cell. Check ASCII against that same metric; icon
+    // coverage or a font's fixed-pitch flag alone does not establish compatibility.
+    private static func isTerminalFont(_ font: NSFont) -> Bool {
+        guard !normalized(font.familyName ?? font.fontName).hasSuffix("nfp") else { return false }
+        let reference = font.glyph(withName: "W")
+        let width = font.advancement(forGlyph: reference).width
+        guard reference != 0, width.isFinite, width > 0 else { return false }
+        let tolerance = max(0.01, width * 0.001)
+        return (32..<127).allSatisfy { code in
+            var character = UniChar(code)
+            var glyph = CGGlyph()
+            guard CTFontGetGlyphsForCharacters(font, &character, &glyph, 1), glyph != 0 else { return false }
+            let advance = font.advancement(forGlyph: NSGlyph(glyph)).width
+            return advance.isFinite && abs(advance - width) <= tolerance
+        }
+    }
+
+    /// Prefer the Mono sibling, whose patched icons fit a single terminal cell.
     private static func nerdSibling(of font: NSFont) -> NSFont? {
         guard let family = font.familyName else { return nil }
-        let target = normalized(family) + "nf"
-        guard let match = NSFontManager.shared.availableFontFamilies.first(where: { normalized($0) == target }) else {
-            return nil
+        var base = normalized(family)
+        for suffix in ["nfm", "nfp", "nf"] where base.hasSuffix(suffix) {
+            base.removeLast(suffix.count)
+            break
         }
-        return NSFont(name: match, size: font.pointSize)
+        for suffix in ["nfm", "nf"] {
+            if let family = NSFontManager.shared.availableFontFamilies.first(where: { normalized($0) == base + suffix }),
+               let candidate = NSFont(name: family, size: font.pointSize),
+               isTerminalFont(candidate), hasNerdGlyphs(candidate) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private static func firstInstalledNerdFont(size: CGFloat) -> NSFont? {
-        guard let family = NSFontManager.shared.availableFontFamilies.first(where: { $0.localizedCaseInsensitiveContains("nerd font") }) else {
-            return nil
+        let families = NSFontManager.shared.availableFontFamilies.sorted()
+        for suffix in ["nfm", "nf"] {
+            for family in families where normalized(family).hasSuffix(suffix) {
+                if let font = NSFont(name: family, size: size), isTerminalFont(font), hasNerdGlyphs(font) {
+                    return font
+                }
+            }
         }
-        return NSFont(name: family, size: size)
+        return nil
     }
 
     /// A font by the name a terminal config uses, tolerating the abbreviations terminals
@@ -133,6 +168,8 @@ enum TerminalFont {
         name.lowercased()
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "nerdfontmono", with: "nfm")
+            .replacingOccurrences(of: "nerdfontpropo", with: "nfp")
             .replacingOccurrences(of: "nerdfont", with: "nf")
     }
 }

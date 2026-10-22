@@ -131,6 +131,8 @@ private enum HydraTreeCache {
             // simply made again. Landings are one at a time, so this does not spin.
             guard (generations[checkout] ?? 0) == generation else { continue }
             captures[checkout] = Capture(tree: made.tree, commit: made.commit, capturedAt: .now, generation: generation)
+            // Stored first, so a caller cancelled meanwhile still leaves the capture for the next head.
+            try Task.checkCancellation()
             return made
         }
     }
@@ -344,7 +346,7 @@ extension AppModel {
 
     /// The checkout a lead works in: its worktree, else the project folder.
     private func hydraCheckout(of lead: ChatThread) -> String? {
-        lead.worktreePath ?? project(lead.projectID)?.path
+        try? executionDirectory(for: lead)
     }
 
     /// A sidebar project whose name equals the reference, case-insensitive, after a
@@ -367,7 +369,7 @@ extension AppModel {
     /// own checkout for a head in the lead's project, else the head's project folder.
     private func hydraCheckout(of head: ChatThread, lead: ChatThread) -> String? {
         if let target = head.hydra?.targetCheckout, !target.isEmpty { return target }
-        return head.projectID == lead.projectID ? hydraCheckout(of: lead) : project(head.projectID)?.path
+        return head.projectID == lead.projectID ? hydraCheckout(of: lead) : (try? executionDirectory(for: head))
     }
 
     /// Whether a head is still allowed to start. A stop or a delete during routing leaves
@@ -531,7 +533,7 @@ extension AppModel {
         project: String? = nil,
         profile: String? = nil
     ) -> ChatThread? {
-        guard let parent = thread(parentID) else { return nil }
+        guard let parent = thread(parentID), beginThreadTurn(parentID) else { return nil }
         // A lead with no heads left starts the roster over. The count would otherwise
         // climb for the life of the chat, and a lead that has sent out twenty-five heads
         // over a morning would name its next one "Hank 2" with one head in the panel.
@@ -642,6 +644,12 @@ extension AppModel {
             failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ did not start because its checkout could not be read."), info.persona.name))
             return
         }
+        do {
+            _ = try ensureExecutionDirectory(for: lead)
+        } catch {
+            failHydraRoute(id, error.localizedDescription)
+            return
+        }
         updateHydraHead(id) { $0.targetCheckout = checkout }
         // A head on another provider than its lead, with no model chosen for it, runs that
         // provider's default: the catalogue it comes from may not have loaded yet.
@@ -683,13 +691,13 @@ extension AppModel {
     /// cannot be copied (no git, no commits yet) or git refuses; the head then works in
     /// the checkout itself.
     private func makeHydraCopy(for head: ChatThread, of checkout: String) async -> (path: String, tree: String)? {
-        guard let info = head.hydra, let project = project(head.projectID) else { return nil }
+        guard let info = head.hydra else { return nil }
         // A head's work landing in the checkout right now finishes first, so the copy
         // starts from the checkout whole rather than half-way through a patch.
         if let parentID = head.parentThreadID { await existingRuntime(for: parentID)?.hydraLanding?.value }
         let git = Git(checkout)
         guard await git.isRepository(), await git.hasCommits() else { return nil }
-        let folder = project.name.replacingOccurrences(of: " ", with: "-").lowercased()
+        let folder = (project(head.projectID)?.name ?? "task").replacingOccurrences(of: " ", with: "-").lowercased()
         let name = info.persona.name.replacingOccurrences(of: " ", with: "-").lowercased()
         let suffix = String(head.id.uuidString.lowercased().prefix(8))
         let path = Storage.worktreesDirectory.appendingPathComponent("\(folder)-\(name)-\(suffix)").path
@@ -745,23 +753,19 @@ extension AppModel {
                 $0.tokens = max($0.tokens, live.hydraTokens)
             }
         }
-        // Opt-in: a finished head leaves the panel on its own, for the sidebar under its
-        // lead, instead of waiting for "Clear finished heads". Running heads stay put. It
-        // goes once its panel has played the head's finish (see `HydraPanel.finishHold`),
-        // not the instant it is done, and only if it is still there to clear.
-        if settings.hydraAutoClearFinished {
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(HydraPanel.finishHold + 0.2))
-                guard let self, let head = self.thread(id), head.isInPanel, head.hydra?.isFinished == true else { return }
-                self.updateThread(id) { $0.isInPanel = false }
-                if let parentID = head.parentThreadID {
-                    let leadRuntime = self.runtime(for: parentID)
-                    if leadRuntime.hydraSelectedHeadID == id { leadRuntime.hydraSelectedHeadID = nil }
-                    if leadRuntime.hydraPoppedHeadID == id { leadRuntime.hydraPoppedHeadID = nil }
-                    leadRuntime.hydraAutoPopHeld.remove(id)
-                    leadRuntime.hydraAutoPanelDocks[id] = nil
-                    leadRuntime.panelStackOrder.removeAll { $0 == .auto(id) }
-                }
+        // Keep the finish visible briefly, then clear the panel only if the head is
+        // still finished. Running heads stay put.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(HydraPanel.finishHold + 0.2))
+            guard let self, let head = self.thread(id), head.isInPanel, head.hydra?.isFinished == true else { return }
+            self.updateThread(id) { $0.isInPanel = false }
+            if let parentID = head.parentThreadID {
+                let leadRuntime = self.runtime(for: parentID)
+                if leadRuntime.hydraSelectedHeadID == id { leadRuntime.hydraSelectedHeadID = nil }
+                if leadRuntime.hydraPoppedHeadID == id { leadRuntime.hydraPoppedHeadID = nil }
+                leadRuntime.hydraAutoPopHeld.remove(id)
+                leadRuntime.hydraAutoPanelDocks[id] = nil
+                leadRuntime.panelStackOrder.removeAll { $0 == .auto(id) }
             }
         }
         guard let parentID = head.parentThreadID, let finished = thread(id)?.hydra else { return }
@@ -773,7 +777,7 @@ extension AppModel {
         // its copy, where its half-done work is, and that folder has to still be there
         // when the lead reads it. Those copies go when the heads are cleared by hand, or
         // when the head is steered on for another turn.
-        if settings.hydraAutoClearFinished, outcome == .completed {
+        if outcome == .completed {
             releaseHydraCopy(of: id)
         }
     }
@@ -1114,7 +1118,7 @@ extension AppModel {
         leadRuntime.panelStackOrder.removeAll { if case .auto = $0 { return true }; return false }
     }
 
-    /// Finished heads leave the panel for the sidebar, and give their copies back.
+    /// Clears finished heads from the panel and gives their copies back.
     func clearFinishedHydraHeads(of parentID: UUID) {
         for head in hydraHeads(of: parentID) where head.hydra?.isFinished == true {
             updateThread(head.id) { $0.isInPanel = false }
@@ -1142,7 +1146,7 @@ extension AppModel {
     private func releaseHydraCopyAfterHistory(of id: UUID, info: HydraHeadInfo, copy: String) async {
         guard !libraryWritesBlocked, let head = thread(id), head.hydra == info, head.worktreePath == copy,
               info.hasOwnCopy, info.isFinished,
-              let project = project(head.projectID),
+              let directory = try? executionDirectory(for: head),
               existingRuntime(for: id)?.isRunning != true,
               existingRuntime(for: id)?.isHydraMerging != true else { return }
         let copyURL = URL(fileURLWithPath: copy).resolvingSymlinksInPath().standardizedFileURL
@@ -1155,7 +1159,6 @@ extension AppModel {
               info.targetCheckout.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL == copyURL }) != true,
               !threads.contains(where: { $0.id == head.parentThreadID && $0.worktreePath == copy }) else { return }
         let runtime = existingRuntime(for: id)
-        let directory = head.executionDirectory(projectPath: project.path)
         let workIsPreserved = info.landing.map { landing in
             landing.landed || landing.isEmpty
                 || landing.patchPath.map { FileManager.default.fileExists(atPath: $0) } == true
@@ -1193,7 +1196,7 @@ extension AppModel {
 
     /// Writes what a head changed in its copy but never landed to a patch file, and tells
     /// the lead where it went. Nothing to keep where the copy holds no changes of its own.
-    private func keepHydraCopyAsPatch(_ id: UUID, name: String, copy: String, base: String) async -> Bool {
+    func keepHydraCopyAsPatch(_ id: UUID, name: String, copy: String, base: String) async -> Bool {
         let copyGit = Git(copy)
         // A copy that differs from its base only by build output, or by the cache the
         // head's own tool wrote there, holds no work of the head's: nothing to keep, and

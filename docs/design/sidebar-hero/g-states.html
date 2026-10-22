@@ -1,0 +1,205 @@
+<!doctype html>
+<!--
+G · Sage states. Portable layer specification, 268 × 128 coordinates, art above y102.
+Priority: fail > wait > running > done > idle. Controls select one resolved state.
+Every state layer (weather, tone, status, fabric, axis) crossfades 400ms ease.
+Idle and wait are FULLY STATIC after entry settles; no timers mutate their artwork.
+Wait: solid rest axis, WAIT · 1 and leader; idle: dashed axis, 0.0°.
+Wait variants default to overcast: 56 × 24 cloud at (116,3), .6 fill and
+.75px upper-edge outline; neutral gray wash .08. Cloud enters x-24→0 and
+opacity 0→1 over 1.2s ease-out once. Tanzaku: 9 × 22 slip at (201,8),
+right-edge shadow, .75px thread and 9px monospace question mark; drops and
+settles once in 1.2s. Both hold still afterward; reduced motion appears at rest.
+Running: nested rotation groups anchored (186,0). Track A 2.4s: 7,11,7,3,7°;
+track B 3.7s: 0,1,0,-1,0°; ease-in-out, combined bias +7° ±5°.
+Leaving running: capture each actual transform once; ease both to zero over 800ms.
+Fabric: one cloth-covered ball, gathered neck, 1px cord and short knotted end.
+Continuous scalloped silhouette + four tapered valleys + four lit ridge shoulders;
+contact ellipse beneath the ball, tiny gather shadows, then rigid head and tie.
+Light comes from upper-left, about 35 degrees; no specular or rim lighting.
+Cloth palette: #f8f7ee light, #eeeee4 mid, #c4ccc5 cool sage-gray shadow;
+All cloth coordinates lie on a 0.5px grid. Authored neutral paths are deformed
+once into four wind keys, lifted done and narrow/long fail silhouettes. Each
+part retains its own identical M/C/Z command sequence across every frame.
+All resulting skirt paths widen progressively to 115% at the hem, around x186;
+neck anchors, head size and four folds stay unchanged, including every wind key.
+Wind displaces silhouette, ridges and valleys together with a downwind hem wave;
+neck anchors and head stay rigid. 2.4s A→B→C→D→A at 0,.25,.5,.75,1.
+Wind: fixed pool of 4 horizontal .75px streaks, lengths 26/40/32/46,
+translation x -80→300, 1.8/2.1/2.4/2.7s, negative staggered delays.
+Running axis dashoffset 0→-16 in 2s. Readout samples actual combined transforms at 10Hz.
+Done: static lifted hem; warm cream wash .07 and uniform doll tint .045.
+Corner sun center (250,14), radius 13, clipped by the rounded card; solid gold
+disc, radial halo from .35 to transparent (no blur), 12 rounded tapered rays
+of alternating lengths at .7 opacity. Rays rotate in 30s; halo opacity
+breathes .65→1→.65 in 4s. Dark gold is deeper and softer.
+Fail: static narrow wet hem; slate wash .11; fixed pool of 16 rain paths,
+lengths 6/8/10px, .75px stroke, .45 opacity; translate (0,-28)→(-20,128),
+2.2/2.8/3.4s linear, staggered negative delays. No particle simulation.
+Hover: nested doll lift y0→-3 in 180ms, top-clipped string shortens with doll;
+band opacity .08→.14, label .75→1 in 160ms; callout dashoffset 0→-12 in 1.2s.
+Card press scale 1→.98 in 100ms, center (134,64).
+Reduced motion (toggle OR system): all loops paused at authored static frames,
+all transitions removed, running angle +7°, rain distributed in place, sun still.
+Only paths, gradients, rigid transforms, opacity, dashoffset and compatible path morphs.
+JS samples rotation for text only; state-event snapshots are not per-frame animation.
+No filters, external assets or dependencies. F is unchanged.
+-->
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>G · Sage states</title><style>
+*{box-sizing:border-box}body{margin:0;padding:36px;background:#eef0ee;color:#29352e;font:13px -apple-system,'PingFang SC',sans-serif}main{max-width:1680px;margin:auto}h1{font-size:20px;font-weight:600;margin:0 0 8px}p{color:#657069;line-height:1.7}header{margin-bottom:24px}.controls{display:flex;gap:6px;flex-wrap:wrap;margin-top:20px}button{font:inherit;cursor:pointer}.controls button{border:1px solid #c8d1ca;background:transparent;border-radius:7px;padding:7px 14px;color:inherit}.controls button[aria-pressed=true]{background:#d6e2d9;border-color:#819d8b}button:focus-visible{outline:2px solid #3e7053;outline-offset:4px}.sidebars{display:flex;gap:32px;flex-wrap:wrap}.theme{--ink:#1f2a30;--secondary:#64747d;--selected:#ffffff69;--sage:#709d83;color:var(--ink)}.dark{--ink:#e6ecef;--secondary:#9aa8ad;--selected:#ffffff0d;--sage:#527661}.sidebar{width:300px;height:700px;border-radius:26px;background:linear-gradient(145deg,#cfdbe3,#d9e2e6);overflow:hidden}.sidebar.dark{background:linear-gradient(145deg,#262d32,#1e2328)}.windowbar{height:64px;position:relative}.lights{display:flex;gap:8px;position:absolute;left:20px;top:20px}.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}.plain{border:0;background:transparent;color:var(--secondary);padding:4px;display:inline-flex;align-items:center;justify-content:center}.toggle{position:absolute;right:17px;top:16px}.icon{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}.hero{display:block;padding:0;border:0;width:268px;height:104px;border-radius:14px;overflow:hidden;background:var(--sage);color:white;transition:transform .1s;margin:0 16px;transform-origin:center}.hero:active{transform:scale(.98)}.hero svg{width:100%;height:100%;display:block}.wash{opacity:0;transition:opacity .16s}.caption{opacity:.6;transition:opacity .16s}.hero:hover .wash,body[data-mode=hover] .wash{opacity:.06}.hero:hover .caption,body[data-mode=hover] .caption{opacity:1}.section{display:flex;align-items:center;margin:25px 20px 15px;gap:10px;color:var(--secondary)}.section strong{font-size:12px;font-weight:600;flex:1}.section .plain{padding:2px}.threads{padding:0 12px}.folder{height:33px;display:flex;align-items:center;gap:8px;padding:0 9px;font-weight:500;margin-top:9px}.chevron{font-size:12px;color:var(--secondary);width:10px}.folder .count{margin-left:auto;font-size:11px;color:var(--secondary);font-weight:400}.row{height:34px;display:flex;align-items:center;gap:8px;padding:0 10px 0 27px;border-radius:7px;font-size:13px}.row span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1}.row time{font-size:11px;color:var(--secondary);white-space:nowrap}.row.selected{background:var(--selected)}.row.selected:before{content:'';width:4px;height:4px;border-radius:50%;background:var(--ink);margin-left:-12px}.enlargements{margin-top:42px;display:flex;gap:32px;flex-wrap:wrap}.study{margin:0;max-width:100%;overflow-x:auto}.study figcaption{font:11px ui-monospace,monospace;color:#657069;margin-bottom:12px}.stage{width:836px;padding:16px;background:#d5dfe5;border-radius:24px}.dark .stage{background:#1e2328}.stage .hero{width:804px;height:312px;border-radius:42px;margin:0}footer{margin-top:32px;max-width:760px}footer p{margin:4px 0}#feedback{min-height:20px;margin-top:12px;font-size:12px}body[data-static=true] .hero,body[data-static=true] .wash,body[data-static=true] .caption{transition:none}@media(max-width:680px){body{padding:24px 16px}.sidebars{gap:24px}}@media(prefers-reduced-motion:reduce){.hero,.wash,.caption{transition:none}}
+
+.hero{height:128px}.stage .hero{height:384px}.hero svg{overflow:hidden}
+.controls .segment{display:inline-flex;gap:0;align-items:center;margin-right:10px}.segment span{margin-right:8px}.segment button{border-radius:0}.segment button:first-of-type{border-radius:7px 0 0 7px}.segment button:last-child{border-radius:0 7px 7px 0}
+.theme{--sun-disc:#f2dc9b}.dark{--sun-disc:#dcc38b}
+.wait-cloud,.wait-tag{display:none}body[data-wait=overcast] .wait-cloud,body[data-wait=tanzaku] .wait-tag{display:inline}
+body[data-state=wait][data-wait=overcast] .cloud-enter{animation:cloud-enter 1.2s ease-out both}
+body[data-state=wait][data-wait=tanzaku] .tag-enter{transform-origin:186px 3px;animation:tag-enter 1.2s ease-out both}
+@keyframes cloud-enter{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:translateX(0)}}
+@keyframes tag-enter{0%{opacity:0;transform:translateY(-8px) rotate(-7deg)}55%{opacity:1;transform:translateY(1px) rotate(3deg)}80%{transform:translateY(0) rotate(-1deg)}100%{opacity:1;transform:translateY(0) rotate(0deg)}}
+body[data-state=wait] .leader{animation:none!important}
+body[data-static=true] .cloud-enter,body[data-static=true] .tag-enter{animation:none!important;opacity:1;transform:none}
+.layer{opacity:0;transition:opacity .4s ease;pointer-events:none}.layer.visible{opacity:1}
+.rot-a,.rot-b{transform-origin:186px 0;transition:transform .8s ease}.lift-doll{transition:transform .18s ease}
+.hero:hover .lift-doll,.hero:focus-visible .lift-doll,body[data-hover=true] .lift-doll{transform:translateY(-3px)}
+.band-fill{opacity:.08;transition:opacity .16s}.entry-label{opacity:.75;transition:opacity .16s}
+.hero:hover .band-fill,.hero:focus-visible .band-fill,body[data-hover=true] .band-fill{opacity:.14}
+.hero:hover .entry-label,.hero:focus-visible .entry-label,body[data-hover=true] .entry-label{opacity:1}
+.callout{display:none}body[data-entry=callout] .callout{display:inline}body[data-entry=callout] .band{display:none}
+.hero:hover .leader,.hero:focus-visible .leader,body[data-hover=true] .leader{animation:leader 1.2s linear infinite}
+.wind{animation:wind var(--duration) linear infinite;animation-delay:var(--delay)}
+.rain{animation:rain var(--duration) linear infinite;animation-delay:var(--delay)}
+.sun-rays{transform-origin:250px 14px;animation:sun 30s linear infinite}.sun-halo{animation:pulse 4s ease-in-out infinite}
+body:not([data-state=fail]) .rain,body:not([data-state=done]) .sun-rays,body:not([data-state=done]) .sun-halo,body:not([data-state=running]) .wind,body:not([data-state=running]) .fabric-motion{animation-play-state:paused}
+body[data-state=running] .rot-a{animation:sway-a 2.4s ease-in-out infinite}body[data-state=running] .rot-b{animation:sway-b 3.7s ease-in-out infinite}
+body[data-state=running] .moving-axis{animation:axis 2s linear infinite}
+@keyframes sway-a{0%,50%,100%{transform:rotate(7deg)}25%{transform:rotate(11deg)}75%{transform:rotate(3deg)}}
+@keyframes sway-b{0%,50%,100%{transform:rotate(0deg)}25%{transform:rotate(1deg)}75%{transform:rotate(-1deg)}}
+@keyframes wind{from{transform:translateX(-80px)}to{transform:translateX(300px)}}
+@keyframes rain{from{transform:translate(0,-28px)}to{transform:translate(-20px,128px)}}
+@keyframes sun{to{transform:rotate(360deg)}}@keyframes pulse{0%,100%{opacity:.65}50%{opacity:1}}
+@keyframes axis{to{stroke-dashoffset:-16}}@keyframes leader{to{stroke-dashoffset:-12}}
+body[data-static=true] .hero *{animation-play-state:paused!important;transition:none!important}
+body[data-static=true] .rot-a,body[data-static=true] .rot-b{animation:none!important;transform:rotate(0deg)!important}
+body[data-static=true][data-state=running] .rot-a{transform:rotate(7deg)!important}
+body[data-static=true] .hero{transition:none}
+</style></head>
+<body data-wait="overcast" data-state="idle" data-entry="band" data-hover="false" data-static="false"><main>
+<header><h1>G · Sage states</h1><p>同一块鼠尾草绿，五种会话天气。优先级：出错 › 待处理 › 运行中 › 完成 › 空闲。</p>
+<div class="controls"><div class="segment" role="group" aria-label="会话状态"><button data-state="fail" aria-pressed="false">出错</button><button data-state="wait" aria-pressed="false">待处理</button><button data-state="running" aria-pressed="false">运行中</button><button data-state="done" aria-pressed="false">完成</button><button data-state="idle" aria-pressed="true">空闲</button></div>
+<div class="segment" role="group" aria-label="新会话入口"><span>入口：</span><button data-entry="band" aria-pressed="true">按钮带</button><button data-entry="callout" aria-pressed="false">标注</button></div><div class="segment" role="group" aria-label="待处理场景"><span>待处理：</span><button data-wait="overcast" aria-pressed="true">阴天</button><button data-wait="tanzaku" aria-pressed="false">短册</button></div><button id="hover" aria-pressed="false">hover</button><button id="reduce" aria-pressed="false">reduce motion</button></div></header>
+<div class="sidebars" id="sidebars"></div><div class="enlargements" id="enlargements"></div>
+<footer><p>空闲完全静止；待处理保留实线轴与 WAIT 标注，可选阴天或短册。云朵飘入、短册轻落后均在 1.2 秒内静止；减少动态时直接呈现。</p><p>运行中偏转迎风，褶皱与波浪下摆一起舒展；角度读数跟随真实摆动。</p><p>完成以右上角探入的金色太阳、慢转光芒和微暖底色提示未读；出错以斜雨、冷色与垂落布面提示异常。</p><p>按钮带把新会话放在固定底栏；标注入口用制图引线连接布边，整张卡片都可点击。</p><p>悬停时娃娃抬起 3px；减少动态保留每种天气的静态画面与状态文字。</p><p>同一块米白布包住球体，在颈部用细绳收束；短褶与接触阴影连接头部和裙身。</p><p>裙摆加宽约 15%，四道褶谷向外舒展，贯穿连续的波浪下摆，左上受光、右下落入低饱和灰绿阴影，没有硬质卷边。</p><p>布料统一采用柔光明暗，五种状态共用布面骨架；阴天略冷，完成时布面只添一层极淡暖色，主光仍在左上。</p><div id="feedback" role="status" aria-live="polite"></div></footer></main><script>
+// Rounded gathers feed one continuous hem; alternating low ridges and high valleys.
+const cloth={
+body:'M182 47 C179 51 176 57.5 172 64 C168 71 163.5 78 161 81.5 C162.5 85.5 166 88 169.5 88 C172 88 173 85.5 175 85.5 C177 85.5 179 91 183 91 C186.5 91 188 87.5 190 87.5 C192.5 87.5 195 90 198.5 89.5 C202 89 202 84.5 204.5 84.5 C207 84.5 211 86.5 214 83 C215 82 215.5 80 215 79 C210 72.5 203 65.5 198.5 59.5 C194 54 192.5 49.5 190 47 C187.5 46 184.5 46 182 47 Z',
+valley1:'M183 49 C181.5 58 176 74.5 175 85.5 C174 86 173 87.5 172 88 C173 77.5 179 58 183 49 Z',
+valley2:'M185.5 49 C186 61.5 189.5 78.5 190 87.5 C189 87.5 188 88.5 187 89.5 C187.5 78 184 61 185.5 49 Z',
+valley3:'M188 49 C191 60 201.5 75.5 204.5 84.5 C203 84.5 202.5 86.5 201.5 88 C198.5 77 189.5 61 188 49 Z',
+valley4:'M190 49 C196 60 210 74 215 79 C215.5 80 215 82 214 83 C208.5 76.5 195 61.5 190 49 Z',
+ridge1:'M181.5 50 C177.5 61 167.5 78 164 83 C164.5 85 166 86.5 168 87 C169 76 178.5 59 181.5 50 Z',
+ridge2:'M184 50 C181 62 177.5 79.5 179 87.5 C180 89 181.5 90 183 90 C181 78 183.5 62 184 50 Z',
+ridge3:'M186.5 50 C187 62.5 193 79.5 194 88 C195 88.5 196.5 89 198 88.5 C195 77.5 189 61 186.5 50 Z',
+ridge4:'M189 50 C193.5 61.5 205 77 208 84 C209.5 84.5 211 84.5 212 83.5 C207 76 195 60.5 189 50 Z'
+};
+// Event-time construction only: every cubic control point travels with its cloth panel.
+const half=n=>Math.round(n*2)/2;
+function drape(path,pose){return path.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g,(_,sx,sy)=>{
+ const x=Number(sx),y=Number(sy),t=Math.max(0,(y-49)/42);
+ let dx=0,dy=0;
+ if(pose==='B'){dx=13*t*t;dy=(-3+2*Math.sin((x-161)/9))*t*t}
+ if(pose==='C'){dx=5*t*t;dy=(1.5+2*Math.sin((x-168)/9))*t*t}
+ if(pose==='D'){dx=-3*t*t;dy=(2+1.5*Math.sin((x-175)/9))*t*t}
+ if(pose==='done'){dx=2*t*t;dy=-(2+Math.max(0,x-184)*.18)*t*t}
+ if(pose==='fail'){dx=(187-x)*.4*t;dy=5*t*t}
+ return `${half(186+(x+dx-186)*(1+.15*Math.min(1,t)))} ${half(y+dy)}`;
+})}
+const keys=Object.fromEntries(Object.entries(cloth).map(([name,d])=>[name,[drape(d,'A'),drape(d,'done')]]));
+const running=Object.fromEntries(Object.entries(cloth).map(([name,d])=>[name,['A','B','C','D'].map(pose=>drape(d,pose))]));
+const wet=Object.fromEntries(Object.entries(cloth).map(([name,d])=>[name,drape(d,'fail')]));
+
+const icon=(path)=>`<svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="${path}"/></svg>`;
+const search=icon('M13.5 13.5 L17 17 M15 9 A6 6 0 1 1 3 9 A6 6 0 1 1 15 9');
+const bell=icon('M6 14 L3.5 14 C5 12 5 11 5 8 C5 2 15 2 15 8 C15 11 15 12 16.5 14 Z M8 17 C9 18 11 18 12 17');
+
+const style=document.createElement('style');
+style.textContent=Object.entries(running).map(([name,paths])=>`@keyframes fabric-${name}{${paths.map((d,i)=>`${i*25}%{d:path('${d}')}`).join('')}100%{d:path('${paths[0]}')}}.fabric-${name}{animation:fabric-${name} 2.4s ease-in-out infinite}`).join('');document.head.append(style);
+function fabric(id,state){return Object.keys(cloth).map(name=>{
+ const tone=name==='body'?'mid':name.startsWith('ridge')?'lit':'shadow';
+ return `<path class="${state==='running'?'fabric-motion fabric-'+name:''}" d="${state==='fail'?wet[name]:state==='done'?keys[name][1]:keys[name][0]}" fill="url(#cloth-${tone}-${id})"/>`;
+}).join('')}
+function hero(id){return `<button class="hero" aria-label="新建会话"><svg viewBox="0 0 268 128" aria-hidden="true"><defs>
+<radialGradient id="head-${id}" cx="30%" cy="25%" r="85%"><stop stop-color="#f8f7ee"/><stop offset=".5" stop-color="#eeeee4"/><stop offset="1" stop-color="#c4ccc5"/></radialGradient>
+<linearGradient id="cloth-mid-${id}" x1="0%" y1="0%" x2="100%" y2="80%"><stop stop-color="#f8f7ee"/><stop offset="1" stop-color="#dce0d8"/></linearGradient>
+<linearGradient id="cloth-lit-${id}" x1="0%" y1="0%" x2="100%" y2="80%"><stop stop-color="#f8f7ee"/><stop offset="1" stop-color="#eeeee4"/></linearGradient>
+<linearGradient id="cloth-shadow-${id}" x1="0%" y1="0%" x2="100%" y2="80%"><stop stop-color="#e3e6dd"/><stop offset="1" stop-color="#c4ccc5"/></linearGradient>
+<radialGradient id="contact-${id}" cx="50%" cy="35%" r="60%"><stop stop-color="#aebbb2" stop-opacity=".55"/><stop offset="1" stop-color="#aebbb2" stop-opacity="0"/></radialGradient>
+<radialGradient id="sun-halo-${id}"><stop stop-color="var(--sun-disc)" stop-opacity=".35"/><stop offset=".5" stop-color="var(--sun-disc)" stop-opacity=".35"/><stop offset="1" stop-color="var(--sun-disc)" stop-opacity="0"/></radialGradient>
+<clipPath id="art-${id}"><path d="M0 0 H268 V102 H0 Z"/></clipPath></defs>
+<g class="layer" data-for="done"><path d="M0 0H268V128H0Z" fill="#fff0cd" opacity=".07"/></g><g class="layer" data-for="fail"><path d="M0 0H268V128H0Z" fill="#24394d" opacity=".11"/></g>
+<g class="layer" data-for="wait"><path class="wait-cloud" d="M0 0H268V128H0Z" fill="#a4aab0" opacity=".08"/></g>
+<g clip-path="url(#art-${id})">
+<g fill="none" stroke="#fffef3" stroke-width=".75" opacity=".45"><path d="M20.5 -5V54.5 M-5 17.5H274 M33.5 33.5H101.5 M39.5 29.5V37.5 M95.5 29.5V37.5 M113.5 104 C137.5 72 214 71 250 99 M243.5 94H251.5 M247.5 90V98 M39.5 52.5H73.5 M39.5 49V56 M73.5 49V56"/>
+<path class="layer visible moving-axis" data-for="idle running done fail" stroke-dasharray="4 4" d="M186 0V101 M111.5 45.5L247.5 94"/><path class="layer" data-for="wait" d="M186 0V101"/></g>
+<g fill="#fffef3" font-family="ui-monospace,monospace" font-size="9" opacity=".6"><text x="46" y="29">ø173</text><text class="angle" x="80" y="55.5">0.0°</text><text x="229" y="86">R269</text></g>
+<g class="layer" data-for="running" fill="none" stroke="white" stroke-width=".75" opacity=".4">${[26,40,32,46].map((len,i)=>`<path class="wind" opacity=".4" style="--duration:${1.8+i*.3}s;--delay:-${i*.53}s" d="M0 ${28+i*19}h${len}"/>`).join('')}</g>
+<g class="layer" data-for="fail" fill="none" stroke="white" stroke-width=".75">${Array.from({length:16},(_,i)=>`<path class="rain" opacity=".45" style="--duration:${[2.2,2.8,3.4][i%3]}s;--delay:-${(i*.47+.3).toFixed(2)}s" d="M${18+(i*43)%260} 0l-2 ${6+i%3*2}"/>`).join('')}</g>
+<g class="layer" data-for="done">
+<path class="sun-halo" d="M280 14a30 30 0 1 1-60 0a30 30 0 1 1 60 0" fill="url(#sun-halo-${id})"/>
+<path d="M263 14a13 13 0 1 1-26 0a13 13 0 1 1 26 0" fill="var(--sun-disc)"/>
+<g class="sun-rays" fill="none" stroke="#fff1cc" stroke-linecap="round" opacity=".7">${Array.from({length:12},(_,i)=>`<g transform="rotate(${i*30} 250 14)"><path d="M250 -3.5V${i%2?-7:-10}" stroke-width="2"/></g>`).join('')}</g></g>
+<g class="layer" data-for="wait"><g class="wait-cloud"><g class="cloud-enter">
+<path d="M122 27 C114 27 114 16 121 14 C120 6 132 2 137 9 C142 0 156 2 158 12 C168 9 176 24 168 27 Z" fill="#eeeae3" opacity=".6"/>
+<path d="M116.5 21 C116 17 118 15 121 14 C120 6 132 2 137 9 C142 0 156 2 158 12 C164 10 171 17 172 21" fill="none" stroke="#fffaf0" stroke-width=".75" opacity=".65"/>
+</g></g></g>
+<g class="rot-a"><g class="rot-b"><g class="lift-doll"><path d="M186 -5V23" fill="none" stroke="#c3cec6" stroke-width=".75"/>
+${['idle','running','done','fail'].map(state=>`<g class="layer ${state==='idle'?'visible':''}" data-for="${state==='idle'?'idle wait':state}">${fabric(id,state)}</g>`).join('')}
+<path d="M194 48 C194 50 190.5 52 186 52 C181.5 52 178 50 178 48 C178 46 181.5 44 186 44 C190.5 44 194 46 194 48 Z" fill="url(#contact-${id})"/>
+<path d="M182 49 C181.5 51 180.5 53 180.5 55 M184.5 49 C184 51 184 52 184 53 M188 49 C188.5 51 189 52 190 53.5 M190 49 C192 51 193 52 194 53" fill="none" stroke="#aebbb2" stroke-width=".5" opacity=".35"/>
+<path d="M198 35 C198 41.5 192.5 47 186 47 C179.5 47 174 41.5 174 35 C174 28.5 179.5 23 186 23 C192.5 23 198 28.5 198 35 Z" fill="url(#head-${id})"/>
+
+<g class="layer" data-for="done" fill="#f2dc9b" fill-opacity=".045"><path d="${keys.body[1]}"/><path d="M198 35 C198 41.5 192.5 47 186 47 C179.5 47 174 41.5 174 35 C174 28.5 179.5 23 186 23 C192.5 23 198 28.5 198 35 Z"/></g>
+<g class="layer" data-for="wait"><g class="wait-tag"><g class="tag-enter">
+<path d="M186 3 C192 3 194 7 205.5 8" fill="none" stroke="#c3cec6" stroke-width=".75"/>
+<path d="M201 8H210V30H201Z" fill="#eeeee4"/><path d="M208.5 8H210V30H208.5Z" fill="#c4ccc5" opacity=".6"/>
+<path d="M205.5 7V10" stroke="#aebbb2" stroke-width=".75"/><text x="205.5" y="23" text-anchor="middle" font-family="ui-monospace,monospace" font-size="9" fill="#7b8a80">?</text>
+</g></g></g>
+<path d="M182 47.1 C184.2 48 187.8 48 190 47.1 M189.8 47.3 C190.7 48 190.9 49.3 190.6 50.6" fill="none" stroke="#b9c4bc" stroke-width=".6" stroke-linecap="round" opacity=".75"/>
+</g></g></g>
+${[['wait','WAIT · 1'],['running','RUN · 3'],['done','DONE · 2'],['fail','FAIL · 1']].map(([state,label])=>`<g class="layer" data-for="${state}" fill="#fffef3" opacity=".85"><path d="M95 70H125L169 43" stroke="#fffef3" stroke-opacity=".6" stroke-width=".75" fill="none"/><text x="39" y="73" font-family="ui-monospace,monospace" font-size="9.5" fill-opacity=".85">${label}</text></g>`).join('')}</g>
+<g class="band"><path class="band-fill" d="M0 102H268V128H0Z" fill="white"/><path d="M0 102H268" stroke="white" stroke-opacity=".25" stroke-width=".75"/><g class="entry-label" fill="white"><text x="16" y="119" font-size="12" font-weight="500">+ 新会话</text></g></g>
+<g class="callout entry-label" fill="white"><path class="leader" d="M111 111H139L171 88" fill="none" stroke="white" stroke-width=".75" stroke-dasharray="3 3"/><path d="M108 111H114 M111 108V114 M168 88H174 M171 85V91" fill="none" stroke="white" stroke-width=".75"/><text x="16" y="115" font-size="12" font-weight="500">+ 新会话</text></g>
+</svg></button>`}
+const folder=(name,count,open=true)=>`<div class="folder"><span class="chevron">${open?'⌄':'›'}</span>${name}${count?`<span class="count">${count}</span>`:''}</div>`;
+const row=(text,time,selected=false)=>`<div class="row ${selected?'selected':''}"><span>${text}</span><time>${time}</time></div>`;
+for(const theme of ['light','dark']){
+ document.querySelector('#sidebars').insertAdjacentHTML('beforeend',`<section class="sidebar theme ${theme}" aria-label="${theme} sidebar"><div class="windowbar"><div class="lights" aria-hidden="true"><i></i><i></i><i></i></div><span class="plain toggle">${icon('M3 3.5 H17 V16.5 H3 Z M8 3.5 V16.5')}</span></div>${hero(theme)}<div class="section"><strong>会话列表</strong><span class="plain">${search}</span><span class="plain">${bell}</span></div><div class="threads">${folder('Halley')}${row('配置家宽 IP','4小时')}${row('Continued: 配置家宽 IP','7小时')}${row('CSwap','5天')}${folder('Polaris','11',false)}${folder('Uranus','2',false)}${folder('h2os')}${row('笔记属性宽屏滚动空白…','44分钟')}${folder('tivano')}${row('New thread','刚刚',true)}</div></section>`);
+ document.querySelector('#enlargements').insertAdjacentHTML('beforeend',`<figure class="study theme ${theme}"><figcaption>${theme.toUpperCase()} · 3× / 804 × 384</figcaption><div class="stage">${hero(theme+'-large')}</div></figure>`);
+}
+
+let state='idle',reduce=false,clicks=0;
+const media=matchMedia('(prefers-reduced-motion: reduce)');
+const cards=[...document.querySelectorAll('.hero')];
+function motion(){document.body.dataset.static=String(reduce||media.matches);readAngle()}
+function angleOf(el){const transform=getComputedStyle(el).transform;if(transform==='none')return 0;const matrix=new DOMMatrixReadOnly(transform);return Math.atan2(matrix.b,matrix.a)*180/Math.PI}
+function readAngle(){cards.forEach(card=>{const angle=angleOf(card.querySelector('.rot-a'))+angleOf(card.querySelector('.rot-b'));card.querySelector('.angle').textContent=`${Math.abs(angle)<.05?'0.0':angle.toFixed(1)}°`})}
+let readTimer=null,settleTimer=null;
+function setState(next){
+ const leaving=state==='running'&&next!=='running';
+ const groups=cards.flatMap(card=>[card.querySelector('.rot-a'),card.querySelector('.rot-b')]);
+ if(leaving)groups.forEach(group=>{group.style.transition='none';group.style.transform=getComputedStyle(group).transform});
+ state=next;document.body.dataset.state=state;
+ document.querySelectorAll('.layer').forEach(layer=>layer.classList.toggle('visible',layer.dataset.for.split(' ').includes(state)));
+ document.querySelectorAll('button[data-state]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.state===state)));
+ if(leaving){groups.forEach(group=>{void group.getBoundingClientRect();group.style.transition='';group.style.transform='rotate(0deg)'})}
+ if(state==='running')groups.forEach(group=>{group.style.transition='';group.style.transform='' });
+ clearInterval(readTimer);clearTimeout(settleTimer);readAngle();
+ if(state==='running'||leaving){readTimer=setInterval(readAngle,100);if(leaving)settleTimer=setTimeout(()=>{clearInterval(readTimer);readAngle()},850)}
+}
+document.querySelectorAll('button[data-state]').forEach(b=>b.addEventListener('click',()=>setState(b.dataset.state)));
+document.querySelectorAll('button[data-entry]').forEach(b=>b.addEventListener('click',()=>{document.body.dataset.entry=b.dataset.entry;document.querySelectorAll('button[data-entry]').forEach(other=>other.setAttribute('aria-pressed',String(other===b)))}));
+document.querySelectorAll('button[data-wait]').forEach(b=>b.addEventListener('click',()=>{document.body.dataset.wait=b.dataset.wait;document.querySelectorAll('button[data-wait]').forEach(other=>other.setAttribute('aria-pressed',String(other===b)))}));
+document.querySelector('#hover').addEventListener('click',e=>{const active=document.body.dataset.hover!=='true';document.body.dataset.hover=String(active);e.currentTarget.setAttribute('aria-pressed',String(active))});
+document.querySelector('#reduce').addEventListener('click',e=>{reduce=!reduce;e.currentTarget.setAttribute('aria-pressed',String(reduce));motion()});media.addEventListener('change',motion);
+cards.forEach(card=>card.addEventListener('click',()=>{clicks++;document.querySelector('#feedback').textContent=`已新建会话 · ${clicks}（交互演示）`;document.querySelectorAll('.row.selected span').forEach(span=>span.textContent=clicks===1?'New thread':`New thread ${clicks}`)}));
+motion();
+</script></body></html>

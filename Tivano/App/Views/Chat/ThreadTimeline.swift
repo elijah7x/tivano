@@ -54,21 +54,63 @@ struct ThreadTimeline: View, Equatable {
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var viewportHeight: CGFloat = 0
     /// The scroll view's width, for the stepped layout width during a live resize.
-    @State private var paneWidth: CGFloat = 0
-    /// The pane's width when the sidebar's slide began; the rows wrap at the width it will end at from the first frame.
-    @State private var paneWidthAtSlideStart: CGFloat = 0
+    private struct PaneGeometry: Equatable {
+        var width: CGFloat = 0
+        var isShown = false
+    }
+    @State private var paneGeometry = PaneGeometry()
+    private var paneWidth: CGFloat { paneGeometry.width }
+    /// Like the measurement cache, this records a resolved layout without scheduling
+    /// a second body pass between a slide's start width and its target width.
+    private final class WidthLayout {
+        var committedWidth: CGFloat?
+        var slideGeneration: Int?
+        var slideTargetWidth: CGFloat = 0
+        var fontSizes: [Int] = []
+        var needsRemeasure = false
+    }
+    @State private var widthLayout = WidthLayout()
+    private struct MeasurementLayout: Equatable {
+        let width: CGFloat
+        let fontSizes: [Int]
+        let isShown: Bool
+    }
+    private var isReshaping: Bool {
+        guard columnIsShown else { return false }
+        // Use the resize sources here: the shared pane flag is updated by ChatView's
+        // callback, which can otherwise leave one stepped-width frame after a slide.
+        return liveResize.isActive || model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
+    }
     /// While the window is being dragged the content wraps to a width that moves in
     /// steps this wide, so rows re-measure a few times over a drag instead of every
     /// frame; the exact width lands when the drag ends.
     private static let resizeStep: CGFloat = 12
     private var layoutWidth: CGFloat? {
-        guard liveResize.isReshaping, paneWidth > 0 else { return nil }
-        // During the sidebar's slide the rows wrap once, at the pane's final width, and the pane
-        // clips them as it moves; a step per frame re-measured every row per frame.
-        if model.sidebar.isSliding, paneWidthAtSlideStart > 0 {
-            return min(820 + 40, max(Self.resizeStep, paneWidthAtSlideStart + model.sidebar.slideDelta))
+        // Branch before reading either shared observable. A restored column waits for
+        // its own geometry callback, rather than committing its old host's width first.
+        guard columnIsShown, paneGeometry.isShown else {
+            widthLayout.slideGeneration = nil
+            if widthLayout.committedWidth == nil, paneWidth > 0 {
+                widthLayout.committedWidth = min(860, paneWidth)
+            }
+            return widthLayout.committedWidth
         }
-        return min(820 + 40, (paneWidth / Self.resizeStep).rounded(.down) * Self.resizeStep)
+        guard paneWidth > 0 else { return widthLayout.committedWidth }
+        let width: CGFloat
+        if model.sidebar.isSliding, !liveResize.isActive {
+            if widthLayout.slideGeneration != model.sidebar.slideGeneration {
+                widthLayout.slideGeneration = model.sidebar.slideGeneration
+                widthLayout.slideTargetWidth = min(860, max(Self.resizeStep, paneWidth + model.sidebar.remainingSlideDelta))
+            }
+            width = widthLayout.slideTargetWidth
+        } else {
+            widthLayout.slideGeneration = nil
+            width = isReshaping
+                ? min(860, max(Self.resizeStep, (paneWidth / Self.resizeStep).rounded(.down) * Self.resizeStep))
+                : min(860, paneWidth)
+        }
+        widthLayout.committedWidth = width
+        return width
     }
     /// Which edge stays put when the content's height changes. At the conversation's end
     /// it is the bottom, so streaming text and the working line grow in place. Once the
@@ -288,7 +330,7 @@ struct ThreadTimeline: View, Equatable {
             }
             // The rail fades with the slide of the panel that takes its edge. Held mid-resize:
             // a fresh slide every frame lagged the whole chat behind the window.
-            .animation(liveResize.isReshaping ? nil : Chrome.panelSlide, value: showsMinimap)
+            .animation(isReshaping ? nil : Chrome.panelSlide, value: showsMinimap)
             // The rail belongs to the column's leading edge, not to the conversation that
             // re-centres beside a docked panel: the padding the slide adds is cancelled
             // without animation, the way the slide itself adds it, and the glide that
@@ -430,7 +472,22 @@ struct ThreadTimeline: View, Equatable {
     }
 
     private func invalidateMeasurements(in blocks: [DisplayBlock], width: CGFloat) {
-        guard !blocks.isEmpty else { return }
+        guard width > 0, !blocks.isEmpty else { return }
+        let fontSizes = [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code]
+        guard columnIsShown, paneGeometry.isShown else {
+            // A prebuilt column can retain its first measurements. Later font/content
+            // changes are reconciled on reveal, without replacing a hidden stack.
+            if measurements.width == 0 {
+                measurements.width = width
+                widthLayout.fontSizes = fontSizes
+            } else if widthLayout.fontSizes != fontSizes {
+                widthLayout.needsRemeasure = true
+            }
+            return
+        }
+        guard measurements.width != width || widthLayout.fontSizes != fontSizes || widthLayout.needsRemeasure else { return }
+        widthLayout.fontSizes = fontSizes
+        widthLayout.needsRemeasure = false
         cancelHistoryRequest()
         let start = windowStartIndex(in: blocks)
         let current = mountedWindow?.range(in: blocks, start: start) ?? start..<blocks.count
@@ -491,9 +548,11 @@ struct ThreadTimeline: View, Equatable {
     /// view for the first time never parse on the frame. Cached texts are skipped.
     private func warmMarkdown() async {
         var texts: [String] = []
-        for entry in runtime.entries {
-            guard case .assistant(let message) = entry.item.content, !message.isStreaming else { continue }
+        for entry in runtime.entries.reversed() {
+            guard case .assistant(let message) = entry.item.content, !message.isStreaming,
+                  !MarkdownView.isCached(message.text) else { continue }
             texts.append(message.text)
+            if texts.count == MarkdownView.warmCandidateLimit { break }
         }
         guard !texts.isEmpty else { return }
         try? await MarkdownView.warm(texts)
@@ -546,7 +605,9 @@ struct ThreadTimeline: View, Equatable {
             }
             .onDisappear { tracking.setVisible(block.id, isVisible: false, owner: visibilityOwner) }
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("timelineContent")) }) { frame in
+                let hadFrame = measurements.frames[block.id] != nil
                 if measurements.record(block.id, frame: frame, generation: measurementGeneration) {
+                    if !columnIsShown, hadFrame { widthLayout.needsRemeasure = true }
                     tracking.requestMeasurementPass()
                 }
             }
@@ -562,6 +623,7 @@ struct ThreadTimeline: View, Equatable {
         // coming and going is when the stack can lose its place; a look a beat from now
         // costs nothing and catches it whether or not any row says so.
         if tracking.setOutline(outline) {
+            if !columnIsShown, measurements.width > 0 { widthLayout.needsRemeasure = true }
             tracking.armBlankWatch("outline")
             // A new block at the end under a reader held there: the stack is told where
             // the viewport is, since the block may have landed below rows it built for
@@ -636,7 +698,9 @@ struct ThreadTimeline: View, Equatable {
             // The same column as the composer, so messages line up with its edges.
             .frame(maxWidth: 820, alignment: .leading)
             .padding(.horizontal, 20)
-            .frame(width: layoutWidth, alignment: .leading)
+            // Release the fixed width at rest so a smaller proposal can reach the
+            // geometry reader; retaining it would keep the old width feeding itself.
+            .frame(width: isReshaping || !columnIsShown || !paneGeometry.isShown ? layoutWidth : nil, alignment: .leading)
             .padding(.top, Chrome.contentTopInset)
             .padding(.bottom, 18)
             // A short conversation still fills the pane, with its messages resting at the bottom.
@@ -680,6 +744,7 @@ struct ThreadTimeline: View, Equatable {
         }
         .onChange(of: columnIsShown, initial: true) { _, shown in
             tracking.setColumnShown(shown)
+            if shown { tracking.armViewportRefresh("columnShown") }
         }
         // The thread opens at its end and stays there while its rows measure in.
         .onAppear {
@@ -701,27 +766,27 @@ struct ThreadTimeline: View, Equatable {
             let stepped = (height / Self.resizeStep).rounded(.down) * Self.resizeStep
             if stepped != viewportHeight { viewportHeight = stepped }
         }
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
-            paneWidth = $0
+        .onGeometryChange(for: PaneGeometry.self, of: { [columnIsShown] geometry in
+            PaneGeometry(width: geometry.size.width, isShown: columnIsShown)
+        }) {
+            paneGeometry = $0
         }
-        .onChange(of: [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code]) {
-            invalidateMeasurements(in: blocks, width: measurements.width)
-            tracking.armViewportRefresh("typeScale")
-        }
-        .onChange(of: layoutWidth ?? min(860, paneWidth)) { _, width in
-            invalidateMeasurements(in: blocks, width: width)
+        .onChange(of: MeasurementLayout(
+            width: layoutWidth ?? min(860, paneWidth),
+            fontSizes: [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code],
+            isShown: columnIsShown && paneGeometry.isShown
+        ), initial: true) { old, layout in
+            invalidateMeasurements(in: blocks, width: layout.width)
+            if layout.isShown, old.fontSizes != layout.fontSizes {
+                tracking.armViewportRefresh("typeScale")
+            }
         }
         // No animation inside the timeline while the window is being dragged; a spring
         // restarted every frame is what made rows lag behind the window and land somewhere else.
-        .transaction { transaction in if liveResize.isReshaping { transaction.animation = nil } }
-        .onChange(of: liveResize.isReshaping) { _, active in
-            guard !active else { return }
+        .transaction { transaction in if isReshaping { transaction.animation = nil } }
+        .onChange(of: isReshaping) { _, active in
+            guard columnIsShown, !active else { return }
             settleAfterResize()
-        }
-        .onChange(of: model.sidebar.isSliding) { _, sliding in
-            if sliding {
-                paneWidthAtSlideStart = paneWidth
-            }
         }
         .onScrollPhaseChange { _, phase in
             // Inertia and animated navigation still move rows under the pointer. The
@@ -1335,6 +1400,7 @@ struct ThreadTimeline: View, Equatable {
     /// end, otherwise the top anchor already held the top-most row each frame. Unanimated,
     /// so no glide restarts per frame mid-drag; the stack is told where the viewport is.
     private func settleAfterResize() {
+        guard columnIsShown else { return }
         guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling else {
             tracking.armViewportRefresh("resizeScrolling")
             return
@@ -3774,9 +3840,6 @@ private struct WorkingIndicator: View {
     private static let cardWidth: CGFloat = 380
 
     var body: some View {
-        let hiddenSteps = max(0, thinkingSteps.count + liveWork.count - stepLimit)
-        let visibleThinking = Array(thinkingSteps.dropFirst(min(hiddenSteps, thinkingSteps.count)))
-        let visibleWork = Array(liveWork.dropFirst(max(0, hiddenSteps - thinkingSteps.count)))
         let elapsed = now.timeIntervalSince(startedAt)
         let word = WorkingWords.word(seed: seed, elapsedSeconds: Int64(max(0, elapsed)))
         let isRunning = finishedAt == nil
@@ -3841,6 +3904,11 @@ private struct WorkingIndicator: View {
             .accessibilityHint(Text(verbatim: canExpand ? Chrome.localized("Shows what the agent is doing") : ""))
 
             if isExpanded, canExpand {
+                // The slices stay lazy until the section opens: while the line is
+                // collapsed the per-second tick never copies the steps.
+                let hiddenSteps = max(0, thinkingSteps.count + liveWork.count - stepLimit)
+                let visibleThinking = thinkingSteps.dropFirst(min(hiddenSteps, thinkingSteps.count))
+                let visibleWork = liveWork.dropFirst(max(0, hiddenSteps - thinkingSteps.count))
                 VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
                     if hiddenSteps > 0 {
                         Button(TurnFinishedBlock.earlierStepsLabel(hidden: hiddenSteps)) {
@@ -3852,7 +3920,8 @@ private struct WorkingIndicator: View {
                     }
                     if !thinkingSteps.isEmpty {
                         VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
-                            ForEach(Array(visibleThinking.enumerated()), id: \.offset) { _, step in
+                            ForEach(visibleThinking.indices, id: \.self) { position in
+                                let step = visibleThinking[position]
                                 MarkdownView(text: step.text, isStreaming: step.isStreaming).equatable()
                             }
                         }
@@ -3863,7 +3932,7 @@ private struct WorkingIndicator: View {
                         .transition(liveAppearance ? .softAppear : .identity)
                     }
                     if !liveWork.isEmpty {
-                        WorkSteps(entries: visibleWork, runtime: runtime, workingDirectory: workingDirectory, showsAll: Binding(get: { showsAllSteps }, set: { showsAllSteps = $0 }))
+                        WorkSteps(entries: Array(visibleWork), runtime: runtime, workingDirectory: workingDirectory, showsAll: Binding(get: { showsAllSteps }, set: { showsAllSteps = $0 }))
                             .transition(liveAppearance ? .softAppear : .identity)
                     }
                 }

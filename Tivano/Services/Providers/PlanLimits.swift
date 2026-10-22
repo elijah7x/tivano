@@ -78,7 +78,7 @@ enum PlanLimitsReader {
             case .antigravity: try await AntigravitySession.readPlanLimits(executable: executable, environment: environment)
             case .copilot: try await CopilotSession.readPlanLimits(executable: executable, environment: environment)
             case .commandcode: await CommandCodeAPI.planLimits(environment: environment)
-            case .pi, .omp, .cursor, .opencode, .grok, .deepseek, .meta, .zai, .devin, .kimi, .dsh: nil
+            case .pi, .omp, .cursor, .opencode, .grok, .deepseek, .meta, .zai, .devin, .kimi, .dsh, .minimaxCode: nil
             }
             return classified(limits)
         } catch {

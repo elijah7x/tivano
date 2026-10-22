@@ -303,17 +303,24 @@ private enum CodexFingerprintStore {
         guard let legacy = UserDefaults.standard.dictionary(forKey: legacyDefaultsKey) as? [String: [String: Any]] else {
             return [:]
         }
-        UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
         let migrated = legacy.reduce(into: [String: CodexFileFingerprint]()) { result, entry in
             if let fingerprint = CodexFileFingerprint(dict: entry.value, path: entry.key) { result[entry.key] = fingerprint }
         }
-        save(migrated)
+        if save(migrated) {
+            UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
+        }
         return migrated
     }
 
-    static func save(_ fingerprints: [String: CodexFileFingerprint]) {
-        guard let data = try? JSONEncoder().encode(fingerprints) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+    @discardableResult
+    static func save(_ fingerprints: [String: CodexFileFingerprint]) -> Bool {
+        do {
+            let data = try JSONEncoder().encode(fingerprints)
+            try data.write(to: fileURL, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 }
 

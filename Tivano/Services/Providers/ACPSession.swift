@@ -25,7 +25,44 @@ struct ACPSelectionError: LocalizedError {
     var errorDescription: String? { underlying.localizedDescription }
 }
 
-/// Drives Agent Client Protocol agents: Cursor, OpenCode, Grok, Devin, Kimi Code and DeepSeek Harness.
+/// mcode's `session/set_config_option` for `permissionMode` persists the value into the
+/// user's global ~/.minimax/config.yaml, and the CLI has no per-process flag: whatever a
+/// Tivano thread last set becomes the terminal mcode default. The guard records the mode
+/// mcode reported before Tivano first wrote it — the record survives a crash — and has the
+/// last live MiniMax session write it back before its process closes.
+@MainActor
+private enum MiniMaxPermissionGuard {
+    private static let defaultsKey = "miniMaxOriginalPermissionMode"
+    private static var live: Set<ObjectIdentifier> = []
+    private static var defaults: UserDefaults { CaptureRun.defaults ?? .standard }
+
+    /// The user's mode recorded before Tivano's first write; nil while nothing is owed.
+    static var recordedOriginal: String? { defaults.string(forKey: defaultsKey) }
+
+    /// A session's first permission write files the mode mcode reported at session start —
+    /// unless a record already exists: a live sibling's original or a dead session's
+    /// unrestored one, both still the user's own value.
+    static func begin(_ session: ACPSession, reported current: String?) {
+        if recordedOriginal == nil, let current {
+            defaults.set(current, forKey: defaultsKey)
+        }
+        live.insert(ObjectIdentifier(session))
+    }
+
+    /// Deregisters the session and returns the recorded mode when it was the last live
+    /// one; the caller restores it while the connection still answers. When it cannot,
+    /// the record stays on file for the next session's write.
+    static func end(_ session: ACPSession) -> String? {
+        live.remove(ObjectIdentifier(session))
+        return live.isEmpty ? recordedOriginal : nil
+    }
+
+    static func clear() {
+        defaults.removeObject(forKey: defaultsKey)
+    }
+}
+
+/// Drives Agent Client Protocol agents, including MiniMax Code's independent `mcode acp` CLI.
 @MainActor
 final class ACPSession: ProviderSession {
     private static let launchGate = ACPLaunchGate(spacing: 1.5)
@@ -59,6 +96,17 @@ final class ACPSession: ProviderSession {
     private var toolInputs: [String: (title: String, rawInput: JSONValue)] = [:]
     private var promptActive = false
     private var cancelRequested = false
+    private var cancelDeadline: Task<Void, Never>?
+    private var miniMaxPermissionConfigID: String?
+    private var miniMaxPermissionValues: Set<String> = []
+    private var currentMiniMaxPermission: String?
+    private var miniMaxEffortValues: Set<String> = []
+    private var miniMaxHasEmptyVariantBug = false
+    /// Probe sessions (catalog/effort discovery) never send prompts and never touch
+    /// the persisted permission mode.
+    private var appliesMiniMaxPermission = false
+    private var miniMaxPermissionGuarded = false
+    private var miniMaxRestoreTask: Task<Void, Never>?
     /// Tool calls already routed to the checklist (opencode `todowrite` arrives as a
     /// generic tool_call, not a plan update). Their later updates keep feeding the
     /// same checklist instead of opening new tool rows.
@@ -137,6 +185,7 @@ final class ACPSession: ProviderSession {
         guard !isStarting, connection == nil, !isStopping else { throw ProviderError.notRunning }
         isStarting = true
         defer { isStarting = false }
+        appliesMiniMaxPermission = applyingSelection
         guard var executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
         var arguments = launchArguments
         var environment = configuration.environment
@@ -160,9 +209,10 @@ final class ACPSession: ProviderSession {
             executable: executable,
             arguments: arguments,
             directory: configuration.workingDirectory,
-            environment: environment
+            environment: environment,
+            rejectsInvalidJSON: configuration.provider == .minimaxCode
         )
-        let connection = JSONRPCConnection(process: process, sendsVersion: true)
+        let connection = JSONRPCConnection(process: process, sendsVersion: true, strictResponses: configuration.provider == .minimaxCode)
         connection.onNotification = { [weak self] method, params in self?.handleNotification(method, params) }
         connection.onRequest = { [weak self] id, method, params in self?.handleRequest(id, method, params) }
         connection.onClose = { [weak self] tail in self?.handleClose(tail) }
@@ -186,6 +236,19 @@ final class ACPSession: ProviderSession {
             "clientCapabilities": clientCapabilities,
             "clientInfo": ["name": "tivano", "title": "Tivano", "version": .string(AppInfo.version)],
         ])
+        if configuration.provider == .minimaxCode {
+            guard initialized["protocolVersion"]?.int == 1,
+                  initialized["agentInfo"]?["name"]?.string == "minimax-code" else {
+                throw ProviderError.failed(AppText.localized("MiniMax Code returned an unsupported ACP handshake."))
+            }
+            // 0.6.12's Token Plan route rejects advertised empty variants with
+            // "Invalid model reasoning"; its API-key route accepts them.
+            if initialized["agentInfo"]?["version"]?.string == "0.6.12",
+               let snapshot = try? await Shell.run(executable, ["provider", "list", "--json"], environment: environment, timeout: 20),
+               snapshot.succeeded, let root = JSONValue.parse(snapshot.stdout) {
+                miniMaxHasEmptyVariantBug = root["minimaxModelSource"]?.string == "token_plan"
+            }
+        }
         canLoadSessions = initialized["agentCapabilities"]?["loadSession"]?.bool ?? false
         canResumeSessions = initialized["agentCapabilities"]?["sessionCapabilities"]?["resume"]
             .map { !$0.isNull && $0.bool != false } ?? false
@@ -196,13 +259,19 @@ final class ACPSession: ProviderSession {
         let session: JSONValue
         do {
             session = try await openSession(connection)
-        } catch let error as RPCError where error.message.localizedCaseInsensitiveContains("auth") && !authMethods.isEmpty
+        } catch let error as RPCError where configuration.provider != .minimaxCode
+            && error.message.localizedCaseInsensitiveContains("auth") && !authMethods.isEmpty
             && !(configuration.provider == .dsh && configuration.resumeID != nil) {
             if configuration.provider == .kimi { throw Self.kimiLoginRequired }
             _ = try await deadlineRequest(connection, "authenticate", ["methodId": .string(authMethods[0])])
             session = try await openSession(connection)
         }
         applySessionState(session)
+        if configuration.provider == .minimaxCode {
+            // The CLI can inherit auto/bypass from its own config. Never send a prompt
+            // until this process has acknowledged the permission mode Tivano selected.
+            try await applyMiniMaxPermissions()
+        }
         if applyingSelection {
             try await applySelection(
                 model: configuration.model,
@@ -230,13 +299,22 @@ final class ACPSession: ProviderSession {
         if usesParameterizedModels {
             capabilities["_meta"] = ["parameterizedModelPicker": true]
         }
-        if configuration.provider == .kimi {
+        if configuration.provider == .kimi || configuration.provider == .minimaxCode {
             capabilities["elicitation"] = ["form": [:]]
         }
         return .object(capabilities)
     }
 
     func send(_ input: TurnInput) async throws {
+        if configuration.provider == .minimaxCode {
+            guard !promptActive else { throw ProviderError.failed(AppText.localized("MiniMax Code already has an active turn.")) }
+            guard input.images.isEmpty else {
+                throw ProviderError.failed(AppText.localized("Image attachments are not enabled for MiniMax Code in Tivano."))
+            }
+            guard !input.isFinalReport else {
+                throw ProviderError.failed(AppText.localized("Tool-free reporting is not enabled for MiniMax Code in Tivano."))
+            }
+        }
         if configuration.provider == .dsh, input.isFinalReport || configuration.dshFinalReport {
             guard input.isFinalReport, configuration.dshFinalReport, dshReportGuardReady else {
                 throw ProviderError.failed(AppText.localized("DeepSeek Harness could not enable tool-free reporting. Update DeepSeek Harness and try again."))
@@ -283,6 +361,13 @@ final class ACPSession: ProviderSession {
         pendingPermissions.removeAll()
         cancelQuestions(connection)
         connection.notify("session/cancel", ["sessionId": .string(sessionID)])
+        cancelDeadline?.cancel()
+        cancelDeadline = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            guard let self, self.promptActive, self.cancelRequested else { return }
+            // A silent agent must not leave this task's process tree behind.
+            self.connection?.close()
+        }
     }
 
     func compact() async throws {
@@ -349,12 +434,45 @@ final class ACPSession: ProviderSession {
     func stopAndWait(timeout: TimeInterval) async {
         let connection = connection
         stop()
+        await miniMaxRestoreTask?.value
+        miniMaxRestoreTask = nil
         await connection?.closeAndWait(timeout: timeout)
     }
 
     func stop() {
         isStopping = true
+        cancelDeadline?.cancel()
+        cancelDeadline = nil
+        if miniMaxPermissionGuarded {
+            miniMaxPermissionGuarded = false
+            if let original = MiniMaxPermissionGuard.end(self) {
+                if original == currentMiniMaxPermission {
+                    MiniMaxPermissionGuard.clear()
+                } else if let connection, !connection.isClosed {
+                    // The last live session puts the user's mode back while its CLI
+                    // still answers; a dead one keeps the record for the next session.
+                    miniMaxRestoreTask = Task { [weak self] in
+                        await self?.restoreMiniMaxPermission(original)
+                        connection.close()
+                    }
+                }
+            }
+        }
+        // An in-flight restore owns the close, so a repeated stop leaves it to finish.
+        guard miniMaxRestoreTask == nil else { return }
         connection?.close()
+    }
+
+    /// Best-effort write of the user's own mode before the session's process closes,
+    /// bounded so a stuck CLI cannot hold stop. Cleared only when mcode confirms it;
+    /// a failure keeps the record for the next session to restore.
+    private func restoreMiniMaxPermission(_ original: String) async {
+        guard let id = miniMaxPermissionConfigID, miniMaxPermissionValues.contains(original) else { return }
+        if (try? await withDeadline(seconds: 2, provider: configuration.provider.displayName, operation: "session/set_config_option") {
+            try await self.setConfigOption(id, value: original)
+        }) != nil {
+            MiniMaxPermissionGuard.clear()
+        }
     }
 
     private static var kimiLoginRequired: ProviderError {
@@ -363,6 +481,75 @@ final class ACPSession: ProviderSession {
 
     private static var dshAPIKeyRequired: ProviderError {
         .failed(AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings → Providers → DeepSeek."))
+    }
+
+    private static var miniMaxAuthenticationRequired: ProviderError {
+        .failed(AppText.localized("MiniMax Code requires authentication for its selected route. Check the MiniMax Code authentication status in Settings."))
+    }
+
+    /// dsh's ACP bridge reports failures as -32603 "Internal error": a bridge-known
+    /// cause trails the prefix in `message`, and the SDK's generic `errorToResult`
+    /// leaves bare "Internal error" with the real reason in `error.data.details`.
+    private static func dshFailure(_ error: Error) -> String {
+        guard let rpc = error as? RPCError else { return error.localizedDescription }
+        if rpc.message.localizedCaseInsensitiveContains("no API key for provider route") {
+            return dshAPIKeyRequired.localizedDescription
+        }
+        guard rpc.message == "Internal error", let data = rpc.data else { return error.localizedDescription }
+        let candidates = [data.string, data["details"]?.string, data["detail"]?.string,
+                          data["message"]?.string, data.compactString]
+        if let detail = candidates.compactMap({ $0?.trimmed }).first(where: { !["", "{}", "[]", "null", "\"\""].contains($0) }) {
+            return "Internal error: \(detail)"
+        }
+        return error.localizedDescription
+    }
+
+    /// The installed 0.6.12 ACP authenticate method checks the CLI's selected route,
+    /// including BYOK; passing that gate is not proof that a model accepted the key.
+    static func minimaxCodeAuthentication(executable: URL, environment: [String: String]) async -> (auth: ProviderStatus.Auth, message: String) {
+        let process = StdioProcess(executable: executable, arguments: ["acp"], directory: FileManager.default.temporaryDirectory,
+                                   environment: environment, rejectsInvalidJSON: true)
+        let connection = JSONRPCConnection(process: process, sendsVersion: true, strictResponses: true)
+        defer { connection.close() }
+        do {
+            // The documented snapshot exposes credential-presence metadata, not raw keys.
+            // An unsigned OAuth route must not override a configured BYOK route.
+            let snapshot = try await Shell.run(executable, ["provider", "list", "--json"], environment: environment, timeout: 20)
+            guard snapshot.succeeded, let root = JSONValue.parse(snapshot.stdout),
+                  let providers = root["providers"]?.array else {
+                return (.unknown, AppText.localized("MiniMax Code authentication could not be checked."))
+            }
+            let active = providers.first { $0["kind"]?.string == "custom" && $0["active"]?.bool == true }
+                ?? providers.first { $0["active"]?.bool == true }
+            if active?["kind"]?.string == "minimax-api-key" || active?["kind"]?.string == "custom" {
+                guard let hasKey = active?["hasApiKey"]?.bool else {
+                    return (.unknown, AppText.localized("MiniMax Code authentication could not be checked."))
+                }
+                return hasKey
+                    ? (.unknown, AppText.localized("API-key route selected in mcode · key present, server authentication not verified"))
+                    : (.signedOut, AppText.localized("The selected API-key route has no key. Configure it with mcode provider set-minimax-key; mcode login is for the separate Token Plan route."))
+            }
+            guard active?["kind"]?.string == "minimax-oauth" else {
+                return (.unknown, AppText.localized("MiniMax Code authentication could not be checked."))
+            }
+            try connection.start()
+            return try await withDeadline(seconds: 30, provider: "MiniMax Code", operation: "authenticate") {
+                let initialized = try await connection.request("initialize", ["protocolVersion": 1, "clientCapabilities": [:]])
+                guard initialized["protocolVersion"]?.int == 1,
+                      initialized["agentInfo"]?["name"]?.string == "minimax-code" else {
+                    throw ProviderError.failed(AppText.localized("MiniMax Code returned an unsupported ACP handshake."))
+                }
+                let result = try await connection.request("authenticate", ["methodId": "minimax-code-login"])
+                guard result.object != nil else {
+                    throw ProviderError.failed(AppText.localized("MiniMax Code returned an invalid ACP result."))
+                }
+                return (.unknown, AppText.localized("Token Plan route selected in mcode · local sign-in available, server authentication not verified"))
+            }
+        } catch let error as RPCError where error.code == -32000 && error.message.localizedCaseInsensitiveContains("authentication required") {
+            return (.signedOut, AppText.localized("The selected Token Plan route needs sign-in. Run mcode login; Global accounts use mcode login --region global."))
+        } catch {
+            return (.unknown, AppText.localized("MiniMax Code authentication could not be checked."))
+        }
     }
 
     static func authStatus(provider: ProviderKind, executable: URL, environment: [String: String]) async -> ProviderStatus.Auth {
@@ -411,17 +598,51 @@ final class ACPSession: ProviderSession {
         defer { session.stop() }
         return try await withDeadline(seconds: 180, provider: provider.displayName, operation: "probeModels") {
             _ = try await session.start(applyingSelection: false)
-            try await session.probeModelEfforts()
-            return session.models
+            if provider == .minimaxCode {
+                try await session.probeMiniMaxModelEfforts()
+            } else {
+                try await session.probeModelEfforts()
+            }
+            let models = session.models
+            if provider == .minimaxCode { await session.stopAndWait(timeout: 5) }
+            return models
         }
     }
 
     // MARK: - Session state
 
     private func deadlineRequest(_ connection: JSONRPCConnection, _ method: String, _ params: JSONValue) async throws -> JSONValue {
-        try await withDeadline(seconds: 45, provider: configuration.provider.displayName, operation: method) {
-            try await connection.request(method, params)
+        do {
+            return try await withDeadline(seconds: 45, provider: configuration.provider.displayName, operation: method) {
+                try await connection.request(method, params)
+            }
+        } catch let error as RPCError where configuration.provider == .minimaxCode {
+            throw ProviderError.failed(Self.miniMaxFailure(error, operation: method))
+        } catch let error as RPCError where configuration.provider == .dsh {
+            throw ProviderError.failed(Self.dshFailure(error))
         }
+    }
+
+    // 0.6.12 wraps ordinary exceptions in error.data.details. Never display that
+    // arbitrary text (or stderr); only classify known causes into fixed messages.
+    private static func miniMaxFailure(_ error: RPCError, operation: String) -> String {
+        let evidence = [error.message, error.data?["details"]?.string,
+                        error.data?["message"]?.string, error.data?["code"]?.string]
+            .compactMap { $0 }.joined(separator: "\n").lowercased()
+        let reason: String
+        if error.code == -32000 && error.message.localizedCaseInsensitiveContains("authentication required") {
+            reason = miniMaxAuthenticationRequired.localizedDescription
+        } else if evidence.contains("auth.login_required") {
+            reason = AppText.localized("MiniMax Code requires authentication for its selected route. Check the MiniMax Code authentication status in Settings.")
+        } else if error.data?["details"]?.string == "Invalid model reasoning" {
+            reason = AppText.localized("This MiniMax Code version rejected the model variant. Choose a thinking variant, or update MiniMax Code.")
+        } else if evidence.contains("econnrefused") || evidence.contains("enotfound")
+                    || evidence.contains("fetch failed") || evidence.contains("etimedout") {
+            reason = AppText.localized("MiniMax Code could not reach its service. Check the CLI network and proxy settings.")
+        } else {
+            reason = AppText.localized("MiniMax Code could not complete this operation. This error does not establish that you are signed out. Check the CLI diagnostics for details.")
+        }
+        return String(format: AppText.localized("MiniMax Code failed during %@ (ACP %d). %@"), operation, error.code, reason)
     }
 
     private func openSession(_ connection: JSONRPCConnection) async throws -> JSONValue {
@@ -471,6 +692,37 @@ final class ACPSession: ProviderSession {
         if let options = state["configOptions"]?.array { applyConfigOptions(options) }
     }
 
+    private func probeMiniMaxModelEfforts() async throws {
+        guard let original = currentModel else { return }
+        var discovered = models
+        // 0.6.12 carries the previous model's effort into a new selection, which
+        // can hide the next model's control. Probe each in a fresh session.
+        for index in discovered.indices where discovered[index].id != original {
+            try Task.checkCancellation()
+            let probe = ACPSession(configuration: configuration)
+            do {
+                _ = try await probe.start(applyingSelection: false)
+                guard let configID = probe.modelConfigID else {
+                    throw ProviderError.failed(AppText.localized("MiniMax Code returned an invalid ACP result."))
+                }
+                let id = discovered[index].id
+                try await probe.setConfigOption(configID, value: id)
+                guard probe.currentModel == id, let option = probe.models.first(where: { $0.id == id }) else {
+                    throw ProviderError.failed(AppText.localized("MiniMax Code returned an invalid ACP result."))
+                }
+                discovered[index].efforts = option.efforts
+                discovered[index].defaultEffort = option.defaultEffort
+                await probe.stopAndWait(timeout: 5)
+            } catch {
+                await probe.stopAndWait(timeout: 5)
+                if error is CancellationError { throw error }
+                try Task.checkCancellation()
+                NSLog("MiniMax effort probe failed for %@: %@", discovered[index].id, error.localizedDescription)
+            }
+        }
+        models = discovered
+    }
+
     /// Cursor and OpenCode report the effort scale of the current model only (the
     /// `thought_level` config option in each reply), so the catalog probe walks the
     /// list: each model without a scale yet is made current in turn and its scale
@@ -486,14 +738,26 @@ final class ACPSession: ProviderSession {
             do {
                 try await setConfigOption(modelConfigID, value: model.id)
                 currentModel = model.id
-            } catch is RPCError {
+            } catch {
+                // The scale walk refines a list already reported: a switch the agent
+                // rejects or times out loses one model's levels, never the list.
+                if error is CancellationError { throw error }
                 try Task.checkCancellation()
+                NSLog("%@ effort probe failed for %@: %@", configuration.provider.displayName, model.id, error.localizedDescription)
                 continue
             }
         }
         if !sameSelectedModel(original, currentModel) {
-            try await setConfigOption(modelConfigID, value: original)
-            currentModel = original
+            // The probe session is discarded right after, so a rejected restore costs
+            // nothing but the models already listed must not be thrown away with it.
+            do {
+                try await setConfigOption(modelConfigID, value: original)
+                currentModel = original
+            } catch {
+                if error is CancellationError { throw error }
+                try Task.checkCancellation()
+                NSLog("%@ effort probe could not restore %@: %@", configuration.provider.displayName, original, error.localizedDescription)
+            }
         }
         try Task.checkCancellation()
         if configuration.provider != .dsh {
@@ -514,7 +778,7 @@ final class ACPSession: ProviderSession {
     }
 
     private func applyModels(_ state: JSONValue) {
-        let current = state["currentModelId"]?.string.map(Self.baseModelID)
+        let current = state["currentModelId"]?.string.map { configuration.provider == .minimaxCode ? $0 : Self.baseModelID($0) }
         currentModel = current ?? currentModel
         let list = (state["availableModels"]?.array ?? []).compactMap { entry -> ModelOption? in
             guard let rawID = entry["modelId"]?.string else { return nil }
@@ -537,28 +801,46 @@ final class ACPSession: ProviderSession {
     private func applyConfigOptions(_ options: [JSONValue]) {
         var efforts: [String] = []
         var hasFast = false
+        let previousModels = models
+        if configuration.provider == .minimaxCode {
+            // ACP config_option_update replaces the complete option list.
+            modelConfigID = nil
+            currentModel = nil
+            currentEffort = nil
+            models = []
+            miniMaxPermissionConfigID = nil
+            miniMaxPermissionValues = []
+            currentMiniMaxPermission = nil
+            miniMaxEffortValues = []
+        }
         effortConfigID = nil
         fastConfigID = nil
         for option in options {
             guard let id = option["id"]?.string else { continue }
+            if configuration.provider == .minimaxCode, option["type"]?.string != "select" { continue }
             let values = Self.flatten(option["options"]?.array ?? [])
             let current = option["currentValue"]?.string
             let category = id == "model" || id == "reasoning_effort" ? id : option["category"]?.string ?? id
             switch category {
+            case "_permission" where configuration.provider == .minimaxCode && id == "permissionMode":
+                miniMaxPermissionConfigID = id
+                miniMaxPermissionValues = Set(values.compactMap { $0["value"]?.string })
+                currentMiniMaxPermission = current
             case "model":
                 modelConfigID = id
                 currentModel = current.map { usesParameterizedModels ? Self.baseModelID($0) : $0 } ?? currentModel
                 // One lookup per value: the walk over OpenCode's four hundred models replies
                 // four hundred times, and a linear search per value on each reply stalled the
                 // main actor.
-                let knownByID = Dictionary(models.map { (configuration.provider == .dsh ? $0.id : Self.baseModelID($0.id), $0) }, uniquingKeysWith: { first, _ in first })
+                let knownByID = Dictionary(previousModels.map { (configuration.provider == .dsh || configuration.provider == .minimaxCode ? $0.id : Self.baseModelID($0.id), $0) }, uniquingKeysWith: { first, _ in first })
                 let list = configuration.provider == .dsh ? dshModels(option, known: knownByID) : values.compactMap { value -> ModelOption? in
                     guard let rawID = value["value"]?.string else { return nil }
+                    if miniMaxHasEmptyVariantBug, rawID.hasSuffix(":v:"), rawID != currentModel { return nil }
                     let valueID = usesParameterizedModels ? Self.baseModelID(rawID) : rawID
                     // A rebuilt list keeps what earlier passes learned about each model (its
                     // scale, its Fast tier): Cursor reports them for the current model only,
                     // one pass at a time.
-                    let known = knownByID[configuration.provider == .dsh ? valueID : Self.baseModelID(valueID)]
+                    let known = knownByID[configuration.provider == .dsh || configuration.provider == .minimaxCode ? valueID : Self.baseModelID(valueID)]
                     var option = ModelOption(
                         id: valueID,
                         name: value["name"]?.string ?? valueID,
@@ -580,10 +862,12 @@ final class ACPSession: ProviderSession {
                 // Cursor also advertises a boolean `thinking` thought_level; only the
                 // scale (low/medium/high/…) drives the effort slider.
                 let scale = values.compactMap { $0["value"]?.string }
-                guard Self.isEffortScale(scale) else { break }
+                guard configuration.provider == .minimaxCode ? !scale.isEmpty : Self.isEffortScale(scale) else { break }
                 effortConfigID = id
-                currentEffort = current
-                efforts = id == "reasoning_effort" ? scale : ModelOption.orderedEfforts(scale)
+                currentEffort = configuration.provider == .minimaxCode
+                    ? current.flatMap { scale.contains($0) ? $0 : nil } : current
+                if configuration.provider == .minimaxCode { miniMaxEffortValues = Set(scale) }
+                efforts = configuration.provider == .minimaxCode || id == "reasoning_effort" ? scale : ModelOption.orderedEfforts(scale)
             case "model_config":
                 if id == "fast" {
                     fastConfigID = id
@@ -597,7 +881,10 @@ final class ACPSession: ProviderSession {
         models = models.map { model in
             var model = model
             let isCurrent = sameSelectedModel(model.id, currentModel)
-            if isCurrent, !efforts.isEmpty {
+            if isCurrent, configuration.provider == .minimaxCode {
+                model.efforts = efforts
+                model.defaultEffort = currentEffort
+            } else if isCurrent, !efforts.isEmpty {
                 model.efforts = efforts
                 model.defaultEffort = currentEffort ?? model.defaultEffort
             }
@@ -607,7 +894,7 @@ final class ACPSession: ProviderSession {
             }
             return model
         }
-        if !models.isEmpty { onEvent?(.models(models, current: currentModel)) }
+        if !models.isEmpty || configuration.provider == .minimaxCode { onEvent?(.models(models, current: currentModel)) }
     }
 
     /// dsh groups its models by route: `deepseek-official` takes an API key, `deepseek-account`
@@ -699,6 +986,7 @@ final class ACPSession: ProviderSession {
     /// from before its provider's variants were merged runs as it was until the effort
     /// or Fast is changed, and then moves within its family.
     private func providerID(for model: String, effort: String?, fastMode: Bool) -> String {
+        if configuration.provider == .minimaxCode { return model }
         guard configuration.provider != .dsh else { return DshCLI.resolvedModelID(model, in: models) }
         if let family = models.first(where: { $0.id == model }) {
             return family.providerID(effort: effort, fastMode: fastMode)
@@ -714,7 +1002,7 @@ final class ACPSession: ProviderSession {
     }
 
     private func sameSelectedModel(_ lhs: String?, _ rhs: String?) -> Bool {
-        if configuration.provider == .dsh { return lhs != nil && lhs == rhs }
+        if configuration.provider == .dsh || configuration.provider == .minimaxCode { return lhs != nil && lhs == rhs }
         return Self.sameModel(lhs, rhs)
     }
 
@@ -730,19 +1018,37 @@ final class ACPSession: ProviderSession {
 
     private func updateSelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async throws {
         guard let connection, let sessionID else { throw ProviderError.notRunning }
+        if configuration.provider == .minimaxCode { try await applyMiniMaxPermissions() }
         if let model, !model.isEmpty {
+            if miniMaxHasEmptyVariantBug, model.hasSuffix(":v:"), model != currentModel {
+                throw ProviderError.failed(AppText.localized("This MiniMax Code version rejected the model variant. Choose a thinking variant, or update MiniMax Code."))
+            }
+            if configuration.provider == .minimaxCode,
+               modelConfigID == nil || !models.contains(where: { $0.id == model }) {
+                throw ProviderError.failed(AppText.localized("MiniMax Code did not advertise the requested model. Refresh its models and choose one again."))
+            }
             let wireID = usesParameterizedModels ? Self.baseModelID(model) : providerID(for: model, effort: effort, fastMode: fastMode)
             if !sameSelectedModel(wireID, currentModel) {
                 if let modelConfigID {
                     try await setConfigOption(modelConfigID, value: wireID)
+                    if configuration.provider == .minimaxCode, !sameSelectedModel(wireID, currentModel) {
+                        throw ProviderError.failed(AppText.localized("MiniMax Code returned an invalid ACP result."))
+                    }
                 } else {
                     _ = try await deadlineRequest(connection, "session/set_model", ["sessionId": .string(sessionID), "modelId": .string(wireID)])
                 }
                 currentModel = wireID
             }
         }
+        if configuration.provider == .minimaxCode, let effort, !effort.isEmpty,
+           effortConfigID == nil || !miniMaxEffortValues.contains(effort) {
+            throw ProviderError.failed(AppText.localized("MiniMax Code did not advertise the requested reasoning effort."))
+        }
         if let effort, !effort.isEmpty, let effortConfigID, effort != currentEffort {
             try await setConfigOption(effortConfigID, value: effort)
+            if configuration.provider == .minimaxCode, currentEffort != effort {
+                throw ProviderError.failed(AppText.localized("MiniMax Code returned an invalid ACP result."))
+            }
             currentEffort = effort
         }
         if let fastConfigID {
@@ -767,6 +1073,10 @@ final class ACPSession: ProviderSession {
            wantedMode == nil || !availableModeIDs.contains(wantedMode ?? "") {
             throw ProviderError.failed(AppText.localized("Kimi Code did not advertise the requested permission or interaction mode. Choose a supported mode and try again."))
         }
+        if configuration.provider == .minimaxCode,
+           wantedMode == nil || !availableModeIDs.contains(wantedMode ?? "") {
+            throw ProviderError.failed(AppText.localized("MiniMax Code did not advertise the requested interaction mode."))
+        }
         if let mode = wantedMode, mode != currentMode {
             if let modeConfigID {
                 try await setConfigOption(modeConfigID, value: mode)
@@ -777,6 +1087,34 @@ final class ACPSession: ProviderSession {
         }
     }
 
+    private func applyMiniMaxPermissions() async throws {
+        // Catalog and effort probes never send prompts and must not touch the
+        // persisted mode either.
+        guard appliesMiniMaxPermission else { return }
+        let wanted: String = switch runtimeMode {
+        case .supervised, .autoAcceptEdits: "default"
+        case .auto: "auto"
+        case .fullAccess: "bypassPermissions"
+        }
+        guard let id = miniMaxPermissionConfigID, miniMaxPermissionValues.contains(wanted) else {
+            throw ProviderError.failed(AppText.localized("MiniMax Code did not advertise the requested permission mode. No prompt was sent."))
+        }
+        if !miniMaxPermissionGuarded {
+            miniMaxPermissionGuarded = true
+            MiniMaxPermissionGuard.begin(self, reported: currentMiniMaxPermission)
+        }
+        // The setter writes ~/.minimax/config.yaml, so it runs only when mcode does not
+        // already report the wanted mode — or when an earlier run still owes the file a
+        // restore and writing the wanted mode itself returns the file to the user.
+        let original = MiniMaxPermissionGuard.recordedOriginal
+        if currentMiniMaxPermission != wanted || (original != nil && original != currentMiniMaxPermission) {
+            try await setConfigOption(id, value: wanted)
+        }
+        guard currentMiniMaxPermission == wanted else {
+            throw ProviderError.failed(AppText.localized("MiniMax Code did not confirm the requested permission mode. No prompt was sent."))
+        }
+    }
+
     private func setConfigOption(_ configID: String, value: String) async throws {
         guard let connection, let sessionID else { throw ProviderError.notRunning }
         let result = try await deadlineRequest(connection, "session/set_config_option", [
@@ -784,6 +1122,9 @@ final class ACPSession: ProviderSession {
             "configId": .string(configID),
             "value": .string(value),
         ])
+        if configuration.provider == .minimaxCode, result["configOptions"]?.array == nil {
+            throw ProviderError.failed(AppText.localized("MiniMax Code returned an invalid ACP result."))
+        }
         if let options = result["configOptions"]?.array { applyConfigOptions(options) }
     }
 
@@ -815,7 +1156,7 @@ final class ACPSession: ProviderSession {
                let image = ToolImages.attachment(block: content) {
                 messageID = nil
                 thoughtID = nil
-                onEvent?(.toolUpdated(id: nextID("image"), update: ToolUpdate(title: "Image", status: .completed, images: [image], kind: .other)))
+                onEvent?(.toolUpdated(id: nextID("image"), update: ToolUpdate(title: AppText.localized("Image"), status: .completed, images: [image], kind: .other)))
                 return
             }
             guard let text = update["content"]?["text"]?.string else { return }
@@ -887,14 +1228,17 @@ final class ACPSession: ProviderSession {
 
     private func handleRequest(_ id: RPCID, _ method: String, _ params: JSONValue) {
         let key = Self.requestKey(id)
-        if method == "elicitation/create", configuration.provider == .kimi {
+        if method == "elicitation/create", configuration.provider == .kimi || configuration.provider == .minimaxCode {
             guard !isStopping, sessionID != nil,
                   params["sessionId"] == nil || acceptsSession(params) else {
                 connection?.respond(to: id, result: ["action": "cancel"])
                 return
             }
-            guard let form = ACPQuestionForm(params) else {
-                onEvent?(.notice(Notice(level: .warning, message: AppText.localized("Kimi Code asked a question in a form Tivano cannot display. The request was declined."))))
+            guard let form = ACPQuestionForm(params, usesOptionTitles: configuration.provider == .minimaxCode) else {
+                let message = configuration.provider == .minimaxCode
+                    ? "MiniMax Code asked a question in a form Tivano cannot display. The request was declined."
+                    : "Kimi Code asked a question in a form Tivano cannot display. The request was declined."
+                onEvent?(.notice(Notice(level: .warning, message: AppText.localized(message))))
                 connection?.respond(to: id, errorCode: -32602, message: "Unsupported question form")
                 return
             }
@@ -987,26 +1331,29 @@ final class ACPSession: ProviderSession {
     private func finishPrompt(_ stopReason: String?, error: Error?) {
         guard promptActive else { return }
         promptActive = false
+        cancelDeadline?.cancel()
+        cancelDeadline = nil
         todoToolCallIDs.removeAll()
         toolKinds.removeAll()
         toolInputs.removeAll()
         if let connection, !connection.isClosed {
             cancelQuestions(connection)
-            for (key, id) in pendingPermissions {
-                connection.respond(to: id, result: ["outcome": ["outcome": "cancelled"]]) { [weak self] succeeded in
-                    if succeeded, let self, self.pendingPermissions.removeValue(forKey: key) != nil {
-                        self.onEvent?(.requestResolved(id: key))
-                    }
-                }
+            for (_, id) in pendingPermissions {
+                connection.respond(to: id, result: ["outcome": ["outcome": "cancelled"]])
             }
         }
+        let resolved = Array(pendingPermissions.keys) + Array(pendingQuestions.keys)
+        pendingPermissions.removeAll()
+        pendingQuestions.removeAll()
+        for key in resolved { onEvent?(.requestResolved(id: key)) }
         if cancelRequested || stopReason == "cancelled" {
             onEvent?(.turnCompleted(status: .interrupted, error: nil))
         } else if let error {
             let detail: String
-            if configuration.provider == .dsh,
-               (error as? RPCError)?.message.localizedCaseInsensitiveContains("no API key for provider route") == true {
-                detail = Self.dshAPIKeyRequired.localizedDescription
+            if configuration.provider == .minimaxCode, let rpc = error as? RPCError {
+                detail = Self.miniMaxFailure(rpc, operation: "session/prompt")
+            } else if configuration.provider == .dsh {
+                detail = Self.dshFailure(error)
             } else if configuration.provider == .kimi, let rpc = error as? RPCError,
                       rpc.code == -32000, rpc.message.localizedCaseInsensitiveContains("auth") {
                 detail = Self.kimiLoginRequired.localizedDescription
@@ -1016,13 +1363,41 @@ final class ACPSession: ProviderSession {
             onEvent?(.turnCompleted(status: .failed, error: detail))
         } else if stopReason == "refusal" {
             onEvent?(.turnCompleted(status: .failed, error: "The agent declined this request."))
+        } else if configuration.provider == .minimaxCode, stopReason != "end_turn" {
+            let message = stopReason == "max_tokens" || stopReason == "max_turn_requests"
+                ? "MiniMax Code stopped at a limit before completing the turn."
+                : "MiniMax Code returned an invalid ACP result."
+            onEvent?(.turnCompleted(status: .failed, error: AppText.localized(message)))
         } else {
             onEvent?(.turnCompleted(status: .completed, error: nil))
+        }
+        if configuration.provider == .minimaxCode, cancelRequested || error != nil || stopReason != "end_turn" {
+            // Cancelled and failed runs cannot retain an idle CLI or lingering tools.
+            // A successful ACP session stays open for its next prompt.
+            stop()
         }
         cancelRequested = false
     }
 
     private func handleClose(_ tail: String) {
+        if configuration.provider == .minimaxCode {
+            connection?.close()
+            if miniMaxPermissionGuarded {
+                // The process is gone before any restore write could run; the recorded
+                // mode stays on file for the next session to put back.
+                miniMaxPermissionGuarded = false
+                _ = MiniMaxPermissionGuard.end(self)
+            }
+            // start() owns its thrown error; an explicit stop has no second failure.
+            guard !isStarting, !isStopping else { return }
+            let detail = AppText.localized("MiniMax Code exited before completing the operation. Check the CLI diagnostics for details.")
+            if promptActive {
+                finishPrompt(nil, error: ProviderError.failed(detail))
+            } else {
+                onEvent?(.exited(error: detail))
+            }
+            return
+        }
         if promptActive {
             finishPrompt(nil, error: ProviderError.failed(TextCleanup.lastLines(tail) ?? "The agent exited."))
         }
@@ -1168,6 +1543,11 @@ final class ACPSession: ProviderSession {
                     .compactMap { $0 }
                     .filter { !$0.isEmpty }
                     .joined(separator: "\n")
+            }
+            if configuration.provider == .minimaxCode, output.isEmpty {
+                // MiniMax's ACP projector carries tool.output directly in rawOutput;
+                // not every tool produces a structuredPreview or stdout dictionary.
+                output = raw.string ?? String(decoding: raw.data(), as: UTF8.self)
             }
             result.exitCode = raw["exitCode"]?.int ?? raw["metadata"]?["exit"]?.int
         }

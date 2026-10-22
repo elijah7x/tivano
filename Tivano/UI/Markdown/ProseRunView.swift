@@ -52,20 +52,20 @@ struct ProseRunRepresentable: NSViewRepresentable {
         view.passesProseThrough = false
         onHost?(view)
         view.mergeTarget = context.environment.mergeRequestTarget
+        view.selectionOwner = context.environment.markdownSelectionOwner
         return view
     }
 
     func updateNSView(_ view: LinkTextView, context: Context) {
         _ = revision
         let coordinator = context.coordinator
-        let source = Self.joinedSources(blocks)
         let mentionNames = mentions.map(\.name)
         let headLinks = targets.mapValues(\.url)
-        if coordinator.lastSource != source || coordinator.lastPointSize != pointSize
+        if coordinator.lastBlocks != blocks || coordinator.lastPointSize != pointSize
             || coordinator.lastCodePointSize != codePointSize
             || coordinator.lastDimmed != dimmed || coordinator.lastRevision != revision
             || coordinator.lastMentions != mentionNames || coordinator.lastHeads != headLinks {
-            coordinator.lastSource = source
+            coordinator.lastBlocks = blocks
             coordinator.lastPointSize = pointSize
             coordinator.lastCodePointSize = codePointSize
             coordinator.lastDimmed = dimmed
@@ -74,10 +74,11 @@ struct ProseRunRepresentable: NSViewRepresentable {
             coordinator.lastHeads = headLinks
             view.render(Self.attributed(blocks: blocks, pointSize: pointSize, dimmed: dimmed, mentions: mentions, targets: targets))
         }
-        // Outside the render check: the click handler is the environment's, and a new one
-        // must land even on an update that drew nothing.
+        // Outside the render check: handlers and selection ownership must land even
+        // on an update that drew nothing.
         view.onOpenHead = onOpenHead
         view.mergeTarget = context.environment.mergeRequestTarget
+        view.selectionOwner = context.environment.markdownSelectionOwner
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: LinkTextView, context: Context) -> CGSize? {
@@ -89,6 +90,7 @@ struct ProseRunRepresentable: NSViewRepresentable {
         view.delegate = nil
         view.onOpenHead = nil
         view.mergeTarget = nil
+        view.selectionOwner = nil
     }
 
     static func joinedSources(_ blocks: [MarkdownBlock]) -> String {

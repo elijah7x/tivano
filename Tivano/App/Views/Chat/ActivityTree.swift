@@ -55,6 +55,22 @@ enum ActivityReveal {
     }
 }
 
+/// The page a group was opened to, kept outside the view: the presentation's
+/// `disclosures` holds Booleans only and its `stepLimits` is keyed by turn, so a group
+/// keeps its own table — by the fold's key — of what recycling the block would drop.
+@MainActor
+private enum ActivityPaging {
+    private static var stepLimits: [String: Int] = [:]
+
+    static subscript(id: String) -> Int? {
+        get { stepLimits[id] }
+        set {
+            if stepLimits.count > 20_000 { stepLimits.removeAll(keepingCapacity: true) }
+            stepLimits[id] = newValue
+        }
+    }
+}
+
 /// The summary line over a group: "Thought 2 times · Ran 2 commands · Edited 3 files".
 /// Counted from the steps' kinds only, so a step's streaming output never reworded it.
 @MainActor
@@ -309,49 +325,68 @@ struct ActivityTreeGroup: View {
     var workingDirectory: String?
     var startsCollapsed = false
     @Environment(\.revealTimelineEnd) private var revealBox
+    @Environment(\.timelineBlockID) private var blockID
     @Environment(\.timelineLiveAppearance) private var liveAppearance
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @State private var isCollapsed: Bool
+    @State private var fallbackCollapsed: Bool
     @State private var stepLimit = ActivityMetrics.stepPage
+    private var disclosureID: String { blockID + "/work/" + (entries.first.map { "\($0.id)" } ?? "") }
+    private var isCollapsed: Bool {
+        get { revealBox?.presentation.disclosures[disclosureID + "/collapsed"] ?? fallbackCollapsed }
+        nonmutating set {
+            if let revealBox { revealBox.presentation.disclosures[disclosureID + "/collapsed"] = newValue }
+            else { fallbackCollapsed = newValue }
+        }
+    }
 
     init(entries: [TimelineEntry], runtime: ThreadRuntime, workingDirectory: String? = nil, startsCollapsed: Bool = false) {
         self.entries = entries
         self.runtime = runtime
         self.workingDirectory = workingDirectory
         self.startsCollapsed = startsCollapsed
-        _isCollapsed = State(initialValue: startsCollapsed)
+        _fallbackCollapsed = State(initialValue: startsCollapsed)
     }
 
-    private var isRunning: Bool {
-        entries.contains { entry in
-            switch entry.item.content {
-            case .tool(let call): return call.status == .running
-            case .reasoning(let block): return block.isStreaming
-            case .assistant(let message): return message.isStreaming
-            default: return false
+    /// Everything the header asks of the steps, gathered in one pass: whether work
+    /// still runs, and whether the group sent out a helper (delegations keep the
+    /// local wording even once the head has been sent out).
+    @MainActor
+    private struct GroupFacts {
+        var isRunning = false
+        var hasDelegation = false
+
+        init(entries: [TimelineEntry]) {
+            for entry in entries {
+                switch entry.item.content {
+                case .tool(let call):
+                    if call.status == .running { isRunning = true }
+                    if call.kind == .agent { hasDelegation = true }
+                case .reasoning(let block):
+                    if block.isStreaming { isRunning = true }
+                case .assistant(let message):
+                    if message.isStreaming { isRunning = true }
+                default:
+                    break
+                }
+                if isRunning && hasDelegation { break }
             }
         }
-    }
-
-    private var summary: String {
-        // Delegations keep the local wording even once the head has been sent out.
-        let hasDelegation = entries.contains { entry in
-            if case .tool(let call) = entry.item.content { return call.kind == .agent }
-            return false
-        }
-        return isRunning || hasDelegation
-            ? WorkGroupSummary.text(for: entries)
-            : ActivitySummary.text(for: entries)
     }
 
     private var motionEnabled: Bool { !reduceMotion && !performanceMode }
 
     var body: some View {
+        let facts = GroupFacts(entries: entries)
+        let summary = facts.isRunning || facts.hasDelegation
+            ? WorkGroupSummary.text(for: entries)
+            : ActivitySummary.text(for: entries)
         let isOpen = !isCollapsed
         let hidden = max(0, entries.count - stepLimit)
-        let visible = hidden > 0 ? Array(entries.suffix(stepLimit)) : entries
-        let animates = liveAppearance && isRunning && motionEnabled
+        let visible = entries.dropFirst(hidden)
+        let firstID = visible.first?.id
+        let lastID = visible.last?.id
+        let animates = liveAppearance && facts.isRunning && motionEnabled
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 // Animating this height (up to a page of steps) while the reader is
@@ -362,7 +397,7 @@ struct ActivityTreeGroup: View {
                 withTransaction(transaction) { isCollapsed.toggle() }
                 if !isOpen { revealBox?.action() }
             } label: {
-                ActivityHeaderLabel(title: summary, isOpen: isOpen, isActive: isRunning)
+                ActivityHeaderLabel(title: summary, isOpen: isOpen, isActive: facts.isRunning)
             }
             .buttonStyle(.plain)
             .help(Text(verbatim: Chrome.localized(isOpen ? "Hide these steps" : "Show these steps")))
@@ -374,6 +409,7 @@ struct ActivityTreeGroup: View {
                     if hidden > 0 {
                         Button {
                             stepLimit += ActivityMetrics.stepPage
+                            ActivityPaging[disclosureID] = stepLimit
                             revealBox?.action()
                         } label: {
                             Text(verbatim: TurnFinishedBlock.earlierStepsLabel(hidden: hidden))
@@ -384,13 +420,13 @@ struct ActivityTreeGroup: View {
                         .padding(.leading, ActivityMetrics.gutterWidth + TimelineMetrics.iconWidth + TimelineMetrics.iconSpacing)
                         .padding(.vertical, ActivityMetrics.stepPadding)
                     }
-                    ForEach(Array(visible.enumerated()), id: \.element.id) { index, entry in
+                    ForEach(visible, id: \.id) { entry in
                         ActivityStep(
                             id: entry.id,
-                            hasPredecessor: index > 0,
-                            continues: index < visible.count - 1,
+                            hasPredecessor: entry.id != firstID,
+                            continues: entry.id != lastID,
                             animatesArrival: animates,
-                            isFirstOfNewGroup: index == 0
+                            isFirstOfNewGroup: entry.id == firstID
                         ) {
                             step(entry)
                         }
@@ -402,8 +438,13 @@ struct ActivityTreeGroup: View {
             }
         }
         .onChange(of: startsCollapsed) { _, collapsed in
-            if collapsed { isCollapsed = true }
+            // One-way: arriving reply text collapses the group, but a group
+            // the reader opened never snaps shut on its own.
+            if collapsed, revealBox?.presentation.disclosures[disclosureID + "/collapsed"] == nil {
+                isCollapsed = true
+            }
         }
+        .onAppear { stepLimit = ActivityPaging[disclosureID] ?? ActivityMetrics.stepPage }
     }
 
     @ViewBuilder

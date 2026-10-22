@@ -59,7 +59,7 @@ enum DshHydraIntegrationProbe {
             defaults.set(true, forKey: "hydraEnabled")
             defaults.set(true, forKey: "hydraIsolateHeads")
             defaults.set(1, forKey: "hydraMaxHeads")
-            for key in ["hydraQueueHeads", "hydraAlwaysHeads", "hydraAutoMerge", "hydraReviewHeads", "hydraAutoClearFinished", "notifyWhenFinished", "chimeWhenFinished"] {
+            for key in ["hydraQueueHeads", "hydraAlwaysHeads", "hydraAutoMerge", "hydraReviewHeads", "notifyWhenFinished", "chimeWhenFinished"] {
                 defaults.set(false, forKey: key)
             }
             defaults.set(projectID.uuidString, forKey: "lastProjectID")
@@ -158,7 +158,8 @@ enum DshHydraIntegrationProbe {
                 if let head = heads.first {
                     headID = head.id
                     guard head.parentThreadID == leadID, model.hydraTeam(of: head.id).isEmpty else { throw Failure(message: "Wrong parent or nested delegation") }
-                    if head.hydra?.isFinished == true, lead.phase == .idle, lead.turns.count >= 2 {
+                    // Let automatic copy release finish before the fixture terminates the app.
+                    if head.hydra?.isFinished == true, head.worktreePath == nil, lead.phase == .idle, lead.turns.count >= 2 {
                         let worker = model.runtime(for: head.id)
                         guard let sid = head.providerSessionID, let leadSID = model.thread(leadID)?.providerSessionID, sid != leadSID,
                               head.hydra?.status == .completed, head.hydra?.summary?.contains(marker) == true,

@@ -19,6 +19,11 @@ struct ComposerArea: View {
     /// The changes popover presented from the tab. Driven by
     /// `runtime.isDiffVisible`, so every opener (tab, Review, ⌘D) shares it.
     @State private var diffPopover = DiffPopoverCoordinator()
+    @State private var repositoryDirectory: String?
+
+    private var canShowChanges: Bool {
+        showsChanges && workingDirectory != nil && repositoryDirectory == workingDirectory
+    }
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     var body: some View {
@@ -32,12 +37,13 @@ struct ComposerArea: View {
 
     private var areaContent: some View {
         VStack(spacing: 12) {
+            ThreadDirectoryError(threadID: runtime.threadID)
             VoiceComposerOrb(threadID: runtime.threadID)
             ForEach(runtime.approvals) { request in
                 ApprovalCard(request: request, runtime: runtime)
             }
             VStack(alignment: .center, spacing: -ThreadChangesTab.overlap) {
-                TabSlot(runtime: runtime, diffPopover: diffPopover, showsChanges: showsChanges)
+                TabSlot(runtime: runtime, diffPopover: diffPopover, showsChanges: canShowChanges)
                     .zIndex(0)
                 ComposerView(runtime: runtime, workingDirectory: workingDirectory, compactModelChip: compactModelChip, takesFocusOnAppear: takesFocusOnAppear)
                     .zIndex(1)
@@ -47,20 +53,53 @@ struct ComposerArea: View {
                 AttachmentAnchorCapture { diffPopover.setFallbackAnchor($0) }
             }
             .background {
-                // A box without the tab never runs git for the stats it would show.
-                if showsChanges { ChangeStatsRefresh(runtime: runtime) }
+                // Remount on reveal to refresh the latest revision once.
+                if canShowChanges && isColumnShown { ChangeStatsRefresh(runtime: runtime) }
             }
-            .onAppear { diffPopover.sync(isVisible: runtime.isDiffVisible, runtime: runtime) }
+            .onAppear { diffPopover.sync(isVisible: canShowChanges && runtime.isDiffVisible, runtime: runtime) }
             // The box moved to another thread; the coordinator closes the popover it had and never opens one on arrival.
-            .onChange(of: runtime.threadID) { diffPopover.sync(isVisible: runtime.isDiffVisible, runtime: runtime) }
+            .onChange(of: runtime.threadID) { diffPopover.sync(isVisible: canShowChanges && runtime.isDiffVisible, runtime: runtime) }
             .onChange(of: runtime.isDiffVisible) { _, visible in
-                diffPopover.sync(isVisible: visible, runtime: runtime)
+                diffPopover.sync(isVisible: canShowChanges && visible, runtime: runtime)
             }
             .onChange(of: runtime.diffOpenRequest) {
-                diffPopover.reopen(runtime: runtime)
+                if canShowChanges { diffPopover.reopen(runtime: runtime) }
+            }
+            .task(id: workingDirectory) {
+                repositoryDirectory = nil
+                diffPopover.close()
+                guard showsChanges, let workingDirectory else { return }
+                let isRepository = await Git(workingDirectory).isRepository()
+                guard !Task.isCancelled else { return }
+                repositoryDirectory = isRepository ? workingDirectory : nil
             }
             .onDisappear { diffPopover.close() }
             .onChange(of: isColumnShown) { _, shown in if !shown { diffPopover.close() } }
+        }
+    }
+}
+
+struct ThreadDirectoryError: View {
+    @Environment(AppModel.self) private var model
+    let threadID: UUID
+
+    private var message: String? {
+        guard let thread = model.thread(threadID) else { return nil }
+        do {
+            let directory = try model.executionDirectory(for: thread)
+            return directory.isEmpty ? Chrome.localized("The working directory is unavailable.") : nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    var body: some View {
+        if let message {
+            Text(verbatim: message)
+                .font(.ui(.callout))
+                .foregroundStyle(Chrome.danger)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -223,6 +262,9 @@ struct ComposerView: View {
             if visible, suggestions.kind == .command { Task { await loadCommands() } }
         }
         .task(id: workingDirectory) {
+            controller.suggestionRefresh?.cancel()
+            suggestions = SuggestionState()
+            fileIndex.reset()
             if let workingDirectory { await fileIndex.prepare(workingDirectory) }
         }
         // The notice says its piece and goes; a second drop restarts the wait.
@@ -1149,6 +1191,11 @@ final class FileIndex {
     private static var built = RecentCache<String, (entries: [Entry], builtAt: Date)>(limit: 2)
     private static var building: [String: Task<[Entry], Never>] = [:]
     private static let freshness: TimeInterval = 60
+
+    func reset() {
+        directory = nil
+        entries = []
+    }
 
     func prepare(_ directory: String) async {
         guard !Task.isCancelled else { return }

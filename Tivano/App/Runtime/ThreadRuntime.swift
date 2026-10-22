@@ -511,6 +511,7 @@ final class ThreadRuntime {
     @ObservationIgnored private var providerHistoryOperation: Task<Void, Never>?
     /// A session being started ahead of the first message (`warmSession`).
     @ObservationIgnored private var warmup: Task<Void, Never>?
+    @ObservationIgnored private var warmupGeneration = UUID()
     @ObservationIgnored var isVoiceOrchestrator = false {
         didSet {
             noteSessionEvent()
@@ -852,8 +853,12 @@ final class ThreadRuntime {
     }
 
     private func completeHistoryLoad(unreadable keptAt: URL? = nil, partly: Bool = false) {
+        if keptAt != nil || partly { controlHistoryUnreadable = true }
         isLoadingHistory = false
         historyLoad = nil
+        if !turns.isEmpty || hasSentPrompts || keptAt != nil {
+            app?.updateThread(threadID) { $0.hasStartedTurn = true }
+        }
         if let keptAt {
             let message = String(format: Chrome.localized(partly
                 ? "Older parts of this chat couldn't be read. Tivano kept the files in %@."
@@ -958,10 +963,166 @@ final class ThreadRuntime {
         approvals.first { $0.kind == .plan }
     }
 
+    // MARK: - External submission (never consumes or repopulates the UI draft)
+
+    private struct ExternalSubmission {
+        var turnID: UUID
+        var continuation: ControlContinuation
+        var original: ChatThread
+        var directory: String
+        var report: @MainActor (ControlTurnUpdate) -> Void
+        var providerStarted = false
+        var failure: ControlFailure?
+    }
+    @ObservationIgnored private var externalSubmission: ExternalSubmission?
+    @ObservationIgnored private var controlInterrupts: [UUID: (turnID: UUID, report: @MainActor (ControlTurnUpdate) -> Void)] = [:]
+    @ObservationIgnored private var controlProviderStoppedTurnID: UUID?
+    @ObservationIgnored private var controlHistoryUnreadable = false
+    @ObservationIgnored private var controlSendingTurns: Set<UUID> = []
+    @ObservationIgnored private var controlDeferredCompletions: [UUID: ControlTurnUpdate] = [:]
+
+    var controlActiveTurnID: UUID? { currentTurnID ?? closingTurnID }
+
+    func reserveExternalSubmission(turnID: UUID, continuation: ControlContinuation,
+                                   report: @escaping @MainActor (ControlTurnUpdate) -> Void) throws {
+        guard externalSubmission == nil else { throw ControlFailure(code: .busy) }
+        guard let thread else { throw ControlFailure(code: .notFound) }
+        try validateExternalRuntime(idle: true)
+        guard let app else { throw ControlFailure(code: .unavailable) }
+        externalSubmission = ExternalSubmission(turnID: turnID, continuation: continuation, original: thread,
+                                                directory: try app.executionDirectory(for: thread), report: report)
+    }
+
+    func submitExternal(text: String, turnID: UUID) async {
+        await ensureLoaded()
+        do {
+            try validateExternalSubmission(turnID, idle: true)
+            await startTurn(text: text, attachments: [], externalTurnID: turnID)
+        } catch { failExternalBeforeTurn(turnID, error: error) }
+    }
+
+    private func validateExternalRuntime(idle: Bool) throws {
+        guard let app else { throw ControlFailure(code: .unavailable) }
+        try app.requireExternalPersistence()
+        _ = try app.localControl.requireOrdinaryThread(threadID, app: app)
+        guard !isReverting, providerHistoryOperation == nil, !isVoiceOrchestrator, !isHydraMerging,
+              !hydraStartupPending, !hasWorkingHelpers, backgroundTasks.isEmpty, !isWaitingForLimit,
+              followUps.isEmpty, pendingSend == nil, !hydraFlushScheduled, hydraPendingReports.isEmpty,
+              hydraLanding == nil, finishingTurnID == nil else { throw ControlFailure(code: .busy) }
+        if idle, phase != .idle || isStartingSession { throw ControlFailure(code: .busy) }
+    }
+
+    private func validateExternalSubmission(_ turnID: UUID, idle: Bool) throws {
+        guard let submission = externalSubmission, submission.turnID == turnID, let app, let thread else {
+            throw ControlFailure(code: .conflict)
+        }
+        try validateExternalRuntime(idle: idle)
+        guard !controlHistoryUnreadable else { throw ControlFailure(code: .corruptHistory) }
+        let original = submission.original
+        guard thread.provider == original.provider, thread.affiliation == original.affiliation,
+              thread.worktreePath == original.worktreePath, thread.runtimeMode == original.runtimeMode,
+              thread.interactionMode == original.interactionMode, thread.effort == original.effort,
+              thread.fastMode == original.fastMode, thread.dshMode == original.dshMode,
+              thread.model == original.model else { throw ControlFailure(code: .conflict) }
+        try app.localControl.requireAvailableProvider(thread, app: app)
+        guard try app.executionDirectory(for: thread) == submission.directory else { throw ControlFailure(code: .conflict) }
+        if idle, submission.continuation == .fresh, !turns.isEmpty || hasSentPrompts || thread.hasStartedTurn {
+            throw ControlFailure(code: .continuationUnavailable)
+        }
+        if !idle, currentTurnID != turnID { throw ControlFailure(code: .conflict) }
+    }
+
+    private func failExternalBeforeTurn(_ turnID: UUID, error: Error) {
+        guard let submission = externalSubmission, submission.turnID == turnID else { return }
+        externalSubmission = nil
+        submission.report(ControlTurnUpdate(state: .failed, failure: Self.controlFailure(error)))
+        flushFollowUpsIfIdle()
+    }
+
+    private static func controlFailure(_ error: Error) -> ControlFailure {
+        if let failure = error as? ControlFailure { return failure }
+        let text = error.localizedDescription.lowercased()
+        let category: String
+        if text.contains("auth") || text.contains("sign in") || text.contains("api key") { category = "authentication" }
+        else if text.contains("resume") || text.contains("conversation") || text.contains("session") && text.contains("not found") { category = "continuation" }
+        else if text.contains("limit") || text.contains("quota") { category = "usage_limit" }
+        else if text.contains("install") { category = "not_installed" }
+        else if text.contains("permission") || text.contains("denied") { category = "permission" }
+        else { category = "provider_or_transport" }
+        return ControlFailure(code: category == "continuation" ? .continuationUnavailable : .providerFailure, detail: category)
+    }
+
+    func interruptExternal(turnID: UUID, operationID: UUID,
+                           report: @escaping @MainActor (ControlTurnUpdate) -> Void) throws {
+        guard currentTurnID == turnID, phase != .idle, !isReverting, finishingTurnID == nil,
+              controlInterrupts.count < LocalControl.maxPendingOperations else { throw ControlFailure(code: .busy) }
+        controlInterrupts[operationID] = (turnID, report)
+        interrupt()
+    }
+
+    private func publishControlEvent(_ event: ProviderEvent) {
+        if case .turnCompleted(let status, _) = event, status == .interrupted { controlProviderStoppedTurnID = currentTurnID }
+        guard var submission = externalSubmission, submission.turnID == currentTurnID else { return }
+        if case .turnStarted = event { submission.providerStarted = true }
+        if case .turnCompleted(_, let error) = event, let error { submission.failure = Self.controlFailure(ProviderError.failed(error)) }
+        externalSubmission = submission
+        let waiting = !approvals.isEmpty || !questions.isEmpty || isWaitingForLimit
+        submission.report(ControlTurnUpdate(state: waiting ? .waiting : (submission.providerStarted ? .started : .accepted)))
+    }
+
+    private func finishControlTurn(_ turnID: UUID, status: TurnStatus) {
+        let submission = externalSubmission?.turnID == turnID ? externalSubmission : nil
+        let observers = controlInterrupts.filter { $0.value.turnID == turnID }
+        guard submission != nil || !observers.isEmpty else { return }
+        // Deletion cancels persistence, not completion. Do not recreate an orphan
+        // document, and still release submit/interrupt tickets after send unwinds.
+        let persisted = !persistenceEnabled || DiskWriter.shared.writeThreadSynchronously(snapshotForSave())
+        let failure = persisted ? (submission?.failure ?? (status == .failed ? ControlFailure(code: .providerFailure) : nil)) : ControlFailure(code: .persistence)
+        let event = ControlTurnUpdate(state: failure == nil ? .ended : .failed, turnStatus: status.rawValue, failure: failure,
+                                      stopEvidence: controlProviderStoppedTurnID == turnID ? "provider_reported_interrupted" : "runtime_ended_only")
+        // Some adapters emit completion before send() has returned. Keep admission and
+        // the quit/update barrier closed until that submission stack has unwound too;
+        // its post-send session-ID writes must not land after the flush boundary.
+        if controlSendingTurns.contains(turnID) { controlDeferredCompletions[turnID] = event; return }
+        deliverControlCompletion(turnID, event: event)
+    }
+
+    private func completeControlSubmission(_ turnID: UUID) {
+        controlSendingTurns.remove(turnID)
+        if let event = controlDeferredCompletions.removeValue(forKey: turnID) {
+            deliverControlCompletion(turnID, event: event)
+            if event.turnStatus == TurnStatus.completed.rawValue { flushFollowUpsIfIdle() }
+        }
+    }
+
+    private func deliverControlCompletion(_ turnID: UUID, event: ControlTurnUpdate) {
+        if let submission = externalSubmission, submission.turnID == turnID {
+            externalSubmission = nil
+            submission.report(event)
+        }
+        let observers = controlInterrupts.filter { $0.value.turnID == turnID }
+        for (id, observer) in observers { controlInterrupts[id] = nil; observer.report(event) }
+    }
+
+    /// The thread is being deleted: pending submit/interrupt tickets fail now rather than
+    /// when the orphaned `startTurn` stack unwinds, which a provider call that never
+    /// returns would block for good — and with it every later quit or update. A
+    /// completion that still lands afterwards finds nothing left to report to.
+    func failExternalControl(_ failure: ControlFailure) {
+        guard externalSubmission != nil || !controlInterrupts.isEmpty else { return }
+        let submission = externalSubmission
+        externalSubmission = nil
+        let observers = controlInterrupts
+        controlInterrupts.removeAll()
+        let event = ControlTurnUpdate(state: .failed, failure: failure, stopEvidence: "thread_deleted")
+        submission?.report(event)
+        for (_, observer) in observers { observer.report(event) }
+    }
+
     // MARK: - Sending
 
     func send() {
-        guard !isReverting, !draft.isEmpty, phase == .idle else { return }
+        guard externalSubmission == nil, controlInterrupts.isEmpty, !isReverting, !draft.isEmpty, phase == .idle else { return }
         let attachments = draft.attachments
         let outgoing = draft.outgoingText.trimmingCharacters(in: .whitespacesAndNewlines)
         if handleLocalCommand(outgoing) {
@@ -1234,6 +1395,7 @@ final class ThreadRuntime {
     private func dispatchHead(_ prompt: FollowUpPrompt, origin: HydraHeadInfo.Origin) -> Bool {
         guard let app, let thread, !thread.isArchived, let launch = app.hydraLaunch(for: thread),
               launch.hasRoom(running: app.runningTivanoHeads(of: threadID)) else { return false }
+        guard app.beginThreadTurn(threadID) else { return false }
         let task = TextCleanup.singleLine(prompt.text, limit: 60)
         let context = app.hydraChatContext(for: threadID)
         let leadIsWorking = phase != .idle
@@ -1259,7 +1421,7 @@ final class ThreadRuntime {
     /// Sends the next queued follow-up to an idle lead at once, even with heads still
     /// out. A turn the user stopped waits for them instead (see `drainFollowUps`).
     private func flushFollowUpsIfIdle() {
-        guard phase == .idle, !followUpFlushScheduled, !followUps.isEmpty,
+        guard phase == .idle, externalSubmission == nil, !followUpFlushScheduled, !followUps.isEmpty,
               thread?.lastStatus != .interrupted else { return }
         followUpFlushScheduled = true
         Task { await startQueuedFollowUpTurn() }
@@ -1319,7 +1481,7 @@ final class ThreadRuntime {
     /// completed turn: an interrupted turn means the user hit stop, so the queue waits for them.
     /// Returns whether a turn starts.
     private func drainFollowUps(after status: TurnStatus) -> Bool {
-        guard status == .completed, phase == .idle, !followUps.isEmpty else { return false }
+        guard status == .completed, phase == .idle, externalSubmission == nil, !followUps.isEmpty else { return false }
         var next = takeBundle(startingAt: 0)
         saveRevision += 1
         // Skip prompts that emptied while queued (an attachment file deleted on disk still counts,
@@ -1377,11 +1539,29 @@ final class ThreadRuntime {
     /// Starts a turn on `text`. `hydraHeads` marks the message as heads reporting back to
     /// their lead rather than the user's own words; `hydraBrief` marks it as the lead's
     /// brief to a head, shown as a pill rather than a plain bubble.
-    private func startTurn(text: String, attachments: [Attachment], hydraHeads: [Int]? = nil, hydraBrief: Bool = false) async {
-        // A new turn must not race a provider-side archive. This wait occurs before
-        // claiming the idle runtime, and the same session is restored before sending.
-        await providerHistoryOperation?.value
+    private func retainUnsentMessage(text: String, attachments: [Attachment]) {
+        if draft.isEmpty {
+            draft = ComposerDraft(text: text, attachments: attachments)
+        } else {
+            followUps.insert(FollowUpPrompt(text: text, attachments: attachments), at: 0)
+            saveRevision += 1
+            scheduleSave()
+        }
+    }
+
+    private func startTurn(text: String, attachments: [Attachment], hydraHeads: [Int]? = nil, hydraBrief: Bool = false, externalTurnID: UUID? = nil) async {
+        // External requests reject races instead of entering the UI's implicit queue.
+        if let externalTurnID {
+            do { try validateExternalSubmission(externalTurnID, idle: true) }
+            catch { failExternalBeforeTurn(externalTurnID, error: error); return }
+        } else {
+            if externalSubmission != nil { enqueueFollowUp(text: text, attachments: attachments); return }
+            // A UI turn may wait for an archive; external control does not archive.
+            await providerHistoryOperation?.value
+        }
         if !hydraBrief && (hydraStartupPending || app?.thread(threadID)?.hydra?.pendingProjectReference != nil) {
+            // External submissions reject races instead of joining the UI's queue.
+            if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)); return }
             enqueueFollowUp(text: text, attachments: attachments)
             if !hydraStartupPending, let summary = app?.thread(threadID)?.hydra?.summary {
                 appendNotice(.error, summary)
@@ -1389,21 +1569,57 @@ final class ThreadRuntime {
             return
         }
         guard phase == .idle, !isReverting else {
-            enqueueFollowUp(text: text, attachments: attachments)
+            if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)) }
+            else { enqueueFollowUp(text: text, attachments: attachments) }
             return
         }
-        guard let app, let initialThread = app.thread(threadID), let project = app.project(initialThread.projectID) else { return }
+        guard let app, var initialThread = app.thread(threadID) else {
+            if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .notFound)) }
+            return
+        }
+        if let externalTurnID, initialThread.model == nil {
+            // Resolve from the already-loaded catalogue without an await that could
+            // overwrite a model the user selects in the UI in the meantime.
+            guard let model = app.providers.defaultModel(for: initialThread.provider) else {
+                failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .unavailable, detail: "model_unavailable"))
+                return
+            }
+            initialThread.model = model.id
+            initialThread.effort = initialThread.effort ?? model.defaultEffort
+            app.updateThread(threadID) { $0.model = initialThread.model; $0.effort = initialThread.effort }
+            externalSubmission?.original.model = initialThread.model
+            externalSubmission?.original.effort = initialThread.effort
+        }
+        let directory: String
+        do {
+            directory = try app.ensureExecutionDirectory(for: initialThread)
+            if externalTurnID != nil { try AppModel.requireControlDirectory(directory) }
+        } catch {
+            if let externalTurnID {
+                failExternalBeforeTurn(externalTurnID, error: error as? ControlFailure ?? ControlFailure(code: .directoryUnavailable))
+            } else { retainUnsentMessage(text: text, attachments: attachments); appendNotice(.error, error.localizedDescription) }
+            return
+        }
         if hydraBrief && initialThread.hydra?.status != .running {
             hydraStartupPending = false
             return
         }
         guard !initialThread.isArchived else {
-            enqueueFollowUp(text: text, attachments: attachments)
+            if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .archived)) }
+            else { enqueueFollowUp(text: text, attachments: attachments) }
             return
         }
         if hydraBrief { hydraStartupPending = false }
+        guard app.beginThreadTurn(threadID) else {
+            if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .persistence)) }
+            else { retainUnsentMessage(text: text, attachments: attachments); appendNotice(.error, Chrome.localized("Could not save the library")) }
+            return
+        }
         let turnIndex = (turns.map(\.index).max() ?? -1) + 1
         var turn = TurnRecord(index: turnIndex)
+        if let externalTurnID { turn.id = externalTurnID }
+        controlSendingTurns.insert(turn.id)
+        defer { completeControlSubmission(turn.id) }
         let userItem = TimelineItem(turnID: turn.id, content: .user(UserMessage(text: text, attachments: attachments, hydraHeads: hydraHeads, hydraBrief: hydraBrief ? true : nil)))
         turn.userItemID = userItem.id
         turns.append(turn)
@@ -1469,11 +1685,32 @@ final class ThreadRuntime {
         // The chat is named as its first message goes in, not when the session finally
         // takes it: a cold session can take seconds, and a first send that fails must
         // not leave the chat nameless for good.
-        generateTitle(from: text, attachments: attachments)
+        if externalTurnID == nil {
+            generateTitle(from: text, attachments: attachments)
+        } else {
+            if initialThread.title == ChatThread.untitled {
+                app.updateThread(threadID) { $0.title = TextCleanup.singleLine(text, limit: 72) }
+            }
+            do {
+                try app.commitExternalLibrary()
+                guard DiskWriter.shared.writeThreadSynchronously(snapshotForSave()) else { throw ControlFailure(code: .persistence) }
+            } catch {
+                externalSubmission?.failure = Self.controlFailure(error)
+                await finishTurn(status: .failed, turnID: turn.id)
+                return
+            }
+        }
 
-        await ensureModel(initialThread)
+        if externalTurnID == nil { await ensureModel(initialThread) }
+        if let externalTurnID {
+            do { try validateExternalSubmission(externalTurnID, idle: false) }
+            catch {
+                externalSubmission?.failure = Self.controlFailure(error)
+                await finishTurn(status: .failed, turnID: turn.id)
+                return
+            }
+        }
 
-        let directory = initialThread.executionDirectory(projectPath: project.path)
         let git = Git(directory)
         let checkpointRef = Git.checkpointRef(thread: threadID, turn: turnIndex, phase: "start")
         // Anything could have happened in the checkout since the last turn, so no snapshot
@@ -1503,7 +1740,7 @@ final class ThreadRuntime {
             // afterwards rather than handed back as a value, because a session is not
             // Sendable and this task is one of its own.
             if let warmup { await warmup.value }
-            let start = Task { () async throws -> Void in _ = try await self.ensureSession(directory: directory, dshFinalReport: isFinalReport) }
+            let start = Task { () async throws -> Void in _ = try await self.ensureSession(allowNewSession: externalTurnID == nil, dshFinalReport: isFinalReport) }
             if await checkpoint.value {
                 updateTurn(turn.id) { $0.baseCheckpoint = checkpointRef }
             }
@@ -1512,7 +1749,15 @@ final class ThreadRuntime {
                 await app.providers.loadCommands(initialThread.provider, directory: directory)
             }
             // The user can stop a turn while it is still starting.
-            guard currentTurnID == turn.id, let session, let thread = app.thread(threadID) else { return }
+            guard currentTurnID == turn.id, let session, let thread = app.thread(threadID) else {
+                if externalTurnID != nil { failExternalBeforeTurn(turn.id, error: ControlFailure(code: .conflict)) }
+                return
+            }
+            if let externalTurnID {
+                try validateExternalSubmission(externalTurnID, idle: false)
+                guard try app.executionDirectory(for: thread) == directory else { throw ControlFailure(code: .conflict) }
+                try AppModel.requireControlDirectory(directory)
+            }
             let command = SlashCommand.name(in: text).flatMap { name in
                 app.providers.commands[ProviderRegistry.commandKey(thread.provider, directory: directory)]?.first { $0.name == name }
             }
@@ -1599,7 +1844,11 @@ final class ThreadRuntime {
             }
             if let command { app.providers.recordCommand(command.name, for: thread.provider) }
         } catch {
-            guard currentTurnID == turn.id else { return }
+            guard currentTurnID == turn.id else {
+                if externalTurnID != nil { failExternalBeforeTurn(turn.id, error: ControlFailure(code: .conflict)) }
+                return
+            }
+            if externalTurnID != nil { externalSubmission?.failure = Self.controlFailure(error) }
             if finishTurnWithCLIUpdateHint(error.localizedDescription, turnID: turn.id) { return }
             appendNotice(.error, error.localizedDescription)
             await finishTurn(status: .failed, turnID: turn.id)
@@ -1629,12 +1878,16 @@ final class ThreadRuntime {
         await app.providers.loadCatalog(thread.provider)
         if let selected = thread.model {
             if let model = app.providers.model(selected, for: thread.provider), model.id != selected {
-                app.updateThread(threadID) { $0.model = model.id }
+                app.updateThread(threadID) {
+                    guard $0.model == selected else { return }
+                    $0.model = model.id
+                }
             }
             return
         }
         if let model = app.providers.defaultModel(for: thread.provider) {
             app.updateThread(threadID) {
+                guard $0.model == nil else { return }
                 $0.model = model.id
                 $0.effort = $0.effort ?? model.defaultEffort
             }
@@ -1652,26 +1905,54 @@ final class ThreadRuntime {
         guard phase == .idle, session == nil, warmup == nil, !isReverting, !hydraStartupPending,
               let app, let thread = app.thread(threadID), !thread.isArchived, !thread.provider.isAPIKeyBased,
               thread.hydra?.pendingProjectReference == nil,
-              !app.providers.cliUpdateBlocksWarmup(thread.provider),
-              let project = app.project(thread.projectID) else { return }
-        let directory = thread.executionDirectory(projectPath: project.path)
+              !app.providers.cliUpdateBlocksWarmup(thread.provider) else { return }
+        let generation = UUID()
+        warmupGeneration = generation
         warmup = Task { [weak self] in
             guard let self else { return }
             await ensureModel(thread)
+            guard !Task.isCancelled, warmupGeneration == generation else { return }
             guard phase == .idle, session == nil, !hydraStartupPending,
                   app.thread(threadID)?.hydra?.pendingProjectReference == nil,
                   !app.providers.cliUpdateBlocksWarmup(thread.provider) else { warmup = nil; return }
             // A start that fails is not retried on every keystroke: the send makes its own.
-            if (try? await ensureSession(directory: directory)) != nil { warmup = nil }
+            do {
+                _ = try await ensureSession()
+                if warmupGeneration == generation { warmup = nil }
+            } catch is CancellationError {
+            } catch {
+                // MiniMax startup can fail before a turn exists. The explicit send
+                // retries and owns that failure, rather than displaying it twice.
+                if warmupGeneration == generation, thread.provider != .minimaxCode {
+                    appendNotice(.error, error.localizedDescription)
+                }
+            }
         }
     }
 
-    private func ensureSession(directory: String, allowNewSession: Bool = true, dshFinalReport: Bool = false) async throws -> any ProviderSession {
+    /// A session launch gets this long before the turn fails: a `start()` that never
+    /// returns must not hold the turn in `.starting` forever.
+    private static let providerStartTimeout: Duration = .seconds(90)
+
+    /// A candidate's `start()` under the launch deadline. Deadlines thrown inside
+    /// `start()` itself keep their own message; only this one reports the launch.
+    private func startCandidate(_ candidate: any ProviderSession, provider: ProviderKind) async throws -> String {
+        do {
+            return try await withDeadline(seconds: Int(Self.providerStartTimeout.components.seconds), provider: provider.displayName, operation: "session start") {
+                try await candidate.start()
+            }
+        } catch let error as SessionDeadlineError where error.operation == "session start" {
+            throw ProviderError.failed(String(format: Chrome.localized("%@ did not start within 90 seconds. Try sending again."), provider.displayName))
+        }
+    }
+
+    private func ensureSession(allowNewSession: Bool = true, dshFinalReport: Bool = false) async throws -> any ProviderSession {
         #if DEBUG
         // Replay is history-only, including accidental UI actions during capture.
         if DshCaptureReplay.isEnabled { throw ProviderError.notRunning }
         #endif
-        guard let app, let thread = app.thread(threadID) else { throw ProviderError.notRunning }
+        guard !Task.isCancelled, let app, let thread = app.thread(threadID) else { throw ProviderError.notRunning }
+        let directory = try app.ensureExecutionDirectory(for: thread)
         if !thread.provider.isAPIKeyBased {
             await app.providers.waitWhileCLIUpdating(thread.provider)
             guard !Task.isCancelled else { throw CancellationError() }
@@ -1721,8 +2002,12 @@ final class ThreadRuntime {
         // A message sent right after launch waits for the login shell, where a CLI installed
         // off the fallback PATH is found; this must not read as "not installed".
         if !DshIntegrationConfiguration.isEnabled { await LoginEnvironment.load() }
+        guard !Task.isCancelled else { throw CancellationError() }
         releaseSession(stop: true)
         try await waitForReplacedSessions()
+        if let external = externalSubmission, currentTurnID == external.turnID {
+            try validateExternalSubmission(external.turnID, idle: false)
+        }
 
         if thread.provider.isAPIKeyBased {
             guard !app.settings.apiKey(for: thread.provider).isEmpty else {
@@ -1772,7 +2057,7 @@ final class ThreadRuntime {
                 }
             }
             do {
-                sessionID = try await candidate.start()
+                sessionID = try await startCandidate(candidate, provider: thread.provider)
             } catch where thread.providerSessionID != nil && thread.providerResumeAt == nil && allowNewSession && session === candidate && !Task.isCancelled {
                 // The session that would not resume is let go of entirely, handler and
                 // all, before the one that starts over takes its place.
@@ -1781,7 +2066,7 @@ final class ThreadRuntime {
                 candidate = makeAPISession(resumeID: nil)
                 session = candidate
                 sessionSignature = signature
-                sessionID = try await candidate.start()
+                sessionID = try await startCandidate(candidate, provider: thread.provider)
             }
             guard session === candidate, !Task.isCancelled else { throw CancellationError() }
             started = true
@@ -1815,7 +2100,7 @@ final class ThreadRuntime {
                 codexHistoryDirectory: thread.hydra?.ownedCodexWorkingDirectory,
                 antiSlopEnabled: signature.antiSlopEnabled,
                 voiceContext: signature.voiceContext,
-                modelCatalog: thread.provider.namesModelVariants || thread.provider == .dsh ? app.providers.models(for: thread.provider) : [],
+                modelCatalog: thread.provider.namesModelVariants || thread.provider == .dsh || thread.provider == .minimaxCode ? app.providers.models(for: thread.provider) : [],
                 dshMode: thread.dshMode ?? .standard,
                 dshFinalReport: signature.dshFinalReport
             )
@@ -1827,7 +2112,7 @@ final class ThreadRuntime {
             case .commandcode: CommandCodeSession(configuration: configuration)
             case .pi: PiSession(configuration: configuration)
             case .omp: OmpSession(configuration: configuration)
-            case .cursor, .opencode, .grok, .devin, .kimi, .dsh: ACPSession(configuration: configuration)
+            case .cursor, .opencode, .grok, .devin, .kimi, .dsh, .minimaxCode: ACPSession(configuration: configuration)
             case .deepseek: DeepSeekSession(configuration: configuration)
             case .meta: MetaSession(configuration: configuration)
             case .zai: ZaiSession(configuration: configuration)
@@ -1854,7 +2139,7 @@ final class ThreadRuntime {
             }
         }
         do {
-            sessionID = try await candidate.start()
+            sessionID = try await startCandidate(candidate, provider: thread.provider)
         } catch where allowNewSession && session === candidate && !Task.isCancelled
             && !(thread.provider == .codex && thread.hydra?.codexHistoryArchived == true
                 && thread.hydra?.ownedCodexSessionID == thread.providerSessionID && thread.providerSessionID != nil)
@@ -1872,9 +2157,14 @@ final class ThreadRuntime {
             candidate = makeSession(resumeID: nil)
             session = candidate
             sessionSignature = signature
-            sessionID = try await candidate.start()
+            sessionID = try await startCandidate(candidate, provider: thread.provider)
         }
         guard session === candidate, !Task.isCancelled else { throw CancellationError() }
+        if let external = externalSubmission, external.continuation == .providerSession {
+            guard let expected = external.original.providerSessionID, sessionID == expected else {
+                throw ControlFailure(code: .continuationUnavailable, detail: "resume_identity_changed")
+            }
+        }
         started = true
         recordSessionID(sessionID)
         if let codex = candidate as? CodexSession { recoverCrashedCodexTurn(using: codex) }
@@ -2318,14 +2608,14 @@ final class ThreadRuntime {
     /// Only the paths its tools and shell commands touched are looked at, so work done in the
     /// same checkout by other threads or by hand never shows up here, let alone gets undone.
     private func previewRevert(to turnID: UUID) async throws -> RevertPreview {
-        guard let app, let thread, let project = app.project(thread.projectID),
+        guard let app, let thread,
               let index = turns.firstIndex(where: { $0.id == turnID }), let base = turns[index].baseCheckpoint else {
             throw ProviderError.failed("No file checkpoint is available for this message. You can still keep the file changes.")
         }
         let removed = turns[index...]
         let paths = Set(removed.flatMap { $0.touchedPaths ?? [] }).sorted()
         let end = removed.compactMap(\.endCheckpoint).last
-        return try await Git(thread.executionDirectory(projectPath: project.path)).previewRestore(base: base, end: end, paths: paths)
+        return try await Git(app.executionDirectory(for: thread)).previewRestore(base: base, end: end, paths: paths)
     }
 
     /// Edits a sent message: the conversation rewinds to before its turn, the files it and
@@ -2355,7 +2645,7 @@ final class ThreadRuntime {
         // idle turn only after a prior archive has finished, just as a new send does.
         await waitForProviderHistory()
         guard phase == .idle, !isReverting else { throw ProviderError.failed("Wait for the running turn to finish first.") }
-        guard let app, let thread = app.thread(threadID), let project = app.project(thread.projectID),
+        guard let app, let thread = app.thread(threadID),
               let index = turns.firstIndex(where: { $0.id == turnID }) else {
             throw ProviderError.failed("This message is no longer in the thread.")
         }
@@ -2363,7 +2653,7 @@ final class ThreadRuntime {
             throw ProviderError.failed("Stop the running agents before reverting this conversation.")
         }
         let removed = Array(turns[index...])
-        let directory = thread.executionDirectory(projectPath: project.path)
+        let directory = try app.ensureExecutionDirectory(for: thread)
 
         isReverting = true
         defer { isReverting = false }
@@ -2377,7 +2667,7 @@ final class ThreadRuntime {
         case .codex:
             if let targetID = removed.lazy.compactMap(\.providerTurnID).first {
                 guard thread.providerSessionID != nil,
-                      let codex = try await ensureSession(directory: directory, allowNewSession: false) as? CodexSession else {
+                      let codex = try await ensureSession(allowNewSession: false) as? CodexSession else {
                     throw ProviderError.failed("The original Codex conversation is unavailable.")
                 }
                 let sessionID = try await codex.rollback(from: targetID)
@@ -2388,7 +2678,7 @@ final class ThreadRuntime {
             stopSession()
         case .copilot:
             guard thread.providerSessionID != nil,
-                  let copilot = try await ensureSession(directory: directory, allowNewSession: false) as? CopilotSession else {
+                  let copilot = try await ensureSession(allowNewSession: false) as? CopilotSession else {
                 throw ProviderError.failed("The original Copilot conversation is unavailable.")
             }
             try await copilot.rollback(turns: removed.count)
@@ -2417,7 +2707,7 @@ final class ThreadRuntime {
                 }
             } else {
                 guard thread.providerSessionID != nil,
-                      let omp = try await ensureSession(directory: directory, allowNewSession: false) as? OmpSession else {
+                      let omp = try await ensureSession(allowNewSession: false) as? OmpSession else {
                     throw ProviderError.failed(Chrome.localized("The original omp conversation is unavailable."))
                 }
                 let file = try await omp.rollback(removing: removed.map(userText(of:)))
@@ -2452,7 +2742,7 @@ final class ThreadRuntime {
             guard let turn = entry.item.turnID else { return false }
             return removedIDs.contains(turn)
         }
-        entryIndex = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        entryIndex = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
         turns.removeSubrange(index...)
         // A head's paths list is what the turn in flight has changed; the turn they
         // belonged to is gone.
@@ -2552,8 +2842,7 @@ final class ThreadRuntime {
 
     func parsedDiff(selection: UUID?, providerFiles: [DiffFile]? = nil) async -> [DiffFile] {
         if let task = cachedDiff(selection: selection) { return await task.value }
-        guard let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) else { return [] }
-        let root = thread.executionDirectory(projectPath: project.path)
+        guard let app, let thread = app.thread(threadID), let root = try? app.executionDirectory(for: thread) else { return [] }
         let git = Git(root)
         let repository = repositoryRoot(for: git)
         let selectedTurns = selection.map { id in turns.filter { $0.id == id } } ?? turns
@@ -2582,7 +2871,12 @@ final class ThreadRuntime {
         let task = Task { () -> [DiffFile] in
             let repositoryPath = await repository.value.path
             let providerPatch = providerFiles == nil ? selectedTurns.compactMap(\.providerDiff).joined(separator: "\n") : ""
-            let reported = providerFiles ?? DiffParser.parse(providerPatch)
+            let reported: [DiffFile]
+            if let providerFiles {
+                reported = providerFiles
+            } else {
+                reported = await Self.parseDiff(providerPatch)
+            }
             let paths = Set((Array(touched) + reported.flatMap { [$0.path] + ($0.oldPath.map { [$0] } ?? []) } + edits.map(\.path)).compactMap { path -> String? in
                 guard !path.isEmpty else { return nil }
                 let absolute = URL(fileURLWithPath: path, relativeTo: URL(fileURLWithPath: root, isDirectory: true)).standardizedFileURL.path
@@ -2710,6 +3004,9 @@ final class ThreadRuntime {
     }
 
     func stopSession() {
+        warmupGeneration = UUID()
+        warmup?.cancel()
+        warmup = nil
         releaseSession(stop: true)
         // The session's own end is dropped with it (see `releaseSession`), so a turn cut
         // off here is closed by hand: left running, the thread showed the working line
@@ -2751,6 +3048,7 @@ final class ThreadRuntime {
     }
 
     private func handle(_ event: ProviderEvent) {
+        defer { publishControlEvent(event) }
         noteSessionEvent()
         if opensTurnAfterFinish {
             deferredBackgroundTurnEvents.append(event)
@@ -2839,8 +3137,8 @@ final class ThreadRuntime {
         case .models(let list, _):
             if let provider = thread?.provider { app?.providers.updateCatalog(list, for: provider) }
         case .commands(let list):
-            if let app, let thread, let project = app.project(thread.projectID) {
-                app.providers.updateCommands(list, for: thread.provider, directory: thread.executionDirectory(projectPath: project.path))
+            if let app, let thread, let directory = try? app.executionDirectory(for: thread) {
+                app.providers.updateCommands(list, for: thread.provider, directory: directory)
             }
         case .title(let title):
             // Provider titles are only a fallback; they must not replace the one Tivano writes.
@@ -2985,8 +3283,8 @@ final class ThreadRuntime {
         // Moving the thread can happen while Git settles; its final checkpoint
         // still belongs to the checkout where this turn ran.
         let finalizationRoot: String?
-        if let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) {
-            finalizationRoot = thread.executionDirectory(projectPath: project.path)
+        if let app, let thread = app.thread(threadID) {
+            finalizationRoot = try? app.executionDirectory(for: thread)
         } else {
             finalizationRoot = nil
         }
@@ -3012,6 +3310,7 @@ final class ThreadRuntime {
         guard ownsTurnFinalization(turnID, generation: generation, runtimeGeneration: runtimeGeneration) else { return }
         currentTurnID = nil
         flushDeltas()
+        streamByteLengths.removeAll()
         approvals.removeAll()
         questions.removeAll()
         // One pass over the turn's rows: they are closed, and the files their tools
@@ -3098,6 +3397,7 @@ final class ThreadRuntime {
         // The turn's own events shared one save every few seconds; whatever they left is
         // written here, so a finished turn is always on disk.
         saveNow()
+        finishControlTurn(turnID, status: status)
         let budgetSpent = headBudgetSpent
         headBudgetSpent = false
         // Continuations can open a new turn synchronously while replaying events.
@@ -3837,6 +4137,7 @@ final class ThreadRuntime {
     }
 
     private func completePlan(_ id: String, markdown: String) {
+        streamByteLengths[id] = nil
         let markdown = TextCleanup.withoutEmDashes(markdown)
         if let entry = entryIndex[id], case .plan(var plan) = entry.item.content {
             if !markdown.isEmpty { plan.markdown = markdown }
@@ -4000,16 +4301,20 @@ final class ThreadRuntime {
         let owner = claimOwner
         guard let before = commandTrees.removeValue(forKey: id), let git = repositoryGit else { return }
         let epoch = treeEpoch
+        let generation = runtimeTurnGeneration
         let completion = CommandDiffCompletion()
         commandDiffCompletions[id] = completion
         commandSettles[id] = Task { [weak self] in
             defer { completion.finish() }
             guard let base = await before.value, let self else { return }
             guard let after = await captureTree(git).value else { return }
-            latestTree = after
-            // Nothing else started or ran alongside while the snapshot was taken, so it
-            // still stands for the working tree and the next command starts from it.
-            if treeEpoch == epoch, commandTrees.isEmpty { settledTree = (after, epoch) }
+            // Timed-out diffs may still update their old rows, but not a newer turn's baseline.
+            if runtimeTurnGeneration == generation {
+                latestTree = after
+                // Nothing else started or ran alongside while the snapshot was taken, so it
+                // still stands for the working tree and the next command starts from it.
+                if treeEpoch == epoch, commandTrees.isEmpty { settledTree = (after, epoch) }
+            }
             guard base != after, let changed = try? await git.changedPaths(from: base, to: after) else { return }
             let repository = repositoryRoot(for: git)
             let attributed = attributedPaths(inTurnOf: id, git: git, repositoryRoot: await repository.value)
@@ -4103,6 +4408,7 @@ final class ThreadRuntime {
         let turnStart = turns.first(where: { $0.id == currentTurnID })?.startedAt ?? .distantPast
         let owner = claimOwner
         guard let pending = foreignCommandBases.removeValue(forKey: id) else { return }
+        let generation = runtimeTurnGeneration
         let completion = CommandDiffCompletion()
         commandDiffCompletions[id] = completion
         commandSettles[id] = Task { [weak self] in
@@ -4111,7 +4417,7 @@ final class ThreadRuntime {
             let git = Git(base.root.path)
             let capture = captureTree(git)
             // The next command in that checkout starts from this one's tree.
-            foreignTrees[base.root.path] = capture
+            if runtimeTurnGeneration == generation { foreignTrees[base.root.path] = capture }
             guard let after = await capture.value, base.tree != after,
                   let changed = try? await git.changedPaths(from: base.tree, to: after) else { return }
             let attributed = attributedPaths(inTurnOf: id, git: git, repositoryRoot: base.root)
@@ -4142,8 +4448,8 @@ final class ThreadRuntime {
         let key = URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path
         return app.threads.contains { thread in
             guard thread.id != threadID, app.existingRuntime(for: thread.id)?.isRunning == true,
-                  let project = app.project(thread.projectID) else { return false }
-            let other = URL(fileURLWithPath: thread.executionDirectory(projectPath: project.path)).standardizedFileURL.resolvingSymlinksInPath().path
+                  let directory = try? app.executionDirectory(for: thread) else { return false }
+            let other = URL(fileURLWithPath: directory).standardizedFileURL.resolvingSymlinksInPath().path
             return other == key || TouchedPaths.relative(other, root: key) != nil
         }
     }
@@ -4209,14 +4515,14 @@ final class ThreadRuntime {
     /// The folder this thread's agent works in: its own copy, else an explicit Hydra
     /// checkout, else the project folder.
     private var workingRoot: String? {
-        guard let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) else { return nil }
-        return thread.executionDirectory(projectPath: project.path)
+        guard let app, let thread = app.thread(threadID) else { return nil }
+        return try? app.executionDirectory(for: thread)
     }
 
     private var repositoryGit: Git? {
         guard let currentTurnID, let turn = turns.first(where: { $0.id == currentTurnID }), turn.baseCheckpoint != nil,
-              let app, let thread = app.thread(threadID), let project = app.project(thread.projectID) else { return nil }
-        return Git(thread.executionDirectory(projectPath: project.path))
+              let root = workingRoot else { return nil }
+        return Git(root)
     }
 
     /// How much of a patch an edit carries. Past it the edit is stats only, so neither the
@@ -4409,7 +4715,7 @@ final class ThreadRuntime {
     /// no landing under way. Panel geometry and the head links of old tool rows are UI
     /// conveniences a fresh runtime starts without, as it does after a relaunch.
     var holdsOnlyPersistedState: Bool {
-        phase == .idle && session == nil && providerHistoryOperation == nil && !isReverting && pendingSend == nil && !isLoadingHistory
+        phase == .idle && externalSubmission == nil && controlInterrupts.isEmpty && session == nil && providerHistoryOperation == nil && !isReverting && pendingSend == nil && !isLoadingHistory
             && draft.isEmpty && followUpEdit == nil && messageEdit == nil
             && approvals.isEmpty && questions.isEmpty
             && hydraPendingReports.isEmpty && hydraBatches.isEmpty && hydraWaiting.isEmpty
@@ -4536,12 +4842,12 @@ private extension TimelineItem.Content {
 extension ThreadRuntime {
     func codexSessionForVoice() async throws -> CodexSession {
         guard let app, let thread = app.thread(threadID), thread.provider == .codex else { throw VoiceRejection.wrongProvider }
-        guard let project = app.project(thread.projectID) else { throw VoiceRejection.noProject }
         if let warmup { await warmup.value }
         await ensureLoaded()
         guard !Task.isCancelled else { throw CancellationError() }
         await ensureModel(thread)
-        let session = try await ensureSession(directory: thread.executionDirectory(projectPath: project.path))
+        guard app.beginThreadTurn(threadID) else { throw ProviderError.failed(Chrome.localized("Could not save the library")) }
+        let session = try await ensureSession()
         guard let codex = session as? CodexSession else { throw VoiceRejection.wrongProvider }
         return codex
     }

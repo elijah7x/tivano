@@ -5,7 +5,7 @@ import SwiftUI
 /// a section header with its tile, one card of rows, and one recorder per row.
 struct ShortcutsSettingsPage: View {
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+        LazyVStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
             ForEach(AppShortcut.Section.allCases) { section in
                 ShortcutSectionCard(section: section)
             }
@@ -42,7 +42,7 @@ private struct ShortcutSectionCard: View {
 
     var body: some View {
         let store = ShortcutStore.shared
-        VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
+        VStack(alignment: .leading, spacing: Chrome.pageSectionHeaderSpacing) {
             ShortcutSectionHeader(title: section.title, symbol: section.symbol) {
                 if store.hasCustomizations(in: section) {
                     Button("Reset") {
@@ -77,7 +77,7 @@ private struct FixedShortcutsCard: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
+        VStack(alignment: .leading, spacing: Chrome.pageSectionHeaderSpacing) {
             ShortcutSectionHeader(title: "Composer", symbol: "text.cursor") {
                 EmptyView()
             }
@@ -208,7 +208,7 @@ private struct ShortcutRecorder: View {
         let store = ShortcutStore.shared
         var actions: [ShortcutRecordingAction] = []
         if current != nil {
-            actions.append(ShortcutRecordingAction(id: "clear", title: "Clear", isDestructive: true) {
+            actions.append(ShortcutRecordingAction(id: "clear", title: "Remove shortcut", isDestructive: true) {
                 Haptics.perform(.generic)
                 store.set(nil, for: shortcut)
                 isPresenting = false

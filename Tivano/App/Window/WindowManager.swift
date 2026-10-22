@@ -141,7 +141,11 @@ final class WindowManager {
     /// The main window for the onboarding captures: the same window, at a fixed size, with
     /// no frame autosave, so the run never reads or writes where the real window sits.
     func makeCaptureWindow(size: NSSize) -> NSWindow {
-        makeWindow(title: AppInfo.name, size: size, resizable: true) { RootView() }
+        let window = makeWindow(title: AppInfo.name, size: size, resizable: true) { RootView() }
+        #if DEBUG
+        if HeroSwitchProbe.isRequested { mainWindow = window }
+        #endif
+        return window
     }
 
     private func makeSettingsWindow() -> NSWindow {
@@ -188,14 +192,32 @@ final class WindowLiveResize {
     /// Whether the sidebar's edge or the terminal's divider is being dragged: the pane
     /// changes width or height every frame the way a live resize does, so the timeline
     /// steps its row width and holds its animations exactly as it does for one. Written
-    /// by the chat view, which is where both drags are observed.
-    var isPaneResizing = false
+    /// by the visible chat view, whose ownership follows ThreadColumns' selection.
+    private(set) var isPaneResizing = false
+    @ObservationIgnored private var paneOwner: UUID?
     /// The window or a pane is being dragged to a new size right now.
     var isReshaping: Bool { isActive || isPaneResizing }
 
+    func setPaneOwner(_ id: UUID?, resizing: Bool = false) {
+        paneOwner = id
+        let active = id != nil && resizing
+        if isPaneResizing != active { isPaneResizing = active }
+    }
+
+    func updatePaneResizing(_ active: Bool, owner: UUID) {
+        guard paneOwner == owner else { return }
+        if isPaneResizing != active { isPaneResizing = active }
+    }
+
+    func releasePane(_ id: UUID) {
+        guard paneOwner == id else { return }
+        setPaneOwner(nil)
+    }
+
     /// The window keeps this alive for as long as it exists, so the observations are
     /// never taken down: a window is not made twice.
-    init(window: NSWindow) {
+    init(window: NSWindow? = nil) {
+        guard let window else { return }
         let center = NotificationCenter.default
         center.addObserver(forName: NSWindow.willStartLiveResizeNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.isActive = true }
@@ -232,11 +254,13 @@ private struct HostedRoot<Content: View>: View {
 struct HostedEnvironment: ViewModifier {
     let model: AppModel
     let liveResize: WindowLiveResize
+    var isLayoutActive = true
+    @State private var inactiveResize = WindowLiveResize()
 
     func body(content: Content) -> some View {
         content
             .environment(model)
-            .environment(liveResize)
+            .environment(isLayoutActive ? liveResize : inactiveResize)
             .font(.ui(.body))
             .buttonBorderShape(.capsule)
             .modifier(ThemeTint(theme: model.settings.theme))

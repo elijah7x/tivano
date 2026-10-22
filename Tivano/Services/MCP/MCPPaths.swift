@@ -3,9 +3,12 @@ import Foundation
 /// Where the config files providers read at launch are written. Each holds every enabled
 /// server in that provider's own format; a missing or empty file means no servers.
 enum MCPPaths {
+    // Provider configs under here carry secrets: the directory and every file in it stay owner-only.
     static let directory: URL = {
         let url = Storage.root.appendingPathComponent("mcp", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // The attributes above only reach a directory this call creates; an existing one is tightened here.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
         return url
     }()
 
@@ -19,4 +22,18 @@ enum MCPPaths {
     static let codexConfigURL = directory.appendingPathComponent("codex.json")
     /// `{"mcpServers": {...}}` for `copilot --additional-mcp-config`.
     static let copilotConfigURL = directory.appendingPathComponent("copilot.json")
+
+    /// Atomic write tightened to 0600; a failed write leaves nothing readable behind.
+    @discardableResult
+    static func writePrivate(_ data: Data, to url: URL) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return true
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            return false
+        }
+    }
 }

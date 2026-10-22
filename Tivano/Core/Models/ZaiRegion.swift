@@ -24,6 +24,8 @@ enum ZaiRegion: String, CaseIterable, Identifiable, Sendable {
 
     var apiHost: String { "\(host)/api/coding/paas/v4" }
 
+    static let apiKeyPlaceholder = "GLM Coding Plan key"
+
     var apiKeySource: String {
         switch self {
         case .global: "z.ai/manage-apikey/apikey-list"

@@ -10,6 +10,43 @@ case "${1:---both}" in
   --both) EDITIONS=(release dev) ;;
   *) echo 'Usage: package_local.sh [--dev|--release|--both]' >&2; exit 1 ;;
 esac
+ROOT=$(pwd -P)
+COMMON_DIR=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)
+COMMON_DIR=$(cd "$COMMON_DIR" && pwd -P)
+SOURCE_ROOT=$(dirname "$COMMON_DIR")
+ARTIFACTS_ROOT=${TIVANO_ARTIFACTS_ROOT-$(dirname "$SOURCE_ROOT")}
+case "$ARTIFACTS_ROOT" in
+  /*) ;;
+  *) echo 'TIVANO_ARTIFACTS_ROOT must be an absolute directory path.' >&2; exit 1 ;;
+esac
+physical_directory() {
+  if [ -d "$1" ]; then
+    (cd "$1" && pwd -P)
+  elif [ -e "$1" ] || [ -L "$1" ]; then
+    echo "Not a usable directory: $1" >&2
+    return 1
+  else
+    local parent leaf
+    parent=$(physical_directory "$(dirname "$1")") || return 1
+    leaf=$(basename "$1")
+    case "$leaf" in
+      .) printf '%s\n' "$parent" ;;
+      ..) dirname "$parent" ;;
+      *) printf '%s/%s\n' "${parent%/}" "$leaf" ;;
+    esac
+  fi
+}
+external_directory() {
+  local directory
+  directory=$(physical_directory "$1") || return 1
+  case "$directory" in
+    "$ROOT"|"$ROOT"/*|"$SOURCE_ROOT"|"$SOURCE_ROOT"/*)
+      echo 'Artifact paths must be outside the current and long-lived source checkouts.' >&2
+      return 1 ;;
+  esac
+  printf '%s\n' "$directory"
+}
+ARTIFACTS_ROOT=$(external_directory "$ARTIFACTS_ROOT")
 TEAM_ID=$(sed -nE 's/^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*([A-Z0-9]{10})[[:space:]]*$/\1/p' config/release.xcconfig)
 DEV_TEAM=$(sed -nE 's/^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*([A-Z0-9]{10})[[:space:]]*$/\1/p' config/dev.xcconfig)
 [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] && [ "$DEV_TEAM" = "$TEAM_ID" ] || {
@@ -41,6 +78,7 @@ for edition in "${EDITIONS[@]}"; do
   config=$(configuration_for "$edition")
   version=$(scripts/version.sh "$edition")
   display=$(scripts/version.sh "$edition" display)
+  packages=$(external_directory "$ARTIFACTS_ROOT/local-packages/$edition")
   derived="build.noindex/$edition"
   mkdir -p "$derived"
   echo "Building $name $display with Developer ID..."
@@ -68,8 +106,8 @@ for edition in "${EDITIONS[@]}"; do
   grep -q "Timestamp=" <<< "$details"
   actual=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$product/Contents/Info.plist")
   [[ "$actual" = "$version" ]] || { echo "Version mismatch: $actual != $version" >&2; exit 1; }
-  mkdir -p build.noindex/packages
-  ditto -c -k --keepParent "$product" "build.noindex/packages/$name-$display.zip"
+  mkdir -p "$packages"
+  ditto -c -k --keepParent "$product" "$packages/$name-$display.zip"
 done
 
 for edition in "${EDITIONS[@]}"; do check_not_running "$(name_for "$edition")"; done

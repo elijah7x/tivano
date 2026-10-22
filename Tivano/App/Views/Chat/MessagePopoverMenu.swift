@@ -1,22 +1,51 @@
 import AppKit
 import SwiftUI
 
-/// The text the reader had selected when the menu opened, copied the way Command-C would,
-/// from whichever text view held it: the prose's own or SwiftUI's. The right-click is the
-/// moment to look, since the popover takes the key window after it. The view is held
-/// weakly, so a menu left open pins no row.
+/// A menu-opening string snapshot, separate from the weak responder used by Copy.
+/// Reading the selection directly never borrows or changes the general pasteboard.
 @MainActor
 final class SelectionCopy {
     private weak var holder: NSView?
+    private(set) var text: String?
 
-    /// Remembers the window's first responder when it can copy and sits inside `area`: a
-    /// selection in another row, or in the chat box, is not this menu's to copy.
-    fileprivate func capture(in area: NSView) {
+    fileprivate func capture(in area: RightClickCatcherView, owner: UUID) {
         holder = nil
-        guard let view = area.window?.firstResponder as? NSView,
-              view.responds(to: #selector(NSText.copy(_:))),
-              view.convert(view.bounds, to: nil).intersects(area.convert(area.bounds, to: nil)) else { return }
-        if let text = view as? NSTextView, text.selectedRange().length == 0 { return }
+        text = nil
+        guard let window = area.window,
+              let view = window.firstResponder as? NSView,
+              view.window === window,
+              view.responds(to: #selector(NSText.copy(_:))) else { return }
+        // A field editor/composer is not message text, even if temporarily over a row.
+        guard (view as? NSTextView)?.isEditable != true else { return }
+
+        if let native = view as? LinkTextView {
+            // Native prose carries the enclosing menu's identity, not just its frame.
+            guard native.selectionOwner == owner,
+                  let storage = native.textStorage else { return }
+            let range = native.selectedRange()
+            guard range.location != NSNotFound, range.location >= 0, range.length > 0,
+                  range.location <= storage.length,
+                  range.length <= storage.length - range.location else { return }
+            if native.selectedRanges.count == 1 {
+                text = (storage.string as NSString).substring(with: range)
+            }
+            // Keep native multi-range Copy; only a single range is quoted directly.
+        } else {
+            // SwiftUI's selectable Text exposes NSAccessibility, not NSTextInputClient.
+            // Require a static text element wholly owned by one message; a shared hosting
+            // view or an editable field must never lend another message its selection.
+            let frame = window.convertToScreen(view.convert(view.bounds, to: nil))
+            guard view.accessibilityRole() == .staticText,
+                  area.uniquelyContainsSelectionRect(frame) else { return }
+            let range = view.accessibilitySelectedTextRange()
+            guard range.location != NSNotFound, range.location >= 0, range.length > 0,
+                  range.length <= Int.max - range.location,
+                  view.accessibilitySelectedTextRanges() == [NSValue(range: range)],
+                  let selected = view.accessibilitySelectedText(),
+                  selected.utf16.count == range.length,
+                  view.accessibilitySelectedTextRange() == range else { return }
+            text = selected
+        }
         holder = view
     }
 
@@ -35,36 +64,47 @@ final class SelectionCopy {
 private struct RightClickPopoverModifier: ViewModifier {
     let actions: (SelectionCopy) -> [RowAction]
     @State private var anchor: CGPoint?
-    @State private var selection = SelectionCopy()
+    @State private var owner = UUID()
+    @State private var menuActions: [RowAction] = []
 
     func body(content: Content) -> some View {
         content
+            .environment(\.markdownSelectionOwner, owner)
             .overlay {
-                RightClickCatcher { [selection] point, view in
-                    selection.capture(in: view)
-                    anchor = point
+                RightClickCatcher { [actions, owner, anchor = $anchor, menuActions = $menuActions] point, view in
+                    let selection = SelectionCopy()
+                    selection.capture(in: view, owner: owner)
+                    // Freeze the full-message fallback and code actions too. A body update
+                    // while the menu is open must not replace any of these values.
+                    menuActions.wrappedValue = actions(selection)
+                    anchor.wrappedValue = point
                 }
             }
             .popover(
-                isPresented: Binding(get: { anchor != nil }, set: { if !$0 { anchor = nil } }),
+                isPresented: Binding(get: { anchor != nil }, set: {
+                    if !$0 {
+                        anchor = nil
+                        menuActions = []
+                    }
+                }),
                 attachmentAnchor: .rect(.rect(CGRect(origin: anchor ?? .zero, size: CGSize(width: 1, height: 1)))),
                 arrowEdge: .top
             ) {
-                PopoverMenu { RowActionItems(actions: actions(selection)) }
+                PopoverMenu { RowActionItems(actions: menuActions) }
             }
     }
 }
 
 extension View {
     /// A right-click or control-click anywhere on the view opens a `PopoverMenu` of `actions` at the pointer.
-    /// `actions` gets the selection the reader had when the menu opened, for a Copy that honours it.
+    /// `actions` runs once at opening with the owned selection snapshot, never on a menu redraw.
     func rightClickPopover(actions: @escaping (SelectionCopy) -> [RowAction]) -> some View {
         modifier(RightClickPopoverModifier(actions: actions))
     }
 }
 
 private struct RightClickCatcher: NSViewRepresentable {
-    var onRightClick: (CGPoint, NSView) -> Void
+    var onRightClick: (CGPoint, RightClickCatcherView) -> Void
 
     func makeNSView(context: Context) -> RightClickCatcherView {
         RightClickCatcherView(onRightClick: onRightClick)
@@ -78,12 +118,27 @@ private struct RightClickCatcher: NSViewRepresentable {
 /// A transparent overlay that only claims secondary clicks. It returns nil from
 /// hit-testing for every other event, so text selection, links, buttons and
 /// drags in the SwiftUI content underneath behave exactly as if it were absent.
-private final class RightClickCatcherView: NSView {
-    var onRightClick: (CGPoint, NSView) -> Void
+fileprivate final class RightClickCatcherView: NSView {
+    private static let instances = NSHashTable<RightClickCatcherView>.weakObjects()
+    var onRightClick: (CGPoint, RightClickCatcherView) -> Void
 
-    init(onRightClick: @escaping (CGPoint, NSView) -> Void) {
+    init(onRightClick: @escaping (CGPoint, RightClickCatcherView) -> Void) {
         self.onRightClick = onRightClick
         super.init(frame: .zero)
+        Self.instances.add(self)
+    }
+
+    /// Require the entire text element inside exactly one message, including its
+    /// offscreen portion. Visible rects can extend beyond bounds on unclipped NSViews.
+    func uniquelyContainsSelectionRect(_ rect: NSRect) -> Bool {
+        guard let window, rect.minX.isFinite, rect.minY.isFinite,
+              rect.maxX.isFinite, rect.maxY.isFinite, rect.width > 0, rect.height > 0 else { return false }
+        let owners = Self.instances.allObjects.filter { area in
+            guard area.window === window, !area.isHiddenOrHasHiddenAncestor else { return false }
+            let frame = window.convertToScreen(area.convert(area.bounds, to: nil))
+            return frame.contains(rect)
+        }
+        return owners.count == 1 && owners.first === self
     }
 
     @available(*, unavailable)

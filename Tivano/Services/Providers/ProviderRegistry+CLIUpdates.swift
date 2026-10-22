@@ -125,7 +125,9 @@ extension ProviderRegistry {
     /// Asks for an install. Callers that share an install await the one already running.
     /// A custom binary path, an unknown channel, and a provider that is off or unmonitored do not install.
     func updateCLI(_ provider: ProviderKind, recovery: Bool = false) async -> Bool {
-        guard !recovery, !CaptureRun.isEnabled, !provider.isAPIKeyBased else { return false }
+        // MiniMax Code needs its official installer/npm flags for native optional dependencies.
+        // Until that update transaction is integrated, offer read-only version checks only.
+        guard !recovery, !CaptureRun.isEnabled, !provider.isAPIKeyBased, provider != .minimaxCode else { return false }
         guard let executable = executable(for: provider) else { return false }
         guard settings.isEnabled(provider), monitorsCLIUpdates(provider), settings.binaryPath(for: provider).isEmpty else { return false }
         let lock = cliInstallLock(for: executable)

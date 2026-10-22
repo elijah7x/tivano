@@ -53,7 +53,7 @@ final class ZaiSession: OpenAICompatibleSession {
             return "The conversation no longer fits GLM-5.3's context window. Start a new thread or compact first."
         }
         if statusCode == 401 || lower.contains("token expired") || lower.contains("incorrect") || lower.contains("authentication") {
-            return "Z.ai rejected the API key. Check it in Settings → Providers → Z.ai."
+            return "Z.ai rejected the API key. Check your GLM Coding Plan key in Settings → Providers → Z.ai. Your plan may have expired; a Standard API key will not work here."
         }
         // 1311: the plan does not carry the model asked for. Nothing was spent, no window
         // is involved, and the model is named back so the picker can be set right.
@@ -73,11 +73,11 @@ final class ZaiSession: OpenAICompatibleSession {
         }
         // 1113: no package on this key at all.
         if lower.contains("insufficient balance") || lower.contains("no resource package") || lower.contains("1113") {
-            return "This Z.ai key has no active Coding Plan. Subscribe at z.ai/subscribe, then try again."
+            return "This Z.ai key has no active GLM Coding Plan. The plan may have expired. Check your plan and key type at z.ai/subscribe; a Standard API key will not work here. This endpoint does not fall back to pay-as-you-go."
         }
         // 1309: the subscription lapsed.
         if lower.contains("package has expired") {
-            return "Your GLM Coding Plan has expired. Renew it at z.ai/subscribe, then try again."
+            return "Your GLM Coding Plan has expired. Renew it at z.ai/subscribe, then try again. This endpoint does not fall back to pay-as-you-go; a Standard API key cannot substitute for a GLM Coding Plan key."
         }
         // 1314 and 1315: enterprise packages and their keys.
         if lower.contains("enterprise") {

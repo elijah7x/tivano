@@ -150,7 +150,7 @@ final class CodexSession: ProviderSession {
                 }
             }
             let result = try await Self.deadlineRequest(connection, method, .object(retried), seconds: 90, mutating: true)
-            onEvent?(.notice(Notice(level: .warning, message: "Codex refused the MCP server configuration, so this session runs without MCP servers. Check MCP in Settings.")))
+            onEvent?(.notice(Notice(level: .warning, message: AppText.localized("Codex refused the MCP server configuration, so this session runs without MCP servers. Check MCP in Settings."))))
             return result
         }
     }
@@ -1121,12 +1121,12 @@ final class CodexSession: ProviderSession {
             // head's report pill as "Delegated Head finished", so they draw nothing.
             return nil
         case "imageView":
-            return ToolCall(kind: .read, title: ToolTitles.relativePath(item["path"]?.string ?? "Image", to: workingDirectory))
+            return ToolCall(kind: .read, title: ToolTitles.relativePath(item["path"]?.string ?? AppText.localized("Image"), to: workingDirectory))
         case "imageGeneration":
             // The prompt is a paragraph; as the title it would sit over the picture as a caption.
-            return ToolCall(kind: .other, title: "Generate image", detail: item["revisedPrompt"]?.string)
+            return ToolCall(kind: .other, title: AppText.localized("Generate image"), detail: item["revisedPrompt"]?.string)
         case "enteredReviewMode", "exitedReviewMode":
-            return ToolCall(kind: .other, title: "Review", detail: item["review"]?.string)
+            return ToolCall(kind: .other, title: AppText.localized("Review"), detail: item["review"]?.string)
         default:
             return nil
         }
@@ -1220,7 +1220,7 @@ final class CodexSession: ProviderSession {
             onEvent?(.approval(ApprovalRequest(
                 id: id.key,
                 kind: .fileChange,
-                title: "Apply file changes",
+                title: AppText.localized("Apply file changes"),
                 detail: params["grantRoot"]?.string,
                 reason: params["reason"]?.string,
                 options: options,
@@ -1316,6 +1316,9 @@ final class CodexSession: ProviderSession {
         finalErrors.removeAll()
         lastAgentMessage = nil
         turnID = nil
+        let resolved = Array(pendingRequests.keys)
+        pendingRequests.removeAll()
+        for key in resolved { onEvent?(.requestResolved(id: key)) }
         guard !isStopping else { return }
         onEvent?(.exited(error: TextCleanup.lastLines(tail)))
     }

@@ -7,9 +7,20 @@ enum StoragePaths {
         if let captures = CaptureRun.storageRoot { return captures }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let url = base.appendingPathComponent(AppInfo.libraryName, isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
+
+    nonisolated static func taskWorkspace(_ threadID: UUID) -> URL {
+        root.appendingPathComponent("task-workspaces", isDirectory: true)
+            .appendingPathComponent(threadID.uuidString, isDirectory: true)
+    }
+
+    @discardableResult
+    nonisolated static func ensureTaskWorkspace(_ threadID: UUID) throws -> URL {
+        let url = taskWorkspace(threadID)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 
     /// The user's window wallpaper, one file at a time.
     nonisolated static let wallpaperDirectory: URL = directory("wallpaper")

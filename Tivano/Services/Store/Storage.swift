@@ -30,11 +30,49 @@ struct ThreadSave: Sendable {
     var dirtyTurns: [UUID: StoredTurn]
 }
 
+enum LibraryLoad: Sendable {
+    case loaded(Library)
+    case recovered(Library, skipped: Int, quarantine: URL?, backup: URL, fromPrevious: Bool)
+    case failed(Error)
+}
+
 /// Where the app keeps its library, thread histories and attachments.
 enum Storage {
     static let root: URL = StoragePaths.root
 
     static let libraryURL: URL = root.appendingPathComponent("library.json")
+
+    /// Only the library index changes format; histories and attachments stay in place.
+    static let preStandaloneLibraryURL = root.appendingPathComponent("library-before-standalone.json")
+
+    nonisolated static func prepareLibraryWrite(_ library: Library, to url: URL) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard url == libraryURL, library.threads.contains(where: { $0.projectID == nil }) else { return }
+        if manager.fileExists(atPath: preStandaloneLibraryURL.path) {
+            guard try manager.attributesOfItem(atPath: preStandaloneLibraryURL.path)[.type] as? FileAttributeType == .typeRegular else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            return
+        }
+        guard manager.fileExists(atPath: libraryURL.path) else { return }
+        let original = try Data(contentsOf: libraryURL)
+        // Atomic publication prevents an interrupted copy becoming a trusted backup.
+        let temporary = root.appendingPathComponent(".library-backup-\(UUID().uuidString).tmp")
+        defer { try? manager.removeItem(at: temporary) }
+        try original.write(to: temporary, options: .atomic)
+        try manager.linkItem(at: temporary, to: preStandaloneLibraryURL)
+    }
+
+    nonisolated static func hasStoredTurns(_ id: UUID) throws -> Bool {
+        try DiskWriter.shared.readSynchronously {
+            let url = threadURL(id)
+            guard FileManager.default.fileExists(atPath: url.path) else { return false }
+            let document = try JSONDecoder.storage.decode(ThreadDocument.self, from: Data(contentsOf: url))
+            return !document.turns.isEmpty || !(document.turnIndex ?? []).isEmpty
+                || document.items.contains { if case .user = $0.content { return true }; return false }
+        }
+    }
 
     // Each directory is created on first use and its URL kept: the thread URL is taken on
     // every save, prefetch and delete, and a stat plus mkdir per call was pure waste.
@@ -73,6 +111,110 @@ enum Storage {
         } catch {
             return .failure(error)
         }
+    }
+
+    nonisolated static func loadLibraryRecovering() -> LibraryLoad {
+        let data: Data
+        do {
+            data = try Data(contentsOf: libraryURL)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return .loaded(Library())
+        } catch {
+            return .failed(error)
+        }
+        let previousURL = root.appendingPathComponent("library-previous.json")
+        do {
+            let library = try JSONDecoder.storage.decode(Library.self, from: data)
+            try? data.write(to: previousURL, options: .atomic)
+            return .loaded(library)
+        } catch {
+            do {
+                let fromPrevious: Bool
+                let recovered: (library: Library, projects: [Any], threads: [Any], repairedWorkspaces: Int)?
+                if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    recovered = recoverLibraryElements(object)
+                    fromPrevious = false
+                } else {
+                    let previous = try Data(contentsOf: previousURL)
+                    if let library = try? JSONDecoder.storage.decode(Library.self, from: previous) {
+                        recovered = (library, [], [], 0)
+                    } else if let object = try? JSONSerialization.jsonObject(with: previous) as? [String: Any] {
+                        recovered = recoverLibraryElements(object)
+                    } else {
+                        return .failed(error)
+                    }
+                    fromPrevious = true
+                }
+                // A top-level list that is absent or not a list is no empty index either:
+                // the file is a shape recovery cannot trust, so the library stays
+                // read-only rather than a later save writing an empty index over it.
+                guard let recovered else { return .failed(error) }
+                // Most records failing reads as a format this build does not know (a
+                // downgrade, say), not damage: stay read-only rather than save a partial
+                // index over the whole one.
+                let quarantinedCount = recovered.projects.count + recovered.threads.count
+                let skippedCount = quarantinedCount - recovered.repairedWorkspaces
+                if skippedCount > 0, skippedCount >= recovered.library.projects.count + recovered.library.threads.count {
+                    return .failed(error)
+                }
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let timestamp = formatter.string(from: .now).replacingOccurrences(of: ":", with: "-")
+                let backup = root.appendingPathComponent("library-before-recovery-\(timestamp).json")
+                try FileManager.default.copyItem(at: libraryURL, to: backup)
+                var quarantine: URL?
+                if quarantinedCount > 0 {
+                    let url = root.appendingPathComponent("library-quarantine-\(timestamp).json")
+                    let raw = try JSONSerialization.data(withJSONObject: [
+                        "projects": recovered.projects,
+                        "threads": recovered.threads
+                    ], options: [.prettyPrinted, .sortedKeys])
+                    try raw.write(to: url, options: .atomic)
+                    quarantine = url
+                }
+                return .recovered(recovered.library, skipped: skippedCount, quarantine: quarantine, backup: backup, fromPrevious: fromPrevious)
+            } catch {
+                return .failed(error)
+            }
+        }
+    }
+
+    private nonisolated static func recoverLibraryElements(_ object: [String: Any]) -> (library: Library, projects: [Any], threads: [Any], repairedWorkspaces: Int)? {
+        var repairedWorkspaces = 0
+        func decodeElements<Value: Decodable>(_ key: String, as type: Value.Type) -> ([Value], [Any])? {
+            guard let elements = object[key] as? [Any] else { return nil }
+            var decoded: [Value] = []
+            var quarantined: [Any] = []
+            for element in elements {
+                do {
+                    let data = try JSONSerialization.data(withJSONObject: element, options: .fragmentsAllowed)
+                    decoded.append(try JSONDecoder.storage.decode(type, from: data))
+                } catch {
+                    // Quarantine the original even when replacing only its workspace makes it readable.
+                    if type == ChatThread.self, var raw = element as? [String: Any], raw["controlWorkspace"] != nil {
+                        let closed = ControlWorkspace(mode: .worktree, phase: .failed,
+                                                      failure: ControlFailure(code: .workspaceFailed), enforcesExecutionReadiness: true)
+                        if let data = try? JSONEncoder.storage.encode(closed),
+                           let workspace = try? JSONSerialization.jsonObject(with: data) {
+                            raw["controlWorkspace"] = workspace
+                            if let data = try? JSONSerialization.data(withJSONObject: raw),
+                               let thread = try? JSONDecoder.storage.decode(type, from: data) {
+                                decoded.append(thread)
+                                repairedWorkspaces += 1
+                            }
+                        }
+                    }
+                    quarantined.append(element)
+                }
+            }
+            return (decoded, quarantined)
+        }
+        guard let projects = decodeElements("projects", as: Project.self),
+              let threads = decodeElements("threads", as: ChatThread.self) else { return nil }
+        var library = Library()
+        library.projects = projects.0
+        library.threads = threads.0
+        return (library, projects.1, threads.1, repairedWorkspaces)
     }
 
     /// Reads and decodes a thread file. Safe from any thread: the decoder is made here.
@@ -132,9 +274,7 @@ enum Storage {
             let manager = FileManager.default
             let sources = [threadURL(id), turnsURL(id)].filter { manager.fileExists(atPath: $0.path) }
             guard !sources.isEmpty else { return nil }
-            let stamp = ISO8601DateFormatter().string(from: .now).replacingOccurrences(of: ":", with: "-")
-            let folder = threadsDirectory.appendingPathComponent("Unreadable", isDirectory: true)
-                .appendingPathComponent("\(id.uuidString) \(stamp)", isDirectory: true)
+            let folder = unreadableFolder(for: id)
             do {
                 try manager.createDirectory(at: folder, withIntermediateDirectories: true)
                 for source in sources {
@@ -147,6 +287,13 @@ enum Storage {
                 return nil
             }
         }
+    }
+
+    /// Where unreadable thread files are kept: `Unreadable/<thread> <stamp>` under threads/.
+    nonisolated static func unreadableFolder(for id: UUID) -> URL {
+        let stamp = ISO8601DateFormatter().string(from: .now).replacingOccurrences(of: ":", with: "-")
+        return threadsDirectory.appendingPathComponent("Unreadable", isDirectory: true)
+            .appendingPathComponent("\(id.uuidString) \(stamp)", isDirectory: true)
     }
 
     private nonisolated static func readTurnsUnlocked(_ id: UUID, references: [ThreadTurnReference]) -> (document: ThreadDocument, cost: Int)? {
@@ -494,11 +641,13 @@ final class DiskWriter: Sendable {
     @discardableResult
     func writeThreadSynchronously(_ snapshot: ThreadSave) -> Bool {
         let url = Storage.threadURL(snapshot.head.threadID)
-        let completions = pendingThreads.withLock { $0.removeValue(forKey: url)?.completions ?? [] }
+        let pending = pendingThreads.withLock { $0.removeValue(forKey: url) }
+        var newest = snapshot
+        newest.dirtyTurns = (pending?.snapshot.dirtyTurns ?? [:]).merging(snapshot.dirtyTurns) { _, new in new }
         DocumentPrefetch.shared.forget(snapshot.head.threadID)
         return queue.sync {
-            let success = writeThread(snapshot)
-            for completion in completions { completion(success) }
+            let success = writeThread(newest)
+            for completion in pending?.completions ?? [] { completion(success) }
             return success
         }
     }
@@ -516,7 +665,17 @@ final class DiskWriter: Sendable {
                 if let turn = snapshot.dirtyTurns[reference.id] {
                     var file = StoredTurnFile()
                     if FileManager.default.fileExists(atPath: turnURL.path) {
-                        file = try JSONDecoder.storage.decode(StoredTurnFile.self, from: Data(contentsOf: turnURL))
+                        do {
+                            file = try JSONDecoder.storage.decode(StoredTurnFile.self, from: Data(contentsOf: turnURL))
+                        } catch {
+                            // A turn file that will not decode can never merge a revision;
+                            // it goes where the read path puts files it cannot read, and
+                            // the write continues on a fresh one instead of retrying the
+                            // damaged file forever.
+                            let folder = Storage.unreadableFolder(for: head.threadID)
+                            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                            try FileManager.default.moveItem(at: turnURL, to: folder.appendingPathComponent(turnURL.lastPathComponent))
+                        }
                     }
                     file.revisions[String(reference.revision)] = turn
                     if file.revisions.count > 1 { needsPruning.insert(reference.id) }
@@ -567,6 +726,7 @@ final class DiskWriter: Sendable {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 do {
+                    if let library = value as? Library { try Storage.prepareLibraryWrite(library, to: url) }
                     let data = try JSONEncoder.storage.encode(value)
                     try data.write(to: url, options: .atomic)
                     sizes.withLock { $0[url] = data.count }
@@ -600,8 +760,8 @@ final class DiskWriter: Sendable {
         }
     }
 
-    func readSynchronously<Value>(_ read: () -> Value) -> Value {
-        queue.sync(execute: read)
+    func readSynchronously<Value>(_ read: () throws -> Value) rethrows -> Value {
+        try queue.sync(execute: read)
     }
 
     /// Returns once every write queued so far has landed, so a read that follows sees them.
@@ -612,6 +772,7 @@ final class DiskWriter: Sendable {
     @discardableResult
     private func write(_ value: any Encodable, to url: URL) -> Int? {
         do {
+            if let library = value as? Library { try Storage.prepareLibraryWrite(library, to: url) }
             let data = try JSONEncoder.storage.encode(value)
             try data.write(to: url, options: .atomic)
             errors.withLock { $0[url] = nil }

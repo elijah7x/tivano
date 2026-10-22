@@ -14,7 +14,8 @@ scripts/package_local.sh --release  # only the requested Release build
 ```
 
 The script verifies all requested builds before installing any; keeps prior apps
-under `build.noindex/install-backups/`; stages each verified bundle before a swap;
+under `<artifact-root>/private-artifacts/install-backups/<timestamp>-<pid>/<App name>.app`;
+stages each verified bundle under `/Applications` before a swap;
 and refuses to replace a running target. It never copies or deletes live session
 data. Both local editions use the same Developer ID Application team, with
 separate stable bundle IDs and install paths:
@@ -24,8 +25,28 @@ separate stable bundle IDs and install paths:
 | Release | `/Applications/Tivano.app` | `dev.tivano.Tivano` | `0.0.1` |
 | Dev | `/Applications/Tivano Dev.app` | `dev.tivano.Tivano.dev` | `dev-0.0.1` |
 
-Local ZIPs are in `build.noindex/packages/`. Both editions retain hardened
-runtime and secure timestamps. Local packaging does not submit to Apple
+Local ZIPs are in `<artifact-root>/local-packages/<edition>/`, where `<edition>`
+is `dev` or `release`; filenames and ZIP contents are unchanged. DerivedData and
+build logs remain in the project's `build.noindex/<edition>/`. Long-lived local
+packages and rollback bundles stay outside the source checkouts; old backups are
+not automatically removed.
+
+Set `TIVANO_ARTIFACTS_ROOT` to override the external parent containing
+`local-packages/` and `private-artifacts/`. It must be an absolute directory path
+outside both the current worktree and the long-lived source checkout. The scripts
+resolve existing directory symlinks and validate the final package/backup directory
+as well as the root, rejecting paths into either checkout before building or replacing
+an installed app. Unusable paths fail without replacing it.
+Without an override, the scripts obtain the absolute Git common-dir with
+`git rev-parse --path-format=absolute --git-common-dir` and resolve its physical
+path. Its parent is the long-lived source checkout; that checkout's parent
+(the wrapper directory) is the artifact root, shared by all its worktrees.
+
+Backups are copied and verified before the original app is moved into staging,
+so rollback stays on the `/Applications` volume even if the artifact root is on
+another volume. If rollback fails, the original staged app is preserved for recovery.
+
+Both editions retain hardened runtime and secure timestamps. Local packaging does not submit to Apple
 notarization or upload publicly; public distribution uses the release pipeline.
 The public `release.sh` pipeline builds and notarizes Release without installing,
 quitting or launching it, and keeps its temporary outputs separate from local app backups.

@@ -91,7 +91,7 @@ struct HydraMergePopover: View {
     private var openTitle: String {
         switch note.link.forge {
         case .gitlab: Chrome.localized("Open merge request")
-        case .github, .gitea: Chrome.localized("Open pull request")
+        case .github, .gitea, .cursorOrigin: Chrome.localized("Open pull request")
         }
     }
 

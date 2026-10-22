@@ -19,7 +19,10 @@ enum MCPSessionOverrides {
            let servers = root["mcpServers"] as? [String: Any] {
             ids = Set(servers.keys)
         }
-        var arguments = ["--additional-mcp-config", json]
+        // The CLI accepts `@<path>` here; the resolved config — secrets included —
+        // reaches it through a per-process file instead of argv.
+        guard let configURL = sessionConfigFile(json: json) else { return [] }
+        var arguments = ["--additional-mcp-config", "@\(configURL.path)"]
         for name in copilotUserServerNames() where !ids.contains(name) {
             arguments += ["--disable-mcp-server", name]
         }
@@ -27,6 +30,19 @@ enum MCPSessionOverrides {
             arguments.append("--disable-builtin-mcps")
         }
         return arguments
+    }
+
+    /// A per-process copy of the resolved Copilot config. Stale session files belong to
+    /// dead launches — each edition has a single writer for this directory — and are dropped.
+    private static func sessionConfigFile(json: String) -> URL? {
+        let directory = MCPPaths.directory
+        let url = directory.appendingPathComponent("copilot-session-\(ProcessInfo.processInfo.processIdentifier).json")
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        where name.hasPrefix("copilot-session-") && name != url.lastPathComponent {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+        }
+        guard let data = json.data(using: .utf8), MCPPaths.writePrivate(data, to: url) else { return nil }
+        return url
     }
 
     static func opencodeEnvironment() -> [String: String] {

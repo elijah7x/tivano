@@ -22,6 +22,9 @@ struct InfoHoverButton<Content: View>: View {
             .help(Text(verbatim: Chrome.localized(help)))
             .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
             .accessibilityAddTraits(.isButton)
+            // Hover opens the popover; the default action gives keyboard and VoiceOver
+            // the same path to it.
+            .accessibilityAction { isPresented.toggle() }
             .onHover { over in
                 isHovering = over
                 if over {

@@ -258,7 +258,7 @@ final class VoiceController {
         }
         threadID = home.id
         homeThread = home
-        homeProjectPath = app.project(home.projectID)?.path
+        homeProjectPath = try? app.executionDirectory(for: home)
         try requireCurrent(epoch)
         watchHome(epoch: epoch)
         let runtime = app.runtime(for: home.id)
@@ -452,12 +452,12 @@ final class VoiceController {
                   !current.isArchived, !current.isHydraHead, current.provider == .codex,
                   current.title == homeThread.title, current.projectID == homeThread.projectID,
                   current.worktreePath == homeThread.worktreePath,
-                  let project = app.project(current.projectID), project.path == homeProjectPath else {
+                  let directory = try? app.executionDirectory(for: current), directory == homeProjectPath else {
                 close(epoch: epoch, reason: nil)
                 throw CancellationError()
             }
             var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: current.executionDirectory(projectPath: project.path), isDirectory: &isDirectory), isDirectory.boolValue else {
+            guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue else {
                 close(epoch: epoch, reason: .noProject)
                 throw CancellationError()
             }

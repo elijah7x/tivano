@@ -21,22 +21,119 @@ step() { printf '\n==> %s\n' "$1"; }
 fail() { echo "$1" >&2; exit 1; }
 
 checkout_of() {
-  git worktree list --porcelain | awk -v ref="refs/heads/$1" '
+  git -c core.quotePath=false worktree list --porcelain | awk -v ref="refs/heads/$1" '
     /^worktree / { path = substr($0, 10) }
     $0 == "branch " ref { print path; exit }'
 }
 version_in() { git show "$1:config/$2.xcconfig" | sed -nE 's/^MARKETING_VERSION[[:space:]]*=[[:space:]]*([0-9.]+)[[:space:]]*$/\1/p'; }
 newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
 
+COMMON_DIR=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+TEMP_ROOT="$COMMON_DIR/tivano-worktrees.noindex"
+[ ! -L "$TEMP_ROOT" ] || fail "Temporary root is a symlink: $TEMP_ROOT"
+if [ -e "$TEMP_ROOT" ]; then
+  [ -d "$TEMP_ROOT" ] || fail "Temporary root is not a directory: $TEMP_ROOT"
+else
+  mkdir "$TEMP_ROOT"
+fi
+root_identity() {
+  python3 - "${1:-$TEMP_ROOT}" <<'PY'
+import os, sys
+path = sys.argv[1]
+if os.path.realpath(path) != path or not os.path.isdir(path):
+    sys.exit("Unsafe temporary root: " + path)
+stat = os.stat(path)
+print(f"{stat.st_dev}:{stat.st_ino}")
+PY
+}
+ROOT_ID=$(root_identity) || fail "Invalid temporary root."
+assert_temp_root() {
+  [ "$(root_identity)" = "$ROOT_ID" ] || fail "Temporary root identity changed."
+}
+
+# Serialize releases sharing the common-dir; never reclaim an interrupted lock blindly.
+SHIP_LOCK="$TEMP_ROOT/ship.lock"
+mkdir "$SHIP_LOCK" 2>/dev/null || fail "Another release or an interrupted lock exists at $SHIP_LOCK. Inspect it before retrying."
+LOCK_ID=$(root_identity "$SHIP_LOCK") || fail "Invalid release lock."
+release_lock() {
+  python3 - "$SHIP_LOCK" "$LOCK_ID" <<'PY'
+import os, sys
+path, identity = sys.argv[1:]
+try:
+    stat = os.lstat(path)
+    if not os.path.islink(path) and f"{stat.st_dev}:{stat.st_ino}" == identity:
+        os.rmdir(path)
+except OSError as error:
+    print(f"Release lock retained at {path}: {error}", file=sys.stderr)
+PY
+}
+trap 'status=$?; trap - EXIT; release_lock; exit "$status"' EXIT
+
+# Check both Git's registration and the on-disk identity, including replacement paths.
+worktree_identity() {
+  assert_temp_root
+  python3 - "$1" "$2" "$COMMON_DIR" <<'PY'
+import os, subprocess, sys
+path, branch, common = sys.argv[1:]
+def git(*args):
+    return subprocess.check_output(["git", "-C", path, *args], text=True).strip()
+try:
+    if os.path.realpath(path) != path or os.path.islink(os.path.join(path, ".git")):
+        raise ValueError("symlink or nonphysical path")
+    records = subprocess.check_output(["git", "worktree", "list", "--porcelain", "-z"]).split(b"\0\0")
+    matches = [r.split(b"\0") for r in records if r.split(b"\0")[0] == os.fsencode("worktree " + path)]
+    expected = os.fsencode("branch refs/heads/" + branch) if branch != "detached" else b"detached"
+    if len(matches) != 1 or expected not in matches[0] or any(
+        f.startswith((b"locked", b"prunable")) for f in matches[0]
+    ):
+        raise ValueError("unexpected worktree registration")
+    if git("rev-parse", "--show-toplevel") != path:
+        raise ValueError("unexpected worktree root")
+    actual = git("rev-parse", "--git-common-dir")
+    if os.path.realpath(os.path.join(path, actual)) != common:
+        raise ValueError("different common directory")
+    if branch == "detached":
+        if subprocess.run(["git", "-C", path, "symbolic-ref", "-q", "HEAD"], stdout=subprocess.DEVNULL).returncode != 1:
+            raise ValueError("HEAD is not detached")
+    elif git("symbolic-ref", "HEAD") != "refs/heads/" + branch:
+        raise ValueError("unexpected branch")
+    admin = os.path.realpath(os.path.join(path, git("rev-parse", "--git-dir")))
+    print(":".join(str(n) for p in (path, os.path.join(path, ".git"), admin)
+                   for n in (os.lstat(p).st_dev, os.lstat(p).st_ino)))
+except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    sys.exit(f"Unsafe worktree {path}: {error}")
+PY
+}
+assert_clean() {
+  local changes
+  changes=$(git -C "$1" status --porcelain --untracked-files=all) \
+    || fail "Could not inspect worktree changes: $1"
+  [ -z "$changes" ] || fail "Worktree has user changes: $1"
+}
+assert_unused_path() {
+  assert_temp_root
+  [ ! -e "$1" ] && [ ! -L "$1" ] || fail "Unknown existing path: $1"
+  if git -c core.quotePath=false worktree list --porcelain | grep -Fx "worktree $1" > /dev/null; then
+    fail "Missing but registered worktree: $1"
+  fi
+}
 DEV_CHECKOUT=$(checkout_of dev)
 MAIN_CHECKOUT=$(checkout_of main)
-[ -n "$DEV_CHECKOUT" ] && [ -n "$MAIN_CHECKOUT" ] || fail "dev and main each need a local checkout."
-[ -z "$(git -C "$DEV_CHECKOUT" status --porcelain)" ] || fail "The dev checkout has uncommitted changes."
-[ -z "$(git -C "$MAIN_CHECKOUT" status --porcelain)" ] || fail "The main checkout has uncommitted changes."
+[ -n "$DEV_CHECKOUT" ] || fail "dev needs a local checkout."
+DEV_ID=$(worktree_identity "$DEV_CHECKOUT" dev) || fail "Invalid dev checkout."
+assert_clean "$DEV_CHECKOUT"
+DEV_START=$(git rev-parse dev)
+MAIN_START=$(git rev-parse main)
+MAIN_ID=""
+if [ -n "$MAIN_CHECKOUT" ]; then
+  MAIN_ID=$(worktree_identity "$MAIN_CHECKOUT" main) || fail "Invalid main checkout."
+  assert_clean "$MAIN_CHECKOUT"
+fi
 
 step "Checking main and versions"
 git fetch origin --prune --tags --quiet
-[ "$(git rev-parse main)" = "$(git rev-parse origin/main)" ] || fail "Local main differs from origin/main. Resolve that first."
+[ "$(git rev-parse main)" = "$MAIN_START" ] \
+  && [ "$MAIN_START" = "$(git rev-parse origin/main)" ] || fail "Local main differs from origin/main or moved. Resolve that first."
 VERSION=$(version_in dev dev)
 TAG="v$VERSION"
 # Only tags in main's history count; tags inherited from upstream Droppy do not.
@@ -48,28 +145,139 @@ elif ! newer "$VERSION" "${LAST#v}"; then
   fail "Dev is $VERSION, not newer than $LAST. Every merge into dev advances Dev's version; fix that, not Release."
 fi
 
-WORK="$DEV_CHECKOUT-worktrees/ship-$VERSION"
+WORK="$TEMP_ROOT/ship-$VERSION"
+MAIN_WORK="$TEMP_ROOT/ship-$VERSION-main"
 PREP_WORK="$WORK-prepare-$$"
 PREP_OWNED=0
 BUILD_OWNED=0
-cleanup_preparation() {
+MAIN_OWNED=0
+PREP_ID=""
+BUILD_ID=""
+PREP_COMMIT=""
+BUILD_OUTPUTS=""
+release_outputs() {
+  python3 - "$WORK" "$VERSION" "$1" "${2:-}" <<'PY'
+import hashlib, json, os, subprocess, sys
+root, version, action, expected = sys.argv[1:]
+allowed = {f"build.noindex/Tivano-{version}.dmg"}
+allowed.update("build.noindex/public-release/" + name for name in (
+    "archive.log", "export.log", "ExportOptions.plist",
+    "Tivano.zip.notary-submit.json", f"Tivano-{version}.dmg.notary-submit.json"))
+try:
+    paths = subprocess.check_output(["git", "-C", root, "ls-files", "--others",
+                                    "--ignored", "--exclude-standard", "-z"]).split(b"\0")
+    snapshot = {}
+    for raw in filter(None, paths):
+        name = os.fsdecode(raw)
+        path = os.path.join(root, name)
+        if name not in allowed or os.path.realpath(path) != path or not os.path.isfile(path):
+            sys.exit("Unknown ignored content retained: " + path)
+        stat = os.stat(path)
+        with open(path, "rb") as stream:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+            digest = digest.hexdigest()
+        snapshot[name] = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, digest]
+    encoded = json.dumps(snapshot, sort_keys=True)
+    if action == "capture":
+        print(encoded)
+    elif encoded != expected:
+        sys.exit("Release outputs changed; retained: " + root)
+    else:
+        for name in snapshot:
+            os.unlink(os.path.join(root, name))
+        for name in ("build.noindex/public-release", "build.noindex"):
+            try:
+                os.rmdir(os.path.join(root, name))
+            except OSError:
+                pass
+except (OSError, subprocess.CalledProcessError) as error:
+    sys.exit(str(error))
+PY
+}
+report_retained() {
   status=$?
   trap - EXIT
-  if [ "$PREP_OWNED" = 1 ]; then
-    echo "Preparation exited ($status); owned worktree: $PREP_WORK" >&2
-    if git worktree list --porcelain | awk -v path="$PREP_WORK" '
-      $0 == "worktree " path { found = 1 } END { exit !found }'; then
-      git -C "$PREP_WORK" rev-parse HEAD >&2 || true
-      git -C "$PREP_WORK" diff --stat >&2 || true
-      git worktree remove --force "$PREP_WORK" \
-        || echo "Cleanup failed; preparation worktree retained at $PREP_WORK." >&2
-    elif [ -e "$PREP_WORK" ] || [ -L "$PREP_WORK" ]; then
-      echo "Unregistered preparation path retained for inspection: $PREP_WORK" >&2
+  for kind in PREP BUILD MAIN; do
+    case "$kind" in
+      PREP) owned=$PREP_OWNED; path=$PREP_WORK ;;
+      BUILD) owned=$BUILD_OWNED; path=$WORK ;;
+      MAIN) owned=$MAIN_OWNED; path=$MAIN_WORK ;;
+    esac
+    if [ "$owned" = 1 ]; then
+      echo "Release exited ($status); retained $kind worktree: $path" >&2
+      git -C "$path" rev-parse HEAD >&2 || true
     fi
-  fi
+  done
+  release_lock
   exit "$status"
 }
-trap cleanup_preparation EXIT
+trap report_retained EXIT
+
+assert_dev_at() {
+  [ "$(worktree_identity "$DEV_CHECKOUT" dev)" = "$DEV_ID" ] \
+    && [ "$(checkout_of dev)" = "$DEV_CHECKOUT" ] \
+    && [ "$(git rev-parse dev)" = "$1" ] || fail "dev moved during release; refusing to continue."
+  assert_clean "$DEV_CHECKOUT"
+}
+remove_owned_worktree() {
+  local path="$1" branch="$2" identity="$3" commit="$4" ignored changes
+  changes=$(git -C "$path" status --porcelain --untracked-files=all) || {
+    echo "Could not inspect changes; worktree retained: $path" >&2
+    return 1
+  }
+  if [ "$(worktree_identity "$path" "$branch")" != "$identity" ] \
+    || [ "$(git -C "$path" rev-parse HEAD)" != "$commit" ] \
+    || [ -n "$changes" ]; then
+    echo "Changed worktree retained: $path" >&2
+    return 1
+  fi
+  ignored=$(git -C "$path" ls-files --others --ignored --exclude-standard) || {
+    echo "Could not inspect ignored contents; worktree retained: $path" >&2
+    return 1
+  }
+  if [ -n "$ignored" ]; then
+    # Only outputs observed after our fresh build are eligible, never a reused directory.
+    if [ "$path" != "$WORK" ] || [ "$BUILD_OWNED" != 1 ] || [ -z "$BUILD_OUTPUTS" ]; then
+      echo "Ignored contents require inspection; worktree retained: $path" >&2
+      return 1
+    fi
+    release_outputs remove "$BUILD_OUTPUTS" || return 1
+  fi
+  git worktree remove "$path" || {
+    echo "Worktree could not be safely removed; retained: $path" >&2
+    return 1
+  }
+}
+assert_dev_at "$DEV_START"
+if [ -e "$MAIN_WORK" ] || [ -L "$MAIN_WORK" ]; then
+  [ "$MAIN_CHECKOUT" = "$MAIN_WORK" ] || fail "Unknown existing main path: $MAIN_WORK"
+  [ "$(worktree_identity "$MAIN_WORK" main)" = "$MAIN_ID" ] \
+    && [ "$(git -C "$MAIN_WORK" rev-parse HEAD)" = "$MAIN_START" ] || fail "Temporary main identity changed."
+else
+  assert_unused_path "$MAIN_WORK"
+fi
+
+assert_main_at() {
+  [ "$(checkout_of main)" = "$MAIN_CHECKOUT" ] \
+    && [ "$(worktree_identity "$MAIN_CHECKOUT" main)" = "$MAIN_ID" ] \
+    && [ "$(git rev-parse main)" = "$1" ] \
+    && [ "$(git -C "$MAIN_CHECKOUT" rev-parse HEAD)" = "$1" ] || fail "main moved or its checkout identity changed."
+  assert_clean "$MAIN_CHECKOUT"
+}
+ensure_main_checkout() {
+  [ "$(git rev-parse main)" = "$MAIN_START" ] || fail "Local main moved during release."
+  if [ -z "$MAIN_CHECKOUT" ]; then
+    [ -z "$(checkout_of main)" ] || fail "main acquired another checkout during release."
+    assert_unused_path "$MAIN_WORK"
+    git worktree add --quiet "$MAIN_WORK" main
+    MAIN_OWNED=1
+    MAIN_CHECKOUT="$MAIN_WORK"
+    MAIN_ID=$(worktree_identity "$MAIN_CHECKOUT" main) || fail "Invalid temporary main checkout."
+  fi
+  assert_main_at "$MAIN_START"
+}
 
 if [ "$(version_in dev release)" = "$VERSION" ] && git show dev:CHANGELOG.md | grep "^## \[$VERSION\]" > /dev/null; then
   step "dev already prepared for $VERSION"
@@ -81,10 +289,12 @@ text = sys.stdin.read()
 m = re.search(r"^## \[Unreleased\]\n(.*?)(?=^## \[)", text, re.S | re.M)
 sys.exit(0 if m and re.search(r"^### ", m.group(1), re.M) else 1)' \
     || fail "CHANGELOG.md has nothing under ## [Unreleased]. Every merge into dev adds its entry there."
-  [ ! -e "$PREP_WORK" ] && [ ! -L "$PREP_WORK" ] || fail "Preparation path already exists: $PREP_WORK"
-  PREP_BASE=$(git rev-parse dev)
-  PREP_OWNED=1
+  assert_unused_path "$PREP_WORK"
+  assert_dev_at "$DEV_START"
+  PREP_BASE=$DEV_START
   git worktree add --detach --quiet "$PREP_WORK" "$PREP_BASE"
+  PREP_OWNED=1
+  PREP_ID=$(worktree_identity "$PREP_WORK" detached) || fail "Invalid preparation worktree."
   (
     cd "$PREP_WORK"
     python3 scripts/set_version.py release catch-up-dev
@@ -105,47 +315,68 @@ PY
     git add config/release.xcconfig CHANGELOG.md
     git commit --quiet -m "Prepare Tivano $VERSION" -m "Release takes Dev's version; the Unreleased changelog becomes $VERSION."
   )
-  [ "$(git rev-parse dev)" = "$PREP_BASE" ] || fail "dev moved while preparing; rerun."
-  git -C "$DEV_CHECKOUT" merge --ff-only --quiet "$(git -C "$PREP_WORK" rev-parse HEAD)" \
+  assert_dev_at "$PREP_BASE"
+  [ "$(worktree_identity "$PREP_WORK" detached)" = "$PREP_ID" ] || fail "Preparation identity changed."
+  assert_clean "$PREP_WORK"
+  PREP_COMMIT=$(git -C "$PREP_WORK" rev-parse HEAD)
+  git -C "$DEV_CHECKOUT" merge --ff-only --quiet "$PREP_COMMIT" \
     || fail "dev moved while preparing; rerun."
-  [ "$(git rev-parse dev)" = "$(git -C "$PREP_WORK" rev-parse HEAD)" ] \
-    || fail "dev moved while preparing; rerun."
-  git worktree remove --force "$PREP_WORK"
-  PREP_OWNED=0
+  assert_dev_at "$PREP_COMMIT"
+  if remove_owned_worktree "$PREP_WORK" detached "$PREP_ID" "$PREP_COMMIT"; then
+    PREP_OWNED=0
+  fi
 fi
-DEV_COMMIT=$(git rev-parse dev)
-DEV_TREE=$(git rev-parse "dev^{tree}")
+DEV_COMMIT=${PREP_COMMIT:-$DEV_START}
+assert_dev_at "$DEV_COMMIT"
+DEV_TREE=$(git rev-parse "$DEV_COMMIT^{tree}")
 # Resolve the public tag to a trusted dev Prepare boundary before any GitHub write.
 CREDIT_BASE=$(cd "$DEV_CHECKOUT" && python3 scripts/release_credits.py --range-base)
 assert_dev_unchanged() {
-  [ "$(git rev-parse dev)" = "$DEV_COMMIT" ] || fail "dev moved during release; refusing to continue."
+  assert_dev_at "$DEV_COMMIT"
 }
 
 DMG="$WORK/build.noindex/Tivano-$VERSION.dmg"
 if [ -e "$WORK" ] || [ -L "$WORK" ]; then
-  [ ! -L "$WORK" ] || fail "Refusing existing symlink at $WORK."
-  git worktree list --porcelain | awk -v path="$WORK" '
-    /^worktree / { matching = ($0 == "worktree " path) }
-    matching && $0 == "detached" { found = 1 } END { exit !found }' \
-    || fail "Unknown existing path at $WORK; inspect it before rerunning."
-  [ "$(git -C "$WORK" rev-parse 'HEAD^{tree}')" = "$DEV_TREE" ] \
-    || fail "Existing build worktree has another tree; retained at $WORK."
-  [ -z "$(git -C "$WORK" status --porcelain --untracked-files=all)" ] \
-    || fail "Existing build worktree has user changes; retained at $WORK."
+  BUILD_ID=$(worktree_identity "$WORK" detached) || fail "Invalid existing build worktree."
+  [ "$(git -C "$WORK" rev-parse HEAD)" = "$DEV_COMMIT" ] \
+    && [ "$(git -C "$WORK" rev-parse 'HEAD^{tree}')" = "$DEV_TREE" ] \
+    || fail "Existing build worktree has another commit; retained at $WORK."
+  assert_clean "$WORK"
+else
+  assert_unused_path "$WORK"
 fi
 if [ -f "$DMG" ] && xcrun stapler validate "$DMG" > /dev/null 2>&1 \
   && [ "$(git -C "$WORK" rev-parse 'HEAD^{tree}')" = "$DEV_TREE" ]; then
   step "Notarized DMG for $VERSION already built"
 else
   step "Building and notarizing $VERSION"
+  assert_dev_unchanged
   if [ ! -d "$WORK" ]; then
+    assert_unused_path "$WORK"
     git worktree add --detach --quiet "$WORK" "$DEV_COMMIT"
     BUILD_OWNED=1
+    BUILD_ID=$(worktree_identity "$WORK" detached) || fail "Invalid build worktree."
+  fi
+  [ "$(worktree_identity "$WORK" detached)" = "$BUILD_ID" ] \
+    && [ "$(git -C "$WORK" rev-parse HEAD)" = "$DEV_COMMIT" ] || fail "Build worktree moved."
+  assert_clean "$WORK"
+  if [ "$BUILD_OWNED" = 1 ]; then
+    [ ! -e "$WORK/build.noindex" ] && [ ! -L "$WORK/build.noindex" ] \
+      || fail "Unexpected build output path in fresh worktree."
   fi
   (cd "$WORK" && scripts/release.sh)
+  if [ "$BUILD_OWNED" = 1 ]; then
+    BUILD_OUTPUTS=$(release_outputs capture) || {
+      BUILD_OUTPUTS=""
+      echo "Build outputs include unknown contents; cleanup will retain $WORK." >&2
+    }
+  fi
 fi
 
 assert_dev_unchanged
+[ "$(worktree_identity "$WORK" detached)" = "$BUILD_ID" ] \
+  && [ "$(git -C "$WORK" rev-parse HEAD)" = "$DEV_COMMIT" ] || fail "Build worktree identity changed."
+assert_clean "$WORK"
 BRANCH="release/$TAG"
 MAIN_COMMIT=$(git rev-parse origin/main)
 # Matching refs returns an array even for absence; transport/auth failures still fail.
@@ -215,6 +446,7 @@ if [ "$(git rev-parse 'origin/main^{tree}')" = "$DEV_TREE" ]; then
 else
   step "Opening a pull request that makes main equal dev"
   if [ -z "$COMMIT" ]; then
+  assert_dev_unchanged
   ENTRIES=$(git diff --no-renames --name-status -z origin/main "$DEV_COMMIT" | python3 -c '
 import json, subprocess, sys
 fields = sys.stdin.buffer.read().split(b"\0")
@@ -230,15 +462,19 @@ for status, path in zip(fields[0::2], fields[1::2]):
     out.append({"path": path, "mode": mode, "type": "blob", "sha": sha})
 print(json.dumps(out))' "$DEV_COMMIT")
   for sha in $(jq -r '.[] | select(.sha != null) | .sha' <<< "$ENTRIES"); do
+    assert_dev_unchanged
     remote=$(git cat-file blob "$sha" | base64 | tr -d '\n' | jq -Rs '{content: ., encoding: "base64"}' \
       | gh api "repos/$PROJECT/git/blobs" --input - --jq .sha)
     [ "$remote" = "$sha" ] || fail "Uploaded blob $remote does not match $sha."
   done
+  assert_dev_unchanged
   TREE=$(jq -n --arg base "$(git rev-parse 'origin/main^{tree}')" --argjson tree "$ENTRIES" '{base_tree: $base, tree: $tree}' \
     | gh api "repos/$PROJECT/git/trees" --input - --jq .sha)
   [ "$TREE" = "$DEV_TREE" ] || fail "Remote tree $TREE does not match dev's $DEV_TREE."
+  assert_dev_unchanged
   COMMIT=$(jq -n --arg m "Release Tivano $VERSION" --arg t "$TREE" --arg p "$(git rev-parse origin/main)" \
     '{message: $m, tree: $t, parents: [$p]}' | gh api "repos/$PROJECT/git/commits" --input - --jq .sha)
+  assert_dev_unchanged
   gh api "repos/$PROJECT/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$COMMIT" > /dev/null
   fi
   NOTES=$(git show "$DEV_COMMIT:CHANGELOG.md" | python3 -c '
@@ -246,6 +482,7 @@ import re, sys
 m = re.search(r"^## \[" + re.escape(sys.argv[1]) + r"\][^\n]*\n(.*?)(?=^## \[)", sys.stdin.read(), re.S | re.M)
 print(m.group(1).strip())' "$VERSION")
   if [ -z "$PR" ]; then
+    assert_dev_unchanged
     PR=$(gh pr create -R "$PROJECT" --base main --head "$BRANCH" --title "Release Tivano $VERSION" \
       --body "Makes main equal local dev ($DEV_TREE) for $TAG."$'\n\n'"$NOTES")
   fi
@@ -264,10 +501,19 @@ print(m.group(1).strip())' "$VERSION")
   [ "$(git rev-parse 'origin/main^{tree}')" = "$DEV_TREE" ] || fail "Merged main does not match dev's tree."
 fi
 
+assert_dev_unchanged
+ensure_main_checkout
 step "Fast-forwarding local main"
-git -C "$MAIN_CHECKOUT" merge --ff-only --quiet origin/main
+PUBLISH_COMMIT=$(git rev-parse origin/main)
+[ "$(git rev-parse "$PUBLISH_COMMIT^{tree}")" = "$DEV_TREE" ] || fail "main no longer matches dev."
+assert_main_at "$MAIN_START"
+git -C "$MAIN_CHECKOUT" merge --ff-only --quiet "$PUBLISH_COMMIT"
 
 assert_dev_unchanged
+assert_main_at "$PUBLISH_COMMIT"
+[ "$(worktree_identity "$WORK" detached)" = "$BUILD_ID" ] \
+  && [ "$(git -C "$WORK" rev-parse HEAD)" = "$DEV_COMMIT" ] || fail "Build worktree identity changed."
+assert_clean "$WORK"
 step "Publishing $TAG"
 "$MAIN_CHECKOUT/scripts/publish_release.sh" "$DMG"
 
@@ -295,8 +541,17 @@ if [ -n "$COMMIT" ]; then
   fi
 fi
 if [ "$BUILD_OWNED" = 1 ]; then
-  git worktree remove --force "$WORK"
+  if remove_owned_worktree "$WORK" detached "$BUILD_ID" "$DEV_COMMIT"; then
+    BUILD_OWNED=0
+  fi
 else
   echo "Reused build worktree retained at $WORK."
+fi
+if [ "$MAIN_OWNED" = 1 ]; then
+  if remove_owned_worktree "$MAIN_WORK" main "$MAIN_ID" "$PUBLISH_COMMIT"; then
+    MAIN_OWNED=0
+  fi
+else
+  echo "Existing main checkout retained at $MAIN_CHECKOUT."
 fi
 printf '\nShipped %s from dev %s. Update Release through its own updater.\n' "$TAG" "$DEV_COMMIT"

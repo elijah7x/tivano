@@ -17,6 +17,7 @@ struct RootView: View {
                 // The rows are laid out at the sidebar's width once, and the slide moves the clip
                 // alone, so no row re-wraps per frame.
                 SidebarView()
+                    .environment(\.heroWeatherContentVisible, sidebar.renderedWidth > 0 && !settingsShown)
                     .frame(width: sidebar.width)
                     .frame(width: sidebar.renderedWidth, alignment: .trailing)
                     .clipped()
@@ -88,9 +89,11 @@ struct RootView: View {
             .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
         }
         .overlay(alignment: .topLeading) {
-            if !settingsShown, !sidebar.holdsTrafficLights,
+            // Waiting out the slide like the chat chrome's copy does, so it never
+            // doubles the header's own toggle still riding the edge.
+            if !settingsShown, !sidebar.holdsTrafficLights, !sidebar.isSliding,
                model.selectedThreadID.flatMap({ model.thread($0) }) == nil {
-                SidebarToggleButton()
+                SidebarToggleButton(inSidebar: false)
                     .padding(.leading, Chrome.trafficLightsWidth + Chrome.trafficLightClearance + Chrome.chromeHorizontalPadding)
                     .padding(.top, Chrome.chromeTopPadding)
             }
@@ -213,7 +216,7 @@ struct DetailView: View {
                 // project list says nothing, and the welcome screen would flash.
                 if !model.isLibraryLoaded {
                     Color.clear
-                } else if model.projects.isEmpty {
+                } else if model.projects.isEmpty && model.threads.isEmpty {
                     WelcomeView()
                 } else {
                     NoThreadView()
@@ -270,8 +273,11 @@ private struct ThreadColumns: NSViewRepresentable {
         func stopRendering() {
             covering?.cancel()
             retirement?.cancel()
+            if let shown { resizeState?.releasePane(shown) }
             for scope in scopes.values { scope.setVisible(false) }
         }
+
+        private weak var resizeState: WindowLiveResize?
 
         /// How many columns stay built behind the shown one.
         private static let keptLimit = 8
@@ -303,9 +309,12 @@ private struct ThreadColumns: NSViewRepresentable {
         func cover(_ pane: NSView, _ isCovered: Bool, model: AppModel, liveResize: WindowLiveResize) {
             if self.isCovered != isCovered {
                 self.isCovered = isCovered
-                for (id, column) in columns {
-                    let isInteractive = id == shown && !isCovered
+                liveResize.setPaneOwner(isCovered ? nil : shown, resizing: paneIsResizing(shown, model: model))
+                if let id = shown, let column = columns[id] {
+                    let isInteractive = !isCovered
                     column.acceptsInteraction = isInteractive
+                    if isInteractive { column.frame = pane.bounds }
+                    column.autoresizingMask = isInteractive ? [.width, .height] : []
                     column.rootView = Self.root(id, isShown: isInteractive, model: model, liveResize: liveResize, scope: scopes[id])
                 }
             }
@@ -333,6 +342,8 @@ private struct ThreadColumns: NSViewRepresentable {
 
         func show(_ id: UUID, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) {
             guard id != shown else { return }
+            resizeState = liveResize
+            liveResize.setPaneOwner(isCovered ? nil : id, resizing: paneIsResizing(id, model: model))
             if let shown, let previous = columns[shown] {
                 previous.acceptsInteraction = false
                 previous.isHidden = true
@@ -342,9 +353,9 @@ private struct ThreadColumns: NSViewRepresentable {
             }
             if let kept = columns[id] {
                 kept.acceptsInteraction = !isCovered
-                kept.rootView = Self.root(id, isShown: !isCovered, model: model, liveResize: liveResize, scope: scopes[id])
                 kept.frame = pane.bounds
-                kept.autoresizingMask = [.width, .height]
+                kept.autoresizingMask = isCovered ? [] : [.width, .height]
+                kept.rootView = Self.root(id, isShown: !isCovered, model: model, liveResize: liveResize, scope: scopes[id])
                 // In view before the column shows, so its first frame carries the real
                 // alpha; under a cover that has hidden the pane it stays paused.
                 scopes[id]?.setVisible(!pane.isHidden)
@@ -393,7 +404,7 @@ private struct ThreadColumns: NSViewRepresentable {
             column.acceptsInteraction = isShown && !isCovered
             column.frame = pane.bounds
             column.isHidden = !isShown
-            column.autoresizingMask = isShown ? [.width, .height] : []
+            column.autoresizingMask = isShown && !isCovered ? [.width, .height] : []
             pane.addSubview(column)
             columns[id] = column
             return column
@@ -406,8 +417,14 @@ private struct ThreadColumns: NSViewRepresentable {
                     .environment(\.veilRenderScope, scope)
                     .disabled(!isShown)
                     .allowsHitTesting(isShown)
-                    .modifier(HostedEnvironment(model: model, liveResize: liveResize))
+                    .modifier(HostedEnvironment(model: model, liveResize: liveResize, isLayoutActive: isShown))
             )
+        }
+
+        private func paneIsResizing(_ id: UUID?, model: AppModel) -> Bool {
+            guard !isCovered, let id else { return false }
+            return model.sidebar.isDragging || model.sidebar.isSliding
+                || model.existingRuntime(for: id)?.isTerminalResizing == true
         }
 
         private func drop(_ id: UUID) {
@@ -445,6 +462,14 @@ struct WelcomeView: View {
                         .foregroundStyle(Chrome.secondaryText)
                 }
                 VStack(spacing: 10) {
+                    Button {
+                        model.newThread(affiliation: .standalone)
+                    } label: {
+                        Label("Work without a project", systemImage: "bubble.left")
+                            .padding(.horizontal, 6)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.extraLarge)
                     HStack(spacing: 10) {
                         Button {
                             model.chooseProjectFolder()
@@ -453,19 +478,6 @@ struct WelcomeView: View {
                                 .padding(.horizontal, 6)
                         }
                         .buttonStyle(.glassProminent)
-                        .controlSize(.extraLarge)
-                        Button {
-                            GitHubClonePanel.shared.present(model: model)
-                        } label: {
-                            Label {
-                                Text("Clone from GitHub")
-                            } icon: {
-                                Image("mcp-github").resizable().scaledToFit()
-                                    .frame(width: 16, height: 16)
-                            }
-                            .padding(.horizontal, 6)
-                        }
-                        .buttonStyle(.glass)
                         .controlSize(.extraLarge)
                     }
                     Text("Or drop a folder anywhere in this window.")

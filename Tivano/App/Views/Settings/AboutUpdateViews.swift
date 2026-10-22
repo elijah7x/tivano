@@ -637,6 +637,7 @@ private struct AboutIdentityPill: View {
 private struct AboutVersionPill: View {
     private let checker = UpdateChecker.shared
     private let progress = UpdateInstallProgress.shared
+    @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isReady: Bool {
@@ -733,12 +734,12 @@ private struct AboutVersionPill: View {
                 }
                 .buttonStyle(.plain)
                 .allowsHitTesting(isReady)
+                .disabled(model.hasActiveTurns)
+                .opacity(isReady && model.hasActiveTurns ? 0.45 : 1)
                 .chromeGlassCapsule()
                 // The seal is not a button, but it is still worth saying what it means
                 // rather than showing an empty tooltip.
-                .help(Text(verbatim: isReady
-                    ? String(format: Chrome.localized("Installs Tivano %@ and relaunches"), checker.update?.version ?? "")
-                    : standingHelp))
+                .help(Text(verbatim: help))
                 .accessibilityLabel(Text(verbatim: accessibilityLabel))
                 .accessibilityAddTraits(isReady ? .isButton : [])
             }
@@ -748,6 +749,16 @@ private struct AboutVersionPill: View {
     private var chaseResponse: Double {
         if reduceMotion { return 0.15 }
         return progress.phase == .celebrating ? 0.72 : 0.3
+    }
+
+    /// The button's tooltip: while chats are running the install button is disabled and
+    /// says why instead of promising the install.
+    private var help: String {
+        if isReady {
+            if model.hasActiveTurns { return Chrome.localized("Available after running chats finish") }
+            return String(format: Chrome.localized("Installs Tivano %@ and relaunches"), checker.update?.version ?? "")
+        }
+        return standingHelp
     }
 
     /// The seal is not a button, but it is still worth saying what it means.
@@ -798,6 +809,8 @@ struct AboutSoftwareUpdateSection: View {
                 releaseBody(update, notes: notes ?? "")
             }
         }
+        .padding(.bottom, progress.phase == .waitingForMerge || (checker.updateAvailable && checker.update != nil)
+            ? Chrome.pageSectionSpacing : 0)
         .task {
             if progress.consumePendingCelebration() {
                 startCelebrationSweep()

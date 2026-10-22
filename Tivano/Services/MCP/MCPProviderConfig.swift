@@ -97,14 +97,19 @@ enum MCPProviderConfig {
                     ]))
                 } else {
                     var args: [JSONValue] = [.string("-y"), .string("mcp-remote"), .string(url)]
-                    for key in headers.keys.sorted() {
-                        args += [.string("--header"), .string("\(key): \(headers[key]?.string ?? "")")]
+                    var envList: [JSONValue] = []
+                    // mcp-remote expands ${NAME} in --header values from its own
+                    // environment, so secrets ride in env instead of the server's args.
+                    for (index, key) in headers.keys.sorted().enumerated() {
+                        let name = "MCP_HEADER_\(index)"
+                        args += [.string("--header"), .string("\(key): ${\(name)}")]
+                        envList.append(.object(["name": .string(name), "value": .string(headers[key]?.string ?? "")]))
                     }
                     servers.append(.object([
                         "name": .string(id),
                         "command": .string("npx"),
                         "args": .array(args),
-                        "env": .array([]),
+                        "env": .array(envList),
                     ]))
                 }
             } else {
@@ -230,8 +235,7 @@ enum MCPProviderConfig {
     private static let geminiSettingsURL = MCPPaths.directory.appendingPathComponent("gemini-settings.json")
 
     private static func write(_ value: JSONValue, to url: URL) {
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? value.data(pretty: true).write(to: url, options: .atomic)
+        MCPPaths.writePrivate(value.data(pretty: true), to: url)
     }
 
     private static func serversPresent(in url: URL, key: String) -> Bool {

@@ -82,7 +82,7 @@ final class AutoContinue {
         guard let app, let thread = app.thread(threadID), let runtime = app.existingRuntime(for: threadID) else { return }
         let text = LimitHandoff.text(for: runtime, title: thread.title)
         cancel(threadID)
-        guard let project = app.project(thread.projectID), let made = app.newThread(in: project) else { return }
+        guard let made = app.newThread(affiliation: thread.projectID.map { .project($0) } ?? .standalone) else { return }
         outcomes[threadID] = .handedOff(made.id)
         app.runtime(for: made.id).draft.text = text
     }

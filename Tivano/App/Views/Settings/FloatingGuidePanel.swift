@@ -76,6 +76,9 @@ class FloatingGuidePanel {
         guard escapeMonitor == nil else { return }
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel?.isVisible == true, event.keyCode == 53 else { return event }
+            // Escape aimed at another window belongs to it: a nonactivating panel stays
+            // out of the key window's way, so the composer's Escape still stops a turn.
+            guard event.window === self.panel || self.panel?.isKeyWindow == true else { return event }
             self.close()
             return nil
         }

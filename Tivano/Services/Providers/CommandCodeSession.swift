@@ -384,10 +384,10 @@ final class CommandCodeSession: ProviderSession {
         case "session_titled":
             if let title = event["title"]?.string, !title.isEmpty { onEvent?(.title(title)) }
         case "compaction_start":
-            onEvent?(.notice(Notice(level: .info, message: "Compacting context.")))
+            onEvent?(.notice(Notice(level: .info, message: AppText.localized("Compacting context."))))
         case "compaction_done":
             let saved = event["tokensSaved"]?.int ?? 0
-            let message = saved > 0 ? "Compacted context, freeing \(saved.formatted()) tokens." : "Compacted context."
+            let message = saved > 0 ? String(format: AppText.localized("Compacted context, freeing %@ tokens."), saved.formatted()) : AppText.localized("Compacted context.")
             onEvent?(.notice(Notice(level: .info, message: message)))
         case "notice":
             guard let message = event["message"]?.string, !message.isEmpty else { return }
@@ -466,7 +466,9 @@ final class CommandCodeSession: ProviderSession {
         case 9:
             onEvent?(.turnCompleted(status: .failed, error: "The model produced no response."))
         case 10:
-            onEvent?(.turnCompleted(status: .failed, error: "Command Code is out of credits. Top up at commandcode.ai/billing, or wait for the monthly credits to reset."))
+            let error = [runError, tail].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty } ?? "Command Code reported a credit error. Check your billing status at commandcode.ai/billing."
+            onEvent?(.turnCompleted(status: .failed, error: error))
         default:
             onEvent?(.turnCompleted(status: .failed, error: runError ?? tail ?? "Command Code exited with code \(status)."))
         }
@@ -488,10 +490,7 @@ final class CommandCodeSession: ProviderSession {
         if lowered.contains("not authenticated") || lowered.contains("unauthorized") || lowered.contains("session expired") {
             return "Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings → Providers → Command Code."
         }
-        if lowered.contains("insufficient credits") || lowered.contains("out of credits") {
-            return "Command Code is out of credits. Top up at commandcode.ai/billing, or wait for the monthly credits to reset."
-        }
-        return text
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func errorText(_ value: JSONValue?) -> String? {
@@ -529,11 +528,11 @@ final class CommandCodeSession: ProviderSession {
         case "monitor_command":
             return ToolCall(kind: .command, title: input["command"]?.string.map(ToolTitles.unwrapShell) ?? "Monitor command")
         case "shell_output":
-            return ToolCall(kind: .command, title: "Shell output", detail: input["id"]?.string ?? input["task_id"]?.string)
+            return ToolCall(kind: .command, title: AppText.localized("Shell output"), detail: input["id"]?.string ?? input["task_id"]?.string)
         case "shell_tasks":
-            return ToolCall(kind: .command, title: "Shell tasks")
+            return ToolCall(kind: .command, title: AppText.localized("Shell tasks"))
         case "kill_shell":
-            return ToolCall(kind: .command, title: "Stop shell", detail: input["id"]?.string ?? input["task_id"]?.string ?? input["pid"]?.int.map(String.init))
+            return ToolCall(kind: .command, title: AppText.localized("Stop shell"), detail: input["id"]?.string ?? input["task_id"]?.string ?? input["pid"]?.int.map(String.init))
         case "read_file":
             var call = ToolCall(kind: .read, title: path("file_path") ?? path("path") ?? "Read file")
             if let offset = input["offset"]?.int, let limit = input["limit"]?.int {
@@ -569,7 +568,7 @@ final class CommandCodeSession: ProviderSession {
             let description = input["description"]?.string ?? input["prompt"]?.string.map { TextCleanup.singleLine($0, limit: 96) } ?? "Sub-agent"
             return ToolCall(kind: .agent, title: description, detail: input["subagent_type"]?.string)
         case "agent_output":
-            return ToolCall(kind: .agent, title: "Agent output", detail: input["agent_id"]?.string)
+            return ToolCall(kind: .agent, title: AppText.localized("Agent output"), detail: input["agent_id"]?.string)
         case "activate_skill":
             return ToolCall(kind: .other, title: "Skill · \(input["name"]?.string ?? "")")
         case "enter_worktree", "exit_worktree":

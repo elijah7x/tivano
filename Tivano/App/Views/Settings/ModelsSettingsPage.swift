@@ -55,7 +55,7 @@ struct ModelsSettingsPage: View {
         // keystroke (and all of them again when clearing) is what made entries overlap and jump.
         // Lazy all the way down: expanded catalogues run to hundreds of rows, and the
         // settings scroll view builds and measures every row of an eager stack.
-        LazyVStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+        LazyVStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
             if trimmed.isEmpty || !visiblePins.isEmpty {
                 ChromeSection(
                     title: "Your models",
@@ -66,7 +66,7 @@ struct ModelsSettingsPage: View {
                     ),
                     trailing: trimmed.isEmpty ? AnyView(newGroupButton) : nil
                 ) {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: Chrome.unitSpacing) {
                         if !blocks.ungrouped.isEmpty || blocks.groups.isEmpty {
                             ChromeCard {
                                 VStack(spacing: 0) {
@@ -153,7 +153,7 @@ struct ModelsSettingsPage: View {
                     // window, so scrolling the page does not report new frames every frame.
                     .coordinateSpace(.named(Self.cardsSpace))
                     if trimmed.isEmpty {
-                        Text("Click a model to set its reasoning effort and fast mode for every new chat. Right-click it to move it to another group.")
+                        Text("Set this model's default reasoning effort and fast mode. New chats may inherit the current chat or a Hydra preset instead. Right-click to move the model to another group.")
                             .font(.ui(size: 11))
                             .foregroundStyle(Chrome.secondaryText)
                             .padding(.horizontal, 4)
@@ -161,16 +161,19 @@ struct ModelsSettingsPage: View {
                 }
             }
 
-            ForEach(providers) { provider in
-                ProviderModelsSection(
-                    provider: provider,
-                    query: trimmed,
-                    matchingCatalogue: matchingCatalogues[provider],
-                    isExpanded: Binding(
-                        get: { providerExpansion[provider] ?? true },
-                        set: { providerExpansion[provider] = $0 }
+            // The provider catalogues are units of one list, not separate sections.
+            LazyVStack(alignment: .leading, spacing: Chrome.unitSpacing) {
+                ForEach(providers) { provider in
+                    ProviderModelsSection(
+                        provider: provider,
+                        query: trimmed,
+                        matchingCatalogue: matchingCatalogues[provider],
+                        isExpanded: Binding(
+                            get: { providerExpansion[provider] ?? true },
+                            set: { providerExpansion[provider] = $0 }
+                        )
                     )
-                )
+                }
             }
 
             if !trimmed.isEmpty, visiblePins.isEmpty, providers.isEmpty {
@@ -185,9 +188,9 @@ struct ModelsSettingsPage: View {
             let heightsByID = rowHeights.reduce(into: [String: CGFloat]()) { heights, entry in
                 heights[entry.key.id] = entry.value
             }
-            let updatedHeights = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            let updatedHeights = Dictionary(items.compactMap { item in
                 heightsByID[item.id].map { (item, $0) }
-            })
+            }, uniquingKeysWith: { first, _ in first })
             if rowHeights != updatedHeights { rowHeights = updatedHeights }
         }
     }
@@ -333,7 +336,7 @@ struct ModelsSettingsPage: View {
 
         let order = modelBlocks(query: "").groups.map(\.id)
         // A card's slot is its height plus the gap between cards.
-        let heights = Dictionary(uniqueKeysWithValues: order.compactMap { id in cardFrames[.group(id)].map { (id, $0.height + 10) } })
+        let heights = Dictionary(order.compactMap { id in cardFrames[.group(id)].map { (id, $0.height + 10) } }, uniquingKeysWith: { first, _ in first })
         let moved = withAnimation(Self.slide) {
             groupDrag.settle(order: order, heights: heights, fallbackHeight: 60) { _, placeAfter in
                 model.settings.moveModelSection(id, by: placeAfter ? 1 : -1)
@@ -661,7 +664,7 @@ private struct ModelGroupHeader: View {
             Spacer(minLength: 8)
             HStack(spacing: 4) {
                 RowControl(symbol: "pencil", help: "Rename group", isEnabled: true) { beginEditing() }
-                RowControl(symbol: "trash", help: "Delete group", isEnabled: true) {
+                RowControl(symbol: "trash", help: "Remove group heading. Models stay in the list.", isEnabled: true) {
                     withAnimation(Chrome.panelSlide) { model.settings.removeModelSection(section.id) }
                 }
             }
@@ -685,9 +688,10 @@ private struct ModelGroupHeader: View {
             }
             .disabled(!canMoveDown)
             Divider()
-            Button("Delete Group") {
+            Button("Remove group heading") {
                 withAnimation(Chrome.panelSlide) { model.settings.removeModelSection(section.id) }
             }
+            .help(Text("Models stay in the list."))
         }
         .onAppear { focusNewGroup() }
         .onChange(of: sectionToFocus) { _, _ in focusNewGroup() }
@@ -790,7 +794,7 @@ private struct ProviderModelsSection: View {
         let rows = rows(catalogue, pinned: pinned, isFiltering: isFiltering)
         // Collapsed with nothing chosen closes the card outright.
         let cardVisible = isExpanded || isFiltering || !rows.isEmpty
-        VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
+        VStack(alignment: .leading, spacing: Chrome.unitHeaderSpacing) {
             CollapsibleProviderHeader(provider: provider, isExpanded: $isExpanded, subject: "model list")
             // Lazy, so only the rows on screen are built. Same fill and shape as ChromeCard.
             LazyVStack(spacing: 0) {

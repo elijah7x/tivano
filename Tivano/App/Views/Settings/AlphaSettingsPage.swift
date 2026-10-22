@@ -27,7 +27,7 @@ struct AlphaSettingsPage: View {
                         Text("Alpha")
                             .font(.ui(.title3, weight: .semibold))
                             .foregroundStyle(Chrome.primaryText)
-                        Text("Features here are early versions and may be unstable. Turn them on with care.")
+                        Text("Features here are early versions and may be unstable. Turning Alpha off ends the current voice call and disables local control. Individual feature choices are kept.")
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -49,7 +49,7 @@ struct AlphaSettingsPage: View {
         }
         ChromeSection(title: "Features") {
             ChromeCard {
-                ChromeRow(title: "Codex realtime voice", detail: "Talk with Codex out loud. Start a call from Start voice in the sidebar, or from the waveform button in any Codex chat to continue that chat by voice. Codex listens, answers and does the work in the chat. Needs Codex 0.159 or later, signed in with ChatGPT.") {
+                ChromeRow(title: "Codex realtime voice", detail: "Talk with Codex out loud. Start a call from Start voice in the sidebar, or from the waveform button in any Codex chat to continue that chat by voice. Codex listens, answers and does the work in the chat. Needs Codex 0.159 or later, signed in with ChatGPT. Turning this off ends the current call.") {
                     SettingsSwitch(isOn: $settings.alphaVoiceEnabled)
                         .accessibilityLabel(Text("Codex realtime voice"))
                 }
@@ -57,6 +57,7 @@ struct AlphaSettingsPage: View {
                     ChromeRowDivider()
                     VoiceStyleRow()
                 }
+                LocalControlSettingsRows()
             }
         }
         .disabled(!settings.alphaEnabled)
@@ -66,6 +67,7 @@ struct AlphaSettingsPage: View {
         .onChange(of: settings.isVoiceEnabled) { _, enabled in
             if !enabled { model.voice.end() }
         }
+        CLIInstallationSettings()
     }
 }
 

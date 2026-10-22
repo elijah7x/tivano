@@ -10,17 +10,6 @@ enum GitHubAPI {
         try await request(URL(string: "https://api.github.com/user")!, token: token)
     }
 
-    static func repositories(token: String) async throws -> [GitHubRepository] {
-        var repositories: [GitHubRepository] = []
-        for page in 1...10 {
-            let url = URL(string: "https://api.github.com/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member&page=\(page)")!
-            let batch: [GitHubRepository] = try await request(url, token: token)
-            repositories.append(contentsOf: batch)
-            if batch.count < 100 { break }
-        }
-        return repositories
-    }
-
     static func startDeviceFlow() async throws -> GitHubDeviceCode {
         let response: DeviceResponse = try await request(
             URL(string: "https://github.com/login/device/code")!,
@@ -148,38 +137,5 @@ enum GitHubCredentials {
             "GIT_CONFIG_KEY_1": "credential.https://github.com.helper",
             "GIT_CONFIG_VALUE_1": "!f() { test \"$1\" = get || return 0; echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f",
         ]
-    }
-}
-
-enum GitHubClone {
-    static func clone(_ fullName: String, into destination: URL, token: String?) async throws {
-        let parent = destination.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-        var environment = LoginEnvironment.current
-        if let token { environment.merge(GitHubCredentials.environment(token: token)) { _, new in new } }
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        let result = try await Shell.run(LoginEnvironment.git,
-                                         ["clone", "--", "https://github.com/\(fullName).git", destination.path],
-                                         in: parent, environment: environment, timeout: 1800)
-        guard result.succeeded else {
-            let message = result.errorOutput.split(whereSeparator: \.isNewline)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .last { !$0.isEmpty } ?? AppText.localized("git clone failed")
-            throw GitHubError.cloneFailed(message)
-        }
-    }
-
-    static func configureIdentity(at repository: URL, user: GitHubUser) async {
-        guard let result = try? await Shell.run(LoginEnvironment.git, ["config", "--global", "user.email"], in: repository),
-              result.trimmedOutput.isEmpty else { return }
-        _ = try? await Shell.run(LoginEnvironment.git, ["config", "user.name", user.name ?? user.login], in: repository)
-        _ = try? await Shell.run(LoginEnvironment.git,
-                                 ["config", "user.email", "\(user.id)+\(user.login)@users.noreply.github.com"], in: repository)
-    }
-
-    static func originURL(at directory: URL) async -> String? {
-        guard let result = try? await Shell.run(LoginEnvironment.git, ["remote", "get-url", "origin"], in: directory),
-              result.succeeded, !result.trimmedOutput.isEmpty else { return nil }
-        return result.trimmedOutput
     }
 }

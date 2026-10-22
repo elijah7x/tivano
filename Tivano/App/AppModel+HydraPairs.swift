@@ -148,6 +148,15 @@ extension AppModel {
         }
     }
 
+    func inheritableHydraPair(from current: ChatThread?, into project: Project?) -> UUID? {
+        guard let current else { return nil }
+        // A project-default pair must not become the default for unrelated tasks.
+        if project == nil, let source = self.project(current.projectID), source.hydraPairID == current.hydraPairID {
+            return nil
+        }
+        return current.hydraPairID
+    }
+
     /// Sets the pair that each new chat in a project starts on. Nil removes the rule.
     /// Open chats do not change: the rule applies to new chats only.
     func setHydraPair(_ pairID: UUID?, forProject projectID: UUID) {

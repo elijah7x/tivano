@@ -64,6 +64,10 @@ enum WebsiteCaptures {
     /// Writes the library, the thread histories and the project folders the run opens, and
     /// resets the run's defaults. Called before anything reads settings or the library.
     static func prepare() {
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--standalone-task-probe") {
+            StandaloneTaskProbe.prepare()
+            return
+        }
         if DshNativeIntegrationProbe.isRequested {
             DshNativeIntegrationProbe.prepare()
             return
@@ -303,6 +307,22 @@ enum WebsiteCaptures {
     // MARK: - Run
 
     static func run(model: AppModel) async {
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--standalone-task-probe") {
+            await StandaloneTaskProbe.run(model: model)
+            return
+        }
+        if HeroSwitchProbe.isRequested {
+            await HeroSwitchProbe.run(model: model)
+            return
+        }
+        if KeepsakePreview.isRequested {
+            await KeepsakePreview.run(model: model)
+            return
+        }
+        if HeroPreview.isRequested {
+            await HeroPreview.run(model: model)
+            return
+        }
         if DshNativeIntegrationProbe.isRequested {
             await DshNativeIntegrationProbe.run(model: model)
             return
@@ -732,6 +752,114 @@ final class Recorder {
         configuration.scalesToFit = false
         configuration.showsCursor = false
         return configuration
+    }
+}
+/// Holds a disposable library open for native interaction checks after real-model checks.
+@MainActor
+private enum StandaloneTaskProbe {
+    static func prepare() {
+        guard let root = CaptureRun.storageRoot, let defaults = CaptureRun.defaults else { return }
+        do {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent("threads"), withIntermediateDirectories: true)
+            defaults.removePersistentDomain(forName: CaptureRun.suiteName)
+            defaults.set(false, forKey: "notifyWhenFinished")
+            defaults.set(false, forKey: "chimeWhenFinished")
+            try JSONEncoder.storage.encode(Library()).write(to: root.appendingPathComponent("library.json"), options: .atomic)
+        } catch {
+            WebsiteCaptures.log("standalone fixture failed: \(error)")
+            exit(1)
+        }
+    }
+
+    static func run(model: AppModel) async {
+        guard let output = CaptureRun.outputDirectory else { return }
+        await model.bootstrap()
+        guard model.isLibraryLoaded else { exit(1) }
+        model.settings.hydraEnabled = false
+        model.settings.hasSeenHydraIntro = true
+        model.settings.defaultWorkspaceMode = .local
+        model.settings.defaultProvider = .deepseek
+        model.settings.theme = .breeze
+        for provider in ProviderKind.allCases {
+            model.settings.setBinaryPath("/usr/bin/true", for: provider)
+        }
+        model.selectedThreadID = nil
+        var checks: [String: Bool] = [:]
+        checks["zero-project-create"] = model.projects.isEmpty && model.newThread(affiliation: .standalone) != nil
+        let folder = output.appendingPathComponent("repos/tivano")
+        let otherFolder = output.appendingPathComponent("repos/second-project")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
+        } catch { exit(1) }
+        let project = model.addProject(at: folder)
+        let second = model.addProject(at: otherFolder)
+        model.updateProject(second.id) { $0.name = "用于检查窄窗口的长项目名称 · Long Project Name" }
+        model.updateProject(project.id) { $0.icon = .emoji("🛠️") }
+        guard let draft = model.newThread(affiliation: .project(project.id)) else { exit(1) }
+        model.rename(draft.id, to: "项目会话 · 图标与归属测试")
+        checks["project-default"] = model.newThread()?.projectID == project.id
+        guard let task = model.newThread(affiliation: .standalone) else { exit(1) }
+        model.rename(task.id, to: "独立任务 · 工作目录测试")
+        checks["task-default"] = model.newThread()?.projectID == nil
+        let runtime = model.runtime(for: task.id)
+        await runtime.ensureLoaded()
+        runtime.draft.text = "草稿应在切换归属后保留"
+        checks["task-to-project"] = model.moveThread(task.id, to: .project(project.id))
+        checks["project-to-task"] = model.moveThread(task.id, to: .standalone)
+        checks["draft-preserved"] = runtime.draft.text == "草稿应在切换归属后保留"
+        runtime.draft.text = ""
+        do {
+            let directory = try model.ensureExecutionDirectory(for: model.thread(task.id)!)
+            let payload = URL(fileURLWithPath: directory).appendingPathComponent("task-result.txt")
+            try Data("isolated task file\n".utf8).write(to: payload)
+            checks["task-directory"] = directory == StoragePaths.taskWorkspace(task.id).path
+            model.archive(task.id)
+            checks["archive-keeps-files"] = FileManager.default.fileExists(atPath: payload.path)
+            model.updateThread(task.id) { $0.isArchived = false }
+            checks["task-restored"] = model.standaloneTasks.contains { $0.id == task.id }
+        } catch {
+            checks["task-directory"] = false
+            WebsiteCaptures.log("standalone task directory: \(error)")
+        }
+        model.selectedThreadID = task.id
+        checks["flush"] = model.flushForQuit()
+        if case .success(let library) = Storage.loadLibrary() {
+            checks["persist-task"] = library.threads.contains { $0.id == task.id && $0.projectID == nil }
+            checks["persist-icon"] = library.projects.first { $0.id == project.id }?.icon == .emoji("🛠️")
+        }
+        write(checks, name: "model-checks.json", output: output)
+        guard checks.values.allSatisfy({ $0 }) else { exit(1) }
+        model.selectedThreadID = draft.id
+        if !model.sidebar.isVisible { model.sidebar.toggle() }
+        WindowManager.shared.showMain()
+        NSApp.activate(ignoringOtherApps: true)
+        WebsiteCaptures.log("standalone task probe ready pid=\(ProcessInfo.processInfo.processIdentifier)")
+        let deadline = Date.now.addingTimeInterval(1200)
+        while Date.now < deadline, !FileManager.default.fileExists(atPath: output.appendingPathComponent("finish").path) {
+            let state: [String: Any] = [
+                "pid": ProcessInfo.processInfo.processIdentifier,
+                "selectedThread": model.selectedThreadID?.uuidString ?? "",
+                "projects": model.projects.map { ["id": $0.id.uuidString, "name": $0.name, "icon": $0.icon?.storage ?? ""] },
+                "threads": model.threads.map { thread in
+                    ["id": thread.id.uuidString, "projectID": thread.projectID?.uuidString ?? "", "title": thread.title,
+                     "directory": (try? model.executionDirectory(for: thread)) ?? "",
+                     "terminals": model.terminals.sessions(for: thread.id).map(\.directory)] as [String: Any]
+                }
+            ]
+            write(state, name: "inspection-state.json", output: output)
+            try? await Task.sleep(for: .seconds(1))
+        }
+        model.terminals.terminateAll()
+        for thread in model.threads { model.existingRuntime(for: thread.id)?.stopSession() }
+        _ = model.flushForQuit()
+        WebsiteCaptures.log("standalone task probe finished")
+        exit(0)
+    }
+
+    private static func write(_ value: Any, name: String, output: URL) {
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? data.write(to: output.appendingPathComponent(name), options: .atomic)
     }
 }
 #endif

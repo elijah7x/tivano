@@ -76,6 +76,13 @@ enum Chrome {
     static let cardCornerRadius: CGFloat = 16
     static let sectionSpacing: CGFloat = 20
     static let sectionHeaderSpacing: CGFloat = 10
+    // Settings pages space by level: sections far apart, units inside a section closer,
+    // and every header tight to what it titles. Popovers keep the compact values above.
+    static let pageTitleSpacing: CGFloat = 24
+    static let pageSectionSpacing: CGFloat = 36
+    static let pageSectionHeaderSpacing: CGFloat = 12
+    static let unitSpacing: CGFloat = 20
+    static let unitHeaderSpacing: CGFloat = 8
     static let contentHorizontalPadding: CGFloat = 16
     /// The gap between a row's trailing control and the card edge.
     static let rowControlTrailingPadding: CGFloat = 10
@@ -512,11 +519,27 @@ struct ChromeIconLabel: View {
     var isActive = false
     var isHovering = false
     var prominent = false
+    var glyphSize: CGFloat? = nil
     var secondary = false
 
+    /// "asset:" names a template image in the asset catalog, for glyphs SF Symbols lacks.
+    private var glyph: Image {
+        symbol.hasPrefix("asset:") ? Image(String(symbol.dropFirst(6))) : Image(systemName: symbol)
+    }
+
     var body: some View {
-        Image(systemName: symbol)
-            .font(prominent ? .ui(.title3, weight: .semibold) : Chrome.iconFont)
+        Group {
+            if let glyphSize {
+                glyph
+                    .resizable()
+                    .scaledToFit()
+                    .font(Chrome.inlineIconFont)
+                    .frame(width: glyphSize, height: glyphSize)
+            } else {
+                glyph
+                    .font(prominent ? .ui(.title3, weight: .semibold) : Chrome.iconFont)
+            }
+        }
             .foregroundStyle(secondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(foreground))
             .frame(width: prominent ? Chrome.capsuleHeight : Chrome.capsuleContentHeight, height: prominent ? Chrome.capsuleHeight : Chrome.capsuleContentHeight)
             .background {
@@ -558,11 +581,12 @@ private struct ChromeHoverIcon: View {
     var isEnabled = true
     var isActive = false
     var prominent = false
+    var glyphSize: CGFloat? = nil
     var secondary = false
     @State private var isHovering = false
 
     var body: some View {
-        ChromeIconLabel(symbol: symbol, isEnabled: isEnabled, isActive: isActive, isHovering: isHovering, prominent: prominent, secondary: secondary)
+        ChromeIconLabel(symbol: symbol, isEnabled: isEnabled, isActive: isActive, isHovering: isHovering, prominent: prominent, glyphSize: glyphSize, secondary: secondary)
             .onHover { hovering in
                 guard isHovering != hovering else { return }
                 withAnimation(Chrome.hover) { isHovering = hovering }
@@ -575,12 +599,13 @@ struct ChromeIconButton: View {
     var isEnabled = true
     var isActive = false
     var prominent = false
+    var glyphSize: CGFloat? = nil
     let help: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            ChromeHoverIcon(symbol: symbol, isEnabled: isEnabled, isActive: isActive, prominent: prominent)
+            ChromeHoverIcon(symbol: symbol, isEnabled: isEnabled, isActive: isActive, prominent: prominent, glyphSize: glyphSize)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -631,9 +656,37 @@ struct ChromeMenuButton<Content: View>: View {
 struct ChromeCircleButton: View {
     let symbol: String
     let help: String
+    var glass = true
     let action: () -> Void
+    @State private var isHovering = false
 
     var body: some View {
+        Group {
+            if glass {
+                button.chromeGlassCircle()
+            } else {
+                // Without glass it sits among the sidebar header's buttons, so it takes their hover circle.
+                button
+                    .background {
+                        if isHovering {
+                            Circle()
+                                .fill(Chrome.overlay(0.08))
+                                .shadow(color: Chrome.primaryText.opacity(0.1), radius: Chrome.capsuleVerticalPadding * 2, y: Chrome.capsuleVerticalPadding)
+                                .padding(1)
+                        }
+                    }
+                    .onHover { hovering in
+                        withAnimation(Chrome.hover) { isHovering = hovering }
+                    }
+            }
+        }
+        .modifier(ChromeHoverForeground())
+        .help(Text(verbatim: Chrome.localized(help)))
+        .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
+        .background { NoWindowDragArea() }
+    }
+
+    private var button: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(Chrome.iconFont)
@@ -641,11 +694,6 @@ struct ChromeCircleButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .chromeGlassCircle()
-        .modifier(ChromeHoverForeground())
-        .help(Text(verbatim: Chrome.localized(help)))
-        .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
-        .background { NoWindowDragArea() }
     }
 }
 
@@ -817,8 +865,13 @@ struct SidebarSymbol: View {
         self.scale = scale
     }
 
+    /// "asset:" names a template image in the asset catalog, for glyphs SF Symbols lacks.
+    private var glyph: Image {
+        name.hasPrefix("asset:") ? Image(String(name.dropFirst(6))) : Image(systemName: name)
+    }
+
     var body: some View {
-        Image(systemName: name)
+        glyph
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
@@ -1204,8 +1257,10 @@ struct ChromeSection<Content: View>: View {
     var trailing: AnyView? = nil
     @ViewBuilder var content: Content
 
+    @Environment(\.chromeSectionHeaderSpacing) private var headerSpacing
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
+        VStack(alignment: .leading, spacing: headerSpacing) {
             HStack(spacing: 4) {
                 Text(verbatim: Chrome.localized(title))
                     .font(.ui(.body, weight: .semibold))
@@ -1222,9 +1277,24 @@ struct ChromeSection<Content: View>: View {
     }
 }
 
+private struct ChromeSectionHeaderSpacingKey: EnvironmentKey {
+    static let defaultValue = Chrome.sectionHeaderSpacing
+}
+
+extension EnvironmentValues {
+    /// The gap between a section's title and its content; settings pages widen it.
+    var chromeSectionHeaderSpacing: CGFloat {
+        get { self[ChromeSectionHeaderSpacingKey.self] }
+        set { self[ChromeSectionHeaderSpacingKey.self] = newValue }
+    }
+}
+
 struct ChromeRow<Control: View>: View {
     let title: String
     var detail: String?
+    /// Off for a detail that is display text rather than a localization key (a theme's
+    /// subtitle, which stays in English).
+    var localizesDetail = true
     @ViewBuilder var control: Control
 
     var body: some View {
@@ -1234,7 +1304,7 @@ struct ChromeRow<Control: View>: View {
                     .font(.ui(.body))
                     .foregroundStyle(Chrome.primaryText)
                 if let detail, !detail.isEmpty {
-                    Text(verbatim: Chrome.localized(detail))
+                    Text(verbatim: localizesDetail ? Chrome.localized(detail) : detail)
                         .font(.ui(.subheadline))
                         .foregroundStyle(Chrome.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)

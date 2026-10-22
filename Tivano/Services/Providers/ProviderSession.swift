@@ -192,7 +192,9 @@ enum ProviderError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notInstalled(let provider):
-            if provider.isAPIKeyBased {
+            if provider == .minimaxCode {
+                AppText.localized("MiniMax Code is not installed. Install the official mcode CLI, then refresh Providers. Authentication is configured separately in MiniMax Code.")
+            } else if provider.isAPIKeyBased {
                 "\(provider.displayName) needs an API key. Add one in Settings → Providers → \(provider.displayName)."
             } else {
                 "\(provider.displayName) is not installed. Install it and sign in with `\(provider.loginCommand)`."

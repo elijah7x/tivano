@@ -88,7 +88,7 @@ final class PiSession: ProviderSession {
         try FileManager.default.createDirectory(at: gateDirectory, withIntermediateDirectories: true)
         let gateURL = gateDirectory.appendingPathComponent("\(UUID().uuidString).json")
         self.gateURL = gateURL
-        writeGate(finalReport: false)
+        try writeGate(finalReport: false)
 
         var arguments = ["--mode", "rpc", "-e", extensionURL.path]
         arguments.append(runtimeMode == .auto || runtimeMode == .fullAccess ? "--approve" : "--no-approve")
@@ -162,7 +162,7 @@ final class PiSession: ProviderSession {
         guard !turnActive else { throw ProviderError.failed("Pi is still on the last turn.") }
         runtimeMode = input.runtimeMode
         interactionMode = input.interactionMode
-        writeGate(finalReport: input.isFinalReport)
+        try writeGate(finalReport: input.isFinalReport)
         if let wanted = input.model, !wanted.isEmpty, wanted != model, let slash = wanted.firstIndex(of: "/") {
             process.send(["type": .string("set_model"), "provider": .string(String(wanted[..<slash])), "modelId": .string(String(wanted[wanted.index(after: slash)...]))])
             model = wanted
@@ -270,15 +270,15 @@ final class PiSession: ProviderSession {
     }
 
     /// The gate the extension reads before every tool call.
-    private func writeGate(finalReport: Bool) {
-        guard let gateURL else { return }
+    private func writeGate(finalReport: Bool) throws {
+        guard let gateURL else { throw ProviderError.notRunning }
         let gate: JSONValue = [
             "runtimeMode": .string(runtimeMode.rawValue),
             "interactionMode": .string(interactionMode.rawValue),
             "finalReport": .bool(finalReport),
             "systemPrompt": "",
         ]
-        try? gate.data().write(to: gateURL, options: .atomic)
+        try gate.data().write(to: gateURL, options: .atomic)
     }
 
     // MARK: - Stream
@@ -610,6 +610,10 @@ final class PiSession: ProviderSession {
 
     private func didClose(status: Int32) {
         pendingResponses.resolveAll(.null)
+        let resolved = Array(pendingApprovals.keys) + Array(pendingQuestions.keys)
+        pendingApprovals.removeAll()
+        pendingQuestions.removeAll()
+        for key in resolved { onEvent?(.requestResolved(id: key)) }
         let tail = TextCleanup.lastLines(process?.errorTail ?? "")
         process = nil
         if turnActive {

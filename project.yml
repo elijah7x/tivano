@@ -4,6 +4,7 @@ options:
   deploymentTarget:
     macOS: "26.0"
   developmentLanguage: en
+  createIntermediateGroups: true
 packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
@@ -35,6 +36,13 @@ targets:
         buildPhase: resources
     dependencies:
       - package: SwiftTerm
+      - target: TivanoCLI
+        link: false
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
     settings:
       base:
         PRODUCT_NAME: "Tivano"
@@ -63,3 +71,31 @@ targets:
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Developer ID Application
+          CODE_SIGN_ENTITLEMENTS: config/release.entitlements
+  TivanoCLI:
+    type: tool
+    platform: macOS
+    configFiles:
+      Debug: config/dev.xcconfig
+      Release: config/release.xcconfig
+    sources:
+      - path: TivanoCLI
+      - path: Tivano/Core/Models/LocalControl.swift
+      - path: Tivano/Services/Control/ControlSocket.swift
+      - path: Tivano/Services/Control/ControlClient.swift
+    settings:
+      base:
+        PRODUCT_NAME: tivano-control
+        PRODUCT_MODULE_NAME: TivanoCLI
+        PRODUCT_BUNDLE_IDENTIFIER: dev.tivano.Tivano.CLI
+        GENERATE_INFOPLIST_FILE: YES
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: Developer ID Application
+        OTHER_CODE_SIGN_FLAGS: "--timestamp"
+        SKIP_INSTALL: YES
+        DEAD_CODE_STRIPPING: YES
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.tivano.Tivano.CLI.dev

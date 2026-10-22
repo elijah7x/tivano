@@ -13,6 +13,20 @@ struct CommandPalette: View {
     @State private var threadCandidates: [(thread: ChatThread, searchTitle: String)] = []
     @State private var projectCandidates: [(project: Project, searchName: String)] = []
     @FocusState private var isFocused: Bool
+    @State private var worktreeProjectID: UUID?
+    @State private var changesDirectory: String?
+
+    private struct RepositoryContext: Equatable {
+        let projectID: UUID?
+        let projectPath: String?
+        let directory: String?
+    }
+
+    private var repositoryContext: RepositoryContext {
+        let project = model.currentProject
+        let directory = model.selectedThread.flatMap { try? model.executionDirectory(for: $0) }.flatMap { $0.isEmpty ? nil : $0 }
+        return RepositoryContext(projectID: project?.id, projectPath: project?.path, directory: directory)
+    }
 
     private struct LibraryKey: Equatable {
         var threads: [ChatThread]
@@ -97,6 +111,20 @@ struct CommandPalette: View {
             .padding(.top, 72)
         }
         .onAppear { isFocused = true }
+        .task(id: repositoryContext) {
+            let context = repositoryContext
+            worktreeProjectID = nil
+            changesDirectory = nil
+            items = results
+            if let path = context.projectPath, !path.isEmpty, await Git(path).isRepository(), !Task.isCancelled {
+                worktreeProjectID = context.projectID
+            }
+            if let directory = context.directory, await Git(directory).isRepository(), !Task.isCancelled {
+                changesDirectory = directory
+            }
+            guard !Task.isCancelled else { return }
+            items = results
+        }
         .onChange(of: query) {
             selection = 0
             items = results
@@ -162,26 +190,30 @@ struct CommandPalette: View {
                 WindowManager.shared.hideSettings()
                 model.newThread()
             },
-            Item(id: "new-worktree", title: Chrome.localized("New thread in worktree"), symbol: "arrow.triangle.branch", shortcut: ShortcutStore.label(for: .newWorktreeThread)) {
-                WindowManager.shared.hideSettings()
-                model.newThread(workspace: .worktree)
-            },
             Item(id: "add-project", title: Chrome.localized("Add project"), symbol: "folder.badge.plus", shortcut: ShortcutStore.label(for: .addProject)) {
                 model.chooseProjectFolder()
             },
-            Item(id: "clone-github", title: Chrome.localized("Clone from GitHub"), symbol: "arrow.down.circle", shortcut: nil) {
-                GitHubClonePanel.shared.present(model: model)
-            },
         ]
+        if let project = model.currentProject, worktreeProjectID == project.id {
+            actions.insert(Item(id: "new-worktree", title: Chrome.localized("New thread in worktree"), symbol: "arrow.triangle.branch", shortcut: ShortcutStore.label(for: .newWorktreeThread)) {
+                Task { @MainActor in
+                    guard await Git(project.path).isRepository(), model.currentProject?.id == project.id else { return }
+                    WindowManager.shared.hideSettings()
+                    model.newThread(affiliation: .project(project.id), workspace: .worktree)
+                }
+            }, at: 1)
+        }
         if !(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented),
            let threadID = model.selectedThreadID {
             let runtime = model.runtime(for: threadID)
             actions.append(Item(id: "terminal", title: Chrome.localized("Toggle terminal"), symbol: "terminal", shortcut: ShortcutStore.label(for: .toggleTerminal)) {
                 runtime.isTerminalVisible.toggle()
             })
-            actions.append(Item(id: "changes", title: Chrome.localized("Toggle changes"), symbol: "plusminus", shortcut: ShortcutStore.label(for: .toggleChanges)) {
-                runtime.toggleDiff()
-            })
+            if let directory = repositoryContext.directory, changesDirectory == directory {
+                actions.append(Item(id: "changes", title: Chrome.localized("Toggle changes"), symbol: "plusminus", shortcut: ShortcutStore.label(for: .toggleChanges)) {
+                    runtime.toggleDiff()
+                })
+            }
             actions.append(Item(id: "archive-thread", title: Chrome.localized("Archive thread"), symbol: "archivebox", shortcut: ShortcutStore.label(for: .archiveThreadDirect)) {
                 withAnimation(Chrome.panelSlide) { model.archive(threadID) }
             })
@@ -196,7 +228,7 @@ struct CommandPalette: View {
             .prefix(needle.isEmpty ? 6 : 10)
             .map { candidate in
                 let thread = candidate.thread
-                return Item(id: thread.id.uuidString, title: thread.title, subtitle: model.project(thread.projectID)?.name, symbol: "bubble.left") {
+                return Item(id: thread.id.uuidString, title: thread.title, subtitle: model.project(thread.projectID)?.name ?? (thread.affiliation == .standalone ? Chrome.localized("Task") : nil), symbol: "bubble.left") {
                     WindowManager.shared.hideSettings()
                     model.openThread(thread.id)
                 }

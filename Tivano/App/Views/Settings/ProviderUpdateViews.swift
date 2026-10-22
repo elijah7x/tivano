@@ -28,12 +28,11 @@ struct ProviderUpdateSubtitle: View {
     let state: ProviderUpdateViewState
 
     var body: some View {
-        let color = color
         VStack(alignment: .leading, spacing: 2) {
             ForEach(lines, id: \.self) { line in
                 Text(verbatim: line)
-                    .font(.ui(size: 11))
-                    .foregroundStyle(color)
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -119,21 +118,6 @@ struct ProviderUpdateSubtitle: View {
         if state.phase == .checking || state.channelKnown { return nil }
         if providerUpdateText(state.error) != nil { return nil }
         return Chrome.localized("The install channel is unknown, so Tivano will not update it.")
-    }
-
-    private var color: Color {
-        switch state.phase {
-        case .failed:
-            return Chrome.danger
-        case .updated:
-            return providerUpdateText(state.installed) == nil ? Chrome.warning : Chrome.success
-        case .available:
-            return blocksProviderUpdate(state) ? Chrome.warning : Chrome.accent
-        default:
-            if state.customBinaryPath { return Chrome.warning }
-            if !state.channelKnown, state.phase != .checking { return Chrome.warning }
-            return Chrome.secondaryText
-        }
     }
 }
 
@@ -249,16 +233,16 @@ struct ProviderUpdateMonitoringRow: View {
     /// `ChromeRow` looks the detail up again. Format the whole sentence first; the command
     /// stays a value, and a second lookup of that sentence misses and leaves it unchanged.
     private var detail: String {
+        let checks = Chrome.localized(isOn
+            ? "Check this CLI for updates every six hours. Installation starts only when you choose Update."
+            : "Automatic checks are off. You can still check manually.")
         if state.customBinaryPath {
-            return Chrome.localized("A custom binary path is set, so Tivano will not update it. It still compares the installed version with the newest release every six hours.")
+            return String(format: Chrome.localized("%@ A custom executable is not updated by Tivano."), checks)
         }
         if !state.channelKnown {
-            return Chrome.localized("The install channel is unknown, so Tivano will not update it. It still compares the installed version with the newest release every six hours.")
+            return String(format: Chrome.localized("%@ The install channel is unknown, so Tivano will not update it."), checks)
         }
-        if let command = providerUpdateText(state.command) {
-            return String(format: Chrome.localized("Updates with %@. Tivano compares the installed version with the newest release every six hours."), command)
-        }
-        return Chrome.localized("Tivano compares the installed version with the newest release every six hours.")
+        return checks
     }
 }
 

@@ -98,7 +98,7 @@ struct ModelEffortButton: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if let current, !current.efforts.isEmpty {
-                        Text(verbatim: Chrome.localized(ModelOption.effortTitle(thread.effort ?? current.defaultEffort ?? "")))
+                        Text(verbatim: Chrome.localized(ModelOption.effortTitle((thread.provider == .minimaxCode ? thread.effort.flatMap { current.efforts.contains($0) ? $0 : nil } : thread.effort) ?? current.defaultEffort ?? "")))
                             .foregroundStyle(Chrome.primaryText.opacity(0.72))
                             .lineLimit(1)
                             .fixedSize()
@@ -143,6 +143,12 @@ struct ModelEffortButton: View {
         }
         #endif
         .task(id: thread.provider) { await registry.loadCatalog(thread.provider) }
+        .onChange(of: current, initial: true) { _, current in
+            guard thread.provider == .minimaxCode, let current,
+                  let effort = model.thread(thread.id)?.effort,
+                  !current.efforts.contains(effort) else { return }
+            model.updateThread(thread.id) { $0.effort = nil }
+        }
     }
 
     /// The full model and effort, plus the pair the chat leads with, for the tooltip and
@@ -150,7 +156,7 @@ struct ModelEffortButton: View {
     private func helpText(current: ModelOption?, pair: HydraPair?) -> String {
         var parts = [current?.shortName ?? fallbackName]
         if let current, !current.efforts.isEmpty {
-            parts.append(Chrome.localized(ModelOption.effortTitle(thread.effort ?? current.defaultEffort ?? "")))
+            parts.append(Chrome.localized(ModelOption.effortTitle((thread.provider == .minimaxCode ? thread.effort.flatMap { current.efforts.contains($0) ? $0 : nil } : thread.effort) ?? current.defaultEffort ?? "")))
         }
         parts.append(thread.provider.routeSummary)
         if let pair { parts.append(HydraPairSummary.title(pair, registry: model.providers)) }
@@ -236,6 +242,7 @@ private struct ModelEffortPanel: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Chrome.secondaryText)
                 .help(Text(verbatim: Chrome.localized("Back")))
+                .accessibilityLabel(Text(verbatim: Chrome.localized("Back")))
                 Text("Temporary pair")
                     .font(.ui(.body))
                     .foregroundStyle(Chrome.secondaryText)
@@ -418,6 +425,7 @@ struct ModelList: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Chrome.secondaryText)
                 .help(Text(verbatim: Chrome.localized("Back")))
+                .accessibilityLabel(Text(verbatim: Chrome.localized("Back")))
                 TextField("Search models", text: $query)
                     .textFieldStyle(.plain)
                     .font(.ui(.body))
@@ -929,7 +937,9 @@ struct EffortSliderCard: View {
             }
 
             if efforts.isEmpty {
-                Text("This model has one reasoning level.")
+                Text(verbatim: Chrome.localized(provider == .minimaxCode
+                    ? "MiniMax Code has not advertised adjustable reasoning for this model."
+                    : "This model has one reasoning level."))
                     .font(.ui(.callout))
                     .foregroundStyle(Chrome.secondaryText)
                     .frame(height: EffortSlider.thumbSize)
@@ -1197,7 +1207,7 @@ enum EffortBrand: Hashable {
         case .deepseek, .dsh: .deepseek
         case .meta: .meta
         case .antigravity: .antigravity
-        case .codex, .cursor, .grok, .opencode, .devin, .copilot, .commandcode, .pi, .omp, .zai, .kimi: .silver
+        case .codex, .cursor, .grok, .opencode, .devin, .copilot, .commandcode, .pi, .omp, .zai, .kimi, .minimaxCode: .silver
         case nil: .purple
         }
     }

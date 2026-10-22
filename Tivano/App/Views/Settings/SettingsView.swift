@@ -12,6 +12,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     case shortcuts
     case archive
     case alpha
+    case keepsakes
     case about
 
     var id: String { rawValue }
@@ -28,6 +29,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .sourceControl: "Source control"
         case .shortcuts: "Shortcuts"
         case .archive: "Archive"
+        case .keepsakes: "Keepsakes"
         case .about: "About"
         }
     }
@@ -47,6 +49,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .sourceControl: "arrow.triangle.branch"
         case .shortcuts: "command"
         case .archive: "archivebox"
+        case .keepsakes: "tag"
         case .about: "info.circle"
         }
     }
@@ -63,22 +66,24 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .sourceControl: Color(red: 0.345, green: 0.337, blue: 0.839)
         case .shortcuts: Color(red: 0.32, green: 0.48, blue: 0.93)
         case .archive: Chrome.orange
+        case .keepsakes: Color(red: 0.204, green: 0.780, blue: 0.349)
         case .about: Color(red: 0.204, green: 0.780, blue: 0.349)
         }
     }
 
     var keywords: [String] {
         switch self {
-        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "token", "tokens", "activity", "usage", "panel", "limits", "credits", "heatmap", "daily", "weekly", "cumulative", "finish", "finished", "sound", "chime", "icon", "icons", "emoji", "symbol", "symbols", "project mark", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies"]
+        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "token", "tokens", "activity", "usage", "panel", "limits", "credits", "heatmap", "daily", "weekly", "cumulative", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies"]
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
         case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
         case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting"]
-        case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "clone", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
+        case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
         case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "实验室", "实验", "语音", "麦克风", "通话"]
         case .shortcuts: ["keyboard", "keys"]
         case .archive: ["archived", "restore"]
+        case .keepsakes: ["keepsake", "early supporter", "信物"]
         case .about: ["version", "license"]
         }
     }
@@ -107,6 +112,10 @@ final class SettingsNavigation {
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var keepsakeOverlayShown = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var keepsakeDismissRequest = 0
     @State private var page: SettingsPage = .general
     @State private var search = ""
     @State private var scrollTracker = SettingsScrollTracker()
@@ -115,8 +124,11 @@ struct SettingsView: View {
         let query = search.trimmed
         guard !query.isEmpty else { return SettingsPage.allCases }
         return SettingsPage.allCases.filter { page in
-            page.title.localizedCaseInsensitiveContains(query)
-                || page.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
+            ([page.title] + page.keywords).contains { key in
+                [key, Chrome.localized(key)].contains {
+                    $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                }
+            }
         }
     }
 
@@ -124,10 +136,28 @@ struct SettingsView: View {
         let visiblePages = self.visiblePages
         HStack(spacing: 0) {
             sidebar(visiblePages: visiblePages).frame(width: 212)
+                .opacity(keepsakeOverlayShown ? 0.25 : 1)
+                .allowsHitTesting(!keepsakeOverlayShown)
+                .disabled(keepsakeOverlayShown)
+                .overlay {
+                    // Inserted only while shown, so the blur view costs nothing on other pages.
+                    if keepsakeOverlayShown {
+                        ZStack {
+                            KeepsakeBackdrop()
+                            KeepsakeOverlayStyle.veil(dark: colorScheme == .dark)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { keepsakeDismissRequest += 1 }
+                        .transition(.opacity)
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: keepsakeOverlayShown)
             SettingsDetail(page: page, fullWindow: false)
                 .padding(.trailing, Chrome.sheetInset)
                 .padding(.vertical, Chrome.sheetInset)
         }
+        .environment(\.keepsakeDismissRequest, keepsakeDismissRequest)
+        .onPreferenceChange(KeepsakeOverlayPreference.self) { keepsakeOverlayShown = $0 }
         .onDisappear { scrollTracker.end() }
         .background { WindowBackdrop(opacity: model.settings.backdropOpacity) }
         .background { WindowChromeConfigurator(performanceMode: model.settings.performanceMode) }
@@ -149,7 +179,7 @@ struct SettingsView: View {
             Color.clear
                 .frame(height: Chrome.trafficLightDiameter)
                 .padding(.top, Chrome.trafficLightTop)
-            SidebarSearchField(text: $search) {
+            SidebarSearchField(text: $search, prompt: "Search settings pages or providers") {
                 if let first = visiblePages.first { page = first }
             }
             .padding(.horizontal, Chrome.listInset)
@@ -157,7 +187,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(visiblePages) { item in
-                        SettingsSidebarRow(page: item, isSelected: page == item) { page = item }
+                        SettingsSidebarRow(page: item, isSelected: page == item, hasUnseenKeepsakes: model.hasUnseenKeepsakes) { page = item }
                             .equatable()
                     }
                     if visiblePages.isEmpty {
@@ -195,16 +225,24 @@ struct SettingsView: View {
 private struct SettingsSidebarRow: View, Equatable {
     let page: SettingsPage
     let isSelected: Bool
+    let hasUnseenKeepsakes: Bool
     let action: () -> Void
 
     // Each action only selects this row's fixed page in its owning sidebar.
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.page == rhs.page && lhs.isSelected == rhs.isSelected
+        lhs.page == rhs.page && lhs.isSelected == rhs.isSelected && lhs.hasUnseenKeepsakes == rhs.hasUnseenKeepsakes
     }
 
     var body: some View {
-        SidebarRow(title: page.title, isSelected: isSelected, action: action) {
+        SidebarRow(title: page.title, isSelected: isSelected, accessoryWidth: page == .keepsakes && hasUnseenKeepsakes ? 14 : 0, action: action) {
             SettingsSidebarIcon(page: page)
+        } accessory: { _ in
+            if page == .keepsakes && hasUnseenKeepsakes {
+                Circle()
+                    .fill(Chrome.accent)
+                    .frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+            }
         }
     }
 }
@@ -234,6 +272,7 @@ private struct SettingsSidebarIcon: View {
 }
 
 struct SettingsSidebar: View {
+    @Environment(AppModel.self) private var model
     @Bindable private var navigation = SettingsNavigation.shared
     @State private var search = ""
     @State private var scrollTracker = SettingsScrollTracker()
@@ -244,9 +283,11 @@ struct SettingsSidebar: View {
         let query = search.trimmed
         guard !query.isEmpty else { return SettingsPage.allCases }
         return SettingsPage.allCases.filter { page in
-            Chrome.localized(page.title).localizedCaseInsensitiveContains(query)
-                || page.title.localizedCaseInsensitiveContains(query)
-                || page.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
+            ([page.title] + page.keywords).contains { key in
+                [key, Chrome.localized(key)].contains {
+                    $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                }
+            }
         }
     }
 
@@ -262,7 +303,7 @@ struct SettingsSidebar: View {
             .help(Text(verbatim: Chrome.localized("Back to your threads")))
             .padding(.horizontal, Chrome.listInset)
             .padding(.top, 10)
-            SidebarSearchField(text: $search) {
+            SidebarSearchField(text: $search, prompt: "Search settings pages or providers") {
                 if let first = visiblePages.first { navigation.page = first }
             }
             .padding(.horizontal, Chrome.listInset)
@@ -270,7 +311,7 @@ struct SettingsSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(visiblePages) { item in
-                        SettingsSidebarRow(page: item, isSelected: page == item) { navigation.page = item }
+                        SettingsSidebarRow(page: item, isSelected: page == item, hasUnseenKeepsakes: model.hasUnseenKeepsakes) { navigation.page = item }
                             .equatable()
                     }
                     if visiblePages.isEmpty {
@@ -340,10 +381,13 @@ private struct SettingsArchiveDetail<Content: View>: View {
 }
 
 private struct SettingsPageScroll: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var keepsakeOverlayShown = false
     let page: SettingsPage
     let fullWindow: Bool
     @State private var modelSearch = ""
     @State private var mcpSearch = ""
+    @State private var archiveFilter = ArchiveFilter()
     @State private var scrollChrome = ChromeScrollModel()
     @State private var scrollTracker = SettingsScrollTracker()
 
@@ -360,20 +404,26 @@ private struct SettingsPageScroll: View {
             scrollChrome.update(travel: 0)
             modelSearch = ""
             mcpSearch = ""
+            archiveFilter = ArchiveFilter()
         }
     }
 
     private var pageScroll: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+            VStack(alignment: .leading, spacing: Chrome.pageTitleSpacing) {
                 if fullWindow {
                     Text(verbatim: Chrome.localized(page.title))
                         .font(.ui(.title2, weight: .medium))
                         .foregroundStyle(Chrome.primaryText)
                         .accessibilityAddTraits(.isHeader)
+                        .opacity(keepsakeOverlayShown ? 0 : 1)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: keepsakeOverlayShown)
                 }
-                pageContent
+                VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
+                    pageContent
+                }
             }
+            .environment(\.chromeSectionHeaderSpacing, Chrome.pageSectionHeaderSpacing)
             .frame(maxWidth: fullWindow ? 680 : .infinity, alignment: .leading)
             .padding(.horizontal, fullWindow ? Chrome.contentHorizontalPadding * 2 : Chrome.contentHorizontalPadding + 8)
             .frame(maxWidth: .infinity)
@@ -382,6 +432,9 @@ private struct SettingsPageScroll: View {
             .padding(.bottom, fullWindow ? Chrome.contentHorizontalPadding * 2 : 24)
             .allowsHitTesting(!scrollTracker.isFrozen)
         }
+        .onPreferenceChange(KeepsakeOverlayPreference.self) { keepsakeOverlayShown = $0 }
+        // The expanded keepsake is placed at the card's frame; scrolling would separate them.
+        .scrollDisabled(keepsakeOverlayShown)
         .scrollIndicators(.never)
         .id(page)
         .onScrollGeometryChange(for: CGFloat.self, of: Self.travel) { _, travel in
@@ -401,8 +454,11 @@ private struct SettingsPageScroll: View {
                 page: page,
                 scrollChrome: scrollChrome,
                 modelSearch: $modelSearch,
-                mcpSearch: $mcpSearch
+                mcpSearch: $mcpSearch,
+                archiveFilter: $archiveFilter
             )
+            .opacity(keepsakeOverlayShown ? 0 : 1)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: keepsakeOverlayShown)
         }
     }
 
@@ -423,7 +479,8 @@ private struct SettingsPageScroll: View {
         case .alpha: AlphaSettingsPage()
         case .sourceControl: SourceControlSettingsPage()
         case .shortcuts: ShortcutsSettingsPage()
-        case .archive: ArchiveSettingsPage()
+        case .archive: ArchiveSettingsPage(filter: $archiveFilter)
+        case .keepsakes: KeepsakesSettingsPage()
         case .about: AboutSettingsPage()
         }
     }
@@ -438,6 +495,7 @@ private struct SettingsPageChrome: View {
     let scrollChrome: ChromeScrollModel
     @Binding var modelSearch: String
     @Binding var mcpSearch: String
+    @Binding var archiveFilter: ArchiveFilter
 
     var body: some View {
         HStack(spacing: 10) {
@@ -448,11 +506,11 @@ private struct SettingsPageChrome: View {
             if page == .mcp {
                 ChromeSearchField(query: $mcpSearch, prompt: "Search servers")
             }
+            if page == .archive {
+                ArchiveChromeControls(filter: $archiveFilter)
+            }
             if page == .providers {
                 ProvidersRefreshButton()
-            }
-            if page == .archive {
-                ArchiveDeleteAllButton()
             }
             if page == .about {
                 AboutUpdateChromeAccessory()
@@ -482,6 +540,11 @@ private struct GeneralSettingsPage: View {
     private static let workspaceOptions = WorkspaceMode.allCases.map { ($0, $0.title) }
     private static let hapticOptions = TimelineHapticStyle.allCases.map { ($0, $0.title) }
     private static let languageOptions = AppLanguage.allCases.map { ($0, $0.title) }
+    private static let textGenerationOptions = TextGenerationChoice.allCases.map { ($0, $0.title) }
+    private static let locationOptions: [(NewThreadLocation, String)] = [
+        (.recent, "Follow the latest chat"),
+        (.standalone, "Tasks (no project)"),
+    ]
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -490,10 +553,11 @@ private struct GeneralSettingsPage: View {
         TokenActivitySection()
         ChromeSection(title: "New threads") {
             ChromeCard {
-                // No picker: a new thread follows the one it is made from, and the composer's
-                // model picker is where the provider is chosen (see `AppModel.newThread`).
-                ChromeRow(title: "Provider and model", detail: "A new thread follows the one you are in: its provider, model, effort and Hydra pair. With no thread open it starts on the provider you last chose.") {
-                    EmptyView()
+                newThreadModelRow
+                ChromeRowDivider()
+                ChromeRow(title: "Default location", detail: "By default, follow the latest chat's location, including Tasks. Applies only to ordinary new chats; creating a chat from a project still places it in that project.") {
+                    GlassPickerButton(options: Self.locationOptions, selection: $settings.newThreadLocation, maxWidth: 190)
+                        .accessibilityLabel(Text("Default location"))
                 }
                 ChromeRowDivider()
                 ChromeRow(title: "Permissions", detail: settings.defaultRuntimeMode.summary) {
@@ -552,14 +616,13 @@ private struct GeneralSettingsPage: View {
                 }
             }
         }
-        ChromeSection(title: "Projects") {
+        ChromeSection(title: "Text generation") {
             ChromeCard {
-                ChromeRow(title: "Projects", detail: "Activates every project at once unless explicitly overridden") {
-                    SettingsSwitch(isOn: $settings.projectsEnabled)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Marks", detail: "An emoji or symbol for each project, drawn before the thread's name in the activity list and on the project's own row") {
-                    ProjectMarksRow()
+                ChromeRow(
+                    title: "Thread titles and commit messages",
+                    detail: "Automatic uses the thread's own provider. Claude uses Haiku, Codex your default model."
+                ) {
+                    GlassPickerButton(options: Self.textGenerationOptions, selection: $settings.textGeneration, asset: { ProviderKind(rawValue: $0.rawValue)?.iconName })
                 }
             }
         }
@@ -581,6 +644,261 @@ private struct GeneralSettingsPage: View {
             }
         }
     }
+
+    private var newThreadModelRow: some View {
+        NewThreadModelSettingsRow()
+    }
+}
+
+private struct NewThreadModelSettingsRow: View {
+    @Environment(AppModel.self) private var model
+    @State private var isPresented = false
+
+    var body: some View {
+        let registry = model.providers
+        let providers = registry.availableProviders
+        let selection = model.settings.newThreadModelSelection
+        let option = selection.flatMap { registry.model($0.modelID, for: $0.provider) }
+        let isAvailable = selection.map { providers.contains($0.provider) && option != nil } ?? true
+        let name = selection.map { ModelPin(provider: $0.provider, modelID: $0.modelID).displayName }
+        let effortTitle = option.flatMap { option -> String? in
+            guard !option.efforts.isEmpty else { return nil }
+            let effort = selection?.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
+            return Chrome.localized(ModelOption.effortTitle(effort ?? option.defaultEffort ?? ""))
+        }
+        let title = selection.map { [$0.provider.displayName, option?.shortName ?? name ?? $0.modelID, effortTitle].compactMap { $0 }.joined(separator: " · ") }
+            ?? Chrome.localized("Recent selection")
+        let fullTitle = selection.map { [$0.provider.displayName, option?.name ?? name ?? $0.modelID, effortTitle].compactMap { $0 }.joined(separator: " · ") }
+            ?? Chrome.localized("Recent selection")
+        let displayedTitle = isAvailable ? title : String(format: Chrome.localized("%@ (unavailable)"), title)
+        let helpTitle = isAvailable ? fullTitle : String(format: Chrome.localized("%@ (unavailable)"), fullTitle)
+        var details = [Chrome.localized("Project Hydra presets take priority. Otherwise, Recent selection uses the current or most recent model; a selected model stays fixed.")]
+        if !isAvailable {
+            details.append(Chrome.localized("The selected model is unavailable. New chats will use Recent selection."))
+        }
+        if providers.isEmpty {
+            details.append(Chrome.localized("No providers available. You can still use Recent selection."))
+        }
+        return ChromeRow(title: "Default model", detail: details.joined(separator: "\n")) {
+            Button {
+                isPresented = true
+            } label: {
+                HStack(spacing: 6) {
+                    if let selection {
+                        Image(selection.provider.iconName)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 14, height: 14)
+                    }
+                    Text(verbatim: displayedTitle)
+                        .font(.ui(size: 12.5, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "chevron.down")
+                        .font(Chrome.chevronFont)
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+                .padding(.horizontal, Chrome.capsuleHorizontalPadding)
+                .frame(height: Chrome.capsuleContentHeight)
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .chromeGlassCapsule()
+            .frame(maxWidth: 190, alignment: .trailing)
+            .foregroundStyle(Chrome.primaryText)
+            .help(Text(verbatim: helpTitle))
+            .accessibilityLabel(Text("Default model"))
+            .accessibilityValue(Text(verbatim: helpTitle))
+            .popover(isPresented: $isPresented, arrowEdge: .trailing) {
+                NewThreadModelPicker(
+                    selection: selection,
+                    selectedModelID: option?.id ?? selection?.modelID,
+                    initialProvider: selection?.provider
+                        ?? (providers.contains(model.settings.defaultProvider) ? model.settings.defaultProvider : providers.first)
+                ) { selection in
+                    model.settings.newThreadModelSelection = selection
+                    isPresented = false
+                }
+                .frame(width: 360)
+                .presentedChrome()
+            }
+            .background { NoWindowDragArea() }
+        }
+    }
+}
+
+private struct NewThreadModelPicker: View {
+    @Environment(AppModel.self) private var model
+    let selection: NewThreadModelSelection?
+    let selectedModelID: String?
+    let select: (NewThreadModelSelection?) -> Void
+    @State private var selectedProvider: ProviderKind?
+
+    init(
+        selection: NewThreadModelSelection?,
+        selectedModelID: String?,
+        initialProvider: ProviderKind?,
+        select: @escaping (NewThreadModelSelection?) -> Void
+    ) {
+        self.selection = selection
+        self.selectedModelID = selectedModelID
+        self.select = select
+        _selectedProvider = State(initialValue: initialProvider)
+    }
+
+    var body: some View {
+        let registry = model.providers
+        let providers = registry.availableProviders
+        let provider = selectedProvider.flatMap { providers.contains($0) ? $0 : nil }
+        let providerPrompt = selectedProvider.map {
+            String(format: Chrome.localized("%@ (unavailable)"), $0.displayName)
+        } ?? Chrome.localized("Choose a provider")
+        let providerOptions = (provider == nil ? [(ProviderKind?.none, providerPrompt)] : [])
+            + providers.map { (Optional($0), $0.displayName) }
+        let options = provider.map { registry.sortedModels(for: $0) } ?? []
+        let selectedOption = selection?.provider == provider
+            ? options.first { $0.id == selectedModelID }
+            : nil
+        let modelTitle = selectedOption?.name ?? Chrome.localized("Choose a model")
+        let effortTitle = Chrome.localized(ModelOption.effortTitle(
+            selection?.effort.flatMap { selectedOption?.efforts.contains($0) == true ? $0 : nil }
+                ?? selectedOption?.defaultEffort ?? ""
+        ))
+        let isLoading = provider.map { registry.loadingCatalogs.contains($0) } ?? false
+        let error = provider.flatMap { registry.status($0).catalogError }
+        VStack(alignment: .leading, spacing: 0) {
+            PopoverItem("Recent selection", isChecked: selection == nil) {
+                select(nil)
+            }
+            .padding(.horizontal, 6)
+            .padding(.top, 6)
+            Divider()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 5)
+            editorRow("Provider") {
+                GlassPickerButton(
+                    options: providerOptions,
+                    selection: Binding(
+                        get: { provider },
+                        set: { if let provider = $0 { selectedProvider = provider } }
+                    ),
+                    asset: { $0?.iconName },
+                    maxWidth: 190
+                )
+                .disabled(providers.isEmpty)
+                .help(Text(verbatim: provider?.displayName ?? providerPrompt))
+                .accessibilityLabel(Text("Provider"))
+                .accessibilityValue(Text(verbatim: provider?.displayName ?? providerPrompt))
+            }
+            editorRow("Model") {
+                GlassPickerButton(
+                    options: [(String?.none, "Choose a model")] + options.map { (Optional($0.id), $0.shortName) },
+                    selection: Binding(
+                        get: { selectedOption?.id },
+                        set: { id in
+                            guard let provider, selectedProvider == provider,
+                                  registry.availableProviders.contains(provider),
+                                  let id, let option = options.first(where: { $0.id == id }) else { return }
+                            let effort = selection?.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
+                            select(NewThreadModelSelection(provider: provider, modelID: id, effort: effort))
+                        }
+                    ),
+                    maxWidth: 190
+                )
+                .disabled(options.isEmpty)
+                .help(Text(verbatim: modelTitle))
+                .accessibilityLabel(Text("Model"))
+                .accessibilityValue(Text(verbatim: modelTitle))
+            }
+            if let selectedOption, !selectedOption.efforts.isEmpty {
+                editorRow("Reasoning effort") {
+                    GlassPickerButton(
+                        options: [(String?.none, "Default")] + selectedOption.efforts.map { (Optional($0), ModelOption.effortTitle($0)) },
+                        selection: Binding(
+                            get: { selection?.effort.flatMap { selectedOption.efforts.contains($0) ? $0 : nil } },
+                            set: { effort in
+                                guard let selection else { return }
+                                select(NewThreadModelSelection(provider: selection.provider, modelID: selection.modelID, effort: effort))
+                            }
+                        ),
+                        maxWidth: 190
+                    )
+                    .help(Text(verbatim: effortTitle))
+                    .accessibilityLabel(Text("Reasoning effort"))
+                    .accessibilityValue(Text(verbatim: effortTitle))
+                }
+            }
+            if providers.isEmpty {
+                catalogNote(Chrome.localized("No providers available. You can still use Recent selection."))
+            } else if let provider {
+                if isLoading {
+                    catalogNote(String(format: Chrome.localized(options.isEmpty ? "Loading %@'s models…" : "Refreshing %@'s models…"), provider.displayName))
+                } else if let error {
+                    catalogNote(
+                        options.isEmpty ? error : String(
+                            format: Chrome.localized("Could not refresh %@'s models. You can still use the loaded models.\n%@"),
+                            provider.displayName, error
+                        ),
+                        retryProvider: provider
+                    )
+                } else if options.isEmpty {
+                    catalogNote(
+                        String(format: Chrome.localized("No models loaded for %@ yet."), provider.displayName),
+                        retryProvider: provider
+                    )
+                }
+            }
+        }
+        .padding(.bottom, 14)
+        .task(id: selectedProvider) {
+            guard let provider = selectedProvider, registry.availableProviders.contains(provider), !Task.isCancelled else { return }
+            await registry.loadCatalog(provider, force: false)
+        }
+    }
+
+    private func editorRow<Control: View>(_ title: String, @ViewBuilder control: () -> Control) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(verbatim: Chrome.localized(title))
+                .font(.ui(.body))
+                .foregroundStyle(Chrome.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            control()
+                .layoutPriority(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 5)
+    }
+
+    private func catalogNote(_ message: String, retryProvider: ProviderKind? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(verbatim: message)
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+                .lineLimit(nil)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let provider = retryProvider {
+                Button("Retry") {
+                    Task {
+                        let registry = model.providers
+                        guard selectedProvider == provider,
+                              registry.availableProviders.contains(provider),
+                              !registry.loadingCatalogs.contains(provider) else { return }
+                        await registry.loadCatalog(provider, force: true)
+                    }
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .disabled(model.providers.loadingCatalogs.contains(provider))
+                .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("Retry loading %@'s models"), provider.displayName)))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+    }
 }
 
 /// The main interface, font sizes and other appearance settings.
@@ -593,7 +911,7 @@ private struct AppearanceSettingsPage: View {
         let clearerUnavailable = performanceMode || WallpaperStore.shared.hasWallpaper
         ChromeSection(title: "Main interface") {
             ChromeCard {
-                ChromeRow(title: "Theme", detail: settings.theme.detail) {
+                ChromeRow(title: "Theme", detail: settings.theme.detail, localizesDetail: false) {
                     ThemePickerButton(selection: $settings.theme)
                 }
                 ChromeRowDivider()
@@ -619,6 +937,12 @@ private struct AppearanceSettingsPage: View {
                 ChromeRow(title: "Performance Mode", detail: "Disable window transparency, blurs, glows and background effects for lowest GPU usage") {
                     SettingsSwitch(isOn: $settings.performanceMode)
                 }
+                ChromeRowDivider()
+                ChromeRow(title: "Skylight", detail: performanceMode ? "Unavailable in Performance Mode" : "A teru teru bozu at the top of the sidebar keeps you company while agents work, and its weather shows how your threads are doing: it sways in the wind while they run, turns overcast when one needs you, brightens when a reply lands and rains when one fails. It animates only while visible.") {
+                    SettingsSwitch(isOn: $settings.showsSkylight)
+                }
+                .disabled(performanceMode)
+                .opacity(performanceMode ? 0.5 : 1)
             }
             WallpaperCard()
         }
@@ -627,13 +951,6 @@ private struct AppearanceSettingsPage: View {
             ChromeCard {
                 ChromeRow(title: "Auto-hide top controls", detail: "Show the upper-right controls only while the pointer is over their area") {
                     SettingsSwitch(isOn: $settings.autoHideTopControls)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Open the sidebar at launch", detail: "Collapsed otherwise; the list button in the toolbar shows and hides it any time") {
-                    SettingsSwitch(isOn: Binding(
-                        get: { model.sidebar.startsOpen },
-                        set: { model.sidebar.startsOpen = $0 }
-                    ))
                 }
             }
         }
@@ -772,20 +1089,22 @@ private struct ProvidersSettingsPage: View {
         let settings = model.settings
         // Eager on purpose: a handful of sections, and lazy ones were rebuilt while scrolling,
         // which reset their fields and re-ran every check they started on appear.
-        VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+        VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
             ProviderSelectionSection(settings: settings)
             ForEach(ProviderGroup.allCases) { group in
                 let providers = group.providers.filter { settings.isEnabled($0) }
                 if !providers.isEmpty {
                     ChromeSection(title: group.title) {
-                        ForEach(providers) { provider in
-                            ProviderSettingsSection(
-                                provider: provider,
-                                expansionOverride: Binding(
-                                    get: { providerExpansion[provider] },
-                                    set: { providerExpansion[provider] = $0 }
+                        VStack(alignment: .leading, spacing: Chrome.unitSpacing) {
+                            ForEach(providers) { provider in
+                                ProviderSettingsSection(
+                                    provider: provider,
+                                    expansionOverride: Binding(
+                                        get: { providerExpansion[provider] },
+                                        set: { providerExpansion[provider] = $0 }
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
                 }
@@ -810,6 +1129,25 @@ private struct ProviderSettingsSection: View {
     @State private var signInTask: Task<Void, Never>?
     @State private var signInError: String?
 
+    private var apiKeyDetail: String {
+        let settings = model.settings
+        if let error = settings.apiKeyStoreErrors[provider] {
+            let template = settings.apiKeyMigrationFailures.contains(provider)
+                ? "This key from an earlier version is still stored unencrypted because the Keychain refused it (%@). Enter it again to retry."
+                : "Couldn't save to your Keychain (%@). The key works until you quit Tivano; enter it again to retry."
+            return String(format: Chrome.localized(template), error)
+        }
+        if apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           case .environment(let name) = settings.apiKeySource(for: provider) {
+            return String(format: Chrome.localized("Using %@ from your shell environment."), name)
+        }
+        return provider == .zai
+            ? String(format: Chrome.localized("Use a GLM Coding Plan key; Standard API keys will not work here. Stored in your Keychain. Get one at %@."), provider.apiKeySource ?? Chrome.localized("the provider dashboard"))
+            : provider.isAPIKeyBased
+            ? String(format: Chrome.localized("Stored in your Keychain. Get one at %@."), provider.apiKeySource ?? Chrome.localized("the provider dashboard"))
+            : String(format: Chrome.localized("Instead of `%@`: a Studio key from %@, stored in your Keychain and handed to the CLI."), provider.loginCommand, provider.apiKeySource ?? Chrome.localized("the provider dashboard"))
+    }
+
     private static let regionOptions = ZaiRegion.allCases.map { ($0, $0.title) }
 
     var body: some View {
@@ -828,7 +1166,7 @@ private struct ProviderSettingsSection: View {
         let showsUsage = settings.showsProviderUsage
             && (PlanLimitsReader.exposesLimits(provider) || CreditsReader.exposesCredits(provider))
             && status.isInstalled && status.auth != .signedOut
-        VStack(alignment: .leading, spacing: Chrome.sectionHeaderSpacing) {
+        VStack(alignment: .leading, spacing: Chrome.unitHeaderSpacing) {
             CollapsibleProviderHeader(provider: provider, isExpanded: expansion, subject: "provider settings", detail: provider.routeSummary)
             ChromeReveal(isExpanded: isExpanded) {
                 let showsSignIn = !status.isChecking && !isSignedIn && !provider.loginCommand.isEmpty
@@ -869,7 +1207,7 @@ private struct ProviderSettingsSection: View {
                                 ProviderUpdateSubtitle(state: updateState)
                             } else if provider.isAPIKeyBased, status.apiKeyConfigured, let host = provider.apiHost {
                                 Text(verbatim: String(format: Chrome.localized("Native API · %@"), host))
-                                    .font(.ui(size: 11))
+                                    .font(.ui(.subheadline))
                                     .foregroundStyle(Chrome.secondaryText)
                             }
                         }
@@ -907,9 +1245,29 @@ private struct ProviderSettingsSection: View {
                             ))
                         }
                     }
-                    if provider == .dsh, let error = status.catalogError {
+                    if provider == .dsh || provider == .minimaxCode, let error = status.catalogError {
                         ChromeRowDivider()
                         ChromeRow(title: "Models", detail: error) {
+                            EmptyView()
+                        }
+                    }
+                    if provider == .minimaxCode {
+                        ChromeRowDivider()
+                        ChromeRow(title: "Authentication", detail: "Tivano uses the authentication route already selected in mcode. Token Plan uses your existing mcode sign-in; API-key users keep their configured key. Local checks and model lists do not verify server authentication.") {
+                            Link(destination: URL(string: "https://agent.minimax.io/docs/cli/configuration")!) {
+                                Text("Setup guide").frame(height: Chrome.rowButtonLabelHeight)
+                            }
+                            .buttonStyle(.glass)
+                        }
+                        ChromeRowDivider()
+                        ChromeRow(title: "CLI updates", detail: "Update MiniMax Code with its official installer or the documented npm command.") {
+                            Link(destination: provider.installURL) {
+                                Text("Setup guide").frame(height: Chrome.rowButtonLabelHeight)
+                            }
+                            .buttonStyle(.glass)
+                        }
+                        ChromeRowDivider()
+                        ChromeRow(title: "Attachments and usage", detail: "MiniMax Code currently uses text input in Tivano. Image attachments, plan balances and token-spend accounting are not enabled.") {
                             EmptyView()
                         }
                     }
@@ -917,16 +1275,14 @@ private struct ProviderSettingsSection: View {
                         ChromeRowDivider()
                         ChromeRow(
                             title: provider.isAPIKeyBased ? "API key" : "API key (optional)",
-                            detail: provider.isAPIKeyBased
-                                ? String(format: Chrome.localized("Stored in your Keychain. Get one at %@."), provider.apiKeySource ?? Chrome.localized("the provider dashboard"))
-                                : String(format: Chrome.localized("Instead of `%@`: a Studio key from %@, stored in your Keychain and handed to the CLI."), provider.loginCommand, provider.apiKeySource ?? Chrome.localized("the provider dashboard"))
+                            detail: apiKeyDetail
                         ) {
                             HStack(spacing: 8) {
                                 Group {
                                     if showsAPIKey {
-                                        TextField("", text: $apiKey, prompt: Text("sk-…"))
+                                        TextField("", text: $apiKey, prompt: Text(verbatim: Chrome.localized(provider == .zai ? ZaiRegion.apiKeyPlaceholder : "sk-…")))
                                     } else {
-                                        SecureField("", text: $apiKey, prompt: Text("sk-…"))
+                                        SecureField("", text: $apiKey, prompt: Text(verbatim: Chrome.localized(provider == .zai ? ZaiRegion.apiKeyPlaceholder : "sk-…")))
                                     }
                                 }
                                 .textFieldStyle(.roundedBorder)
@@ -941,11 +1297,14 @@ private struct ProviderSettingsSection: View {
                                 .buttonStyle(.plain)
                                 .foregroundStyle(Chrome.secondaryText)
                                 .help(Text(verbatim: Chrome.localized(showsAPIKey ? "Hide the API key" : "Show the API key")))
+                                .accessibilityLabel(Text(verbatim: Chrome.localized(showsAPIKey ? "Hide the API key" : "Show the API key")))
                             }
                         }
                         if provider.isAPIKeyBased, !status.isInstalled {
                             ChromeRowDivider()
-                            ChromeRow(title: "Get a key", detail: String(format: Chrome.localized("%@ needs an API key. Nothing to install."), provider.displayName)) {
+                            ChromeRow(title: "Get a key", detail: provider == .zai
+                                ? "Z.ai needs a GLM Coding Plan key. Standard API keys will not work here. Nothing to install."
+                                : String(format: Chrome.localized("%@ needs an API key. Nothing to install."), provider.displayName)) {
                                 Link(destination: provider.installURL) {
                                     Text(verbatim: String(format: Chrome.localized("Get a %@ key"), provider.displayName))
                                         .frame(height: Chrome.rowButtonLabelHeight)
@@ -987,7 +1346,9 @@ private struct ProviderSettingsSection: View {
                                         ? "Opens DeepSeek Harness to sign in to your DeepSeek account."
                                         : "Opens your browser to sign in to your DeepSeek account."))
                                 : signInError ?? "Click here to login again."
-                            ChromeRow(title: "Sign in", detail: signInDetail) {
+                            ChromeRow(title: provider == .minimaxCode ? "Token Plan sign-in" : "Sign in", detail: provider == .minimaxCode
+                                ? "Use mcode login for Token Plan, or mcode login --region global for Global accounts. If already signed in, refresh the provider. API-key users do not need this step."
+                                : signInDetail) {
                                 if provider == .dsh {
                                     HStack(spacing: 8) {
                                         if registry.signingIn == .dsh {
@@ -1091,20 +1452,11 @@ private struct ProviderSettingsSection: View {
 private struct SourceControlSettingsPage: View {
     @Environment(AppModel.self) private var model
 
-    private static let textGenerationOptions = TextGenerationChoice.allCases.map { ($0, $0.title) }
-
     var body: some View {
         @Bindable var settings = model.settings
         GitHubSettingsSection()
-        ChromeSection(title: "Text generation") {
-            ChromeCard {
-                ChromeRow(
-                    title: "Thread titles and commit messages",
-                    detail: "Automatic uses the thread's own provider. Claude uses Haiku, Codex your default model."
-                ) {
-                    GlassPickerButton(options: Self.textGenerationOptions, selection: $settings.textGeneration, asset: { ProviderKind(rawValue: $0.rawValue)?.iconName })
-                }
-            }
+        ChromeSection(title: "Cursor Origin") {
+            ChromeCard { CursorOriginStatusRow() }
         }
         ChromeSection(title: "Commit message instructions") {
             ChromeCard {
@@ -1131,7 +1483,7 @@ private struct SourceControlSettingsPage: View {
                         .buttonStyle(.glass)
                 }
                 ChromeRowDivider()
-                ChromeRow(title: "Pull requests", detail: "Opened with the GitHub CLI (gh) or GitLab CLI (glab) from your PATH.") {
+                ChromeRow(title: "Pull requests", detail: "Opened with the GitHub CLI (gh), GitLab CLI (glab), Cursor Origin CLI (origin) or Gitea CLI (tea) from your PATH.") {
                     EmptyView()
                 }
             }
@@ -1139,73 +1491,229 @@ private struct SourceControlSettingsPage: View {
     }
 }
 
-/// Clears the whole archive from the page's chrome row, asking first the way a single
-/// delete does when the setting is on. The question hangs off the button as a popover,
-/// like the sidebar's delete menu, rather than a sheet over the whole window.
-private struct ArchiveDeleteAllButton: View {
-    @Environment(AppModel.self) private var model
-    @State private var isConfirming = false
+/// Whether the `origin` CLI that opens and merges Cursor Origin pull requests is installed
+/// and signed in, read from `origin auth status`.
+private struct CursorOriginStatusRow: View {
+    private enum Status: Equatable {
+        case checking, missing, signedOut, signedIn(String?)
+    }
+
+    @State private var status = Status.checking
 
     var body: some View {
-        let count = model.archivedThreads.count
+        ChromeRow(title: "Origin CLI", detail: detail) {
+            if status == .signedOut {
+                Button("Copy command") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString("origin auth login", forType: .string)
+                }
+                .buttonStyle(.glass)
+            }
+        }
+        .task { status = await Self.check() }
+    }
+
+    private var detail: String {
+        switch status {
+        case .checking: Chrome.localized("Checking…")
+        case .missing: Chrome.localized("The origin CLI is not on your PATH.")
+        case .signedOut: Chrome.localized("Not signed in. Run `origin auth login` in Terminal.")
+        case .signedIn(let account?): String(format: Chrome.localized("Signed in as %@"), account)
+        case .signedIn(nil): Chrome.localized("Signed in")
+        }
+    }
+
+    private static func check() async -> Status {
+        guard LoginEnvironment.which("origin") != nil else { return .missing }
+        guard let result = try? await Shell.run(tool: "origin", ["auth", "status"], timeout: 20) else { return .signedOut }
+        let text = TextCleanup.stripANSI(result.output + "\n" + result.errorOutput)
+        guard result.succeeded, text.range(of: "Token:\\s+valid", options: .regularExpression) != nil else { return .signedOut }
+        let account = text.firstMatch(of: /Account:[ \t]*(\S+)/).map { String($0.output.1) }
+        return .signedIn(account)
+    }
+}
+
+private struct ArchiveDeleteAllButton: View {
+    @Environment(AppModel.self) private var model
+    let threadIDs: Set<UUID>
+    let isFiltered: Bool
+    @State private var isConfirming = false
+    @State private var pendingIDs: Set<UUID> = []
+    @State private var pendingIsFiltered = false
+
+    var body: some View {
         ChromeTextButton(
             symbol: "trash",
-            title: "Delete all",
-            help: "Delete every archived thread",
-            isEnabled: count > 0,
+            title: String(format: Chrome.localized(isFiltered ? "Delete matching chats (%lld)" : "Delete all archived chats (%lld)"), threadIDs.count),
+            help: isFiltered ? "Delete matching archived chats" : "Delete every archived thread",
+            isEnabled: !threadIDs.isEmpty,
             isDestructive: true
         ) {
             if model.settings.confirmBeforeDeleting {
+                pendingIDs = threadIDs
+                pendingIsFiltered = isFiltered
                 isConfirming = true
             } else {
-                model.deleteArchivedThreads()
+                model.deleteArchivedThreads(ids: threadIDs)
             }
         }
         .popover(isPresented: $isConfirming, arrowEdge: .bottom) {
             PopoverMenu {
-                PopoverSectionHeader(count == 1 ? "Delete the archived thread?" : "Delete all archived threads?")
-                PopoverNote(count == 1
-                    ? "Its history will be removed. Files in your project stay as they are."
-                    : String(format: Chrome.localized("The histories of all %lld threads will be removed. Files in your projects stay as they are."), count))
+                PopoverSectionHeader(pendingIsFiltered ? "Delete matching archived chats?" : "Delete all archived threads?")
+                PopoverNote(String(format: Chrome.localized(pendingIsFiltered
+                    ? "The histories of the %lld matching chats will be removed. Files in your projects stay as they are."
+                    : "The histories of all %lld threads will be removed. Files in your projects stay as they are."), pendingIDs.count))
                 PopoverDivider()
-                PopoverItem(count == 1 ? "Delete thread" : String(format: Chrome.localized("Delete %lld threads"), count), symbol: "trash", isDestructive: true) {
-                    model.deleteArchivedThreads()
+                PopoverItem(String(format: Chrome.localized("Delete %lld threads"), pendingIDs.count), symbol: "trash", isDestructive: true) {
+                    model.deleteArchivedThreads(ids: pendingIDs)
+                    isConfirming = false
                 }
             }
         }
     }
 }
 
-/// The archived threads. The empty archive never reaches this page: the pane shows its symbol instead.
-private struct ArchiveSettingsPage: View {
-    @Environment(AppModel.self) private var model
+/// What the archive page shows: lifted into the settings scroll so the chrome row's search
+/// field and Delete all act on the same rows as the page.
+struct ArchiveFilter: Equatable {
+    enum ChatType: CaseIterable {
+        case all, chats, heads
 
-    /// The row waiting on its confirmation, or nil. One deletion is ever in flight, so one
-    /// dialog on the card serves every row.
-    @State private var pendingDeletion: ChatThread?
+        var title: String {
+            switch self {
+            case .all: "All chats"
+            case .chats: "Chats"
+            case .heads: "Hydra heads"
+            }
+        }
+    }
+
+    enum ProjectScope: Hashable {
+        case all, project(UUID), none
+    }
+
+    var query = ""
+    var chatType: ChatType = .all
+    var project: ProjectScope = .all
+
+    var isActive: Bool { !search.isEmpty || chatType != .all || project != .all }
+    private var search: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The archive's projects, by name, for the project picker and the groups.
+    static func projects(in archived: [ChatThread], from all: [Project]) -> [Project] {
+        let ids = Set(archived.compactMap(\.projectID))
+        return all.filter { ids.contains($0.id) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    static func scope(of thread: ChatThread, known: Set<UUID>) -> ProjectScope {
+        thread.projectID.flatMap { known.contains($0) ? .project($0) : nil } ?? .none
+    }
+
+    func apply(to archived: [ChatThread], known: Set<UUID>) -> [ChatThread] {
+        let search = search
+        return archived.filter { thread in
+            let matchesType = chatType == .all || (chatType == .heads ? thread.isHydraHead : !thread.isHydraHead)
+            let matchesProject = project == .all || project == Self.scope(of: thread, known: known)
+            let matchesSearch = search.isEmpty || [thread.title, thread.hydra?.persona.name ?? "", thread.hydra?.task ?? ""].contains {
+                $0.range(of: search, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            }
+            return matchesType && matchesProject && matchesSearch
+        }
+    }
+}
+
+/// The archive page's chrome row: its search field and Delete all, which deletes what is shown.
+private struct ArchiveChromeControls: View {
+    @Environment(AppModel.self) private var model
+    @Binding var filter: ArchiveFilter
 
     var body: some View {
         let archived = model.archivedThreads
-        let firstID = archived.first?.id
-        ChromeCard(lazy: true) {
-            ForEach(archived, id: \.id) { thread in
-                if thread.id != firstID { ChromeRowDivider() }
-                ChromeRow(title: thread.title, detail: model.project(thread.projectID)?.name) {
-                    HStack(spacing: 8) {
-                        Button("Restore") { model.unarchive(thread.id) }
-                            .buttonStyle(.glass)
-                        // The same check the sidebar and Delete all honour: a row here
-                        // used to delete a history on the first click.
-                        Button("Delete", role: .destructive) {
-                            if model.settings.confirmBeforeDeleting {
-                                pendingDeletion = thread
-                            } else {
-                                model.delete(thread.id)
+        let known = Set(ArchiveFilter.projects(in: archived, from: model.projects).map(\.id))
+        ChromeSearchField(query: $filter.query, prompt: "Search archived chats")
+        ArchiveDeleteAllButton(threadIDs: Set(filter.apply(to: archived, known: known).map(\.id)), isFiltered: filter.isActive)
+    }
+}
+
+private struct ArchiveSettingsPage: View {
+    @Environment(AppModel.self) private var model
+    @Binding var filter: ArchiveFilter
+    @State private var pendingDeletion: ArchiveRow?
+
+    private struct ArchiveRow: Identifiable {
+        let thread: ChatThread
+        let title: String
+        var id: UUID { thread.id }
+    }
+
+    private struct ArchiveGroup: Identifiable {
+        let id: ArchiveFilter.ProjectScope
+        let title: String
+        let rows: [ArchiveRow]
+    }
+
+    var body: some View {
+        let archived = model.archivedThreads
+        let projects = ArchiveFilter.projects(in: archived, from: model.projects)
+        let known = Set(projects.map(\.id))
+        let options: [(value: ArchiveFilter.ProjectScope, title: String)] = [(.all, "All projects")]
+            + projects.map { (.project($0.id), $0.name) } + [(.none, "No project")]
+        let rows = filter.apply(to: archived, known: known).map { thread in
+            let title: String
+            if let info = thread.hydra, !info.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                title = "\(info.persona.name) · \(info.task)"
+            } else {
+                title = thread.title
+            }
+            return ArchiveRow(thread: thread, title: title)
+        }
+        let grouped = Dictionary(grouping: rows) { ArchiveFilter.scope(of: $0.thread, known: known) }
+        let groups = options.filter { $0.value != .all }.compactMap { option -> ArchiveGroup? in
+            guard let rows = grouped[option.value], !rows.isEmpty else { return nil }
+            return ArchiveGroup(id: option.value, title: option.title, rows: rows)
+        }
+        VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
+            HStack(spacing: 8) {
+                GlassPickerButton(options: ArchiveFilter.ChatType.allCases.map { ($0, $0.title) }, selection: $filter.chatType)
+                    .accessibilityLabel(Text("Chat type"))
+                GlassPickerButton(options: options, selection: $filter.project, symbol: { _ in "folder" })
+                    .accessibilityLabel(Text("Project"))
+            }
+            if groups.isEmpty {
+                Text("No matching chats")
+                    .font(.ui(.body))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, Chrome.sectionSpacing)
+            }
+            ForEach(groups) { group in
+                ChromeSection(
+                    title: group.title,
+                    trailing: AnyView(Text(verbatim: String(format: Chrome.localized("%lld chats"), group.rows.count))
+                        .font(.ui(.body))
+                        .foregroundStyle(Chrome.secondaryText))
+                ) {
+                    ChromeCard(lazy: true) {
+                        ForEach(group.rows) { row in
+                            if row.id != group.rows.first?.id { ChromeRowDivider() }
+                            ChromeRow(title: row.title) {
+                                HStack(spacing: 8) {
+                                    Button("Restore") { model.unarchive(row.id) }
+                                        .buttonStyle(.glass)
+                                    Button("Delete", role: .destructive) {
+                                        if model.settings.confirmBeforeDeleting {
+                                            pendingDeletion = row
+                                        } else {
+                                            model.delete(row.id)
+                                        }
+                                    }
+                                    .buttonStyle(.glass)
+                                }
+                                .controlSize(.small)
                             }
                         }
-                        .buttonStyle(.glass)
                     }
-                    .controlSize(.small)
                 }
             }
         }
@@ -1216,9 +1724,9 @@ private struct ArchiveSettingsPage: View {
                 set: { if !$0 { pendingDeletion = nil } }
             ),
             presenting: pendingDeletion
-        ) { thread in
+        ) { row in
             Button("Delete thread", role: .destructive) {
-                model.delete(thread.id)
+                model.delete(row.id)
                 pendingDeletion = nil
             }
         } message: { _ in
@@ -1233,23 +1741,33 @@ private struct AboutSettingsPage: View {
     private static let swiftTermURL = URL(string: "https://github.com/migueldeicaza/SwiftTerm")!
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+        VStack(alignment: .leading, spacing: 0) {
+            // Brings its own gap below, and only while it shows a card, so an empty one
+            // leaves no hole under the page title; a new release pushes the rest down.
             AboutSoftwareUpdateSection()
-            appCard
-            ChromeSection(title: "Credits") {
-                ChromeCard {
-                    UpstreamAttributionRow(url: Self.upstreamURL)
-                    ChromeRowDivider()
-                    ChromeRow(title: "Working indicators", detail: "Ported from Zeron by Wing, MIT License.") {
-                        CreditLink(title: "zeronsh/zeron", url: Self.zeronURL)
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(title: "Terminal", detail: "SwiftTerm by Miguel de Icaza, MIT License.") {
-                        CreditLink(title: "SwiftTerm", url: Self.swiftTermURL)
-                    }
-                    ChromeRowDivider()
-                    LicensesRow()
+            VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
+                ChromeSection(title: "Version information") {
+                    appCard
                 }
+                credits
+            }
+        }
+    }
+
+    private var credits: some View {
+        ChromeSection(title: "Credits") {
+            ChromeCard {
+                UpstreamAttributionRow(url: Self.upstreamURL)
+                ChromeRowDivider()
+                ChromeRow(title: "Working indicators", detail: "Ported from Zeron by Wing, MIT License.") {
+                    CreditLink(title: "zeronsh/zeron", url: Self.zeronURL)
+                }
+                ChromeRowDivider()
+                ChromeRow(title: "Terminal", detail: "SwiftTerm by Miguel de Icaza, MIT License.") {
+                    CreditLink(title: "SwiftTerm", url: Self.swiftTermURL)
+                }
+                ChromeRowDivider()
+                LicensesRow()
             }
         }
     }
@@ -1388,40 +1906,6 @@ private struct CreditLink: View {
     }
 }
 
-/// The per-project marks behind one button: the Projects card stays two rows long, and the
-/// list of projects with their marks opens in a popover off this row.
-private struct ProjectMarksRow: View {
-    @Environment(AppModel.self) private var model
-
-    @State private var isPresented = false
-
-    var body: some View {
-        Button("Edit") { isPresented = true }
-            .buttonStyle(.glass)
-            .controlSize(.small)
-            .disabled(model.projects.isEmpty)
-            .help(Text(verbatim: Chrome.localized("Choose a mark for each project")))
-            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(model.projects.enumerated()), id: \.element.id) { index, project in
-                        if index > 0 { ChromeRowDivider() }
-                        ChromeRow(title: project.name, detail: project.path) {
-                            ProjectIconButton(icon: icon(for: project.id))
-                        }
-                    }
-                }
-                .frame(width: 400)
-            }
-    }
-
-    private func icon(for id: UUID) -> Binding<ProjectIcon?> {
-        Binding(
-            get: { model.project(id)?.icon },
-            set: { newIcon in model.updateProject(id) { $0.icon = newIcon } }
-        )
-    }
-}
-
 /// The theme menu: Breeze (Tivano's own) and System on top, then the dark and the
 /// light themes in their own sections, each with a swatch of its surface and accent.
 /// Breeze Dark and Breeze Light lead their sections.
@@ -1441,7 +1925,7 @@ private struct ThemePickerButton: View {
             HStack(spacing: 6) {
                 selection.swatch
                     .frame(width: 14, height: 14)
-                Text(verbatim: Chrome.localized(selection.displayName))
+                Text(verbatim: selection.displayName)
                     .font(.ui(size: 12.5, weight: .medium))
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
@@ -1472,7 +1956,7 @@ private struct ThemePickerButton: View {
     }
 
     private func item(_ theme: AppTheme) -> some View {
-        PopoverItem(theme.displayName, leading: AnyView(theme.swatch), isChecked: theme == selection) {
+        PopoverItem(theme.displayName, leading: AnyView(theme.swatch), isChecked: theme == selection, localizesTitle: false) {
             selection = theme
         }
     }

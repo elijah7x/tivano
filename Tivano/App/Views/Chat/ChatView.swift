@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ChatView: View {
+    @Environment(\.chatColumnIsShown) private var columnIsShown
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
     @Bindable var runtime: ThreadRuntime
@@ -57,7 +58,12 @@ struct ChatView: View {
     /// resize does; a spring restarted per frame lagged the panels behind and swam. The
     /// sidebar's open or close slide is held the same way for its run.
     private var panelsHeld: Bool {
-        panelResize.isActive || model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
+        guard columnIsShown else { return true }
+        return panelResize.isActive || model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
+    }
+    private var paneIsResizing: Bool? {
+        guard columnIsShown else { return nil }
+        return model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
     }
     @State private var hydraShownSince: Date?
     @State private var hydraLingers = false
@@ -75,8 +81,8 @@ struct ChatView: View {
         // The thread and project are read here, once, and passed down as values: the timeline
         // rows and the composer never observe them, so a change to either re-renders this
         // body alone and the children only where what they were handed changed.
-        let workingDirectory = thread.flatMap { thread in project.map { thread.executionDirectory(projectPath: $0.path) } }
-        let directory = workingDirectory ?? LoginEnvironment.homeDirectory
+        let workingDirectory = thread.flatMap { try? model.executionDirectory(for: $0) }.flatMap { $0.isEmpty ? nil : $0 }
+        let directory = workingDirectory
         let title = thread?.title ?? ""
         // Who is in a panel comes from the model and changes rarely; the geometry
         // comes from the measured pane and changes every frame of a live resize.
@@ -94,7 +100,7 @@ struct ChatView: View {
                 runtime: runtime,
                 scrollChrome: scrollChrome,
                 scrollState: scrollState,
-                projectName: project?.name,
+                projectName: project?.name ?? (thread?.affiliation == .standalone ? Chrome.localized("Task") : nil),
                 workingDirectory: workingDirectory,
                 supportsRewind: thread?.provider.supportsRewind ?? false,
                 columnHeight: columnHeight,
@@ -243,8 +249,9 @@ struct ChatView: View {
             // A sidebar or terminal-divider drag reshapes the pane per frame the way a
             // live resize does; the sidebar's toggle slide reshapes the pane per frame too;
             // the timeline and composer read one signal for both.
-            .onChange(of: model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing, initial: true) { _, dragging in
-                liveResize.isPaneResizing = dragging
+            .onChange(of: paneIsResizing, initial: true) { _, dragging in
+                guard columnIsShown, let dragging else { return }
+                liveResize.updatePaneResizing(dragging, owner: runtime.threadID)
             }
             // The pane's final size: docked panels land on their new docked spot, and
             // a free spot left outside is pulled back inside.
@@ -261,7 +268,7 @@ struct ChatView: View {
             }
 
             if runtime.isTerminalVisible {
-                TerminalPanel(runtime: runtime, directory: directory)
+                TerminalPanel(runtime: runtime)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -281,9 +288,11 @@ struct ChatView: View {
             model.spawnSubagent(from: runtime.threadID, title: link.title, prompt: link.prompt)
         })
         .task(id: directory) {
+            guard let directory else { return }
             await git.refresh(directory, force: false)
         }
         .onChange(of: runtime.diffRevision) {
+            guard let directory else { return }
             Task { await git.refresh(directory) }
         }
         // The column is not rebuilt on a thread switch, so what belonged to the previous
@@ -315,9 +324,8 @@ struct ChatView: View {
         return PlacedPanel(drag: subagentDrag, rest: rest, size: scene.layout.panelSize, content: SubagentPanel(
             thread: subagent,
             size: scene.layout.panelSize,
-            // The helper works in the project folder, whatever this thread's worktree.
-            workingDirectory: model.project(subagent.projectID).map { subagent.executionDirectory(projectPath: $0.path) },
-            projectName: project?.name,
+            workingDirectory: (try? model.executionDirectory(for: subagent)).flatMap { $0.isEmpty ? nil : $0 },
+            projectName: model.project(subagent.projectID)?.name ?? (subagent.affiliation == .standalone ? Chrome.localized("Task") : nil),
             onDrag: { translation in
                 let position = subagentDrag.move(by: translation, from: rest, in: scene.layout)
                 dock(.subagent, \.subagentPanelDock, nearest: position, scene: scene)
@@ -956,7 +964,7 @@ private struct ChatChromeRow: View {
     let scrollChrome: ChromeScrollModel
     let title: String
     let project: Project?
-    let directory: String
+    let directory: String?
     let git: GitStatusModel
     let titleLeading: CGFloat
     @State private var isTopControlsHovered = false
@@ -968,20 +976,25 @@ private struct ChatChromeRow: View {
         // Follows the buttons, not the sidebar's state: they leave for the sidebar only once it
         // is wide enough to hold them, and the row closes up as they go.
         let sidebarVisible = model.sidebar.holdsTrafficLights
-        chromeRowContent(sidebarVisible: sidebarVisible)
+        // Mid-slide the header's own toggle is still riding the sidebar's edge; a pair
+        // inserted here doubled it at the window's left and came in on the row's
+        // still-opening padding — the ghost jump. They appear once the slide settles.
+        let showsSidebarControls = !sidebarVisible && !model.sidebar.isSliding
+        chromeRowContent(sidebarVisible: sidebarVisible, showsSidebarControls: showsSidebarControls)
         // With the sidebar hidden the native window buttons sit over this row, so it steps clear of them.
         .padding(.leading, sidebarVisible ? 0 : Chrome.trafficLightsWidth + Chrome.trafficLightClearance)
         .padding(.horizontal, Chrome.chromeHorizontalPadding)
         .padding(.top, Chrome.chromeTopPadding)
         .animation(Chrome.panelSlide, value: sidebarVisible)
+        .animation(.softAppear, value: showsSidebarControls)
     }
 
     @ViewBuilder
-    private func chromeRowContent(sidebarVisible: Bool) -> some View {
+    private func chromeRowContent(sidebarVisible: Bool, showsSidebarControls: Bool) -> some View {
         HStack(alignment: .center, spacing: 10) {
             // With the sidebar away, its toggle and thread list remain available.
-            if !sidebarVisible {
-                SidebarToggleButton()
+            if showsSidebarControls {
+                SidebarToggleButton(inSidebar: false)
                     .transition(.softAppear)
                 ThreadsButton()
                     .transition(.softAppear)
@@ -1035,16 +1048,16 @@ private struct ChatChromeRow: View {
                 HydraButton(thread: thread, runtime: runtime)
                     .transition(.softAppear)
             }
-            if git.isRepository {
+            if let directory, git.directory == directory, git.isRepository {
                 BranchMenu(runtime: runtime, directory: directory, git: git)
             }
             ChromeCapsule {
-                OpenInMenu(directory: directory)
+                OpenInMenu(threadID: runtime.threadID, directory: directory)
                 if let project {
                     ChromeDivider()
                     ScriptsMenu(project: project, runtime: runtime)
                 }
-                if git.isRepository {
+                if let directory, git.directory == directory, git.isRepository {
                     ChromeDivider()
                     GitActionsMenu(runtime: runtime, directory: directory, git: git)
                 }
@@ -1053,9 +1066,11 @@ private struct ChatChromeRow: View {
                 ChromeIconButton(symbol: "terminal", isActive: runtime.isTerminalVisible, help: Chrome.localized("Terminal") + ShortcutStore.hint(for: .toggleTerminal)) {
                     runtime.isTerminalVisible.toggle()
                 }
-                ChromeDivider()
-                ChromeIconButton(symbol: "plusminus", isActive: runtime.isDiffVisible, help: Chrome.localized("Changes") + ShortcutStore.hint(for: .toggleChanges)) {
-                    runtime.toggleDiff()
+                if let directory, git.directory == directory, git.isRepository {
+                    ChromeDivider()
+                    ChromeIconButton(symbol: "plusminus", isActive: runtime.isDiffVisible, help: Chrome.localized("Changes") + ShortcutStore.hint(for: .toggleChanges)) {
+                        runtime.toggleDiff()
+                    }
                 }
             }
         }
@@ -1160,6 +1175,7 @@ private struct ThreadsButton: View {
 @MainActor
 @Observable
 final class GitStatusModel {
+    private(set) var directory: String?
     private(set) var isRepository = false
     private(set) var status: GitStatus?
     private(set) var branches: [GitBranch] = []
@@ -1180,6 +1196,10 @@ final class GitStatusModel {
     private static let freshness: TimeInterval = 30
 
     func refresh(_ directory: String, force: Bool = true) async {
+        if self.directory != directory {
+            self.directory = directory
+            apply(Snapshot())
+        }
         if let cached = Self.snapshots[directory] {
             apply(cached)
             if !force, Date.now.timeIntervalSince(cached.fetchedAt) < Self.freshness { return }
@@ -1196,6 +1216,7 @@ final class GitStatusModel {
         }
         snapshot.fetchedAt = .now
         Self.snapshots[directory] = snapshot
+        guard self.directory == directory, !Task.isCancelled else { return }
         apply(snapshot)
     }
 
@@ -1225,6 +1246,9 @@ private struct BranchMenu: View {
     let git: GitStatusModel
 
     @State private var isNamingBranch = false
+    @State private var isNamingWorktree = false
+    @State private var isRenamingBranch = false
+    @State private var pushedRename: (name: String, upstream: String)?
     @State private var branchName = ""
 
     var body: some View {
@@ -1248,9 +1272,17 @@ private struct BranchMenu: View {
                 branchName = ""
                 isNamingBranch = true
             }
-            if runtime.thread?.worktreePath == nil, runtime.turns.isEmpty {
+            if let thread = runtime.thread, thread.worktreePath != nil, let branch = thread.branch {
+                PopoverItem("Rename branch…", symbol: "pencil", isEnabled: !runtime.isHydraMerging) {
+                    branchName = branch
+                    isRenamingBranch = true
+                }
+            }
+            if model.project(runtime.thread?.projectID) != nil, runtime.thread?.worktreePath == nil, runtime.turns.isEmpty {
                 PopoverItem("Use a new worktree for this thread", symbol: "square.stack.3d.up") {
-                    Task { await model.createWorktree(for: runtime.threadID) }
+                    branchName = AppModel.suggestedBranchName(title: runtime.thread?.title ?? ChatThread.untitled,
+                                                            threadID: runtime.threadID)
+                    isNamingWorktree = true
                 }
             }
         }
@@ -1259,7 +1291,72 @@ private struct BranchMenu: View {
             Button("Create") { createBranch() }
             Button("Cancel", role: .cancel) {}
         }
-        .transformPreference(ChromePresentationPreference.self) { $0 = $0 || isNamingBranch }
+        .alert("New worktree", isPresented: $isNamingWorktree) {
+            TextField("Branch name", text: $branchName)
+            Button("Create") { createWorktree() }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename branch", isPresented: $isRenamingBranch) {
+            TextField("Branch name", text: $branchName)
+            Button("Rename") { renameBranch() }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename a pushed branch?", isPresented: Binding(
+            get: { pushedRename != nil },
+            set: { if !$0 { pushedRename = nil } }
+        ), presenting: pushedRename) { rename in
+            Button("Rename") {
+                let threadID = runtime.threadID
+                Task {
+                    await model.renameWorktreeBranch(threadID, to: rename.name)
+                    await git.refresh(directory)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { rename in
+            Text(verbatim: String(format: Chrome.localized("This branch is pushed as %@. Only the local name changes: the remote branch and any pull request keep the old name, and pushing may need its upstream set again."), rename.upstream))
+        }
+        .transformPreference(ChromePresentationPreference.self) {
+            $0 = $0 || isNamingBranch || isNamingWorktree || isRenamingBranch || pushedRename != nil
+        }
+    }
+
+    private func createWorktree() {
+        let typed = branchName
+        let threadID = runtime.threadID
+        Task {
+            guard let project = model.project(runtime.thread?.projectID) else { return }
+            var branch: String?
+            if !AppModel.normalizedBranchName(typed).isEmpty {
+                switch await model.checkBranchName(typed, in: project.path, renaming: nil) {
+                case .accepted(let name), .pushed(let name, _):
+                    branch = name
+                case .rejected(let message):
+                    model.alert = AppAlert(title: "Could not create a worktree", message: message)
+                    return
+                }
+            }
+            await model.createWorktree(for: threadID, branch: branch)
+            await git.refresh(model.thread(threadID)?.worktreePath ?? directory)
+        }
+    }
+
+    private func renameBranch() {
+        let typed = branchName
+        let threadID = runtime.threadID
+        Task {
+            guard let old = model.thread(threadID)?.branch else { return }
+            switch await model.checkBranchName(typed, in: directory, renaming: old) {
+            case .accepted(let name):
+                await model.renameWorktreeBranch(threadID, to: name)
+                await git.refresh(directory)
+            case .pushed(let name, let upstream):
+                pushedRename = (name, upstream)
+            case .rejected(let message):
+                // An empty or unchanged name is no error; the alert just closes.
+                if !message.isEmpty { model.alert = AppAlert(title: "Could not rename branch", message: message) }
+            }
+        }
     }
 
     private func switchBranch(_ name: String) {
@@ -1286,24 +1383,42 @@ private struct BranchMenu: View {
 }
 
 private struct OpenInMenu: View {
-    let directory: String
+    @Environment(AppModel.self) private var model
+    let threadID: UUID
+    let directory: String?
 
     var body: some View {
         ChromeMenuButton(symbol: "arrow.up.forward.app", help: "Open in another app") {
             PopoverSectionHeader("Open in")
             PopoverItem("Finder", image: Workspace.finderIcon) {
-                NSWorkspace.shared.open(URL(fileURLWithPath: directory))
+                withDirectory { NSWorkspace.shared.open(URL(fileURLWithPath: $0)) }
             }
             ForEach(Workspace.installedEditors) { editor in
                 PopoverItem(editor.name, symbol: "chevron.left.forwardslash.chevron.right", image: Workspace.icon(for: editor)) {
-                    Workspace.open(directory, with: editor)
+                    withDirectory { Workspace.open($0, with: editor) }
                 }
             }
             PopoverDivider()
-            PopoverItem("Copy path", symbol: "doc.on.doc") {
+            PopoverItem("Copy path", symbol: "doc.on.doc", isEnabled: directory != nil) {
+                guard let directory else { return }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(directory, forType: .string)
             }
+        }
+    }
+
+    private func withDirectory(_ action: (String) -> Void) {
+        guard let thread = model.thread(threadID) else { return }
+        do {
+            let directory = try model.ensureExecutionDirectory(for: thread)
+            var isDirectory: ObjCBool = false
+            guard !directory.isEmpty,
+                  FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw ProviderError.failed(Chrome.localized("The working directory is unavailable."))
+            }
+            action(directory)
+        } catch {
+            model.alert = AppAlert(title: "Could not open task workspace", message: error.localizedDescription)
         }
     }
 }
@@ -1354,8 +1469,8 @@ private struct GitActionsMenu: View {
             PopoverNote(changed == 1 ? "1 changed file" : String(format: Chrome.localized("%d changed files"), changed))
             PopoverDivider()
             PopoverItem("Commit…", symbol: "checkmark.circle", isEnabled: changed > 0) { isCommitting = true }
-            PopoverItem("Push", symbol: "arrow.up.circle") { push() }
-            PopoverItem("Create pull request", symbol: "arrow.triangle.pull") { openPullRequest() }
+            PopoverItem("Push", symbol: "arrow.up.circle", isEnabled: git.status?.branch != nil) { push() }
+            PopoverItem("Create pull request", symbol: "arrow.triangle.pull", isEnabled: git.status?.branch != nil) { openPullRequest() }
             if let url = git.remoteURL {
                 PopoverDivider()
                 PopoverItem("Open repository", symbol: "safari") { NSWorkspace.shared.open(url) }
@@ -1468,6 +1583,7 @@ private struct CommitSheet: View {
                 .help(Text(verbatim: canGenerate ? Chrome.localized("Write a commit message from these changes") : Chrome.localized("Turn on text generation in Settings > Source control")))
                 Toggle("Push after committing", isOn: $pushesAfterCommit)
                     .toggleStyle(.checkbox)
+                    .disabled(git.status?.branch == nil)
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .buttonStyle(.glass)
@@ -1511,7 +1627,7 @@ private struct CommitSheet: View {
         defer { isCommitting = false }
         let repository = Git(directory)
         let text = message.trimmed
-        let pushes = pushesAfterCommit
+        let pushes = pushesAfterCommit && git.status?.branch != nil
         let error = await git.perform("Committing") {
             try await repository.commitAll(message: text)
             if pushes { try await repository.push() }

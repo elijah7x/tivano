@@ -14,11 +14,17 @@ enum LoginEnvironment {
 struct ShellResult: Sendable {
     var succeeded = false
     var output = ""
+    var stdout: Data { Data(output.utf8) }
     var errorOutput = ""
 }
 enum Shell {
     static func run(_ executable: URL, _ arguments: [String], environment: [String: String], timeout: Double) async throws -> ShellResult {
         let test = ProcessInfo.processInfo.environment["DSH_TEST_CASE"] ?? ""
+        if arguments == ["provider", "list", "--json"], test.hasPrefix("empty-variant") {
+            return ShellResult(succeeded: true, output: test == "empty-variant"
+                ? #"{"minimaxModelSource":"token_plan"}"#
+                : #"{"minimaxModelSource":"minimax_api_key"}"#)
+        }
         if ["final-report", "report-guard-missing", "patch-validation"].contains(test), arguments.last == "--dump-config" {
             let file = URL(fileURLWithPath: ProcessInfo.processInfo.environment["DSH_TEST_ROOT"]!).appendingPathComponent("patch-warnings.txt")
             return ShellResult(succeeded: true, output: "[]", errorOutput: (try? String(contentsOf: file, encoding: .utf8)) ?? "")

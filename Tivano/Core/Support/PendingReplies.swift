@@ -1,10 +1,18 @@
 import Foundation
 
+struct DuplicateReplyID: Error {}
+
 /// Replies waiting on a request id. The id is registered before `send` runs, so a fast
 /// reply can't arrive before anyone is waiting for it.
 @MainActor
 final class PendingReplies<Value: Sendable> {
-    private var continuations: [String: CheckedContinuation<Value, Error>] = [:]
+    private struct Entry {
+        let token: UUID
+        let continuation: CheckedContinuation<Value, Error>
+        var timeoutTask: Task<Void, Never>?
+    }
+
+    private var continuations: [String: Entry] = [:]
 
     /// Without a `timeoutValue`, a timeout throws `CancellationError`.
     func register(
@@ -13,14 +21,24 @@ final class PendingReplies<Value: Sendable> {
         timeoutValue: Value? = nil,
         send: () -> Void
     ) async throws -> Value {
-        try await withTaskCancellationHandler {
+        let token = UUID()
+        return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
-                continuations[id] = continuation
+                guard continuations[id] == nil else {
+                    continuation.resume(throwing: DuplicateReplyID())
+                    return
+                }
+                continuations[id] = Entry(token: token, continuation: continuation)
                 send()
-                guard let timeout else { return }
-                Task {
-                    try? await Task.sleep(for: timeout)
+                guard let timeout, continuations[id]?.token == token else { return }
+                continuations[id]?.timeoutTask = Task {
+                    do {
+                        try await Task.sleep(for: timeout)
+                    } catch {
+                        return
+                    }
+                    guard self.continuations[id]?.token == token else { return }
                     if let timeoutValue {
                         self.resolve(id, timeoutValue)
                     } else {
@@ -30,34 +48,43 @@ final class PendingReplies<Value: Sendable> {
             }
         } onCancel: {
             Task { @MainActor [weak self] in
-                self?.continuations.removeValue(forKey: id)?.resume(throwing: CancellationError())
+                guard let self, self.continuations[id]?.token == token else { return }
+                self.fail(id, CancellationError())
             }
         }
     }
 
     @discardableResult
     func resolve(_ id: String, _ value: Value) -> Bool {
-        guard let continuation = continuations.removeValue(forKey: id) else { return false }
-        continuation.resume(returning: value)
+        guard let entry = continuations.removeValue(forKey: id) else { return false }
+        entry.timeoutTask?.cancel()
+        entry.continuation.resume(returning: value)
         return true
     }
 
     @discardableResult
     func fail(_ id: String, _ error: Error) -> Bool {
-        guard let continuation = continuations.removeValue(forKey: id) else { return false }
-        continuation.resume(throwing: error)
+        guard let entry = continuations.removeValue(forKey: id) else { return false }
+        entry.timeoutTask?.cancel()
+        entry.continuation.resume(throwing: error)
         return true
     }
 
     func resolveAll(_ value: Value) {
         let waiting = Array(continuations.values)
         continuations.removeAll()
-        for continuation in waiting { continuation.resume(returning: value) }
+        for entry in waiting {
+            entry.timeoutTask?.cancel()
+            entry.continuation.resume(returning: value)
+        }
     }
 
     func failAll(_ error: Error) {
         let waiting = Array(continuations.values)
         continuations.removeAll()
-        for continuation in waiting { continuation.resume(throwing: error) }
+        for entry in waiting {
+            entry.timeoutTask?.cancel()
+            entry.continuation.resume(throwing: error)
+        }
     }
 }

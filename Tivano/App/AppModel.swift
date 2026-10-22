@@ -12,6 +12,36 @@ struct AppAlert: Identifiable {
 @MainActor
 @Observable
 final class AppModel {
+    private(set) var keepsakes: [Keepsake] = []
+    private var keepsakesSeen = false
+
+    var hasUnseenKeepsakes: Bool { !keepsakes.isEmpty && !keepsakesSeen }
+
+    func markKeepsakesSeen() {
+        guard !keepsakes.isEmpty, !keepsakesSeen else { return }
+        keepsakesSeen = true
+        KeepsakeStore.save(.init(keepsakes: keepsakes, seen: keepsakesSeen))
+    }
+
+    func lightKeepsake(_ id: String) {
+        guard let index = keepsakes.firstIndex(where: { $0.id == id }), keepsakes[index].litAt == nil else { return }
+        keepsakes[index].litAt = Date()
+        KeepsakeStore.save(.init(keepsakes: keepsakes, seen: keepsakesSeen))
+    }
+
+    #if DEBUG
+    func prepareKeepsakePreview() {
+        guard CaptureRun.isEnabled else { return }
+        let id = "early-supporter"
+        if let index = keepsakes.firstIndex(where: { $0.id == id }) {
+            keepsakes[index].litAt = nil
+        } else {
+            keepsakes.append(Keepsake(id: id, earnedAt: Date(), litAt: nil))
+        }
+        KeepsakeStore.save(.init(keepsakes: keepsakes, seen: keepsakesSeen))
+    }
+    #endif
+
     let settings: AppSettings
     let providers: ProviderRegistry
     /// The user's MCP connections, handed to every provider session at launch.
@@ -21,6 +51,7 @@ final class AppModel {
     /// Picks chats back up once a spent usage limit resets, with the setting on.
     @ObservationIgnored private(set) var autoContinue: AutoContinue!
     @ObservationIgnored private(set) var voice: VoiceController!
+    @ObservationIgnored private(set) var localControl: AppControlService!
     /// How often each Tivano-run head has been started again after failing at the door
     /// (see `hydraHeadTurnFinished`); a head gets two more goes.
     @ObservationIgnored var hydraHeadRetries: [UUID: Int] = [:]
@@ -28,11 +59,18 @@ final class AppModel {
     /// The lists are the source of truth for anything that shows several items at once. Single
     /// lookups go through the cells below, so the timeline rows, composer and chat header of one
     /// thread are left alone when another thread's title, status or unread flag changes.
+    private(set) var projectsRevision: UInt64 = 0
     private(set) var projects: [Project] = [] {
-        didSet { Self.write(Self.sync(&projectCells, with: projects)) }
+        didSet {
+            Self.write(Self.sync(&projectCells, with: projects))
+            projectsRevision &+= 1
+        }
     }
     @ObservationIgnored private var threadStorage: [ChatThread] = []
     private(set) var threadsRevision: UInt64 = 0
+    /// Only fields used by control-list membership/search/order, not streamed status
+    /// or timestamps. Cursor snapshots still use the full threadsRevision.
+    private(set) var controlThreadMembershipRevision: UInt64 = 0
     private(set) var threads: [ChatThread] {
         get {
             _ = threadsRevision
@@ -40,6 +78,7 @@ final class AppModel {
         }
         set {
             threadStorage = newValue
+            controlThreadMembershipRevision &+= 1
             synchronizeThreads()
             if isLibraryLoaded { announceLoweredPermissions() }
         }
@@ -59,7 +98,7 @@ final class AppModel {
     /// lookup or an update never scans the list.
     private struct ThreadIndex {
         var positions: [UUID: Int] = [:]
-        var projects: [UUID: [Int]] = [:]
+        var projects: [UUID?: [Int]] = [:]
 
         init(_ threads: [ChatThread]) {
             positions.reserveCapacity(threads.count)
@@ -93,7 +132,7 @@ final class AppModel {
                 }
             }
             if let selectedThreadID, let thread = thread(selectedThreadID) {
-                rememberLastProject(thread.projectID)
+                rememberAffiliation(thread.affiliation)
             }
         }
     }
@@ -106,10 +145,21 @@ final class AppModel {
     var isCommandPalettePresented = false
     var alert: AppAlert?
 
+    /// True while any chat still has work in flight — a running turn, voice, a merge,
+    /// helpers or queued work — or local control holds an accepted mutation. The
+    /// runtimes dictionary and the control ledger are unobserved, so this flag is
+    /// maintained in `updateTaskSleepPrevention`, which every runtime change funnels
+    /// through. The updater's install button dims on it; `flushForQuit` stays the
+    /// authority.
+    private(set) var hasActiveTurns = false
+
     @ObservationIgnored private let taskSleepPrevention = TaskSleepPrevention()
     @ObservationIgnored private var runtimes: [UUID: ThreadRuntime] = [:]
+    private var creatingWorktrees: Set<UUID> = []
     @ObservationIgnored private var runtimeLastAccess: [UUID: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var runtimeCapacityScheduled = false
+    @ObservationIgnored private var runtimeCapacityRetry: Task<Void, Never>?
+    @ObservationIgnored private var runtimeReleasesAwaitingSave: Set<UUID> = []
     @ObservationIgnored private var idleSessionStops: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var lastLibrarySave: ContinuousClock.Instant?
@@ -120,7 +170,7 @@ final class AppModel {
     /// again every few minutes; it skips anything still running, so a busy chat is left alone.
     @ObservationIgnored private var hydraMergeSweepTask: Task<Void, Never>?
     private(set) var isLibraryLoaded = false
-    @ObservationIgnored private var libraryLoad: Task<Result<Library, Error>, Never>?
+    @ObservationIgnored private var libraryLoad: Task<LibraryLoad, Never>?
     @ObservationIgnored private var restoreSelectionAfterLoad = false
     @ObservationIgnored private(set) var persistenceEnabled = true
     @ObservationIgnored var libraryWritesBlocked = false
@@ -136,21 +186,26 @@ final class AppModel {
         sidebar = SidebarLayout()
         autoContinue = AutoContinue(app: self)
         voice = VoiceController(app: self)
+        localControl = AppControlService(app: self)
+        settings.onExternalControlChanged = { [weak self] in self?.localControl.refreshListening() }
         settings.onSleepPreventionChanged = { [weak self] in
             self?.updateTaskSleepPrevention()
         }
     }
 
     func updateTaskSleepPrevention() {
+        let busy = runtimes.values.contains(where: Self.hasActiveTasks)
+        let active = busy || localControl.hasPendingMutations
+        if active != hasActiveTurns { hasActiveTurns = active }
         taskSleepPrevention.update(
             mode: CaptureRun.isEnabled ? .off : settings.taskSleepMode,
-            hasRunningTasks: runtimes.values.contains(where: Self.hasActiveTasks)
+            hasRunningTasks: busy
         )
     }
 
     private static func hasActiveTasks(_ runtime: ThreadRuntime) -> Bool {
         runtime.isRunning || runtime.isVoiceOrchestrator || runtime.isHydraMerging || runtime.isCLIStarting
-            || runtime.hasWorkingHelpers || !runtime.backgroundTasks.isEmpty || runtime.isWaitingForLimit
+            || !runtime.backgroundTasks.isEmpty || runtime.isWaitingForLimit || runtime.hasWorkingHelpers
     }
 
     /// Mirrors a list into its cells: values that changed are written to their cell (and only
@@ -250,12 +305,25 @@ final class AppModel {
             _ = await libraryLoad.value
             return
         }
-        let load = Task.detached(priority: .userInitiated) { Storage.loadLibrary() }
+        let load = Task.detached(priority: .userInitiated) { Storage.loadLibraryRecovering() }
         libraryLoad = load
         var library: Library
+        var didRecoverLibrary = false
         switch await load.value {
-        case .success(let loaded): library = loaded
-        case .failure(let error):
+        case .loaded(let loaded): library = loaded
+        case .recovered(let recovered, let skipped, let quarantine, let backup, let fromPrevious):
+            library = recovered
+            didRecoverLibrary = true
+            let message: String
+            if fromPrevious {
+                message = String(format: Chrome.localized("Tivano's library file was damaged, so it loaded the copy saved at the last launch. Chats created since then may be missing from the sidebar; their documents are still on disk. The damaged file is kept at %@."), backup.path)
+            } else if skipped == 0, quarantine != nil {
+                message = String(format: Chrome.localized("Tivano repaired damaged workspace records and kept all chats. Affected workspaces cannot run. The original file is kept at %@ and the damaged records at %@."), backup.path, quarantine?.path ?? backup.path)
+            } else {
+                message = String(format: Chrome.localized("Tivano couldn't read %lld items in its library and loaded the rest. The original file is kept at %@ and the unreadable items at %@."), Int64(skipped), backup.path, quarantine?.path ?? backup.path)
+            }
+            alert = AppAlert(title: "Some of your library was repaired", message: message)
+        case .failed(let error):
             library = Library()
             libraryWritesBlocked = true
             let recovery = Storage.root.appendingPathComponent("library-recovery-\(UUID().uuidString).json")
@@ -265,7 +333,16 @@ final class AppModel {
                 message: String(format: Chrome.localized("Tivano couldn't read its library (%@). The original file and chat documents are preserved. Repair the library and restart Tivano. Any new chats will be saved separately to %@ when you quit."), error.localizedDescription, recovery.path)
             )
         }
+        let keepsakeSnapshot = await Task.detached(priority: .utility) {
+            KeepsakeStore.load(granting: KeepsakeCatalog.grantedByThisBuild)
+        }.value
+        keepsakes = keepsakeSnapshot.keepsakes
+        keepsakesSeen = keepsakeSnapshot.seen
         let originalThreads = library.threads
+        for index in library.threads.indices where library.threads[index].controlWorkspace?.phase == .preparing {
+            library.threads[index].controlWorkspace?.phase = .failed
+            library.threads[index].controlWorkspace?.failure = ControlFailure(code: .workspaceFailed, detail: "restart_during_preparation")
+        }
         for index in library.threads.indices where !CaptureRun.isEnabled && (library.threads[index].lastStatus == .running || library.threads[index].pendingResultTurnID != nil || library.threads[index].hydra?.status == .running) {
             if library.threads[index].lastStatus == .running || library.threads[index].pendingResultTurnID != nil {
                 library.threads[index].lastStatus = .interrupted
@@ -287,15 +364,15 @@ final class AppModel {
         projects = library.projects + projects.filter { !knownProjects.contains($0.id) }
         threads = library.threads + threads.filter { !knownThreads.contains($0.id) }
         isLibraryLoaded = true
+        localControl.refreshListening()
         updateDockBadge()
         libraryLoad = nil
         let permissionsLowered = announceLoweredPermissions()
-        if permissionsLowered || threads != originalThreads || projects != library.projects { scheduleSave() }
+        // A recovered index goes back out once, so the next launch reads a clean file
+        // instead of recovering, alerting and quarantining the same damage again.
+        if didRecoverLibrary || permissionsLowered || threads != originalThreads || projects != library.projects { scheduleSave() }
         // Capture seeds retain their staged statuses and never start account or merge services.
         if CaptureRun.isEnabled { return }
-        if let lastID = settings.lastProjectID, project(lastID) == nil {
-            settings.lastProjectID = nil
-        }
         if restoreSelectionAfterLoad { openThreadOnLaunch() }
         // The threads most likely to be opened first decode in the background from the start,
         // so the first click into a conversation never parses its history on the main thread.
@@ -350,8 +427,9 @@ final class AppModel {
     // MARK: - Lookup
 
     /// One project, observed on its own: only a change to this project re-renders the caller.
-    func project(_ id: UUID) -> Project? {
-        projectCells[id]?.value ?? nil
+    func project(_ id: UUID?) -> Project? {
+        guard let id else { return nil }
+        return projectCells[id]?.value ?? nil
     }
 
     /// One thread, observed on its own: only a change to this thread re-renders the caller.
@@ -363,28 +441,89 @@ final class AppModel {
         selectedThreadID.flatMap(thread)
     }
 
-    var currentProject: Project? {
-        if let selectedThread, let current = project(selectedThread.projectID) { return current }
-        if let lastID = settings.lastProjectID, let last = project(lastID) { return last }
-        // No selection (for example after relaunch): stay in the folder you last worked in
-        // instead of jumping back to the first project ever added.
-        if let recent = threads.filter({ !$0.isArchived && !$0.isInPanel }).max(by: { $0.updatedAt < $1.updatedAt }),
-           let recentProject = project(recent.projectID) { return recentProject }
-        return projects.first
+    var currentAffiliation: ThreadAffiliation {
+        if let selectedThread { return selectedThread.affiliation }
+        if let saved = settings.lastThreadAffiliation { return saved }
+        if let recent = threads.filter({ !$0.isHelper && !$0.isArchived }).max(by: { $0.updatedAt < $1.updatedAt }) {
+            return recent.affiliation
+        }
+        return .standalone
+    }
+
+    var currentProject: Project? { project(currentAffiliation.projectID) }
+
+    private func rememberAffiliation(_ affiliation: ThreadAffiliation) {
+        settings.lastThreadAffiliation = affiliation
+        settings.lastProjectID = affiliation.projectID
     }
 
     private func rememberLastProject(_ id: UUID) {
         guard project(id) != nil else { return }
-        if settings.lastProjectID != id { settings.lastProjectID = id }
+        rememberAffiliation(.project(id))
+    }
+
+    /// Resolves without touching disk. A missing project is an error, never a task.
+    func executionDirectory(for thread: ChatThread) throws -> String {
+        var current = thread
+        var visited = Set<UUID>()
+        while visited.insert(current.id).inserted {
+            if let workspace = current.controlWorkspace, workspace.enforcesExecutionReadiness, workspace.phase != .ready {
+                throw ControlFailure(code: workspace.phase == .preparing ? .workspacePreparing : .workspaceFailed)
+            }
+            // A ready worktree without its checkout must not run in the project's default directory.
+            if let workspace = current.controlWorkspace, workspace.enforcesExecutionReadiness,
+               workspace.mode == .worktree, workspace.phase == .ready,
+               current.worktreePath?.isEmpty != false {
+                throw ControlFailure(code: .workspaceFailed)
+            }
+            if let id = current.projectID {
+                guard let project = project(id) else {
+                    throw ProviderError.failed(Chrome.localized("This thread's project is unavailable."))
+                }
+                return current.executionDirectory(projectPath: project.path)
+            }
+            if let target = current.hydra?.targetCheckout, !target.isEmpty {
+                return current.executionDirectory(projectPath: target)
+            }
+            guard let parentID = current.parentThreadID else {
+                return StoragePaths.taskWorkspace(current.id).path
+            }
+            guard let parent = self.thread(parentID) else {
+                throw ProviderError.failed(Chrome.localized("This task's parent is unavailable."))
+            }
+            current = parent
+        }
+        throw ProviderError.failed(Chrome.localized("This task's parent is unavailable."))
+    }
+
+    @discardableResult
+    func ensureExecutionDirectory(for thread: ChatThread) throws -> String {
+        let directory = try executionDirectory(for: thread)
+        if thread.projectID == nil {
+            var owner = thread
+            var visited: Set<UUID> = [owner.id]
+            while let parentID = owner.parentThreadID, let parent = self.thread(parentID), parent.projectID == nil {
+                guard visited.insert(parentID).inserted else { throw ProviderError.notRunning }
+                owner = parent
+            }
+            if directory == StoragePaths.taskWorkspace(owner.id).path {
+                try StoragePaths.ensureTaskWorkspace(owner.id)
+            }
+        }
+        return directory
     }
 
     /// The project's top-level threads, in sidebar order. A helper whose parent is among
     /// them sits under that parent instead (see `helpers(of:)`); an ordinary helper whose
     /// parent is gone or archived stands
     /// on its own. Hydra heads only appear under their lead, even across projects.
-    func threads(in project: Project) -> [ChatThread] {
-        let shown = (threadIndex.projects[project.id] ?? []).map { threads[$0] }
-            .filter(\.isStandaloneListCandidate)
+    func threads(in project: Project) -> [ChatThread] { threads(in: .project(project.id)) }
+
+    var standaloneTasks: [ChatThread] { threads(in: .standalone) }
+
+    func threads(in affiliation: ThreadAffiliation) -> [ChatThread] {
+        let shown = (threadIndex.projects[affiliation.projectID] ?? []).map { threads[$0] }
+            .filter { $0.isStandaloneListCandidate && (affiliation != .standalone || !$0.isHelper) }
         let shownIDs = Set(shown.map(\.id))
         return shown
             .filter { $0.parentThreadID.map { !shownIDs.contains($0) } ?? true }
@@ -406,8 +545,8 @@ final class AppModel {
     @discardableResult
     func moveThread(_ id: UUID, to targetID: UUID, placeAfter: Bool) -> Bool {
         guard id != targetID, let moving = thread(id), let target = thread(targetID),
-              moving.projectID == target.projectID, let project = project(moving.projectID) else { return false }
-        let before = threads(in: project).map(\.id)
+              moving.projectID == target.projectID else { return false }
+        let before = threads(in: moving.affiliation).map(\.id)
         var order = before
         order.removeAll { $0 == id }
         guard let index = order.firstIndex(of: targetID) else { return false }
@@ -459,11 +598,24 @@ final class AppModel {
     /// Threads in the order the sidebar shows them, for keyboard navigation: each thread
     /// followed by the helpers under it, unless they are folded away.
     var sidebarThreads: [ChatThread] {
-        projects.filter(\.isExpanded).flatMap { project in
+        let projectThreads = projects.filter(\.isExpanded).flatMap { project in
             threads(in: project).flatMap { thread in
                 thread.foldsHelpers ? [thread] : [thread] + helpers(of: thread.id)
             }
         }
+        let tasks = standaloneTasks
+        let attention = Set(tasks.filter { task in
+            guard let runtime = existingRuntime(for: task.id) else { return false }
+            return !runtime.approvals.isEmpty || !runtime.questions.isEmpty
+        }.map(\.id))
+        let rest = tasks.filter { !attention.contains($0.id) }
+        let days = Dictionary(grouping: rest.filter { !$0.isPinned }) {
+            Calendar.current.startOfDay(for: $0.updatedAt)
+        }
+        let orderedTasks = ChatThread.orderedByActivity(tasks.filter { attention.contains($0.id) })
+            + ChatThread.orderedByActivity(rest.filter(\.isPinned))
+            + days.keys.sorted(by: >).flatMap { ChatThread.orderedByActivity(days[$0] ?? []) }
+        return projectThreads + orderedTasks.flatMap { $0.foldsHelpers ? [$0] : [$0] + helpers(of: $0.id) }
     }
 
     /// The helpers that sit under a thread in the sidebar: spawned from it and not archived.
@@ -516,15 +668,28 @@ final class AppModel {
         return runtime
     }
 
-    private func releaseExcessIdleRuntimes() {
+    private func releaseExcessIdleRuntimes(isRetry: Bool = false) {
         guard runtimes.count > 12 else { return }
         let fallback = ContinuousClock.now
         let candidates = runtimes.keys.sorted {
             (runtimeLastAccess[$0] ?? fallback) < (runtimeLastAccess[$1] ?? fallback)
         }
+        var awaitingSave: Set<UUID> = []
         for id in candidates {
             guard runtimes.count > 12 else { break }
             releaseIdleRuntime(id)
+            if runtimeReleasesAwaitingSave.contains(id) { awaitingSave.insert(id) }
+        }
+        // A save still under way just keeps the runtime for now; a failed one already
+        // says so in its own timeline and retries there.
+        guard !awaitingSave.isEmpty, !isRetry else { return }
+        if runtimeCapacityRetry == nil {
+            runtimeCapacityRetry = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let self else { return }
+                self.releaseExcessIdleRuntimes(isRetry: true)
+                self.runtimeCapacityRetry = nil
+            }
         }
     }
 
@@ -552,8 +717,8 @@ final class AppModel {
     /// The rows either side of a thread within its project: what the arrow keys and the
     /// next click are most likely to open.
     func neighbors(of id: UUID?) -> [UUID] {
-        guard let id, let thread = thread(id), let project = project(thread.projectID) else { return [] }
-        let order = threads(in: project)
+        guard let id, let thread = thread(id) else { return [] }
+        let order = threads(in: thread.affiliation)
         guard let index = order.firstIndex(where: { $0.id == id }) else { return [] }
         var neighbors: [UUID] = []
         if index > 0 { neighbors.append(order[index - 1].id) }
@@ -580,8 +745,14 @@ final class AppModel {
                 // A turn still working keeps its session; check again after the next interval.
                 guard !runtime.isRunning, self.voice.threadID != id else { continue }
                 runtime.stopSession()
+                if self.releaseIdleRuntime(id) { return }
+                for _ in 0..<3 {
+                    guard self.runtimeReleasesAwaitingSave.contains(id) else { break }
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled else { return }
+                    if self.releaseIdleRuntime(id) { return }
+                }
                 self.idleSessionStops[id] = nil
-                self.releaseIdleRuntime(id)
                 return
             }
         }
@@ -591,6 +762,7 @@ final class AppModel {
     /// whether it did; a runtime holding anything the document does not stays.
     @discardableResult
     func releaseIdleRuntime(_ id: UUID) -> Bool {
+        runtimeReleasesAwaitingSave.remove(id)
         guard let runtime = runtimes[id], selectedThreadID != id, voice.threadID != id, let thread = thread(id),
               // A thread shown beside the selection, in its panel, is on screen.
               thread.parentThreadID == nil || thread.parentThreadID != selectedThreadID,
@@ -601,9 +773,9 @@ final class AppModel {
               !children(of: id).contains(where: {
                   $0.hydra?.status == .running || existingRuntime(for: $0.id)?.isRunning == true
               }) else { return false }
-        if let snapshot = runtime.unsavedSnapshot(), !DiskWriter.shared.writeThreadSynchronously(snapshot) {
+        if runtime.unsavedSnapshot() != nil {
             runtime.saveNow()
-            showLibrarySaveFailure()
+            runtimeReleasesAwaitingSave.insert(id)
             return false
         }
         runtime.cancelPersistence()
@@ -615,8 +787,8 @@ final class AppModel {
     }
 
     var workingDirectory: String? {
-        guard let thread = selectedThread, let project = project(thread.projectID) else { return nil }
-        return thread.executionDirectory(projectPath: project.path)
+        guard let thread = selectedThread else { return nil }
+        return try? executionDirectory(for: thread)
     }
 
     // MARK: - Projects
@@ -688,7 +860,6 @@ final class AppModel {
         guard commitLibrary(library) else { return }
         completeThreadDeletion(removed, cleanup: cleanup)
         projects.removeAll { $0.id == project.id }
-        if settings.lastProjectID == project.id { settings.lastProjectID = nil }
         updateDockBadge()
         scheduleSave()
     }
@@ -705,10 +876,10 @@ final class AppModel {
             return
         }
         restoreSelectionAfterLoad = false
-        guard let project = currentProject else { return }
+        let affiliation = currentAffiliation
         let restored = threads
             .filter {
-                $0.projectID == project.id && !$0.isArchived && !$0.isInPanel && !$0.isHelper && !$0.isHydraHead
+                $0.affiliation == affiliation && !$0.isArchived && !$0.isInPanel && !$0.isHelper && !$0.isHydraHead
             }
             .max { lhs, rhs in
                 let lhsInterrupted = lhs.lastStatus == .interrupted
@@ -721,23 +892,49 @@ final class AppModel {
 
     func insertVoiceHomeThread(_ thread: ChatThread) {
         threads.append(thread)
-        updateProject(thread.projectID) { $0.isExpanded = true }
+        if let projectID = thread.projectID { updateProject(projectID) { $0.isExpanded = true } }
         scheduleSave()
     }
 
     @discardableResult
     func newThread(in project: Project? = nil, workspace: WorkspaceMode? = nil) -> ChatThread? {
-        guard let project = project ?? currentProject else {
-            chooseProjectFolder()
+        newThread(affiliation: project.map { .project($0.id) } ?? .current, workspace: workspace)
+    }
+
+    @discardableResult
+    func newThread(affiliation choice: NewThreadAffiliation, workspace: WorkspaceMode? = nil) -> ChatThread? {
+        let affiliation: ThreadAffiliation
+        switch choice {
+        case .current:
+            // An explicit worktree request still belongs to the current project.
+            affiliation = !CaptureRun.isEnabled && workspace != .worktree && settings.newThreadLocation == .standalone
+                ? .standalone : currentAffiliation
+        case .standalone: affiliation = .standalone
+        case .project(let id): affiliation = .project(id)
+        }
+        if let id = affiliation.projectID, project(id) == nil {
+            alert = AppAlert(title: "Could not create thread", message: "This thread's project is unavailable.")
             return nil
         }
-        let thread = makeThread(in: project, carrying: selectedThread)
+        let project = project(affiliation.projectID)
+        if workspace == .worktree, project == nil {
+            alert = AppAlert(title: "Worktree unavailable", message: "New worktrees need a git repository with at least one commit.")
+            return nil
+        }
+        var thread = makeThread(
+            in: project,
+            carrying: selectedThread,
+            modelSelection: CaptureRun.isEnabled ? nil : settings.newThreadModelSelection
+        )
+        if project != nil, (workspace ?? settings.defaultWorkspaceMode) == .worktree {
+            thread.controlWorkspace = ControlWorkspace(mode: .worktree, phase: .preparing, enforcesExecutionReadiness: false)
+        }
         threads.append(thread)
-        updateProject(project.id) { $0.isExpanded = true }
-        rememberLastProject(project.id)
+        if let project { updateProject(project.id) { $0.isExpanded = true } }
+        rememberAffiliation(affiliation)
         selectedThreadID = thread.id
         scheduleSave()
-        if (workspace ?? settings.defaultWorkspaceMode) == .worktree {
+        if project != nil, (workspace ?? settings.defaultWorkspaceMode) == .worktree {
             Task { await createWorktree(for: thread.id) }
         }
         return thread
@@ -746,11 +943,12 @@ final class AppModel {
     /// Copies conversation context into an unsent thread with independent provider state.
     @discardableResult
     func forwardThread(_ sourceID: UUID) async -> ChatThread? {
-        guard let source = thread(sourceID), project(source.projectID) != nil else { return nil }
+        guard thread(sourceID) != nil else { return nil }
         let sourceRuntime = runtime(for: sourceID)
         await sourceRuntime.ensureLoaded()
         // The source can be renamed or removed while its history loads.
-        guard let resolved = thread(sourceID), let project = project(resolved.projectID) else { return nil }
+        guard let resolved = thread(sourceID), (try? executionDirectory(for: resolved)) != nil else { return nil }
+        let project = project(resolved.projectID)
         let continuation = ThreadContinuation.capture(
             sourceID: sourceID,
             title: resolved.title,
@@ -760,8 +958,8 @@ final class AppModel {
         thread.title = "Continued: " + resolved.title
         thread.hasCustomTitle = true
         threads.append(thread)
-        updateProject(project.id) { $0.isExpanded = true }
-        rememberLastProject(project.id)
+        if let project { updateProject(project.id) { $0.isExpanded = true } }
+        rememberAffiliation(thread.affiliation)
         let newRuntime = runtime(for: thread.id)
         guard await newRuntime.installContinuation(continuation), self.thread(thread.id) != nil else { return nil }
         selectedThreadID = thread.id
@@ -769,18 +967,33 @@ final class AppModel {
         return thread
     }
 
-    /// A chat as it would start in `project`: on `current`'s provider, model and pair when
-    /// made from an open chat, otherwise on what was last used. Not yet in `threads`.
-    private func makeThread(in project: Project, carrying current: ChatThread?) -> ChatThread {
+    /// A chat as it would start in `project`, not yet in `threads`. Only ordinary new
+    /// chats pass a fixed selection; continuations retain the existing inheritance chain.
+    private func makeThread(in project: Project?, carrying current: ChatThread?, modelSelection: NewThreadModelSelection? = nil) -> ChatThread {
         let installed = ProviderKind.allCases.filter { providers.status($0).isInstalled && settings.isEnabled($0) }
         // The project's own pair, when it has one, sets the provider before anything else.
-        let projectPair = HydraPair.projectPair(project.hydraPairID, hydraOn: settings.hydraEnabled, in: hydraPickerPairs)
+        let projectPair = HydraPair.projectPair(project?.hydraPairID, hydraOn: settings.hydraEnabled, in: hydraPickerPairs)
+        if projectPair == nil, let selection = modelSelection,
+           providers.availableProviders.contains(selection.provider),
+           let option = providers.model(selection.modelID, for: selection.provider) {
+            let preference = settings.preference(for: selection.provider, model: option.id)
+            let effort = selection.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
+                ?? preference.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
+            return ChatThread(
+                projectID: project?.id,
+                provider: selection.provider,
+                model: option.id,
+                effort: effort,
+                runtimeMode: settings.defaultRuntimeMode,
+                fastMode: option.supportsFast && preference.fastMode
+            )
+        }
         // With no chat to carry from (a fresh launch), the pair last entered from the
         // picker is where the new chat starts. Before any pair has been entered since
         // this was remembered, the chat last worked in stands in: its pair if it led one,
         // and none if it had left its pair for a model of its own.
         let lastPairID = settings.lastHydraPairID
-            ?? threads.filter { !$0.isHelper }.max { $0.updatedAt < $1.updatedAt }?.hydraPairID
+            ?? threads.filter { !$0.isHelper && (project != nil || $0.projectID == nil) }.max { $0.updatedAt < $1.updatedAt }?.hydraPairID
         let lastPair = current == nil && settings.hydraEnabled
             ? lastPairID.flatMap { id in hydraPickerPairs.first { $0.id == id } }
             : nil
@@ -794,7 +1007,7 @@ final class AppModel {
         let effort = carriesModel ? current?.effort : (preference.effort ?? settings.lastEffort(for: provider))
         let fastMode = carriesModel ? (current?.fastMode ?? false) : preference.fastMode
         var thread = ChatThread(
-            projectID: project.id,
+            projectID: project?.id,
             provider: provider,
             model: model,
             effort: effort,
@@ -814,8 +1027,8 @@ final class AppModel {
             thread.hydraPairID = pair.id
             thread.hydraEnabled = true
         } else if carriesModel {
-            thread.hydraPairID = current?.hydraPairID
-            thread.temporaryHydraPair = current?.temporaryHydraPair
+            thread.hydraPairID = inheritableHydraPair(from: current, into: project)
+            thread.temporaryHydraPair = thread.hydraPairID == nil ? nil : current?.temporaryHydraPair
         } else if let pair = lastPair, pair.provider == provider {
             let lead = hydraLead(of: pair, for: thread)
             thread.model = lead.model
@@ -834,6 +1047,7 @@ final class AppModel {
         change(&thread)
         defer { if isLibraryLoaded { announceLoweredPermissions() } }
         guard thread != previous else { return }
+        if Self.controlListMembershipChanged(previous, thread) { controlThreadMembershipRevision &+= 1 }
         threadStorage[index] = thread
         if Self.structureChanged(previous, thread) {
             synchronizeThreads()
@@ -843,6 +1057,12 @@ final class AppModel {
             threadsRevision &+= 1
         }
         scheduleSave()
+    }
+
+    private static func controlListMembershipChanged(_ previous: ChatThread, _ thread: ChatThread) -> Bool {
+        previous.id != thread.id || previous.projectID != thread.projectID
+            || previous.title != thread.title || previous.isArchived != thread.isArchived
+            || previous.parentThreadID != thread.parentThreadID || previous.isHydraHead != thread.isHydraHead
     }
 
     private static func structureChanged(_ previous: ChatThread, _ thread: ChatThread) -> Bool {
@@ -864,17 +1084,70 @@ final class AppModel {
     /// moved row into view. The runtime stops first, so no turn carries on against a
     /// folder the chat has left. Wrap the call in `withAnimation` to make the move glide
     /// in the sidebar; the model itself never animates.
+    /// Commit the irreversible "has sent" boundary before handing work to a provider.
+    func beginThreadTurn(_ id: UUID) -> Bool {
+        guard let thread = thread(id) else { return false }
+        if thread.hasStartedTurn { return true }
+        updateThread(id) { $0.hasStartedTurn = true }
+        guard persistenceEnabled else { return true }
+        guard commitLibrary(currentLibrary()) else {
+            updateThread(id) { $0.hasStartedTurn = false }
+            return false
+        }
+        return true
+    }
+
+    func canChangeThreadAffiliation(_ id: UUID) -> Bool {
+        guard let thread = thread(id), !thread.isHelper, !thread.isArchived, !thread.hasStartedTurn,
+              thread.lastStatus == nil, !creatingWorktrees.contains(id), children(of: id).isEmpty else { return false }
+        guard let runtime = existingRuntime(for: id) else { return true }
+        return !runtime.isRunning && !runtime.isLoadingHistory && runtime.turns.isEmpty && !runtime.hasSentPrompts
+    }
+
     func moveThread(_ id: UUID, toProject project: Project) {
+        guard let thread = thread(id), self.project(project.id) != nil else { return }
+        if thread.projectID == nil {
+            _ = moveThread(id, to: .project(project.id))
+        } else {
+            applyThreadAffiliation(id, .project(project.id))
+        }
+    }
+
+    @discardableResult
+    func moveThread(_ id: UUID, to affiliation: ThreadAffiliation) -> Bool {
+        guard let thread = thread(id) else { return false }
+        if thread.affiliation == affiliation { return true }
+        guard canChangeThreadAffiliation(id) else { return false }
+        do {
+            guard try !Storage.hasStoredTurns(id) else { return false }
+            if let projectID = affiliation.projectID, project(projectID) == nil {
+                throw ProviderError.failed(Chrome.localized("This thread's project is unavailable."))
+            }
+            applyThreadAffiliation(id, affiliation)
+            return true
+        } catch {
+            alert = AppAlert(title: "Could not change thread location", message: error.localizedDescription)
+            return false
+        }
+    }
+
+    private func applyThreadAffiliation(_ id: UUID, _ affiliation: ThreadAffiliation) {
         existingRuntime(for: id)?.stopSession()
+        terminals.closeAll(for: id)
         updateThread(id) { thread in
-            thread.projectID = project.id
+            thread.projectID = affiliation.projectID
             thread.worktreePath = nil
             thread.branch = nil
+            thread.controlWorkspace = nil
             thread.providerSessionID = nil
             thread.providerResumeAt = nil
+            if affiliation == .standalone {
+                thread.hydraPairID = nil
+                thread.temporaryHydraPair = nil
+            }
         }
-        updateProject(project.id) { $0.isExpanded = true }
-        rememberLastProject(project.id)
+        if let projectID = affiliation.projectID { updateProject(projectID) { $0.isExpanded = true } }
+        rememberAffiliation(affiliation)
         sidebarRevealThreadID = id
     }
 
@@ -984,6 +1257,11 @@ final class AppModel {
         deleteThreads(descendantsIncluding(threads.filter(\.isArchived).map(\.id)))
     }
 
+    /// Deletes the selected archived chats and their helpers, as a single delete does.
+    func deleteArchivedThreads(ids: Set<UUID>) {
+        deleteThreads(descendantsIncluding(threads.filter { $0.isArchived && ids.contains($0.id) }.map(\.id)))
+    }
+
     private func descendantsIncluding(_ roots: [UUID]) -> [ChatThread] {
         var ids = Set(roots)
         var pending = roots
@@ -997,19 +1275,17 @@ final class AppModel {
         let directory: String
         let id: UUID
         let copy: String?
+        let patchBase: String?
+        let headName: String?
     }
 
     private func deletionCleanup(for removed: [ChatThread], removeWorktree: UUID? = nil) -> [ThreadDeletionCleanup] {
         removed.compactMap { thread in
-            guard let project = project(thread.projectID) else { return nil }
+            guard let directory = try? executionDirectory(for: thread) else { return nil }
             let ownsCopy = thread.hydra?.hasOwnCopy == true
                 || (!thread.isHelper && thread.id == removeWorktree)
             let copy = ownsCopy ? thread.worktreePath : nil
             let safeCopy = copy.flatMap { path -> String? in
-                if let info = thread.hydra,
-                   !info.isFinished || !(info.landing?.landed == true || info.landing?.isEmpty == true) {
-                    return nil
-                }
                 let url = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
                 let managed = Storage.worktreesDirectory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
                 guard url.path.hasPrefix(managed),
@@ -1021,8 +1297,16 @@ final class AppModel {
                       !threads.contains(where: { $0.id == thread.parentThreadID && $0.worktreePath == path }) else { return nil }
                 return path
             }
+            // Unfinished or unlanded work in a head's own copy is kept as a patch before
+            // the copy goes, so the base it diffs against and the head's name are
+            // captured here too (see completeThreadDeletion).
+            let keepsPatch = safeCopy != nil && thread.hydra.map { info in
+                info.hasOwnCopy && (!info.isFinished || !(info.landing?.landed == true || info.landing?.isEmpty == true))
+            } == true
             // Capture the actual checkout before its project and runtime disappear.
-            return ThreadDeletionCleanup(directory: thread.executionDirectory(projectPath: project.path), id: thread.id, copy: safeCopy)
+            return ThreadDeletionCleanup(directory: directory, id: thread.id, copy: safeCopy,
+                                         patchBase: keepsPatch ? thread.hydra?.baseTree : nil,
+                                         headName: keepsPatch ? thread.hydra?.persona.name : nil)
         }
     }
 
@@ -1056,9 +1340,17 @@ final class AppModel {
             for item in cleanup {
                 guard let copy = item.copy else { continue }
                 do {
-                    guard let status = await Git(copy).status(), status.changedFiles == 0 else {
-                        alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The worktree has changes or could not be inspected. Its files were kept."))
-                        continue
+                    if let base = item.patchBase {
+                        // The work survives in the patch, so the copy goes even with changes.
+                        guard await keepHydraCopyAsPatch(item.id, name: item.headName ?? "head", copy: copy, base: base) else {
+                            alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
+                            continue
+                        }
+                    } else {
+                        guard let status = await Git(copy).status(), status.changedFiles == 0 else {
+                            alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The worktree has changes or could not be inspected. Its files were kept."))
+                            continue
+                        }
                     }
                     let root = try await Git(item.directory).repositoryRoot()
                     try await Git(root.path).removeWorktree(at: copy)
@@ -1146,8 +1438,10 @@ final class AppModel {
 
     private func discardThreadState(_ thread: ChatThread, deletingDocument: Bool = true) {
         hydraHeadRetries[thread.id] = nil
+        runtimeLastAccess[thread.id] = nil
         idleSessionStops.removeValue(forKey: thread.id)?.cancel()
         runtimes[thread.id]?.cancelPersistence()
+        runtimes[thread.id]?.failExternalControl(ControlFailure(code: .notFound))
         runtimes[thread.id]?.stopSession()
         runtimes[thread.id] = nil
         updateTaskSleepPrevention()
@@ -1199,29 +1493,118 @@ final class AppModel {
         openThread(order[number - 1].id)
     }
 
-    func createWorktree(for threadID: UUID) async {
-        guard let thread = thread(threadID), thread.worktreePath == nil, let project = project(thread.projectID) else { return }
+    /// The longest branch name Tivano accepts, in characters; git's own limit is a
+    /// 255-byte file name per path component, and a CJK character takes three.
+    static let branchNameLimit = 60
+
+    /// Letters of any script (Chinese included), digits and `-_./`. Git accepts more, but
+    /// quotes, `$`, backticks, `@` and emoji break the unquoted shell commands agents
+    /// write and many CI tools that reuse branch names.
+    private static let branchNameCharacters = CharacterSet.letters.union(.decimalDigits)
+        .union(CharacterSet(charactersIn: "-_./"))
+
+    /// What the user typed, with its spaces turned into dashes.
+    static func normalizedBranchName(_ raw: String) -> String {
+        raw.trimmed.replacingOccurrences(of: #"\s+"#, with: "-", options: .regularExpression)
+    }
+
+    static func suggestedBranchName(title: String, threadID: UUID) -> String {
+        let fallback = "tivano/\(threadID.uuidString.lowercased().prefix(8))"
+        let title = title.trimmed
+        guard title != ChatThread.untitled else { return fallback }
+        // The slug keeps letters, digits, `-` and `_`; everything else, `.` and `/` included, becomes a dash.
+        let kept = CharacterSet.letters.union(.decimalDigits).union(CharacterSet(charactersIn: "-_"))
+        let replaced = title.unicodeScalars.map { kept.contains($0) ? String($0) : "-" }.joined()
+        let slug = String(replaced.replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-")).prefix(40))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return slug.isEmpty ? fallback : "tivano/\(slug)"
+    }
+
+    enum BranchNameCheck {
+        case accepted(String)
+        case rejected(String)
+        /// The branch has an upstream: renaming it locally leaves the remote branch and any
+        /// pull request under the old name, so the user confirms first.
+        case pushed(name: String, upstream: String)
+    }
+
+    /// Checks a new name for a worktree's branch, or for the branch of a worktree about to
+    /// be created when `renaming` is nil. `directory` is any checkout of the repository.
+    func checkBranchName(_ raw: String, in directory: String, renaming old: String?) async -> BranchNameCheck {
+        let name = Self.normalizedBranchName(raw)
+        guard !name.isEmpty, name != old else { return .rejected("") }
+        guard name.count <= Self.branchNameLimit else {
+            return .rejected(String(format: AppText.localized("Branch names can be up to %lld characters."), Self.branchNameLimit))
+        }
+        guard name.unicodeScalars.allSatisfy(Self.branchNameCharacters.contains) else {
+            return .rejected(AppText.localized("Branch names can use letters, numbers and - _ . / only."))
+        }
+        let git = Git(directory)
+        guard await git.isValidBranchName(name) else {
+            return .rejected(AppText.localized("That is not a valid branch name."))
+        }
+        let branches = await git.branches()
+        // macOS folds case in ref files, so a name differing only in case collides too.
+        guard !branches.contains(where: { $0.name != old && $0.name.lowercased() == name.lowercased() }) else {
+            return .rejected(AppText.localized("A branch with that name already exists."))
+        }
+        guard let old else { return .accepted(name) }
+        guard await !git.hasOperationInProgress() else {
+            return .rejected(AppText.localized("Finish or abort the merge, rebase or cherry-pick in progress, then rename the branch."))
+        }
+        if let upstream = branches.first(where: { $0.name == old })?.upstream {
+            return .pushed(name: name, upstream: upstream)
+        }
+        return .accepted(name)
+    }
+
+    /// Renames a worktree's branch to a name `checkBranchName` accepted.
+    func renameWorktreeBranch(_ threadID: UUID, to name: String) async {
+        guard let thread = thread(threadID), let path = thread.worktreePath, let old = thread.branch, name != old else { return }
+        let git = Git(path)
+        do {
+            try await git.renameBranch(old, to: name)
+            let ids = threads.filter { $0.projectID == thread.projectID && $0.branch == old }.map(\.id)
+            updateThreads(ids) { _, thread in thread.branch = name }
+        } catch {
+            alert = AppAlert(title: "Could not rename branch", message: error.localizedDescription)
+        }
+    }
+
+    func createWorktree(for threadID: UUID, branch: String? = nil) async {
+        guard let thread = thread(threadID), thread.worktreePath == nil, let project = project(thread.projectID),
+              creatingWorktrees.insert(threadID).inserted else { return }
+        defer { creatingWorktrees.remove(threadID) }
+        updateThread(threadID) { $0.controlWorkspace = ControlWorkspace(mode: .worktree, phase: .preparing, enforcesExecutionReadiness: false) }
         let git = Git(project.path)
         guard await git.isRepository(), await git.hasCommits() else {
+            updateThread(threadID) { $0.controlWorkspace?.phase = .failed; $0.controlWorkspace?.failure = ControlFailure(code: .workspaceFailed) }
             alert = AppAlert(title: "Worktree unavailable", message: "New worktrees need a git repository with at least one commit.")
             return
         }
         let suffix = String(threadID.uuidString.lowercased().prefix(8))
         let folder = project.name.replacingOccurrences(of: " ", with: "-").lowercased()
         let path = Storage.worktreesDirectory.appendingPathComponent("\(folder)-\(suffix)").path
-        let branch = "tivano/\(suffix)"
+        let branch = branch ?? "tivano/\(suffix)"
         let base = await git.status()?.branch
+        guard self.thread(threadID)?.affiliation == thread.affiliation else { return }
         do {
             try await git.addWorktree(at: path, branch: branch, base: base)
             updateThread(threadID) {
                 $0.worktreePath = path
                 $0.branch = branch
+                let unobservedSetup = project.scripts.contains(where: \.runOnWorktreeCreate)
+                $0.controlWorkspace = ControlWorkspace(mode: .worktree, phase: unobservedSetup ? .failed : .ready,
+                                                       failure: unobservedSetup ? ControlFailure(code: .unsupported, detail: "ui_setup_completion_unobserved") : nil,
+                                                       enforcesExecutionReadiness: false)
             }
             for script in project.scripts where script.runOnWorktreeCreate {
                 terminals.run(script, threadID: threadID, directory: path)
                 runtime(for: threadID).isTerminalVisible = true
             }
         } catch {
+            updateThread(threadID) { $0.controlWorkspace?.phase = .failed; $0.controlWorkspace?.failure = ControlFailure(code: .workspaceFailed) }
             alert = AppAlert(title: "Could not create a worktree", message: error.localizedDescription)
         }
     }
@@ -1357,6 +1740,111 @@ final class AppModel {
         }
     }
 
+    // MARK: - Parameterized external creation (no selection, draft or pair inheritance)
+
+    func controlWorkspace(for thread: ChatThread) -> ControlWorkspace {
+        if creatingWorktrees.contains(thread.id) {
+            var workspace = thread.controlWorkspace ?? ControlWorkspace(mode: .worktree, phase: .preparing, enforcesExecutionReadiness: false)
+            workspace.phase = .preparing
+            return workspace
+        }
+        if let workspace = thread.controlWorkspace { return workspace }
+        if thread.worktreePath != nil, project(thread.projectID)?.scripts.contains(where: \.runOnWorktreeCreate) == true {
+            return ControlWorkspace(mode: .worktree, phase: .failed,
+                                    failure: ControlFailure(code: .unsupported, detail: "ui_setup_completion_unobserved"), enforcesExecutionReadiness: false)
+        }
+        return ControlWorkspace(mode: thread.worktreePath == nil ? .local : .worktree, phase: .ready)
+    }
+
+    func requireExternalPersistence() throws {
+        guard isLibraryLoaded, persistenceEnabled, !libraryWritesBlocked, !CaptureRun.isEnabled else {
+            throw ControlFailure(code: .persistence)
+        }
+        guard !localControl.isShuttingDown else { throw ControlFailure(code: .shutdown) }
+    }
+
+    func commitExternalLibrary() throws {
+        try requireExternalPersistence()
+        guard commitLibrary(currentLibrary()) else { throw ControlFailure(code: .persistence) }
+    }
+
+    func createExternalThread(_ request: ControlCreate, provider: ProviderKind) throws -> ChatThread {
+        try requireExternalPersistence()
+        if let projectID = request.projectID, project(projectID) == nil { throw ControlFailure(code: .missingProject) }
+        guard request.workspace != .worktree || request.projectID != nil else { throw ControlFailure(code: .unsupported) }
+        // Never grant permissions implicitly to a provider that cannot ask first.
+        guard provider.supports(.supervised) else { throw ControlFailure(code: .unsupported) }
+        if let project = project(request.projectID) { try Self.requireControlDirectory(project.path) }
+        var thread = ChatThread(projectID: request.projectID, provider: provider, model: request.model,
+                                effort: nil, runtimeMode: .supervised)
+        thread.hydraEnabled = false
+        thread.hydraPairID = nil
+        thread.temporaryHydraPair = nil
+        thread.controlWorkspace = ControlWorkspace(mode: request.workspace, phase: request.workspace == .worktree ? .preparing : .ready)
+        var library = currentLibrary()
+        library.threads.append(thread)
+        guard commitLibrary(library) else { throw ControlFailure(code: .persistence) }
+        threads.append(thread)
+        return thread
+    }
+
+    static func requireControlDirectory(_ path: String) throws {
+        var directory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &directory), directory.boolValue,
+              FileManager.default.isReadableFile(atPath: path), FileManager.default.isWritableFile(atPath: path) else {
+            throw ControlFailure(code: .directoryUnavailable)
+        }
+    }
+
+    /// Unlike the UI terminal path, setup is complete only after every configured script
+    /// exits successfully. Failed worktrees are retained, explicitly unusable, for review.
+    func prepareExternalWorktree(_ id: UUID) async throws {
+        guard let original = thread(id), original.controlWorkspace?.phase == .preparing,
+              let project = project(original.projectID), creatingWorktrees.insert(id).inserted else {
+            throw ControlFailure(code: .workspaceFailed)
+        }
+        defer { creatingWorktrees.remove(id) }
+        do {
+            let git = Git(project.path)
+            guard await git.isRepository(), await git.hasCommits() else { throw ControlFailure(code: .workspaceFailed, detail: "repository_requires_commit") }
+            try requireExternalWorkspaceOwner(id, original: original, projectPath: project.path)
+            let suffix = id.uuidString.lowercased()
+            let path = Storage.worktreesDirectory.appendingPathComponent("control-\(suffix)").path
+            let branch = "tivano/control-\(suffix)"
+            // Git resolves HEAD at creation; never silently substitute another checkout.
+            try await git.addWorktree(at: path, branch: branch, base: "HEAD")
+            try requireExternalWorkspaceOwner(id, original: original, projectPath: project.path)
+            updateThread(id) { $0.worktreePath = path; $0.branch = branch }
+            try commitExternalLibrary()
+            let scripts = project.scripts.filter(\.runOnWorktreeCreate)
+            guard scripts.count <= 16 else { throw ControlFailure(code: .bounds) }
+            for script in scripts {
+                try requireExternalWorkspaceOwner(id, original: original, projectPath: project.path)
+                let result = try await Shell.run(URL(fileURLWithPath: "/bin/zsh"), ["-lc", script.command],
+                                                in: URL(fileURLWithPath: path), timeout: 120, outputLimit: 8_192)
+                guard result.succeeded else { throw ControlFailure(code: .workspaceFailed, detail: "setup_exit_\(result.status)") }
+            }
+            try requireExternalWorkspaceOwner(id, original: original, projectPath: project.path)
+            try Self.requireControlDirectory(path)
+            updateThread(id) { $0.controlWorkspace?.phase = .ready }
+            try commitExternalLibrary()
+        } catch {
+            let failure = error as? ControlFailure ?? ControlFailure(code: .workspaceFailed)
+            updateThread(id) { $0.controlWorkspace?.phase = .failed; $0.controlWorkspace?.failure = failure }
+            // If even the failed state cannot persist, report persistence, never ready.
+            try commitExternalLibrary()
+            throw failure
+        }
+    }
+
+    private func requireExternalWorkspaceOwner(_ id: UUID, original: ChatThread, projectPath: String) throws {
+        try requireExternalPersistence()
+        guard let current = thread(id), current.affiliation == original.affiliation, !current.isArchived,
+              current.controlWorkspace?.phase == .preparing, project(current.projectID)?.path == projectPath else {
+            throw ControlFailure(code: .workspaceFailed)
+        }
+    }
+
     // MARK: - Persistence
 
     /// The library holds every thread and every head's report, runs to megabytes, and
@@ -1406,8 +1894,11 @@ final class AppModel {
     }
 
     /// Destructive actions cannot run until the index that forgets their files is durable.
-    private func commitLibrary(_ library: Library) -> Bool {
-        guard isLibraryLoaded, persistenceEnabled, !libraryWritesBlocked else { return false }
+    /// `duringShutdown` lets the quit flush write after `persistenceEnabled` was switched
+    /// off: quit flushes twice — once before sessions stop, once after the MCP shutdown —
+    /// and the second pass still persists what that window changed.
+    private func commitLibrary(_ library: Library, duringShutdown: Bool = false) -> Bool {
+        guard isLibraryLoaded, duringShutdown || persistenceEnabled, !libraryWritesBlocked else { return false }
         saveTask?.cancel()
         saveTask = nil
         guard DiskWriter.shared.writeSynchronously(library, to: Storage.libraryURL) else {
@@ -1435,8 +1926,16 @@ final class AppModel {
 
     /// The updater also uses this barrier before starting its external installer.
     func flushForQuit() -> Bool {
+        // No externally-admitted operation may write beyond the updater's flush barrier.
+        // Refuse rather than silently cancel accepted turns or half-created worktrees.
+        localControl.suspendForShutdown()
+        var flushed = false
+        defer { if !flushed { localControl.restoreAfterFailedShutdown() } }
+        guard !localControl.hasPendingMutations else {
+            alert = AppAlert(title: "Local control is busy", message: "Wait for accepted local-control operations to end before quitting or updating.")
+            return false
+        }
         guard isLibraryLoaded else { return false }
-        guard persistenceEnabled else { return true }
         for runtime in runtimes.values {
             if let snapshot = runtime.unsavedSnapshot(), !DiskWriter.shared.writeThreadSynchronously(snapshot) {
                 showLibrarySaveFailure()
@@ -1452,10 +1951,11 @@ final class AppModel {
                     return false
                 }
             }
-        } else if !commitLibrary(currentLibrary()) {
+        } else if !commitLibrary(currentLibrary(), duringShutdown: true) {
             return false
         }
         DiskWriter.shared.waitForQueuedWrites()
+        flushed = true
         return true
     }
 

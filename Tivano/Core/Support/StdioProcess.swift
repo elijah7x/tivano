@@ -38,6 +38,7 @@ final class StdioProcess: @unchecked Sendable {
     let messages: MessageStream
 
     private let framing: Framing
+    private let rejectsInvalidJSON: Bool
     private let continuation: AsyncStream<MessageStream.Entry>.Continuation
     private let process = Process()
     private let stdin = Pipe()
@@ -63,7 +64,7 @@ final class StdioProcess: @unchecked Sendable {
     /// stream's iterator decrements it and a `Mutex` cannot be captured by a closure.
     private let ingressBytes: OSAllocatedUnfairLock<Int>
 
-    init(executable: URL, arguments: [String], directory: URL, environment: [String: String], framing: Framing = .lines) {
+    init(executable: URL, arguments: [String], directory: URL, environment: [String: String], framing: Framing = .lines, rejectsInvalidJSON: Bool = false) {
         let stream = AsyncStream.makeStream(of: MessageStream.Entry.self)
         state = Mutex(State(framer: StdioFramer(framing: framing)))
         let ingress = OSAllocatedUnfairLock(initialState: 0)
@@ -73,6 +74,7 @@ final class StdioProcess: @unchecked Sendable {
         })
         continuation = stream.continuation
         self.framing = framing
+        self.rejectsInvalidJSON = rejectsInvalidJSON
         process.executableURL = executable
         process.arguments = arguments
         process.currentDirectoryURL = directory
@@ -91,6 +93,7 @@ final class StdioProcess: @unchecked Sendable {
     }
 
     var failureReason: String? { state.withLock { $0.failureReason } }
+    var exitStatus: Int32? { state.withLock { $0.exitStatus } }
 
     func start() throws {
         stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -368,7 +371,11 @@ final class StdioProcess: @unchecked Sendable {
     private func deliver(_ line: Data) {
         var line = line
         while let last = line.last, last == 0x0D || last == 0x20 { line.removeLast() }
-        guard !line.isEmpty, let message = JSONValue.parse(line) else { return }
+        guard !line.isEmpty else { return }
+        guard let message = JSONValue.parse(line) else {
+            if rejectsInvalidJSON { fail(AppText.localized("The agent sent invalid JSON on its protocol output.")) }
+            return
+        }
         guard !state.withLock({ $0.outputFinished }) else { return }
         let size = line.count
         let accepted = ingressBytes.withLock { queued in
@@ -421,8 +428,10 @@ final class StdioProcess: @unchecked Sendable {
 
         // A grandchild can inherit stdout and keep it open after the provider exits.
         let handle = stdout.fileHandleForReading
+        let errorHandle = stderr.fileHandleForReading
         DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in
             handle.readabilityHandler = nil
+            errorHandle.readabilityHandler = nil
             self?.finishOutput()
         }
     }

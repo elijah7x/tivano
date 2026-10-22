@@ -118,11 +118,30 @@ struct ProjectScript: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+enum ThreadAffiliation: Equatable, Sendable, Codable {
+    case project(UUID)
+    case standalone
+
+    var projectID: UUID? {
+        if case .project(let id) = self { return id }
+        return nil
+    }
+}
+
+enum NewThreadAffiliation: Sendable {
+    case project(UUID)
+    case standalone
+    case current
+}
+
 struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     static let untitled = "New thread"
 
     var id: UUID
-    var projectID: UUID
+    var projectID: UUID?
+    var hasStartedTurn = false
+
+    var affiliation: ThreadAffiliation { projectID.map(ThreadAffiliation.project) ?? .standalone }
     var title: String
     var createdAt: Date
     var updatedAt: Date
@@ -142,6 +161,8 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var interactionMode: InteractionMode
     var worktreePath: String?
     var branch: String?
+    /// External creation records readiness durably; failure never falls back to a project.
+    var controlWorkspace: ControlWorkspace?
     var providerSessionID: String?
     var providerResumeAt: String?
     var isPinned: Bool
@@ -218,6 +239,23 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// Sidebar layouts separately nest ordinary helpers under their visible parents.
     var isStandaloneListCandidate: Bool { !isArchived && !isInPanel && !isHydraHead }
 
+    static func orderedByActivity(_ threads: [ChatThread]) -> [ChatThread] {
+        let calendar = Calendar.current
+        func order(_ thread: ChatThread) -> Double? {
+            guard let order = thread.activityOrder, let day = thread.activityOrderDay,
+                  calendar.isDate(day, inSameDayAs: thread.updatedAt) else { return nil }
+            return order
+        }
+        return threads.sorted { lhs, rhs in
+            switch (order(lhs), order(rhs)) {
+            case let (left?, right?) where left != right: return left < right
+            case (nil, .some): return true
+            case (.some, nil): return false
+            default: return lhs.updatedAt > rhs.updatedAt
+            }
+        }
+    }
+
     /// Defaults key holding the per-chat Hydra default; `AppSettings` reads it from here.
     static let hydraDefaultKey = "hydraDefaultEnabled"
 
@@ -234,7 +272,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         return supported
     }
 
-    init(projectID: UUID, provider: ProviderKind, model: String?, effort: String?, runtimeMode: RuntimeMode, fastMode: Bool = false) {
+    init(projectID: UUID?, provider: ProviderKind, model: String?, effort: String?, runtimeMode: RuntimeMode, fastMode: Bool = false) {
         id = UUID()
         self.projectID = projectID
         title = Self.untitled
@@ -256,7 +294,9 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
-        projectID = try container.decode(UUID.self, forKey: .projectID)
+        projectID = try container.decodeIfPresent(UUID.self, forKey: .projectID)
+        // Old records cannot prove that an unloaded history has never been sent.
+        hasStartedTurn = try container.decodeIfPresent(Bool.self, forKey: .hasStartedTurn) ?? true
         title = container.value(.title, default: Self.untitled)
         createdAt = container.value(.createdAt, default: .now)
         updatedAt = container.value(.updatedAt, default: createdAt)
@@ -272,6 +312,12 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         interactionMode = container.value(.interactionMode, default: .build)
         worktreePath = container.value(.worktreePath, default: nil)
         branch = container.value(.branch, default: nil)
+        controlWorkspace = try container.decodeIfPresent(ControlWorkspace.self, forKey: .controlWorkspace)
+        if let workspace = controlWorkspace, workspace.mode == .worktree, workspace.phase == .ready,
+           worktreePath?.isEmpty != false {
+            // Enter backup-before-write recovery instead of falling back to a default directory.
+            throw DecodingError.dataCorruptedError(forKey: .controlWorkspace, in: container, debugDescription: "Ready worktree has no checkout")
+        }
         providerSessionID = container.value(.providerSessionID, default: nil)
         providerResumeAt = container.value(.providerResumeAt, default: nil)
         isPinned = container.value(.isPinned, default: false)

@@ -22,7 +22,7 @@ final class MCPProxy: @unchecked Sendable {
             return saved
         }
         let picked = pickFreePort()
-        try? "\(picked)".write(to: portFile, atomically: true, encoding: .utf8)
+        MCPPaths.writePrivate(Data("\(picked)".utf8), to: portFile)
         return picked
     }
 
@@ -30,7 +30,7 @@ final class MCPProxy: @unchecked Sendable {
     private static func repickPort() -> UInt16 {
         let picked = pickFreePort()
         portBox.withLock { $0 = picked }
-        try? "\(picked)".write(to: portFile, atomically: true, encoding: .utf8)
+        MCPPaths.writePrivate(Data("\(picked)".utf8), to: portFile)
         return picked
     }
 
@@ -50,14 +50,28 @@ final class MCPProxy: @unchecked Sendable {
 
     private static let headLimit = 65_536
     private static let bodyLimit = 32 * 1_024 * 1_024
+    private static let responseLimit = 16 * 1024 * 1024
     private static let divider = Data("\r\n\r\n".utf8)
+    /// Local connections served at once; one more than this gets a bare 503 and a close.
+    /// Hydra heads each hold long-lived streams to several servers, so this stays well above a team's need.
+    private static let connectionLimit = 128
+    /// Seconds from accept for the whole request — head plus declared body — to arrive.
+    private static let requestReadTimeout: TimeInterval = 30
 
     private let queue = DispatchQueue(label: "MCPProxy")
+
+    /// `reading` stays true only from accept until the request's head and declared body
+    /// are all in; the read deadline covers that window alone, never the upstream answer.
+    private struct TrackedConnection: @unchecked Sendable {
+        let connection: NWConnection
+        var task: Task<Void, Never>?
+        var reading = true
+    }
 
     private struct State {
         var routes: [String: Route] = [:]
         var listener: NWListener?
-        var connections: [ObjectIdentifier: NWConnection] = [:]
+        var connections: [ObjectIdentifier: TrackedConnection] = [:]
         var running = false
     }
 
@@ -137,7 +151,7 @@ final class MCPProxy: @unchecked Sendable {
     }
 
     func stop() {
-        let (listener, open) = state.withLock { state -> (NWListener?, [NWConnection]) in
+        let (listener, open) = state.withLock { state -> (NWListener?, [TrackedConnection]) in
             let listener = state.listener
             let open = Array(state.connections.values)
             state.listener = nil
@@ -146,8 +160,9 @@ final class MCPProxy: @unchecked Sendable {
             return (listener, open)
         }
         listener?.cancel()
-        for connection in open {
-            connection.cancel()
+        for tracked in open {
+            tracked.task?.cancel()
+            tracked.connection.cancel()
         }
     }
 
@@ -173,13 +188,37 @@ final class MCPProxy: @unchecked Sendable {
     }
 
     private func accept(_ connection: NWConnection) {
-        state.withLock { $0.connections[ObjectIdentifier(connection)] = connection }
+        let id = ObjectIdentifier(connection)
+        let admitted = state.withLock { state -> Bool in
+            guard state.connections.count < Self.connectionLimit else { return false }
+            state.connections[id] = TrackedConnection(connection: connection)
+            return true
+        }
+        connection.stateUpdateHandler = { [weak self] newState in
+            guard case .failed = newState, let self else { return }
+            connection.cancel()
+            self.forget(connection)
+        }
         connection.start(queue: queue)
+        guard admitted else {
+            respond(connection: connection, status: 503, body: Self.jsonError("too many connections"))
+            return
+        }
+        queue.asyncAfter(deadline: .now() + Self.requestReadTimeout) { [weak self] in
+            guard let self,
+                  let tracked = self.state.withLock({ $0.connections[id] }),
+                  // An identifier can be reused by a later connection once this one is freed.
+                  tracked.connection === connection, tracked.reading else { return }
+            self.respond(connection: tracked.connection, status: 408, body: Self.jsonError("request timed out"))
+        }
         readHead(connection, Data())
     }
 
     private func forget(_ connection: NWConnection) {
-        state.withLock { _ = $0.connections.removeValue(forKey: ObjectIdentifier(connection)) }
+        let task = state.withLock {
+            $0.connections.removeValue(forKey: ObjectIdentifier(connection))?.task
+        }
+        task?.cancel()
     }
 
     private func readHead(_ connection: NWConnection, _ prefix: Data) {
@@ -193,6 +232,10 @@ final class MCPProxy: @unchecked Sendable {
                 buffer.append(data)
             }
             if let divider = buffer.range(of: Self.divider) {
+                guard divider.lowerBound - buffer.startIndex <= Self.headLimit else {
+                    self.respond(connection: connection, status: 413, body: Self.jsonError("request head too large"))
+                    return
+                }
                 let head = buffer[buffer.startIndex..<divider.lowerBound]
                 let rest = buffer[divider.upperBound..<buffer.endIndex]
                 self.handleExchange(connection: connection, head: Data(head), rest: Data(rest))
@@ -223,6 +266,9 @@ final class MCPProxy: @unchecked Sendable {
             let name = line[line.startIndex..<colon].trimmingCharacters(in: .whitespaces).lowercased()
             let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
             if !name.isEmpty {
+                if name == "content-length", let existing = headers[name], existing != value {
+                    return nil
+                }
                 headers[name] = value
             }
         }
@@ -239,7 +285,17 @@ final class MCPProxy: @unchecked Sendable {
             respond(connection: connection, status: 411, body: Self.jsonError("chunked request bodies are not supported"))
             return
         }
-        let contentLength = max(0, clientHeaders["content-length"].flatMap(Int.init) ?? 0)
+        let contentLength: Int
+        if let value = clientHeaders["content-length"] {
+            guard !value.isEmpty, value.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                  let length = Int(value), length >= 0 else {
+                respond(connection: connection, status: 400, body: Self.jsonError("invalid content-length"))
+                return
+            }
+            contentLength = length
+        } else {
+            contentLength = 0
+        }
         if contentLength > Self.bodyLimit {
             respond(connection: connection, status: 413, body: Self.jsonError("request body too large"))
             return
@@ -268,7 +324,8 @@ final class MCPProxy: @unchecked Sendable {
             if next.count >= need {
                 self.routeRequest(connection: connection, method: method, path: path, clientHeaders: clientHeaders, body: Data(next.prefix(need)))
             } else if isComplete || error != nil {
-                self.routeRequest(connection: connection, method: method, path: path, clientHeaders: clientHeaders, body: next)
+                connection.cancel()
+                self.forget(connection)
             } else {
                 self.readBody(connection: connection, method: method, path: path, clientHeaders: clientHeaders, buffer: next, need: need)
             }
@@ -276,6 +333,19 @@ final class MCPProxy: @unchecked Sendable {
     }
 
     private func routeRequest(connection: NWConnection, method: String, path: String, clientHeaders: [String: String], body: Data) {
+        let id = ObjectIdentifier(connection)
+        state.withLock { $0.connections[id]?.reading = false }
+        // Loopback alone does not keep browsers out: a cross-site POST from a page
+        // arrives either with a Host that is not this loopback port (DNS rebinding)
+        // or carrying the page's Origin, which the CLI clients here never send.
+        let host = clientHeaders["host"] ?? ""
+        guard host == "127.0.0.1:\(Self.port)" || host == "localhost:\(Self.port)",
+              clientHeaders["origin"].map(Self.loopbackOrigin) ?? true,
+              method.uppercased() != "POST" || Self.jsonContentType(clientHeaders["content-type"])
+        else {
+            respond(connection: connection, status: 403, body: Self.jsonError("forbidden"))
+            return
+        }
         let bare = String(path.prefix(upTo: path.firstIndex(of: "?") ?? path.endIndex))
         // A path the proxy holds no route for is a bad gateway, never a 404: the app reads a 404
         // seen through the proxy as the server's own answer (GitLab answers 404 while MCP is off).
@@ -294,18 +364,35 @@ final class MCPProxy: @unchecked Sendable {
             return
         }
         let box = ConnectionBox(connection: connection)
-        Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else {
                 box.connection.cancel()
                 return
             }
             do {
                 try await self.sendUpstream(box: box, serverID: serverID, route: route, method: method, clientHeaders: clientHeaders, body: body)
+            } catch let error where error is CancellationError || (error as? URLError)?.code == .cancelled {
+                // The local connection went away; nothing left to answer.
             } catch {
                 Self.log.error("request to '\(serverID)' failed: \(error.localizedDescription)")
                 self.respond(connection: box.connection, status: 502, body: Self.jsonError("upstream request failed"))
             }
         }
+        state.withLock { $0.connections[id]?.task = task }
+    }
+
+    /// An http(s) origin naming this machine — `null` and every other host are refused.
+    private static func loopbackOrigin(_ origin: String) -> Bool {
+        guard let url = URL(string: origin),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host else { return false }
+        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+
+    /// `application/json` with optional parameters (`; charset=utf-8`).
+    private static func jsonContentType(_ contentType: String?) -> Bool {
+        guard let mediaType = contentType?.split(separator: ";", maxSplits: 1).first else { return false }
+        return mediaType.trimmingCharacters(in: .whitespaces).lowercased() == "application/json"
     }
 
     private func sendUpstream(box: ConnectionBox, serverID: String, route: Route, method: String, clientHeaders: [String: String], body: Data) async throws {
@@ -344,10 +431,12 @@ final class MCPProxy: @unchecked Sendable {
             request.httpBody = body
         }
         var (stream, response) = try await URLSession.shared.bytes(for: request)
+        defer { stream.task.cancel() }
         var http = response as? HTTPURLResponse
         if route.usesOAuth, http?.statusCode == 401 {
             if let refreshed = try? await MCPOAuth.accessToken(serverID: serverID) {
                 request.setValue("Bearer \(refreshed)", forHTTPHeaderField: "Authorization")
+                stream.task.cancel()
                 (stream, response) = try await URLSession.shared.bytes(for: request)
                 http = response as? HTTPURLResponse
             }
@@ -355,10 +444,10 @@ final class MCPProxy: @unchecked Sendable {
         guard let http else {
             throw URLError(.badServerResponse)
         }
-        try await writeBack(box: box, response: http, stream: stream)
+        try await writeBack(box: box, serverID: serverID, response: http, stream: stream)
     }
 
-    private func writeBack(box: ConnectionBox, response: HTTPURLResponse, stream: URLSession.AsyncBytes) async throws {
+    private func writeBack(box: ConnectionBox, serverID: String, response: HTTPURLResponse, stream: URLSession.AsyncBytes) async throws {
         let contentType = response.value(forHTTPHeaderField: "Content-Type")
         var headers: [(String, String)] = []
         if let contentType {
@@ -374,30 +463,48 @@ final class MCPProxy: @unchecked Sendable {
         if contentType?.lowercased().contains("text/event-stream") == true {
             headers.append(("Transfer-Encoding", "chunked"))
             headers.append(("Connection", "close"))
-            await send(connection, Data(Self.statusHead(status: response.statusCode, headers: headers).utf8))
+            guard await send(connection, Data(Self.statusHead(status: response.statusCode, headers: headers).utf8)) else {
+                connection.cancel()
+                forget(connection)
+                return
+            }
+            var canSend = true
             do {
                 var buffer = Data()
                 for try await byte in stream {
                     buffer.append(byte)
-                    if byte == UInt8(ascii: "\n") {
-                        await send(connection, Self.chunk(buffer))
+                    if byte == UInt8(ascii: "\n") || buffer.count >= 16_384 {
+                        canSend = await send(connection, Self.chunk(buffer))
                         buffer.removeAll(keepingCapacity: true)
+                        if !canSend { break }
                     }
                 }
-                if !buffer.isEmpty {
-                    await send(connection, Self.chunk(buffer))
+                if canSend, !buffer.isEmpty {
+                    canSend = await send(connection, Self.chunk(buffer))
                 }
             } catch {
+                // A broken upstream stream gets no terminating chunk: the client must see
+                // the connection die, not a clean end of events.
+                if !Task.isCancelled {
+                    Self.log.error("stream from '\(serverID)' failed mid-response: \(error.localizedDescription)")
+                }
+                canSend = false
             }
-            await send(connection, Data("0\r\n\r\n".utf8))
+            if canSend {
+                await send(connection, Data("0\r\n\r\n".utf8))
+            }
             connection.cancel()
             forget(connection)
         } else {
             var payload = Data()
             if response.expectedContentLength > 0 {
-                payload.reserveCapacity(Int(response.expectedContentLength))
+                payload.reserveCapacity(Int(min(response.expectedContentLength, Int64(Self.responseLimit))))
             }
             for try await byte in stream {
+                guard payload.count < Self.responseLimit else {
+                    respond(connection: connection, status: 502, body: Self.jsonError("upstream response too large"))
+                    return
+                }
                 payload.append(byte)
             }
             headers.append(("Content-Length", "\(payload.count)"))
@@ -417,10 +524,11 @@ final class MCPProxy: @unchecked Sendable {
         return frame
     }
 
-    private func send(_ connection: NWConnection, _ data: Data) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            connection.send(content: data, completion: .contentProcessed { _ in
-                continuation.resume()
+    @discardableResult
+    private func send(_ connection: NWConnection, _ data: Data) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            connection.send(content: data, completion: .contentProcessed { error in
+                continuation.resume(returning: error == nil)
             })
         }
     }
@@ -455,12 +563,15 @@ final class MCPProxy: @unchecked Sendable {
         case 204: "No Content"
         case 400: "Bad Request"
         case 401: "Unauthorized"
+        case 403: "Forbidden"
         case 404: "Not Found"
         case 405: "Method Not Allowed"
+        case 408: "Request Timeout"
         case 411: "Length Required"
         case 413: "Content Too Large"
         case 500: "Internal Server Error"
         case 502: "Bad Gateway"
+        case 503: "Service Unavailable"
         default:
             if (200..<300).contains(status) { "OK" } else { "Error" }
         }

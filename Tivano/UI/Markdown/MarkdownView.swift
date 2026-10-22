@@ -186,6 +186,9 @@ struct MarkdownView: View, Equatable {
         let parsed: [MarkdownBlock]
         if let slot = streamingParses.lastIndex(where: { $0.text == text }) {
             parsed = streamingParses.remove(at: slot).parse.blocks
+        } else if let slot = streamingParses.lastIndex(where: { extends($0.text, to: text) }) {
+            let previous = streamingParses.remove(at: slot)
+            parsed = MarkdownParser.parse(text, extending: (previous.text, previous.parse)).blocks
         } else {
             parsed = MarkdownParser.parse(text)
         }
@@ -264,6 +267,11 @@ struct MarkdownView: View, Equatable {
                 RichLink.warm(source, with: pretty)
             }
         }
+    }
+
+    @MainActor
+    static func isCached(_ text: String) -> Bool {
+        blockCache.contains(text)
     }
 
     @MainActor

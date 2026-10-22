@@ -77,6 +77,7 @@ struct WallpaperCard: View {
                     }
                     .buttonStyle(.plain)
                     .help(Text(verbatim: Chrome.localized("Back to sharp")))
+                    .accessibilityLabel(Text(verbatim: Chrome.localized("Back to sharp")))
                     .offset(x: -28)
                     .transition(.opacity.combined(with: .offset(x: 6)))
                 }
@@ -186,6 +187,7 @@ private struct WallpaperPreview: View {
         }
         .buttonStyle(.plain)
         .contentShape(.rect)
+        .accessibilityLabel(Text(verbatim: Chrome.localized(store.hasWallpaper ? "Wallpaper picture" : "Drop a picture here, or choose one")))
         .dropDestination(for: URL.self, action: { urls, _ in
             guard let url = urls.first(where: WallpaperStore.accepts) else { return false }
             store.install(from: url)

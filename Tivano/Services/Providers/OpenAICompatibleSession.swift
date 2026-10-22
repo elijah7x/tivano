@@ -457,7 +457,7 @@ class OpenAICompatibleSession: ProviderSession {
     func compact() async throws {
         // Keep the system prompt plus the most recent exchanges.
         guard messages.count > 12 else {
-            onEvent?(.notice(Notice(level: .info, message: "Nothing to compact yet.")))
+            onEvent?(.notice(Notice(level: .info, message: AppText.localized("Nothing to compact yet."))))
             return
         }
         let system = messages.first
@@ -465,7 +465,7 @@ class OpenAICompatibleSession: ProviderSession {
         messages = (system.map { [$0] } ?? []) + tail
         // Slicing can orphan tool messages from their tool_calls.
         sanitizeHistory()
-        onEvent?(.notice(Notice(level: .info, message: "Context compacted.")))
+        onEvent?(.notice(Notice(level: .info, message: AppText.localized("Context compacted."))))
     }
 
     func stop() {
@@ -630,13 +630,15 @@ class OpenAICompatibleSession: ProviderSession {
             // Nothing was streamed, but the error still goes up as it was thrown.
             throw StreamAttemptFailure(underlying: error, emittedOutput: false)
         }
+        defer { bytes.task.cancel() }
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             // Read the error body for a useful message.
-            var body = ""
-            for try await line in bytes.lines {
-                body += line + "\n"
-                if body.count > 8_000 { break }
+            var bodyData = Data()
+            for try await byte in bytes {
+                bodyData.append(byte)
+                if bodyData.count >= 8_000 { break }
             }
+            let body = String(decoding: bodyData, as: UTF8.self)
             var round = StreamRound()
             round.statusCode = http.statusCode
             round.rawError = errorMessage(fromBody: body, statusCode: http.statusCode)
@@ -668,7 +670,10 @@ class OpenAICompatibleSession: ProviderSession {
             // per-line Task.isCancelled check fire instead of reading on.
             continuation.onTermination = { _ in drain.cancel() }
         }
-        defer { sseDrain = nil }
+        defer {
+            sseDrain?.cancel()
+            sseDrain = nil
+        }
         for await chunk in stream {
             if Task.isCancelled || interrupted { throw CancellationError() }
             switch chunk {
@@ -708,6 +713,8 @@ class OpenAICompatibleSession: ProviderSession {
             }
         }
 
+        try Task.checkCancellation()
+        if interrupted { throw CancellationError() }
         var round = StreamRound()
         round.content = content
         round.reasoning = reasoning
@@ -738,48 +745,88 @@ class OpenAICompatibleSession: ProviderSession {
     /// then feeds chunks to the coalescer. A transport failure is delivered as
     /// a chunk; CancellationError is rethrown for the stop path.
     private nonisolated static func drainSSE(bytes: URLSession.AsyncBytes, into coalescer: StreamCoalescer, contextWindow: Int) async throws {
+        func handleJSON(_ json: JSONValue) async {
+            if let err = json["error"], !err.isNull {
+                await coalescer.emitStreamError(err["message"]?.string ?? err.displayText)
+                return
+            }
+            if let u = json["usage"], !u.isNull {
+                let input = u["prompt_tokens"]?.int ?? u["input_tokens"]?.int
+                let output = u["completion_tokens"]?.int ?? u["output_tokens"]?.int
+                let cached = u["prompt_tokens_details"]?["cached_tokens"]?.int
+                    ?? u["input_tokens_details"]?["cached_tokens"]?.int
+                    ?? u["prompt_cache_hit_tokens"]?.int
+                // Reported totals only: the cached count is already part of the
+                // input, and the context window says nothing about consumption.
+                let total = u["total_tokens"]?.int ?? ((input ?? 0) + (output ?? 0))
+                if total > 0 {
+                    await coalescer.emitUsage(ContextUsage(usedTokens: total, windowTokens: contextWindow))
+                }
+                await coalescer.emitTokenUsage(ReportedTokenUsage(total: total, input: input, output: output, cachedInput: cached))
+            }
+            guard let choice = json["choices"]?.array?.first else { return }
+            let delta = choice["delta"] ?? .null
+            if let text = delta["content"]?.string, !text.isEmpty {
+                await coalescer.appendText(text)
+            }
+            if let think = (delta["reasoning_content"]?.string ?? delta["reasoning"]?.string), !think.isEmpty {
+                await coalescer.appendReasoning(think)
+            }
+            for call in delta["tool_calls"]?.array ?? [] {
+                let index = call["index"]?.int ?? 0
+                let id = call["id"]?.string ?? ""
+                let name = call["function"]?["name"]?.string ?? ""
+                let args = call["function"]?["arguments"]?.string ?? ""
+                await coalescer.emitToolCall(index: index, id: id, name: name, arguments: args)
+            }
+        }
+
+        var pending = ""
+        func handleLine(_ line: Data) async throws -> Bool {
+            if Task.isCancelled { throw CancellationError() }
+            var line = line
+            if line.last == UInt8(ascii: "\r") { line.removeLast() }
+            let trimmed = String(decoding: line, as: UTF8.self).trimmed
+            if trimmed.isEmpty {
+                pending = ""
+                return true
+            }
+            guard trimmed.hasPrefix("data:") else { return true }
+            let data = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if data == "[DONE]" { return false }
+            // A complete value on its own line wins, so one stray non-JSON line cannot
+            // swallow every later event of a server that sends no blank lines.
+            if let json = JSONValue.parse(data) {
+                pending = ""
+                await handleJSON(json)
+                return true
+            }
+            let payload = pending.isEmpty ? data : pending + "\n" + data
+            guard let json = JSONValue.parse(payload) else {
+                pending = payload.utf8.count <= 16 * 1024 * 1024 ? payload : ""
+                return true
+            }
+            pending = ""
+            await handleJSON(json)
+            return true
+        }
+
         do {
-            for try await line in bytes.lines {
+            var line = Data()
+            for try await byte in bytes {
                 if Task.isCancelled { throw CancellationError() }
-                let trimmed = line.trimmed
-                guard trimmed.hasPrefix("data:") else { continue }
-                let data = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                if data == "[DONE]" { break }
-                guard let json = JSONValue.parse(String(data)) else { continue }
-                if let err = json["error"], !err.isNull {
-                    await coalescer.emitStreamError(err["message"]?.string ?? err.displayText)
-                    continue
-                }
-                if let u = json["usage"], !u.isNull {
-                    let input = u["prompt_tokens"]?.int ?? u["input_tokens"]?.int
-                    let output = u["completion_tokens"]?.int ?? u["output_tokens"]?.int
-                    let cached = u["prompt_tokens_details"]?["cached_tokens"]?.int
-                        ?? u["input_tokens_details"]?["cached_tokens"]?.int
-                        ?? u["prompt_cache_hit_tokens"]?.int
-                    // Reported totals only: the cached count is already part of the
-                    // input, and the context window says nothing about consumption.
-                    let total = u["total_tokens"]?.int ?? ((input ?? 0) + (output ?? 0))
-                    if total > 0 {
-                        await coalescer.emitUsage(ContextUsage(usedTokens: total, windowTokens: contextWindow))
+                if byte == UInt8(ascii: "\n") {
+                    let shouldContinue = try await handleLine(line)
+                    line.removeAll(keepingCapacity: true)
+                    if !shouldContinue { break }
+                } else {
+                    guard line.count < 16 * 1024 * 1024 else {
+                        throw ProviderError.failed("The server sent a stream line larger than 16 MB.")
                     }
-                    await coalescer.emitTokenUsage(ReportedTokenUsage(total: total, input: input, output: output, cachedInput: cached))
-                }
-                guard let choice = json["choices"]?.array?.first else { continue }
-                let delta = choice["delta"] ?? .null
-                if let text = delta["content"]?.string, !text.isEmpty {
-                    await coalescer.appendText(text)
-                }
-                if let think = (delta["reasoning_content"]?.string ?? delta["reasoning"]?.string), !think.isEmpty {
-                    await coalescer.appendReasoning(think)
-                }
-                for call in delta["tool_calls"]?.array ?? [] {
-                    let index = call["index"]?.int ?? 0
-                    let id = call["id"]?.string ?? ""
-                    let name = call["function"]?["name"]?.string ?? ""
-                    let args = call["function"]?["arguments"]?.string ?? ""
-                    await coalescer.emitToolCall(index: index, id: id, name: name, arguments: args)
+                    line.append(byte)
                 }
             }
+            if !line.isEmpty { _ = try await handleLine(line) }
             await coalescer.finish()
         } catch is CancellationError {
             await coalescer.finish()
