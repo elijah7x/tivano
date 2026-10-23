@@ -201,6 +201,7 @@ final class AppSettings {
         static let lastNewChatModel = "lastNewChatModel"
         static let lastNewChatPair = "lastNewChatPair"
         static let dismissedModelGroupsTip = "dismissedModelGroupsTip"
+        static let hidesOutdatedModels = "hidesOutdatedModels"
         static let recentDownloadsPicker = "recentDownloadsPicker"
         static let lastProjectID = "lastProjectID"
         static let lastThreadAffiliation = "lastThreadAffiliation"
@@ -748,6 +749,12 @@ final class AppSettings {
         didSet { defaults.set(dismissedModelGroupsTip, forKey: Key.dismissedModelGroupsTip) }
     }
 
+    /// Model pickers show the newest three versions of each line; chosen, default and
+    /// in-use models always show.
+    var hidesOutdatedModels: Bool {
+        didSet { defaults.set(hidesOutdatedModels, forKey: Key.hidesOutdatedModels) }
+    }
+
     /// The model and the pair new chats were last started on from the picker, offered
     /// again as Recent. Kept apart, so going back and forth between a model and a
     /// temporary pair never loses the pair.
@@ -953,6 +960,7 @@ final class AppSettings {
         lastNewChatModel = Self.load(ModelPin.self, forKey: Key.lastNewChatModel)
         lastNewChatPair = Self.load(HydraPair.self, forKey: Key.lastNewChatPair)
         dismissedModelGroupsTip = defaults.bool(forKey: Key.dismissedModelGroupsTip)
+        hidesOutdatedModels = defaults.object(forKey: Key.hidesOutdatedModels) as? Bool ?? true
         hydraEnabled = defaults.object(forKey: Key.hydraEnabled) as? Bool ?? true
         hydraDefaultEnabled = defaults.object(forKey: Key.hydraDefaultEnabled) as? Bool ?? true
         hasSeenHydraIntro = defaults.object(forKey: Key.hasSeenHydraIntro) as? Bool ?? false

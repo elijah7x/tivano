@@ -79,22 +79,21 @@ def range_base(tag, head="HEAD"):
         raise RuntimeError(f"{tag} is not in public main history")
     public_tree = run_git(["rev-parse", f"{tag}^{{tree}}"]).strip()
     subject = f"Prepare Tivano {tag[1:]}"
-    candidates = run_git(["log", "--format=%H%x1f%s", head]).splitlines()
-    matching = []
-    for line in candidates:
-        sha, title = line.split("\x1f", 1)
-        if title != subject:
-            continue
-        if run_git(["rev-parse", f"{sha}^{{tree}}"]).strip() != public_tree:
-            continue
-        valid = True
+    candidates = [line.split("\x1f") for line in run_git(["log", "--format=%H%x1f%T%x1f%s", head]).splitlines()]
+
+    def released_versions(sha):
         for edition in ("dev", "release"):
-            text = run_git(["show", f"{sha}:config/{edition}.xcconfig"])
-            match = VERSION_RE.search(text)
+            match = VERSION_RE.search(run_git(["show", f"{sha}:config/{edition}.xcconfig"]))
             if not match or match.group(1) != tag[1:]:
-                valid = False
-        if valid:
-            matching.append(sha)
+                return False
+        return True
+
+    matching = [sha for sha, tree, title in candidates
+                if title == subject and tree == public_tree and released_versions(sha)]
+    if not matching:
+        # A fix that landed after the Prepare commit ships in the same release: the dev
+        # commit carrying the tag's exact tree and versions is then the boundary.
+        matching = [sha for sha, tree, _ in candidates if tree == public_tree and released_versions(sha)]
     if len(matching) != 1:
         raise RuntimeError(f"Expected one {subject} ancestor with {tag}'s exact tree and versions; found {len(matching)}. Cannot bound contributor history")
     return matching[0]

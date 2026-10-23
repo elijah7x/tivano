@@ -337,7 +337,10 @@ final class ProviderRegistry {
                     return option
                 }
                 // A list cached before variants were merged is merged on the way in.
-                initialCatalogs[provider] = provider.namesModelVariants ? ModelFamilies.collapsed(ordered) : ordered
+                var restored = provider.namesModelVariants ? ModelFamilies.collapsed(ordered) : ordered
+                // A Pi list cached before account routes were merged keeps one row per route.
+                if provider == .pi { restored = ModelFamilies.mergedRoutes(restored) }
+                initialCatalogs[provider] = restored
             }
         }
         if !CaptureRun.isEnabled,
@@ -742,7 +745,10 @@ final class ProviderRegistry {
         guard let id else { return nil }
         let list = models(for: provider)
         if provider == .dsh { return list.first { $0.id == DshCLI.resolvedModelID(id, in: list) } }
-        return Self.match(id, in: list)
+        if let match = Self.match(id, in: list) { return match }
+        // Pi drops all but each model's first account route; an id pinned or saved under a removed route resolves to it.
+        if provider == .pi { return list.first { ModelFamilies.routeTail($0.id) == ModelFamilies.routeTail(id) } }
+        return nil
     }
 
     private static func match(_ id: String, in list: [ModelOption]) -> ModelOption? {
@@ -1129,6 +1135,8 @@ final class ProviderRegistry {
         case .claude: Self.mergedClaudeCatalog(list)
         // MiniMax supplies complete snapshots; an empty current scale revokes old values.
         case .minimaxCode: list
+        // Pi lists every model once per account route; the first route stands for the model.
+        case .pi: ModelFamilies.mergedRoutes(list)
         case _ where provider.namesModelVariants: Self.mergedACPCatalog(ModelFamilies.collapsed(list), over: catalogs[provider] ?? [], provider: provider)
         case _ where provider.usesACP: Self.mergedACPCatalog(list, over: catalogs[provider] ?? [], provider: provider)
         default: list
@@ -1225,7 +1233,9 @@ final class ProviderRegistry {
                 return .unknown
             }
             let text = result.output + result.errorOutput
-            return result.succeeded && text.localizedCaseInsensitiveContains("logged in") ? .signedIn(nil) : .signedOut
+            // Codex 0.164 reports an API key as "API key configured - …" instead of "Logged in using an API key".
+            let signedIn = text.localizedCaseInsensitiveContains("logged in") || text.localizedCaseInsensitiveContains("api key configured")
+            return result.succeeded && signedIn ? .signedIn(nil) : .signedOut
         case .claude:
             guard let result = try? await Shell.run(executable, ["auth", "status"], environment: environment, timeout: 20),
                   let json = JSONValue.parse(result.stdout) else { return .unknown }

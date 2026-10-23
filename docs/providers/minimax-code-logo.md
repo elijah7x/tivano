@@ -13,3 +13,7 @@
 Brand attribution: **MiniMax / MiniMax Code**. No asset-specific reuse license or attribution requirement was stated in the retrieved website SVGs. The repository's [MIT license](https://github.com/MiniMax-AI/minimax-code/blob/5821f7c9b0363a9b97a57fff3deaa4cd2da165a4/LICENSE) applies to its covered material; it does not establish a license for this separately sourced website mark. No broader trademark permission or endorsement is claimed; website-asset reuse permission remains unconfirmed.
 
 The head performed source research and asset editing. The lead subsequently built the asset catalogue and visually inspected its native rendering at 16, 24, 48 and 128 pixels; the silhouette remained clear. Placement in the updated running app still awaits UI acceptance.
+
+## Colour version (2026-10-23)
+
+The asset is now `provider-minimaxCode.imageset/mcode.png` (128 × 128, rendering intent `original`), replacing the monochrome `mcode.svg` so the provider menu shows brand colours like Claude, Kimi and DeepSeek. MiniMax publishes the coloured mascot only as raster with a white background (`agent.minimax.io/assets/logo/apple-touch_v2.png`, 1024 × 1024). Its pixels were clipped by the official mascot path described above, aligned by bounding box (both 0.970 aspect) and scaled 0.5 % beyond the path so no white fringe shows, then rendered with headless Chrome on a transparent background. Geometry and colours are unchanged; nothing was traced or redrawn.

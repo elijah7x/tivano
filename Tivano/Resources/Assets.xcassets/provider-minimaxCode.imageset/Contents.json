@@ -1,10 +1,15 @@
 {
-  "images": [
-    { "filename": "mcode.svg", "idiom": "universal" }
+  "images" : [
+    {
+      "filename" : "mcode.png",
+      "idiom" : "universal"
+    }
   ],
-  "info": { "author": "xcode", "version": 1 },
-  "properties": {
-    "preserves-vector-representation": true,
-    "template-rendering-intent": "template"
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  },
+  "properties" : {
+    "template-rendering-intent" : "original"
   }
 }

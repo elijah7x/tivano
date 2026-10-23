@@ -495,8 +495,9 @@ struct HydraPairEditor: View {
         let registry = model.providers
         let providers = ProviderKind.alphabetical.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.provider) }
         let headsProviders = ProviderKind.alphabetical.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.headsProvider) }
-        let options = registry.sortedModels(for: pair.provider)
-        let headsOptions = pair.headsProvider == pair.provider ? options : registry.sortedModels(for: pair.headsProvider)
+        let sameProvider = pair.headsProvider == pair.provider
+        let options = model.pickerModels(for: pair.provider, keeping: Set([pair.orchestratorModel, sameProvider ? pair.workerModel : nil].compactMap { $0 }))
+        let headsOptions = sameProvider ? options : model.pickerModels(for: pair.headsProvider, keeping: Set([pair.workerModel].compactMap { $0 }))
         let catalogProviders = Self.catalogProviders(pair)
         let leadOption = registry.model(pair.orchestratorModel, for: pair.provider)
         let workerOption = registry.model(pair.workerModel, for: pair.headsProvider)

@@ -5,8 +5,9 @@ import Foundation
 /// Two foldings, both read off the names the provider gives:
 /// - `collapsed` merges the effort and Fast variants a provider lists as models of
 ///   their own ("Claude Opus 5.5 XHigh Fast") into one row whose effort and Fast are
-///   settings, the way Claude and Codex list them. The row keeps every variant's id,
-///   so the session sends the provider exactly an id it listed.
+///   settings, the way Claude and Codex list them. Devin's "Fusion (LEAD + SIDEKICK)"
+///   pairings fold on the lead the same way, one row per pairing. The row keeps every
+///   variant's id, so the session sends the provider exactly an id it listed.
 /// - `lineages` groups the rows of one line ("Claude Opus 5.5", "Claude Opus 5",
 ///   "Claude Opus 4.8") so a list shows the newest and folds the earlier versions, and
 ///   sets free, preview and experimental lines aside.
@@ -87,14 +88,30 @@ enum ModelFamilies {
     /// The words a provider appends to a model's name for its variants, read from the
     /// end: "GPT-6 Sol No Thinking Fast" is "GPT-6 Sol" at no effort, fast. "Thinking"
     /// counts only after an effort ("High Thinking", "No Thinking"); alone it names a
-    /// model of its own ("Claude Opus 4.6 Thinking").
+    /// model of its own ("Claude Opus 4.6 Thinking"). "Extra High" is one effort in
+    /// two words, read as "xhigh". A "Fusion (LEAD + SIDEKICK)" reads the variant words
+    /// of its lead only and keeps the sidekick verbatim, so every pairing folds.
     static func parse(_ name: String) -> (base: String, effort: String?, isFast: Bool) {
+        if name.hasPrefix("Fusion ("), name.hasSuffix(")") {
+            let inner = name.dropFirst("Fusion (".count).dropLast()
+            if let plus = inner.range(of: " + ") {
+                let lead = parse(String(inner[..<plus.lowerBound]))
+                return ("Fusion (\(lead.base) + \(inner[plus.upperBound...]))", lead.effort, lead.isFast)
+            }
+        }
         var words = name.split(separator: " ").map(String.init)
         var isFast = false
         var effort: String?
         if words.count > 1, words.last?.lowercased() == "fast" {
             isFast = true
             words.removeLast()
+        }
+        // "Extra High" is one effort in two words, also before "Thinking"; join it
+        // so the reads below see "xhigh" like any other effort word.
+        let pair = words.count - (words.last?.lowercased() == "thinking" ? 3 : 2)
+        if pair > 0, words[pair].lowercased() == "extra", words[pair + 1].lowercased() == "high" {
+            words[pair] = "xhigh"
+            words.remove(at: pair + 1)
         }
         if words.count > 2, words.last?.lowercased() == "thinking" {
             let before = words[words.count - 2].lowercased()
@@ -211,7 +228,15 @@ enum ModelFamilies {
     /// is read on the main actor, and the expressions took a quarter of a second for it.
     static func lineageKey(_ name: String) -> String {
         let text = bareName(name)
-        let spaced = text.split(separator: " ").filter { !isContextSize($0) }.joined(separator: " ")
+        let spaced = text.split(separator: " ").map { word -> Substring in
+            var word = word
+            // A size at the end of a dashed word is not part of the line: "k3-256k" keys like "k3".
+            while let cut = word.lastIndex(where: { $0 == "-" || $0 == "_" }),
+                  isSize(word[word.index(after: cut)...]) {
+                word = word[..<cut]
+            }
+            return word
+        }.filter { !isContextSize($0) }.joined(separator: " ")
         let base = parse(spaced).base
         let kept = words(base).compactMap { word -> Substring? in
             guard let first = word.first, !first.isNumber else { return nil }
@@ -221,33 +246,73 @@ enum ModelFamilies {
             return channelWords.contains(stem) ? nil : stem
         }
         let key = kept.joined(separator: " ")
-        return key.isEmpty ? name.lowercased() : key
+        return key.isEmpty ? (base.isEmpty ? name.lowercased() : base) : key
     }
 
     /// The first version number in a name, as its parts: "Claude Opus 5.5" → [5, 5],
-    /// "claude-opus-4-8" → [4, 8], "GLM-5.3" and "glm-5p3" → [5, 3]. Parentheticals
-    /// are left out, so a fused pairing does not borrow a version from its parts.
+    /// "claude-opus-4-8" → [4, 8], "GLM-5.3" and "glm-5p3" → [5, 3]. A token that is a
+    /// size — digits, one optional dot, then "k", "m" or "b" at a word end ("256K",
+    /// "1.5m", "120B") — is skipped, and a run stops before one, so "GPT-OSS 120B" → []
+    /// and "K3-256K" → [3]. Parentheticals are left out, so a fused pairing does not
+    /// borrow a version from its parts.
     static func version(_ name: String) -> [Int] {
         let text = bareName(name)
-        guard let start = text.firstIndex(where: \.isNumber) else { return [] }
-        var parts: [Int] = []
-        var digits = ""
-        var index = start
+        var index = text.startIndex
         while index < text.endIndex {
-            let character = text[index]
+            guard text[index].isNumber else {
+                index = text.index(after: index)
+                continue
+            }
+            if let end = sizeEnd(in: text, at: index) {
+                index = end
+                continue
+            }
+            var parts: [Int] = []
+            var digits = ""
+            var cursor = index
+            while cursor < text.endIndex {
+                let character = text[cursor]
+                if character.isNumber {
+                    digits.append(character)
+                } else if ".-p".contains(character), !digits.isEmpty,
+                          text.index(after: cursor) < text.endIndex,
+                          text[text.index(after: cursor)].isNumber,
+                          sizeEnd(in: text, at: text.index(after: cursor)) == nil {
+                    parts.append(Int(digits) ?? 0)
+                    digits = ""
+                } else {
+                    break
+                }
+                cursor = text.index(after: cursor)
+            }
+            if !digits.isEmpty { parts.append(Int(digits) ?? 0) }
+            return parts
+        }
+        return []
+    }
+
+    /// The end of a size token starting at `index` — digits, one optional dot, then
+    /// "k", "m" or "b" right before a word end — or nil when the number is not a size.
+    private static func sizeEnd(in text: String, at index: String.Index) -> String.Index? {
+        var cursor = index
+        var dot = false
+        while cursor < text.endIndex {
+            let character = text[cursor]
             if character.isNumber {
-                digits.append(character)
-            } else if ".-p".contains(character), !digits.isEmpty,
-                      text.index(after: index) < text.endIndex, text[text.index(after: index)].isNumber {
-                parts.append(Int(digits) ?? 0)
-                digits = ""
+                cursor = text.index(after: cursor)
+            } else if character == ".", !dot,
+                      text.index(after: cursor) < text.endIndex,
+                      text[text.index(after: cursor)].isNumber {
+                dot = true
+                cursor = text.index(after: cursor)
             } else {
                 break
             }
-            index = text.index(after: index)
         }
-        if !digits.isEmpty { parts.append(Int(digits) ?? 0) }
-        return parts
+        guard cursor > index, cursor < text.endIndex, "kmb".contains(text[cursor]) else { return nil }
+        let end = text.index(after: cursor)
+        guard end == text.endIndex || " -_()[]".contains(text[end]) else { return nil }
+        return end
     }
 
     /// The name lowercased, without the catalogue prefix ("opencode/") or parentheticals.
@@ -275,6 +340,14 @@ enum ModelFamilies {
         return word.dropLast().allSatisfy { $0.isNumber || $0 == "." } && word.first?.isNumber == true
     }
 
+    /// Digits with an optional dot, then "k", "m" or "b": a size in a name, not a
+    /// version ("256k", "1.5m", "120b"). `isContextSize` is the space-separated
+    /// spelling; this one also sees the dash-joined tail of a word ("k3-256k").
+    private static func isSize(_ word: Substring) -> Bool {
+        guard let last = word.last, "kmb".contains(last), word.count > 1 else { return false }
+        return word.dropLast().allSatisfy { $0.isNumber || $0 == "." } && word.first?.isNumber == true
+    }
+
     private static func compareVersions(_ lhs: [Int], _ rhs: [Int]) -> ComparisonResult {
         for index in 0..<max(lhs.count, rhs.count) {
             let l = index < lhs.count ? lhs[index] : 0
@@ -282,6 +355,179 @@ enum ModelFamilies {
             if l != r { return l < r ? .orderedAscending : .orderedDescending }
         }
         return .orderedSame
+    }
+
+    // MARK: - Routes and visibility
+
+    /// The vendor a line belongs to: its key's first word ("gpt" for "gpt sol"). Claude's
+    /// lines go by their own names in some catalogues ("Sonnet 4.6" in Pi's), and Cursor
+    /// calls one GPT model "Codex 5.3", so those words answer for their vendor.
+    private static func vendor(_ lineage: String) -> String {
+        let word = String(lineage.prefix { $0 != " " })
+        switch word {
+        case "opus", "sonnet", "haiku", "fable": return "claude"
+        case "codex": return "gpt"
+        default: return word
+        }
+    }
+
+    /// Each vendor's distinct versions in a list, for `simplified(knownVersions:)`: what
+    /// every installed provider lists tells one catalogue that its newest Claude, 4.6
+    /// say, is three versions behind.
+    static func vendorVersions(_ list: [ModelOption]) -> [String: Set<[Int]>] {
+        var result: [String: Set<[Int]>] = [:]
+        for option in list where !option.name.hasPrefix("Fusion (") {
+            let version = version(option.name)
+            guard !version.isEmpty else { continue }
+            result[vendor(lineageKey(option.name)), default: []].insert(version)
+        }
+        return result
+    }
+
+    /// The id after its route prefix: "cursor-account-2/gpt-5.2" tails to "gpt-5.2",
+    /// and an id with no "/" to itself.
+    static func routeTail(_ id: String) -> String {
+        guard let slash = id.firstIndex(of: "/") else { return id }
+        return String(id[id.index(after: slash)...])
+    }
+
+    /// Pi lists one account's models once per account ("cursor/gpt-5.2" next to
+    /// "cursor-account-2/gpt-5.2"). A row repeating an earlier row's tail and name
+    /// under a different route prefix drops, so the first route stands for them all.
+    static func mergedRoutes(_ list: [ModelOption]) -> [ModelOption] {
+        var prefixes: [String: String] = [:]
+        return list.filter { option in
+            let key = routeTail(option.id) + "\u{0}" + option.name
+            let prefix = String(option.id.prefix(while: { $0 != "/" }))
+            guard let listed = prefixes[key], listed != prefix else {
+                prefixes[key] = prefix
+                return true
+            }
+            return false
+        }
+    }
+
+    /// The rows a list keeps in view, in the provider's order, when the rest folds
+    /// away. A protected or default row always stays; otherwise:
+    /// - a "Fusion (LEAD + SIDEKICK)" hides when a newer version of its lead's line
+    ///   is listed, when a newer version of its sidekick's line is listed under the
+    ///   same lead, or when its sidekick's " Fast" spelling has a non-Fast twin;
+    /// - an effort or Fast variant row whose base is another row's own name hides
+    ///   behind that row;
+    /// - any other row stays while its version is among its vendor's newest
+    ///   `keepingVersions` distinct versions, or it leads a line of the vendor's newest
+    ///   major version; versionless rows always stay.
+    /// `knownVersions` adds versions other catalogues list (see `vendorVersions`), so a
+    /// catalogue whose newest is long superseded elsewhere does not keep it as current.
+    static func simplified(_ list: [ModelOption], keepingVersions: Int = 3, knownVersions: [String: Set<[Int]>] = [:], protecting isProtected: (ModelOption) -> Bool) -> [ModelOption] {
+        struct Entry {
+            var option: ModelOption
+            var parsed: (base: String, effort: String?, isFast: Bool)
+            var lineage: String
+            var version: [Int]
+            var fusion = false
+            var lead = ""
+            var sidekick = ""
+            var leadLineage = ""
+            var leadVersion: [Int] = []
+            var sidekickLineage = ""
+            var sidekickVersion: [Int] = []
+        }
+        // Each name is read once, like `lineages`: the catalogue is six hundred rows.
+        var names = Set<String>()
+        var entries: [Entry] = []
+        entries.reserveCapacity(list.count)
+        for option in list {
+            names.insert(option.name.lowercased())
+            var entry = Entry(option: option, parsed: parse(option.name), lineage: lineageKey(option.name), version: version(option.name))
+            if option.name.hasPrefix("Fusion ("), option.name.hasSuffix(")") {
+                let inner = option.name.dropFirst("Fusion (".count).dropLast()
+                if let plus = inner.range(of: " + ") {
+                    entry.fusion = true
+                    entry.lead = parse(String(inner[..<plus.lowerBound])).base
+                    entry.sidekick = String(inner[plus.upperBound...])
+                    entry.leadLineage = lineageKey(entry.lead)
+                    entry.leadVersion = version(entry.lead)
+                    entry.sidekickLineage = lineageKey(entry.sidekick)
+                    entry.sidekickVersion = version(entry.sidekick)
+                }
+            }
+            entries.append(entry)
+        }
+        var newestLead: [String: [Int]] = [:]
+        var newestSidekick: [String: [Int]] = [:]
+        var plainSidekicks = Set<String>()
+        var versionsByLineage: [String: [[Int]]] = [:]
+        for entry in entries where entry.fusion {
+            if newestLead[entry.leadLineage].map({ compareVersions(entry.leadVersion, $0) == .orderedDescending }) ?? true {
+                newestLead[entry.leadLineage] = entry.leadVersion
+            }
+            let side = entry.lead + "\u{0}" + entry.sidekickLineage
+            if newestSidekick[side].map({ compareVersions(entry.sidekickVersion, $0) == .orderedDescending }) ?? true {
+                newestSidekick[side] = entry.sidekickVersion
+            }
+            if !entry.sidekick.hasSuffix(" Fast") {
+                plainSidekicks.insert(entry.lead + "\u{0}" + entry.sidekick)
+            }
+        }
+        // Versions count per vendor (a line key's first word), not per line: "GPT-6 Sol",
+        // "GPT-6.1 Sol" and "GPT-5.6 Terra" make GPT's three newest, so "GPT-5.4 Mini" goes
+        // although its own line has nothing newer.
+        for entry in entries where !entry.fusion && !entry.version.isEmpty {
+            versionsByLineage[vendor(entry.lineage), default: []].append(entry.version)
+        }
+        // Only vendors this list carries: another catalogue's vendors have nothing here to hide.
+        for (vendor, versions) in knownVersions where versionsByLineage[vendor] != nil {
+            versionsByLineage[vendor, default: []].append(contentsOf: versions)
+        }
+        var keptVersions: [String: Set<[Int]>] = [:]
+        var newestMajor: [String: Int] = [:]
+        for (vendor, versions) in versionsByLineage {
+            var seen = Set<[Int]>()
+            let distinct = versions.filter { seen.insert($0).inserted }
+                .sorted { compareVersions($0, $1) == .orderedDescending }
+            keptVersions[vendor] = Set(distinct.prefix(keepingVersions))
+            newestMajor[vendor] = distinct.first?.first
+        }
+        // A line the vendor rule would empty keeps its newest row while that row is of
+        // the vendor's newest major version: a current small model ("Gemini 3.8 Flash"
+        // beside "Gemini 4 Argon") is not outdated for lagging the flagship.
+        var survivors = Set<String>()
+        var lineNewest: [String: (id: String, version: [Int])] = [:]
+        var lineKept = Set<String>()
+        for entry in entries where !entry.fusion && !entry.version.isEmpty {
+            let vendor = vendor(entry.lineage)
+            if keptVersions[vendor]?.contains(entry.version) == true { lineKept.insert(entry.lineage) }
+            if lineNewest[entry.lineage].map({ compareVersions(entry.version, $0.version) == .orderedDescending }) ?? true {
+                lineNewest[entry.lineage] = (entry.option.id, entry.version)
+            }
+        }
+        for (lineage, newest) in lineNewest where !lineKept.contains(lineage) && newest.version.first == newestMajor[vendor(lineage)] {
+            survivors.insert(newest.id)
+        }
+        var result: [ModelOption] = []
+        result.reserveCapacity(entries.count)
+        for entry in entries {
+            var hidden = false
+            if !entry.option.isDefault, !isProtected(entry.option) {
+                if entry.fusion {
+                    let oldLead = newestLead[entry.leadLineage].map { compareVersions(entry.leadVersion, $0) == .orderedAscending } ?? false
+                    let oldSidekick = newestSidekick[entry.lead + "\u{0}" + entry.sidekickLineage].map { compareVersions(entry.sidekickVersion, $0) == .orderedAscending } ?? false
+                    let fastTwin = entry.sidekick.hasSuffix(" Fast")
+                        && plainSidekicks.contains(entry.lead + "\u{0}" + String(entry.sidekick.dropLast(" Fast".count)))
+                    hidden = oldLead || oldSidekick || fastTwin
+                } else if entry.option.variants.isEmpty,
+                          (entry.parsed.effort != nil || entry.parsed.isFast),
+                          names.contains(entry.parsed.base.lowercased()) {
+                    hidden = true
+                } else if !entry.version.isEmpty, !survivors.contains(entry.option.id),
+                          let kept = keptVersions[vendor(entry.lineage)], !kept.contains(entry.version) {
+                    hidden = true
+                }
+            }
+            if !hidden { result.append(entry.option) }
+        }
+        return result
     }
 }
 

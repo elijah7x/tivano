@@ -30,7 +30,7 @@ struct ModelsSettingsPage: View {
     private static let slide = Animation.spring(response: 0.28, dampingFraction: 0.82)
 
     var body: some View {
-        let settings = model.settings
+        @Bindable var settings = model.settings
         let registry = model.providers
         let pins = settings.modelList
         let items = settings.modelListItems
@@ -157,6 +157,16 @@ struct ModelsSettingsPage: View {
                             .font(.ui(size: 11))
                             .foregroundStyle(Chrome.secondaryText)
                             .padding(.horizontal, 4)
+                    }
+                }
+            }
+
+            if trimmed.isEmpty {
+                ChromeSection(title: "Model list") {
+                    ChromeCard {
+                        ChromeRow(title: "Hide outdated models", detail: "Show the three newest versions of each model, one row per model instead of one per effort, and the newest Fusion pairings. Chosen and in-use models always show.") {
+                            SettingsSwitch(isOn: $settings.hidesOutdatedModels)
+                        }
                     }
                 }
             }
@@ -764,6 +774,7 @@ private struct ProviderModelsSection: View {
     /// The lines showing their earlier versions, and whether the free and preview models show.
     @State private var openLineages: Set<String> = []
     @State private var showsTrials = false
+    @State private var showsFusion = false
     @State private var lineages = LineageCache()
 
     /// A catalogue longer than this folds each line to its newest version and sets the
@@ -774,11 +785,13 @@ private struct ProviderModelsSection: View {
         /// A model; `earlier` counts the versions folded under it, `lineage` names its line.
         case model(ModelOption, earlier: Int = 0, lineage: String? = nil)
         case trials(count: Int)
+        case fusion(count: Int)
 
         var id: String {
             switch self {
             case .model(let option, _, _): "model/" + option.id
             case .trials: "trials"
+            case .fusion: "fusion"
             }
         }
     }
@@ -786,10 +799,12 @@ private struct ProviderModelsSection: View {
     var body: some View {
         let settings = model.settings
         let registry = model.providers
-        let catalogue = matchingCatalogue ?? registry.sortedModels(for: provider)
+        let fullCatalogue = matchingCatalogue ?? registry.sortedModels(for: provider)
+        let isFiltering = !query.isEmpty
+        // The simplified catalogue drops clearly outdated versions; search always lists the full one.
+        let catalogue = isFiltering || !settings.hidesOutdatedModels ? fullCatalogue : model.pickerModels(for: provider)
         let modelList = settings.modelList
         let isFull = modelList.count >= AppSettings.modelListLimit
-        let isFiltering = !query.isEmpty
         let pinned = Set(modelList)
         let rows = rows(catalogue, pinned: pinned, isFiltering: isFiltering)
         // Collapsed with nothing chosen closes the card outright.
@@ -798,7 +813,7 @@ private struct ProviderModelsSection: View {
             CollapsibleProviderHeader(provider: provider, isExpanded: $isExpanded, subject: "model list")
             // Lazy, so only the rows on screen are built. Same fill and shape as ChromeCard.
             LazyVStack(spacing: 0) {
-                if catalogue.isEmpty {
+                if fullCatalogue.isEmpty {
                     // The loading/empty row is the expanded state; collapsed closes it.
                     ChromeReveal(isExpanded: cardVisible) {
                         ChromeRow(title: registry.loadingCatalogs.contains(provider) ? "Loading models…" : "No models loaded") {
@@ -828,6 +843,12 @@ private struct ProviderModelsSection: View {
                             ChromeRow(title: "Free and preview models", detail: String(format: Chrome.localized("%lld models"), count)) {
                                 disclosure(isOpen: showsTrials, label: nil, show: "Show free and preview models", hide: "Hide free and preview models") {
                                     showsTrials.toggle()
+                                }
+                            }
+                        case .fusion(let count):
+                            ChromeRow(title: "Fusion pairings", detail: String(format: Chrome.localized("%lld pairings"), count)) {
+                                disclosure(isOpen: showsFusion, label: nil, show: "Show Fusion pairings", hide: "Hide Fusion pairings") {
+                                    showsFusion.toggle()
                                 }
                             }
                         }
@@ -861,7 +882,9 @@ private struct ProviderModelsSection: View {
         }
         guard isExpanded else { return catalogue.filter(isPinned).map { .model($0) } }
         guard catalogue.count > Self.foldingThreshold else { return catalogue.map { .model($0) } }
-        let layout = lineages.layout(of: catalogue)
+        // Fusion pairings fold into one row of their own; a pinned one stays a normal row.
+        let fusion = catalogue.filter { Self.isFusion($0) && !isPinned($0) }
+        let layout = lineages.layout(of: catalogue.filter { !Self.isFusion($0) || isPinned($0) })
         var rows: [Row] = []
         for lineage in layout.lineages {
             rows.append(.model(lineage.newest, earlier: lineage.earlier.count, lineage: lineage.key))
@@ -872,7 +895,34 @@ private struct ProviderModelsSection: View {
             rows.append(.trials(count: layout.trials.count))
             rows += layout.trials.filter { showsTrials || isPinned($0) }.map { .model($0) }
         }
+        if !fusion.isEmpty {
+            rows.append(.fusion(count: fusion.count))
+            if showsFusion {
+                // Grouped by lead model, leads sorted, catalogue order within each lead.
+                var order: [String] = []
+                var grouped: [String: [ModelOption]] = [:]
+                for option in fusion {
+                    let lead = Self.fusionLead(of: option.name)
+                    if grouped[lead] == nil { order.append(lead) }
+                    grouped[lead, default: []].append(option)
+                }
+                for lead in order.sorted() {
+                    rows += (grouped[lead] ?? []).map { .model($0) }
+                }
+            }
+        }
         return rows
+    }
+
+    private static func isFusion(_ option: ModelOption) -> Bool {
+        option.name.hasPrefix("Fusion (")
+    }
+
+    /// The lead model of a "Fusion (Lead + Head)" pairing: the text before " + ".
+    private static func fusionLead(of name: String) -> String {
+        guard let open = name.range(of: "Fusion ("),
+              let plus = name.range(of: " + ", range: open.upperBound..<name.endIndex) else { return name }
+        return String(name[open.upperBound..<plus.lowerBound])
     }
 
     private func modelRow(_ option: ModelOption, earlier: Int, lineage: String?, pinned: Set<ModelPin>, isFull: Bool, isFiltering: Bool) -> some View {

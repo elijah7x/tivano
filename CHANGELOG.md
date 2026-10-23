@@ -8,6 +8,44 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.0.6] - 2026-10-23
+
+### English
+
+### New features
+
+- Hide outdated models, on by default in Settings › Models, keeps model pickers short: each vendor shows its three newest versions across all your providers, models listed once per effort or Fast become one row, and Devin's Fusion pairings fold their efforts into one row each, keep only the newest leads and sidekicks, and sit in their own group. Chosen, default, recent, Hydra and in-use models always show, and search still finds everything.
+- Pi's models from several accounts of one service appear once.
+
+### Bug fixes
+
+- Codex signed in with an API key stays recognised as signed in after Codex 0.164 changes its login status wording.
+
+### Refinements
+
+- Antigravity, Pi and MiniMax Code use their official colour logos, matching the other branded providers in menus and settings.
+- The default model picker in Settings › New chat offers two clearly separated choices, Last selection and Custom model, with a checkmark on the one in use and all labels aligned.
+
+### 简体中文
+
+### 新功能
+
+- 设置 › 模型新增“隐藏过时模型”，默认开启，让模型选择器更简洁：参照你所有服务商的模型，每个厂商只显示最新的三个版本；按推理强度或 Fast 分列的同一模型合为一行；Devin 的 Fusion 组合按推理强度合并，只保留最新的主模型和副模型，并单独成组。已选择、默认、最近使用、Hydra 引用和正在使用的模型始终显示，搜索仍可找到全部模型。
+- Pi 中同一服务多个账号的模型只显示一次。
+
+### 问题修复
+
+- Codex 0.164 更改登录状态文案后，使用 API key 登录的 Codex 仍能被正确识别为已登录。
+
+### 优化改进
+
+- Antigravity、Pi 和 MiniMax Code 改用官方彩色标志，在菜单和设置中与其他品牌服务商保持一致。
+- 设置 › 新对话的默认模型选择器分为“上一次选择”和“指定模型”两项，当前使用的一项带勾，标签统一左对齐。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.0.0] - 2026-10-22
 
 ### English

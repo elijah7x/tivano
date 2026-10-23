@@ -15,7 +15,9 @@ enum ModelCatalog {
         let registry = model.providers
         var result: [Entry] = if model.settings.modelList.isEmpty {
             ProviderKind.alphabetical.filter(Set(registry.availableProviders).contains).flatMap { provider in
-                registry.sortedModels(for: provider).map { Entry(provider: provider, option: $0) }
+                var ids: Set<String> = []
+                if let thread, thread.provider == provider, let current = thread.model { ids.insert(current) }
+                return model.pickerModels(for: provider, keeping: ids).map { Entry(provider: provider, option: $0) }
             }
         } else {
             model.settings.modelList.compactMap { pin in

@@ -178,13 +178,24 @@
         }
       }
     },
-    "Recent selection" : {
+    "Custom model" : {
       "extractionState": "manual",
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "最近选择"
+            "value": "指定模型"
+          }
+        }
+      }
+    },
+    "Last selection" : {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一次选择"
           }
         }
       }
@@ -211,13 +222,13 @@
         }
       }
     },
-    "Project Hydra presets take priority. Otherwise, Recent selection uses the current or most recent model; a selected model stays fixed." : {
+    "Project Hydra presets take priority. Otherwise, Last selection uses the current or most recent model; a selected model stays fixed." : {
       "extractionState": "manual",
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "项目的 Hydra 预设优先；否则，“最近选择”沿用当前或最近的模型，指定模型则固定使用该模型。"
+            "value": "项目的 Hydra 预设优先；否则，“上一次选择”沿用当前或最近的模型；“指定模型”则固定使用该模型。"
           }
         }
       }
@@ -244,24 +255,24 @@
         }
       }
     },
-    "The selected model is unavailable. New chats will use Recent selection." : {
+    "The selected model is unavailable. New chats will use Last selection." : {
       "extractionState": "manual",
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "指定的模型当前不可用，新对话将沿用最近选择。"
+            "value": "指定的模型当前不可用，新对话将沿用上一次选择。"
           }
         }
       }
     },
-    "No models available. You can still use Recent selection." : {
+    "No models available. You can still use Last selection." : {
       "extractionState": "manual",
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "暂无可用模型，仍可使用“最近选择”。"
+            "value": "暂无可用模型，仍可使用“上一次选择”。"
           }
         }
       }
@@ -277,13 +288,13 @@
         }
       }
     },
-    "No providers available. You can still use Recent selection." : {
+    "No providers available. You can still use Last selection." : {
       "extractionState": "manual",
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "没有可用的服务商。你仍可使用“最近选择”。"
+            "value": "没有可用的服务商。你仍可使用“上一次选择”。"
           }
         }
       }
@@ -1296,6 +1307,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已完成 %lld / %lld"
+          }
+        }
+      }
+    },
+    "%lld pairings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个组合"
           }
         }
       }
@@ -8241,6 +8263,17 @@
         }
       }
     },
+    "Fusion pairings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fusion 组合"
+          }
+        }
+      }
+    },
     "GLM Coding Plan" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8857,6 +8890,17 @@
         }
       }
     },
+    "Hide Fusion pairings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏 Fusion 组合"
+          }
+        }
+      }
+    },
     "Hide changes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8897,6 +8941,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏助手"
+          }
+        }
+      }
+    },
+    "Hide outdated models" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏过时模型"
           }
         }
       }
@@ -10789,6 +10844,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "模型"
+          }
+        }
+      }
+    },
+    "Model list" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型列表"
           }
         }
       }
@@ -15237,6 +15303,17 @@
         }
       }
     },
+    "Show Fusion pairings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示 Fusion 组合"
+          }
+        }
+      }
+    },
     "Show Tivano" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15541,6 +15618,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示思考过程"
+          }
+        }
+      }
+    },
+    "Show the three newest versions of each model, one row per model instead of one per effort, and the newest Fusion pairings. Chosen and in-use models always show." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个模型只显示最新的三个版本，推理强度不同的同一模型合为一行，Fusion 只保留最新组合。已选择和正在使用的模型始终显示。"
           }
         }
       }

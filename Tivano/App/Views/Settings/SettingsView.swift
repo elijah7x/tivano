@@ -667,17 +667,17 @@ private struct NewThreadModelSettingsRow: View {
             return Chrome.localized(ModelOption.effortTitle(effort ?? option.defaultEffort ?? ""))
         }
         let title = selection.map { [$0.provider.displayName, option?.shortName ?? name ?? $0.modelID, effortTitle].compactMap { $0 }.joined(separator: " · ") }
-            ?? Chrome.localized("Recent selection")
+            ?? Chrome.localized("Last selection")
         let fullTitle = selection.map { [$0.provider.displayName, option?.name ?? name ?? $0.modelID, effortTitle].compactMap { $0 }.joined(separator: " · ") }
-            ?? Chrome.localized("Recent selection")
+            ?? Chrome.localized("Last selection")
         let displayedTitle = isAvailable ? title : String(format: Chrome.localized("%@ (unavailable)"), title)
         let helpTitle = isAvailable ? fullTitle : String(format: Chrome.localized("%@ (unavailable)"), fullTitle)
-        var details = [Chrome.localized("Project Hydra presets take priority. Otherwise, Recent selection uses the current or most recent model; a selected model stays fixed.")]
+        var details = [Chrome.localized("Project Hydra presets take priority. Otherwise, Last selection uses the current or most recent model; a selected model stays fixed.")]
         if !isAvailable {
-            details.append(Chrome.localized("The selected model is unavailable. New chats will use Recent selection."))
+            details.append(Chrome.localized("The selected model is unavailable. New chats will use Last selection."))
         }
         if providers.isEmpty {
-            details.append(Chrome.localized("No providers available. You can still use Recent selection."))
+            details.append(Chrome.localized("No providers available. You can still use Last selection."))
         }
         return ChromeRow(title: "Default model", detail: details.joined(separator: "\n")) {
             Button {
@@ -755,7 +755,7 @@ private struct NewThreadModelPicker: View {
         } ?? Chrome.localized("Choose a provider")
         let providerOptions = (provider == nil ? [(ProviderKind?.none, providerPrompt)] : [])
             + providers.map { (Optional($0), $0.displayName) }
-        let options = provider.map { registry.sortedModels(for: $0) } ?? []
+        let options = provider.map { model.pickerModels(for: $0, keeping: selectedModelID.map { Set([$0]) } ?? []) } ?? []
         let selectedOption = selection?.provider == provider
             ? options.first { $0.id == selectedModelID }
             : nil
@@ -767,7 +767,7 @@ private struct NewThreadModelPicker: View {
         let isLoading = provider.map { registry.loadingCatalogs.contains($0) } ?? false
         let error = provider.flatMap { registry.status($0).catalogError }
         VStack(alignment: .leading, spacing: 0) {
-            PopoverItem("Recent selection", isChecked: selection == nil) {
+            PopoverItem("Last selection", isChecked: selection == nil) {
                 select(nil)
             }
             .padding(.horizontal, 6)
@@ -775,6 +775,24 @@ private struct NewThreadModelPicker: View {
             Divider()
                 .padding(.horizontal, 14)
                 .padding(.vertical, 5)
+            // Shares the Last selection row's checkmark column so the two choices read as peers.
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark")
+                    .font(.ui(.subheadline, weight: .semibold))
+                    .foregroundStyle(Chrome.primaryText)
+                    .opacity(selection == nil ? 0 : 1)
+                    .frame(width: 14)
+                Text(verbatim: Chrome.localized("Custom model"))
+                    .font(.ui(.subheadline, weight: .semibold))
+                    .foregroundStyle(Chrome.secondaryText)
+            }
+            .padding(.leading, 14)
+            .padding(.top, 2)
+            .padding(.bottom, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("Custom model"))
+            .accessibilityAddTraits(selection == nil ? .isHeader : [.isHeader, .isSelected])
             editorRow("Provider") {
                 GlassPickerButton(
                     options: providerOptions,
@@ -829,7 +847,7 @@ private struct NewThreadModelPicker: View {
                 }
             }
             if providers.isEmpty {
-                catalogNote(Chrome.localized("No providers available. You can still use Recent selection."))
+                catalogNote(Chrome.localized("No providers available. You can still use Last selection."))
             } else if let provider {
                 if isLoading {
                     catalogNote(String(format: Chrome.localized(options.isEmpty ? "Loading %@'s models…" : "Refreshing %@'s models…"), provider.displayName))
@@ -867,7 +885,9 @@ private struct NewThreadModelPicker: View {
             control()
                 .layoutPriority(1)
         }
-        .padding(.horizontal, 14)
+        // Leading inset lines the label up with the titles beside the checkmark column.
+        .padding(.leading, 36)
+        .padding(.trailing, 14)
         .padding(.vertical, 5)
     }
 
@@ -896,7 +916,8 @@ private struct NewThreadModelPicker: View {
                 .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("Retry loading %@'s models"), provider.displayName)))
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, 36)
+        .padding(.trailing, 14)
         .padding(.top, 8)
     }
 }
