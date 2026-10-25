@@ -152,6 +152,9 @@ final class AppModel {
     /// through. The updater's install button dims on it; `flushForQuit` stays the
     /// authority.
     private(set) var hasActiveTurns = false
+    /// The only work in progress is chats waiting for their usage limit to reset: the
+    /// install button says so, since a relaunch would drop the wait.
+    private(set) var activeWorkIsLimitWait = false
 
     @ObservationIgnored private let taskSleepPrevention = TaskSleepPrevention()
     @ObservationIgnored private var runtimes: [UUID: ThreadRuntime] = [:]
@@ -197,10 +200,36 @@ final class AppModel {
         let busy = runtimes.values.contains(where: Self.hasActiveTasks)
         let active = busy || localControl.hasPendingMutations
         if active != hasActiveTurns { hasActiveTurns = active }
+        let limitWaitOnly = active && !localControl.hasPendingMutations
+            && !runtimes.values.contains { Self.hasActiveTasks($0) && !$0.isWaitingForLimit }
+        if limitWaitOnly != activeWorkIsLimitWait { activeWorkIsLimitWait = limitWaitOnly }
         taskSleepPrevention.update(
             mode: CaptureRun.isEnabled ? .off : settings.taskSleepMode,
             hasRunningTasks: busy
         )
+    }
+
+    /// What holds the update's install back, one entry per busy chat with the first reason
+    /// that applies to it, in the order the reasons are checked by `hasActiveTasks`, then a
+    /// pending local-control request. Read by the About page so the wait is never unexplained.
+    func installBlockers() -> [(threadID: UUID?, title: String, reason: String)] {
+        var out: [(threadID: UUID?, title: String, reason: String)] = []
+        for runtime in runtimes.values where Self.hasActiveTasks(runtime) {
+            let reason = if runtime.isRunning { "Running" }
+                else if runtime.isCLIStarting { "Starting its session" }
+                else if runtime.isVoiceOrchestrator { "Voice is live" }
+                else if runtime.isHydraMerging { "Landing Hydra work" }
+                else if !runtime.backgroundTasks.isEmpty { "Running background tasks" }
+                else if runtime.isWaitingForLimit { "Waiting for its usage limit to reset" }
+                else { "Its helpers or heads are still working" }
+            let title = thread(runtime.threadID)?.title ?? ""
+            out.append((runtime.threadID, title.isEmpty ? Chrome.localized("New thread") : title, reason))
+        }
+        out.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        if localControl.hasPendingMutations {
+            out.append((nil, Chrome.localized("Local control"), "An external control request is in progress"))
+        }
+        return out
     }
 
     private static func hasActiveTasks(_ runtime: ThreadRuntime) -> Bool {

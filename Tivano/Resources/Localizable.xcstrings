@@ -11,6 +11,39 @@
         }
       }
     },
+    "A relaunch would drop a usage-limit wait. Stop the wait from that chat's box to update now." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重启会取消等待额度重置的自动继续。如需立即更新，请在该对话的输入框中停止等待。"
+          }
+        }
+      }
+    },
+    "An external control request is in progress" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外部控制请求处理中"
+          }
+        }
+      }
+    },
+    "And %lld more" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %lld 个"
+          }
+        }
+      }
+    },
     "Branch names can be up to %lld characters." : {
       "localizations" : {
         "zh-Hans" : {
@@ -69,6 +102,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请先完成或中止正在进行的合并、变基或拣选，再重命名分支。"
+          }
+        }
+      }
+    },
+    "Its helpers or heads are still working" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体仍在工作"
+          }
+        }
+      }
+    },
+    "Landing Hydra work" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在合入 Hydra 工作"
           }
         }
       }
@@ -158,6 +213,39 @@
         }
       }
     },
+    "Running background tasks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台任务运行中"
+          }
+        }
+      }
+    },
+    "Settings › About lists what it waits for." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置 › 关于中列出了正在等待的任务。"
+          }
+        }
+      }
+    },
+    "Starting its session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在启动会话"
+          }
+        }
+      }
+    },
     "That is not a valid branch name." : {
       "localizations" : {
         "zh-Hans" : {
@@ -185,6 +273,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未知"
+          }
+        }
+      }
+    },
+    "Update & restart is available once these finish" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以下任务结束后即可“更新并重启”"
+          }
+        }
+      }
+    },
+    "Waiting for its usage limit to reset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待额度重置后继续"
           }
         }
       }
@@ -3441,6 +3551,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在运行的对话结束后可用"
+          }
+        }
+      }
+    },
+    "Available once chats waiting for their usage limit have continued, or when you stop their wait" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待额度重置的对话继续运行后，或你停止等待后可用"
           }
         }
       }

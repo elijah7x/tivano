@@ -698,7 +698,7 @@ private struct AboutVersionPill: View {
                 .chromeGlassCapsule()
             } else {
                 Button {
-                    guard let update = checker.update, isReady else { return }
+                    guard let update = checker.update, isReady, !model.hasActiveTurns else { return }
                     AppUpdater.shared.install(update)
                 } label: {
                     HStack(spacing: 6) {
@@ -734,8 +734,12 @@ private struct AboutVersionPill: View {
                 }
                 .buttonStyle(.plain)
                 .allowsHitTesting(isReady)
-                .disabled(model.hasActiveTurns)
+                // Dimmed rather than disabled while chats are busy: a disabled control shows
+                // no tooltip on macOS, and the tooltip is what says why it waits.
                 .opacity(isReady && model.hasActiveTurns ? 0.45 : 1)
+                // The flag follows every runtime change, but a missed one must never keep the
+                // button grey for good: opening the page settles it again.
+                .onAppear { model.updateTaskSleepPrevention() }
                 .chromeGlassCapsule()
                 // The seal is not a button, but it is still worth saying what it means
                 // rather than showing an empty tooltip.
@@ -755,7 +759,11 @@ private struct AboutVersionPill: View {
     /// says why instead of promising the install.
     private var help: String {
         if isReady {
-            if model.hasActiveTurns { return Chrome.localized("Available after running chats finish") }
+            if model.hasActiveTurns {
+                return Chrome.localized(model.activeWorkIsLimitWait
+                    ? "Available once chats waiting for their usage limit have continued, or when you stop their wait"
+                    : "Available after running chats finish") + " " + Chrome.localized("Settings › About lists what it waits for.")
+            }
             return String(format: Chrome.localized("Installs Tivano %@ and relaunches"), checker.update?.version ?? "")
         }
         return standingHelp
@@ -784,6 +792,7 @@ private struct AboutVersionPill: View {
 struct AboutSoftwareUpdateSection: View {
     private let checker = UpdateChecker.shared
     private let progress = UpdateInstallProgress.shared
+    @Environment(AppModel.self) private var model
     @State private var celebration: Task<Void, Never>?
     // Refresh when the selected notes change, including edits to the same release.
     @State private var digest = UpdateReleaseNotesDigest(sections: [])
@@ -803,6 +812,11 @@ struct AboutSoftwareUpdateSection: View {
                     }
                 }
             }
+            // An update that cannot install yet says what it waits for, chat by chat, so the
+            // dimmed button is never a mystery.
+            if checker.updateAvailable, checker.update != nil, model.hasActiveTurns, !progress.showsProgressUI {
+                installWaitCard
+            }
             // The cards lead the page on their own, as on the About page; the version is
             // on the pill in the chrome and on the cards' popovers.
             if checker.updateAvailable, let update = checker.update {
@@ -811,6 +825,9 @@ struct AboutSoftwareUpdateSection: View {
         }
         .padding(.bottom, progress.phase == .waitingForMerge || (checker.updateAvailable && checker.update != nil)
             ? Chrome.pageSectionSpacing : 0)
+        // The busy flag follows every runtime change, but a missed one must never keep the
+        // install waiting for good: opening the page settles it again.
+        .onAppear { model.updateTaskSleepPrevention() }
         .task {
             if progress.consumePendingCelebration() {
                 startCelebrationSweep()
@@ -826,6 +843,35 @@ struct AboutSoftwareUpdateSection: View {
             celebration?.cancel()
             celebration = nil
             progress.completeCelebration()
+        }
+    }
+
+    private static let shownBlockers = 5
+
+    private var installWaitCard: some View {
+        let blockers = model.installBlockers()
+        let waitsOnLimit = blockers.contains { $0.reason == "Waiting for its usage limit to reset" }
+        return ChromeCard {
+            ChromeRow(
+                title: "Update & restart is available once these finish",
+                detail: waitsOnLimit ? "A relaunch would drop a usage-limit wait. Stop the wait from that chat's box to update now." : nil
+            ) { EmptyView() }
+            ForEach(Array(blockers.prefix(Self.shownBlockers).enumerated()), id: \.offset) { _, blocker in
+                ChromeRowDivider()
+                ChromeRow(title: blocker.reason, detail: blocker.title, localizesDetail: false) {
+                    if let id = blocker.threadID {
+                        Button("Open") {
+                            model.selectedThreadID = id
+                            SettingsNavigation.shared.dismiss()
+                        }
+                        .buttonStyle(.glass)
+                    }
+                }
+            }
+            if blockers.count > Self.shownBlockers {
+                ChromeRowDivider()
+                ChromeRow(title: String(format: Chrome.localized("And %lld more"), blockers.count - Self.shownBlockers)) { EmptyView() }
+            }
         }
     }
 

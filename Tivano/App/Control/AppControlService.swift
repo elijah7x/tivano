@@ -124,6 +124,7 @@ final class AppControlService {
                         do {
                             try await app.prepareExternalWorktree(thread.id)
                             self.ledger.update(ticket) { $0.state = .ready }
+                            app.updateTaskSleepPrevention()
                         } catch { self.fail(ticket, error) }
                     }
                 }
@@ -157,11 +158,13 @@ final class AppControlService {
             default: throw ControlFailure(code: .invalidRequest)
             }
         } catch { fail(ticket, error) }
+        app.updateTaskSleepPrevention()
         return ledger.outcome(ticket)
     }
 
     private func fail(_ ticket: ControlTicket, _ error: Error) {
         ledger.update(ticket) { $0.state = .failed; $0.error = error as? ControlFailure ?? ControlFailure(code: .internalError) }
+        app?.updateTaskSleepPrevention()
     }
 
     private func updateTurn(_ ticket: ControlTicket, _ event: ControlTurnUpdate) {
@@ -171,6 +174,8 @@ final class AppControlService {
             $0.error = event.failure
             if let evidence = event.stopEvidence { $0.stopEvidence = evidence }
         }
+        // A pending mutation counts as work in progress (`AppModel.hasActiveTurns`).
+        app?.updateTaskSleepPrevention()
     }
 
     func requireOrdinaryThread(_ id: UUID, app: AppModel, requireReady: Bool = true) throws -> ChatThread {

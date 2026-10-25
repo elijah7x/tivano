@@ -553,7 +553,11 @@ final class ThreadRuntime {
     /// Whether `ensureSession` is waiting on a session's `start()`. A session that exits
     /// then is reported by that throwing, and `ensureSession` starts over where it can,
     /// so its exit event neither lets the session go nor fails the turn.
-    @ObservationIgnored private var isStartingSession = false
+    @ObservationIgnored private var isStartingSession = false {
+        // Counted as work in progress (`AppModel.hasActiveTasks`): the flag is settled
+        // again when the start ends, or a check made mid-start stays stuck on busy.
+        didSet { if oldValue != isStartingSession { app?.updateTaskSleepPrevention() } }
+    }
     /// Claude started a turn of its own (a background task it launched finished) while the
     /// previous turn was still being finalized: its events wait here and are replayed into
     /// a turn of their own once `finishTurn` is done with the old one.

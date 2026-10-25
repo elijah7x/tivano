@@ -8,6 +8,32 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.0.23] - 2026-10-25
+
+### English
+
+### Bug fixes
+
+- Update & restart no longer stays greyed out after every chat has finished: a chat whose session was still starting, or a finished local-control request, could leave it waiting for good.
+
+### Refinements
+
+- When an update has to wait, Settings › About lists the chats it waits for and why (running, starting, landing Hydra work, background tasks, helpers at work, a usage-limit wait), each with a button to open it, and the dimmed button now shows a tooltip.
+
+### 简体中文
+
+### 问题修复
+
+- 所有对话都结束后，“更新并重启”不再一直置灰：之前若某个对话的会话正在启动，或一次本地控制请求刚完成，按钮可能一直保持等待状态。
+
+### 优化改进
+
+- 更新需要等待时，设置 › 关于会列出正在等待的对话及原因（运行中、启动中、合入 Hydra 工作、后台任务、子智能体工作中、等待额度重置），每条都可直接打开；变暗的按钮也会显示提示。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.0.22] - 2026-10-25
 
 ### English
