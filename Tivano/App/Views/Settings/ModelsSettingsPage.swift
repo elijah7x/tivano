@@ -237,7 +237,7 @@ struct ModelsSettingsPage: View {
     private var newGroupButton: some View {
         Button {
             withAnimation(Chrome.panelSlide) {
-                let id = model.settings.addModelSection(named: Chrome.localized("New group"))
+                let id = model.settings.addModelSection(named: Chrome.localized("Group"))
                 if model.settings.isModelSectionCollapsed(id) {
                     model.settings.toggleModelSectionCollapsed(id)
                 }
@@ -674,7 +674,7 @@ private struct ModelGroupHeader: View {
             Spacer(minLength: 8)
             HStack(spacing: 4) {
                 RowControl(symbol: "pencil", help: "Rename group", isEnabled: true) { beginEditing() }
-                RowControl(symbol: "trash", help: "Remove group heading. Models stay in the list.", isEnabled: true) {
+                RowControl(symbol: "trash", help: "Ungroup. Models stay in the list.", isEnabled: true) {
                     withAnimation(Chrome.panelSlide) { model.settings.removeModelSection(section.id) }
                 }
             }
@@ -698,7 +698,7 @@ private struct ModelGroupHeader: View {
             }
             .disabled(!canMoveDown)
             Divider()
-            Button("Remove group heading") {
+            Button("Ungroup") {
                 withAnimation(Chrome.panelSlide) { model.settings.removeModelSection(section.id) }
             }
             .help(Text("Models stay in the list."))

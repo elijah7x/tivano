@@ -13,9 +13,21 @@ extension AppModel {
         let sorted = providers.sortedModels(for: provider)
         guard settings.hidesOutdatedModels else { return sorted }
         let protected = protectedModelIDs(for: provider, plus: ids)
-        return ModelFamilies.simplified(sorted, knownVersions: knownModelVersions(), protecting: { option in
+        let knownVersions = knownModelVersions()
+        let key = PickerModelsCacheKey(
+            provider: provider,
+            ids: ids,
+            protectedIDs: protected,
+            hidesOutdatedModels: settings.hidesOutdatedModels,
+            catalogueSignature: catalogueSignature(sorted),
+            knownVersionsSignature: KnownVersionsCache.shared.signature
+        )
+        if let cached = PickerModelsCache.shared.value(for: key) { return cached }
+        let result = ModelFamilies.simplified(sorted, knownVersions: knownVersions, protecting: { option in
             protected.contains(option.id) || option.variants.contains { protected.contains($0.id) }
         })
+        PickerModelsCache.shared.store(result, for: key)
+        return result
     }
 
     /// Every vendor's versions across all loaded catalogues, so Pi's Claude 4.6 counts as
@@ -23,7 +35,7 @@ extension AppModel {
     /// changes: pickers ask for every provider on each render.
     private func knownModelVersions() -> [String: Set<[Int]>] {
         let lists = ProviderKind.allCases.map { providers.models(for: $0) }
-        let signature = lists.map { "\($0.count)\u{0}\($0.first?.id ?? "")\u{0}\($0.last?.id ?? "")" }.joined(separator: "\u{1}")
+        let signature = lists.map { catalogueSignature($0) }.joined(separator: "\u{1}")
         if let cached = KnownVersionsCache.shared.value, KnownVersionsCache.shared.signature == signature { return cached }
         var merged: [String: Set<[Int]>] = [:]
         for list in lists {
@@ -32,6 +44,10 @@ extension AppModel {
         KnownVersionsCache.shared.signature = signature
         KnownVersionsCache.shared.value = merged
         return merged
+    }
+
+    private func catalogueSignature(_ models: [ModelOption]) -> String {
+        "\(models.count)\u{0}\(models.map(\.id).joined(separator: "\u{0}"))"
     }
 
     /// The ids a trimmed picker keeps for `provider`: `ids` first, then the ones the
@@ -71,6 +87,36 @@ extension AppModel {
             for profile in pair.headProfiles where (profile.provider ?? pair.headsProvider) == provider {
                 if let model = profile.model { protected.insert(model) }
             }
+        }
+    }
+}
+
+private struct PickerModelsCacheKey: Hashable {
+    let provider: ProviderKind
+    let ids: Set<String>
+    let protectedIDs: Set<String>
+    let hidesOutdatedModels: Bool
+    let catalogueSignature: String
+    let knownVersionsSignature: String
+}
+
+@MainActor
+private final class PickerModelsCache {
+    static let shared = PickerModelsCache()
+    private static let limit = 48
+    private var values: [PickerModelsCacheKey: [ModelOption]] = [:]
+    private var order: [PickerModelsCacheKey] = []
+
+    func value(for key: PickerModelsCacheKey) -> [ModelOption]? {
+        values[key]
+    }
+
+    func store(_ value: [ModelOption], for key: PickerModelsCacheKey) {
+        if values.updateValue(value, forKey: key) == nil {
+            order.append(key)
+        }
+        if order.count > Self.limit {
+            values.removeValue(forKey: order.removeFirst())
         }
     }
 }

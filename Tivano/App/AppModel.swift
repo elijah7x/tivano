@@ -702,16 +702,17 @@ final class AppModel {
 
     /// Decodes threads' histories ahead of time, off the main thread, so opening one costs no
     /// parse on the click. Threads already open have their history in memory and are skipped.
-    func warmDocuments(_ ids: [UUID]) {
+    /// Urgent requests jump ahead of launch's warm-up.
+    func warmDocuments(_ ids: [UUID], urgent: Bool = false) {
         let cold = ids.filter { runtimes[$0] == nil }
         guard !cold.isEmpty else { return }
-        DocumentPrefetch.shared.warm(cold)
+        DocumentPrefetch.shared.warm(cold, urgent: urgent)
     }
 
     /// The rows either side of the selection within the thread's project, for the
     /// arrow keys and the next click.
     private func warmNeighbors(of id: UUID?) {
-        warmDocuments(neighbors(of: id))
+        warmDocuments(neighbors(of: id), urgent: true)
     }
 
     /// The rows either side of a thread within its project: what the arrow keys and the
@@ -1024,6 +1025,7 @@ final class AppModel {
             thread.model = lead.model
             thread.effort = lead.effort
             thread.fastMode = lead.fastMode
+            thread.dshMode = lead.dshMode
             thread.hydraPairID = pair.id
             thread.hydraEnabled = true
         } else if carriesModel {
@@ -1034,6 +1036,7 @@ final class AppModel {
             thread.model = lead.model
             thread.effort = lead.effort
             thread.fastMode = lead.fastMode
+            thread.dshMode = lead.dshMode
             thread.hydraPairID = pair.id
             thread.hydraEnabled = true
         }
@@ -1197,6 +1200,7 @@ final class AppModel {
         for helper in helpers(of: id) { archive(helper.id) }
         if selectedThreadID == id { selectNeighbor(of: id) }
         existingRuntime(for: id)?.stopSession()
+        autoContinue.dismiss(id)
         releaseHydraCopy(of: id)
         updateThread(id) {
             $0.isArchived = true
@@ -1440,6 +1444,7 @@ final class AppModel {
         hydraHeadRetries[thread.id] = nil
         runtimeLastAccess[thread.id] = nil
         idleSessionStops.removeValue(forKey: thread.id)?.cancel()
+        autoContinue.dismiss(thread.id)
         runtimes[thread.id]?.cancelPersistence()
         runtimes[thread.id]?.failExternalControl(ControlFailure(code: .notFound))
         runtimes[thread.id]?.stopSession()
@@ -1654,9 +1659,9 @@ final class AppModel {
         guard thread(id)?.lastAttentionTurnID != turnID else { return }
         let isVisible = thread(id).map(isOnScreen) ?? false
         let isHead = thread(id)?.isHydraHead == true
-        let waitingForLimit = autoContinue.turnFinished(id, status: status, continues: continues)
+        autoContinue.turnFinished(id, turnID: turnID, status: status, continues: continues, userStopped: userStopped)
         let runtime = existingRuntime(for: id)
-        let stillWorking = continues || waitingForLimit || runtime?.isWaitingForLimit == true || runtime?.isRunning == true
+        let stillWorking = continues || runtime?.isWaitingForLimit == true || runtime?.isRunning == true
             || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true
             || !(runtime?.backgroundTasks.isEmpty ?? true)
         if !isHead && !userStopped && !continues && stillWorking {

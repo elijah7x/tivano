@@ -72,6 +72,16 @@ struct ChatView: View {
     /// switch: panels and reserves snap to the new thread's layout rather than glide from
     /// the old one's, and the Hydra panel's linger is dropped rather than carried across.
     @State private var sceneThreadID: UUID?
+    /// Whether this column has been on screen long enough to have settled. Each thread keeps
+    /// its own column, so a switch is a hidden column being shown: one built just now still
+    /// measures its pane, one kept hidden has a stale pane and heads that came and went
+    /// meanwhile. Until it settles every pass snaps, so arriving never plays as a panel or
+    /// the conversation moving; changes after that slide as before.
+    @State private var hasSettled = false
+    @State private var settleTask: Task<Void, Never>?
+    /// How long a shown column keeps snapping: a few frames, enough for the measurements
+    /// that follow it, and short of anything that reads as the thread's own change.
+    private static let showSettle: Duration = .milliseconds(180)
 
     private static let hydraMinimumPresence: TimeInterval = 1.6
 
@@ -89,12 +99,12 @@ struct ChatView: View {
         // Split, so a resize frame recomputes docks and reserves only, never the
         // thread lists.
         let members = PanelMembers(runtime: runtime, model: model)
+        let switching = sceneThreadID != runtime.threadID || (columnIsShown && !hasSettled)
         let scene = PanelScene(members: members, runtime: runtime, model: model, paneSize: paneSize, composerAreaHeight: composerAreaHeight, holdsHydra: hydraLingers, preferredSize: livePreferredSize)
         // The team's panel as the model has it, before the linger below: what decides
         // whether the panel is held on a beat after its heads leave.
         let hydraPresent = !members.heads.isEmpty && scene.isMeasured
         let holds = panelsHeld
-        let switching = sceneThreadID != runtime.threadID
         VStack(spacing: 0) {
             ThreadTimeline(
                 runtime: runtime,
@@ -266,6 +276,15 @@ struct ChatView: View {
                 for id in ids where autoDrags[id] == nil { autoDrags[id] = PanelDragState() }
                 for id in autoDrags.keys where !ids.contains(id) { autoDrags[id] = nil }
             }
+            // Each automatic panel keeps the corner it was first shown in (see
+            // `ThreadRuntime.hydraAutoPanelPlaced`).
+            .onChange(of: AutoPlacement(scene: scene), initial: true) { _, placement in
+                for (id, corner) in placement.corners {
+                    let kept = runtime.hydraAutoPanelPlaced[id]
+                    guard kept?.corner != corner || kept?.team != placement.team || kept?.bothSides != placement.fitsBothSides else { continue }
+                    runtime.hydraAutoPanelPlaced[id] = (corner, placement.team, placement.fitsBothSides)
+                }
+            }
 
             if runtime.isTerminalVisible {
                 TerminalPanel(runtime: runtime)
@@ -280,6 +299,7 @@ struct ChatView: View {
         // the chrome row mid-flight, clips leading text, unseats the traffic lights
         // the chrome keeps room for, and doubles the title against itself.
         .transition(.identity)
+        .environment(\.panelsSnap, switching)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { columnHeight = $0 }
         .animation(switching ? nil : Chrome.panelSlide, value: runtime.isTerminalVisible)
         // A merge or pull request link in this chat can hand its request to a helper, which
@@ -313,6 +333,18 @@ struct ChatView: View {
             panelResize = PanelResizeState()
         }
         .onAppear { sceneThreadID = runtime.threadID }
+        .onChange(of: columnIsShown, initial: true) { _, shown in
+            settleTask?.cancel()
+            guard shown else {
+                hasSettled = false
+                return
+            }
+            settleTask = Task { @MainActor in
+                try? await Task.sleep(for: Self.showSettle)
+                guard !Task.isCancelled else { return }
+                hasSettled = true
+            }
+        }
     }
 
     // MARK: - Floating panels
@@ -628,6 +660,24 @@ struct ChatView: View {
     }
 }
 
+/// The automatic panels' corners as laid out, keyed for the record kept of them.
+@MainActor
+private struct AutoPlacement: Equatable {
+    let corners: [UUID: PanelDockCorner]
+    let team: PanelDockCorner
+    let fitsBothSides: Bool
+
+    init(scene: PanelScene) {
+        var corners: [UUID: PanelDockCorner] = [:]
+        for head in scene.autoPopped {
+            if let slot = scene.slots[.auto(head.id)] { corners[head.id] = slot.corner }
+        }
+        self.corners = corners
+        team = scene.slots[.hydra]?.corner ?? .bottomTrailing
+        fitsBothSides = scene.layout.fitsBothSides
+    }
+}
+
 /// Makes room for the docked panels on either side and slides the content to its new
 /// place, without laying it out at every width in between. Animating the padding itself
 /// re-wrapped every visible message and the chat box on each frame of the spring, which
@@ -650,6 +700,8 @@ extension EnvironmentValues {
     /// The glide alone, so a view can follow the snap and the glide with the rows but
     /// ignore the padding.
     @Entry var reserveSlideOffset: CGFloat = 0
+    /// True while a column just shown settles: the floating panels take their spots at once.
+    @Entry var panelsSnap = false
 }
 
 private struct ReserveSlide: ViewModifier {
@@ -832,6 +884,19 @@ private struct PanelScene {
                 autoPopped.append(candidate)
             }
             candidates.removeAll { runtime.hydraAutoPanelDocks[$0.id] != nil }
+            // A panel already on screen keeps its corner while that corner has room, the team
+            // panel has not moved and the pane is as wide as it was; only the panels left are
+            // spread below.
+            for candidate in candidates {
+                guard let kept = runtime.hydraAutoPanelPlaced[candidate.id], kept.team == runtime.hydraPanelDock,
+                      kept.bothSides == layoutFitsBothSides else { continue }
+                let other = Self.flippedVertically(kept.corner)
+                let used = placed.count { $0.corner == kept.corner } + placed.count { $0.corner == other }
+                guard used < natural else { continue }
+                placed.append((.auto(candidate.id), kept.corner))
+                autoPopped.append(candidate)
+            }
+            candidates.removeAll { candidate in autoPopped.contains { $0.id == candidate.id } }
             // A pane too narrow for panels on both sides keeps the heads on the team's side.
             for corner in (layoutFitsBothSides ? [runtime.hydraPanelDock.acrossTheColumn, runtime.hydraPanelDock] : [runtime.hydraPanelDock]) {
                 let other = Self.flippedVertically(corner)
@@ -844,6 +909,17 @@ private struct PanelScene {
                 }
             }
         }
+        // The heads' own order decides how automatic panels sharing a corner stack, however
+        // they were placed above: a kept corner placed first must not swap two panels.
+        let headOrder = Dictionary(uniqueKeysWithValues: members.heads.enumerated().map { ($1.id, $0) })
+        func rank(_ id: FloatingPanelID) -> Int {
+            if case .auto(let head) = id { return headOrder[head] ?? Int.max }
+            return -1
+        }
+        let autoIndices = placed.indices.filter { rank(placed[$0].id) >= 0 }
+        let autoSorted = autoIndices.map { placed[$0] }.sorted { rank($0.id) < rank($1.id) }
+        for (index, entry) in zip(autoIndices, autoSorted) { placed[index] = entry }
+        autoPopped.sort { (headOrder[$0.id] ?? Int.max) < (headOrder[$1.id] ?? Int.max) }
         // Too narrow for both sides: every panel goes to the side the team panel is on,
         // else the fuller side, each keeping its top or bottom.
         if !layoutFitsBothSides {

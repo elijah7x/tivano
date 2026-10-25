@@ -214,5 +214,41 @@ extension ProductCaptures {
         runtime.hydraPoppedHeadID = nil
         runtime.isHydraPanelHidden = true
     }
+
+    /// `--website-captures <folder> --hydra-panels-preview`: the team panel and a popped-out
+    /// head over the lead's chat, left open in performance mode for judging by hand while the
+    /// theme is switched. Runs on the capture's isolated storage and defaults.
+    static func panelsPreview(model: AppModel) async {
+        CaptureRun.defaults?.set(true, forKey: "performanceMode")
+        await model.bootstrap()
+        model.settings.hasSeenHydraIntro = true
+        model.settings.theme = .system
+        let window = WindowManager.shared.makeCaptureWindow(size: NSSize(width: 1280, height: 800))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        if model.sidebar.isVisible { model.sidebar.toggle() }
+        model.selectedThreadID = HydraID.lead
+        let runtime = model.runtime(for: HydraID.lead)
+        runtime.rehearseHydraHead(toolID: "head-0", headID: HydraID.head0)
+        runtime.rehearseHydraHead(toolID: "head-1", headID: HydraID.head1)
+        runtime.rehearseHydraHead(toolID: "head-2", headID: HydraID.head2)
+        for (id, activity) in [(HydraID.head1, "Wiring settings navigation"), (HydraID.head2, "Editing ProductCaptures.swift")] {
+            model.updateHydraHead(id) {
+                $0.status = .running
+                $0.finishedAt = nil
+                $0.activity = activity
+            }
+            model.updateThread(id) { $0.lastStatus = .running }
+        }
+        runtime.isHydraPanelHidden = false
+        runtime.hydraSelectedHeadID = HydraID.head2
+        runtime.hydraPanelDock = .bottomTrailing
+        runtime.hydraPoppedHeadID = HydraID.head0
+        runtime.hydraPoppedPanelDock = .bottomLeading
+        windowHolder = window
+    }
+
+    private static var windowHolder: NSWindow?
 }
 #endif

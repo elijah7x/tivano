@@ -32,6 +32,16 @@ enum ModelCatalog {
         }
         return result
     }
+
+    static func fullCatalogueEntries(_ model: AppModel, forProvidersIn entries: [Entry]) -> [Entry] {
+        var providers: [ProviderKind] = []
+        for entry in entries where !providers.contains(entry.provider) {
+            providers.append(entry.provider)
+        }
+        return providers.flatMap { provider in
+            model.providers.sortedModels(for: provider).map { Entry(provider: provider, option: $0) }
+        }
+    }
 }
 
 // MARK: - Composer chip
@@ -368,8 +378,10 @@ struct ModelList: View {
 
     /// A pair row carries two lines, like a model row with its provider under it.
     private static let pairRowHeight: CGFloat = 46
-    /// What `PopoverSectionHeader` takes: an 11 pt line with its own padding above and below.
+    /// What a group title takes: an 11 pt line with its own padding above and below.
     private static let sectionHeaderHeight: CGFloat = 22
+    /// The same for Recent, Pairs and Models, which read one size larger than the groups under them.
+    private static let topHeaderHeight: CGFloat = 25
 
     private enum DisplayRow: Identifiable {
         case header(String)
@@ -394,7 +406,8 @@ struct ModelList: View {
 
         func height(modelRowHeight: CGFloat) -> CGFloat {
             switch self {
-            case .header, .section: ModelList.sectionHeaderHeight
+            case .header: ModelList.topHeaderHeight
+            case .section: ModelList.sectionHeaderHeight
             case .pair, .newTemporaryPair: ModelList.pairRowHeight
             case .otherFold: 34
             case .entry, .empty: modelRowHeight
@@ -407,6 +420,7 @@ struct ModelList: View {
         // The pairs are Hydra's: on offer while it is on, out of sight otherwise.
         let pairs = model.hydraIsOn(thread) ? model.hydraPickerPairs : []
         let searchQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let searchEntries = searchQuery.isEmpty ? entries : ModelCatalog.fullCatalogueEntries(model, forProvidersIn: entries)
         // A chat leads with one pair or runs one model, never both: the checkmark sits on
         // the pair while the chat is in one, even though the pair's lead model is a row too.
         let leadsWithTemporaryPair = model.temporaryHydraPair(for: thread) != nil
@@ -414,7 +428,7 @@ struct ModelList: View {
         let showsProviders = Set(entries.map(\.provider)).count > 1
         // Fixed row heights let the popover size itself in one pass instead of measuring and resizing.
         let rowHeight: CGFloat = showsProviders || (hasHistory && entries.contains { $0.provider != thread.provider }) ? 46 : 34
-        let rows = displayRows(entries: entries, pairs: pairs, query: searchQuery)
+        let rows = displayRows(entries: entries, searchEntries: searchEntries, pairs: pairs, query: searchQuery)
         let contentHeight = rows.reduce(CGFloat.zero) { $0 + $1.height(modelRowHeight: rowHeight) + 1 }
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -435,7 +449,7 @@ struct ModelList: View {
                     .focused($searchIsFocused)
                     .onSubmit {
                         if !searchQuery.isEmpty,
-                           let first = entries.first(where: {
+                           let first = searchEntries.first(where: {
                                !isLocked($0) && ModelsSettingsPage.matches($0.option, id: $0.option.id, provider: $0.provider, query: searchQuery)
                            }) {
                             onChoose(first)
@@ -451,8 +465,8 @@ struct ModelList: View {
                     ForEach(rows) { row in
                         switch row {
                         case .header(let title):
-                            PopoverSectionHeader(title)
-                                .frame(height: Self.sectionHeaderHeight)
+                            PopoverSectionHeader(title, weight: .bold, style: .callout)
+                                .frame(height: Self.topHeaderHeight)
                         case .pair(let pair, let temporary, let recent):
                             let locked = hasHistory && pair.provider != thread.provider
                             HydraPairListRow(
@@ -490,6 +504,8 @@ struct ModelList: View {
                         case .section(let section, let hiddenCount):
                             headingRow(
                                 Text(verbatim: section.name),
+                                weight: .medium,
+                                style: .subheadline,
                                 collapsed: model.settings.isModelSectionCollapsed(section.id),
                                 count: hiddenCount > 0 ? hiddenCount : nil,
                                 height: Self.sectionHeaderHeight
@@ -499,6 +515,8 @@ struct ModelList: View {
                         case .otherFold(let count):
                             headingRow(
                                 Text("Other models · New chats only"),
+                                weight: .bold,
+                                style: .callout,
                                 collapsed: !showsOtherModels,
                                 count: count,
                                 height: 34
@@ -533,9 +551,10 @@ struct ModelList: View {
         hasHistory && entry.provider != thread.provider
     }
 
-    private func displayRows(entries: [ModelCatalog.Entry], pairs: [HydraPair], query: String) -> [DisplayRow] {
-        let selectable = entries.filter { !isLocked($0) }
-        let locked = entries.filter { isLocked($0) }
+    private func displayRows(entries: [ModelCatalog.Entry], searchEntries: [ModelCatalog.Entry], pairs: [HydraPair], query: String) -> [DisplayRow] {
+        let displayedEntries = query.isEmpty ? entries : searchEntries
+        let selectable = displayedEntries.filter { !isLocked($0) }
+        let locked = displayedEntries.filter { isLocked($0) }
         if !query.isEmpty {
             let matches = (selectable + locked).filter {
                 ModelsSettingsPage.matches($0.option, id: $0.option.id, provider: $0.provider, query: query)
@@ -623,7 +642,7 @@ struct ModelList: View {
         rows.append(contentsOf: entries.map { .entry($0, recent: false) })
     }
 
-    private func headingRow(_ title: Text, collapsed: Bool, count: Int?, height: CGFloat, action: @escaping () -> Void) -> some View {
+    private func headingRow(_ title: Text, weight: Font.Weight, style: Font.TextStyle, collapsed: Bool, count: Int?, height: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 title
@@ -633,7 +652,7 @@ struct ModelList: View {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                     .font(Chrome.chevronFont)
             }
-            .font(.ui(.subheadline, weight: .semibold))
+            .font(.ui(style, weight: weight))
             .foregroundStyle(Chrome.secondaryText)
             .padding(.horizontal, 8)
             .padding(.top, 6)

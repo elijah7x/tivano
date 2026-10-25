@@ -543,6 +543,7 @@ struct HydraPairEditor: View {
                                 $0.provider = provider
                                 $0.orchestratorModel = nil
                                 $0.orchestratorEffort = nil
+                                $0.orchestratorDshMode = nil
                                 // Heads on the old lead provider go with it; heads on a
                                 // provider of their own keep their model and effort, and
                                 // when that provider is the new lead's, they are simply
@@ -550,6 +551,7 @@ struct HydraPairEditor: View {
                                 if $0.workerProvider == nil {
                                     $0.workerModel = nil
                                     $0.workerEffort = nil
+                                    $0.workerDshMode = nil
                                 } else if $0.workerProvider == provider {
                                     $0.workerProvider = nil
                                 }
@@ -589,6 +591,17 @@ struct HydraPairEditor: View {
                     )
                 }
             }
+            if pair.provider == .dsh {
+                editorRow("Agent mode") {
+                    GlassPickerButton(
+                        options: DshAgentMode.allCases.map { ($0, $0.title) },
+                        selection: Binding(
+                            get: { pair.orchestratorDshMode ?? .standard },
+                            set: { mode in update { $0.orchestratorDshMode = mode == .standard ? nil : mode } }
+                        )
+                    )
+                }
+            }
             sectionLabel("Heads")
             editorRow("Provider") {
                 GlassPickerButton(
@@ -603,6 +616,7 @@ struct HydraPairEditor: View {
                                 $0.workerProvider = chosen
                                 $0.workerModel = nil
                                 $0.workerEffort = nil
+                                $0.workerDshMode = nil
                             }
                             if let provider { Task { await registry.loadCatalog(provider) } }
                         }
@@ -635,6 +649,17 @@ struct HydraPairEditor: View {
                         selection: Binding(
                             get: { pair.workerEffort },
                             set: { effort in update { $0.workerEffort = effort } }
+                        )
+                    )
+                }
+            }
+            if pair.headsProvider == .dsh {
+                editorRow("Agent mode") {
+                    GlassPickerButton(
+                        options: DshAgentMode.allCases.map { ($0, $0.title) },
+                        selection: Binding(
+                            get: { pair.workerDshMode ?? .standard },
+                            set: { mode in update { $0.workerDshMode = mode == .standard ? nil : mode } }
                         )
                     )
                 }

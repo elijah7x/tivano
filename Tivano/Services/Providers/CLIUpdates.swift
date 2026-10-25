@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// Installers get shell paths and transport settings, never provider or account overlays.
@@ -269,9 +270,12 @@ enum CLIUpdates {
         }
         if isProtected(resolved), isProtected(original) { return nil }
         if let native = claudeNativeChannel(provider, original: original, resolved: resolved, probe: probe) { return native }
+        if let native = codexNativeChannel(provider, original: original, resolved: resolved, environment: environment, probe: probe) { return native }
+        if let native = piNativeChannel(provider, original: original, resolved: resolved, probe: probe) { return native }
         if let native = cursorNativeChannel(provider, original: original, resolved: resolved, probe: probe) { return native }
         if let native = grokNativeChannel(provider, original: original, resolved: resolved, environment: environment, probe: probe) { return native }
         if let native = devinNativeChannel(provider, original: original, resolved: resolved, environment: environment, probe: probe) { return native }
+        if let native = antigravityNativeChannel(provider, original: original, resolved: resolved, probe: probe) { return native }
         return nil
     }
 
@@ -293,6 +297,8 @@ enum CLIUpdates {
             return String(localized: "Devin's installation source could not be verified. Update it through its original installer or administrator.")
         case .grok:
             return String(localized: "Grok's native install path or release metadata could not be verified. Update it through its original installer.")
+        case .antigravity:
+            return String(localized: "Antigravity's installation source could not be verified. Update it with agy update from its official installer.")
         default:
             return String(localized: "The installation source or required metadata could not be verified. Tivano will not update this CLI.")
         }
@@ -311,14 +317,29 @@ enum CLIUpdates {
         environment: [String: String],
         probe: CLIProbe = .live
     ) async throws -> String? {
-        _ = installed
         if provider == .omp { return nil }
+        if provider == .dsh {
+            for path in [probe.standardize(executable.path), probe.standardize(probe.resolve(executable).path)] {
+                let parts = components(path)
+                if let index = parts.lastIndex(where: { $0.hasSuffix(".app") }) {
+                    return try await dshDesktopVersion(bundle: join(Array(parts[...index])), installed: installed, probe: probe)
+                }
+            }
+        }
         switch channel {
         case .homebrew(let brew, let token, let cask):
             return try await homebrewVersion(brew: brew, token: token, cask: cask, environment: environment, probe: probe)
         case .npm(_, let package, _, let tag), .bun(_, let package, _, _, let tag), .pnpm(_, let package, _, _, _, let tag):
             return try await registryVersion(package, tag: tag, probe: probe)
         case .selfUpdate:
+            if provider == .codex { return try await codexStandaloneVersion(probe: probe) }
+            if provider == .pi {
+                let json = try feedJSON(try await probe.fetch(URL(string: "https://pi.dev/api/latest-version")!))
+                guard let version = json["version"] as? String, versionToken(exact: version) != nil else {
+                    throw ShellError(String(localized: "The release feed's version could not be read."))
+                }
+                return version.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             if provider == .grok, let release = grokReleaseChannel(environment: environment, probe: probe) {
                 return try await textVersion(URL(string: "https://storage.googleapis.com/grok-build-public-artifacts/cli/\(release)")!, probe: probe)
             }
@@ -483,6 +504,44 @@ enum CLIUpdates {
         return .selfUpdate(executable: executable, arguments: ["update"], environment: [:])
     }
 
+    /// Default standalone layout: https://chatgpt.com/codex/install.sh
+    /// `codex update` runs the installer with CODEX_NON_INTERACTIVE=1 itself.
+    /// https://github.com/openai/codex/blob/main/codex-rs/cli/src/main.rs
+    /// https://github.com/openai/codex/blob/main/codex-rs/tui/src/update_action.rs
+    private static func codexNativeChannel(_ provider: ProviderKind, original: String, resolved: String, environment: [String: String], probe: CLIProbe) -> CLIInstallChannel? {
+        guard provider == .codex else { return nil }
+        let root = probe.standardize(probe.home() + "/.codex")
+        let bin = probe.standardize(probe.home() + "/.local/bin")
+        guard environment["CODEX_HOME"].map({ $0.isEmpty || same(probe.standardize($0), root) }) ?? true,
+              environment["CODEX_INSTALL_DIR"].map({ $0.isEmpty || same(probe.standardize($0), bin) }) ?? true else { return nil }
+        let launcher = bin + "/codex"
+        let releases = root + "/packages/standalone/releases"
+        let relative = Array(components(resolved).dropFirst(components(releases).count))
+        guard same(original, launcher), probe.isExecutable(launcher), isWithin(resolved, releases),
+              (relative.count == 3 && relative[1] == "bin" && relative[2] == "codex") ||
+              (relative.count == 2 && relative[1] == "codex") else { return nil }
+        let targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+        guard let target = targets.first(where: { relative[0].hasSuffix("-" + $0) }),
+              versionToken(exact: String(relative[0].dropLast(target.count + 1))) != nil else { return nil }
+        return .selfUpdate(executable: launcher, arguments: ["update"], environment: [:])
+    }
+
+    /// Managed shell launcher and marker: https://pi.dev/install.sh
+    /// https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/package-manager-cli.ts
+    private static func piNativeChannel(_ provider: ProviderKind, original: String, resolved: String, probe: CLIProbe) -> CLIInstallChannel? {
+        guard provider == .pi else { return nil }
+        let root = probe.standardize(probe.home() + "/.pi/agent")
+        let launcher = root + "/bin/pi"
+        guard same(original, launcher) || same(resolved, launcher), probe.isExecutable(launcher),
+              let data = probe.readFile(root + "/install/managed-install.json"),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["kind"] as? String == "pi-managed-install",
+              let schema = json["schemaVersion"] as? NSNumber,
+              CFGetTypeID(schema) != CFBooleanGetTypeID(), schema == 1,
+              json["layout"] as? String == "releases-v1" else { return nil }
+        return .selfUpdate(executable: launcher, arguments: ["update", "--self"], environment: [:])
+    }
+
     /// Official installer layout and updater: https://cursor.com/install
     /// https://docs.cursor.com/en/cli/installation
     private static func cursorNativeChannel(_ provider: ProviderKind, original: String, resolved: String, probe: CLIProbe) -> CLIInstallChannel? {
@@ -498,14 +557,15 @@ enum CLIUpdates {
     }
 
     /// The internal updater always swaps GROK_HOME/bin, not an arbitrary executable location.
+    /// Both launcher names are installed by https://x.ai/cli/install.sh
     /// https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-update/src/auto_update.rs
     private static func grokNativeChannel(_ provider: ProviderKind, original: String, resolved: String, environment: [String: String], probe: CLIProbe) -> CLIInstallChannel? {
         guard provider == .grok, grokReleaseChannel(environment: environment, probe: probe) != nil else { return nil }
         let root = probe.standardize(probe.home() + "/.grok")
         guard environment["GROK_HOME"].map({ $0.isEmpty || same(probe.standardize($0), root) }) ?? true,
               environment["GROK_BIN_DIR"].map({ $0.isEmpty || same(probe.standardize($0), root + "/bin") }) ?? true else { return nil }
-        let launcher = root + "/bin/grok"
-        guard same(original, launcher), probe.isExecutable(launcher),
+        let launcher = original
+        guard [root + "/bin/grok", root + "/bin/agent"].contains(where: { same(launcher, $0) }), probe.isExecutable(launcher),
               isWithin(resolved, root + "/downloads"),
               same((resolved as NSString).deletingLastPathComponent, root + "/downloads"),
               (resolved as NSString).lastPathComponent.hasPrefix("grok-"),
@@ -574,6 +634,15 @@ enum CLIUpdates {
         return .selfUpdate(executable: launcher, arguments: ["update"], environment: [:])
     }
 
+    /// The official installer copies a flat executable to `~/.local/bin/agy`, without a symlink.
+    /// https://antigravity.google/cli/install.sh
+    private static func antigravityNativeChannel(_ provider: ProviderKind, original: String, resolved: String, probe: CLIProbe) -> CLIInstallChannel? {
+        guard provider == .antigravity else { return nil }
+        let launcher = probe.standardize((probe.home() as NSString).appendingPathComponent(".local/bin/agy"))
+        guard same(original, launcher), same(resolved, launcher), probe.isExecutable(launcher) else { return nil }
+        return .selfUpdate(executable: launcher, arguments: ["update"], environment: [:])
+    }
+
     // MARK: - Feeds
 
     fileprivate static func loadFeed(_ url: URL) async throws -> Data {
@@ -617,8 +686,110 @@ enum CLIUpdates {
         return version.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Version feeds that do not grant an update. Claude's `stable` channel has no verified HTTP feed.
-    /// Codex's CLI versions are the `@openai/codex` releases. Cursor and Antigravity publish no feed here.
+    /// GitHub release tags may carry a leading `v` or a repository-specific prefix.
+    /// https://docs.github.com/en/rest/releases/releases#get-the-latest-release
+    private static func githubReleaseVersion(_ repository: String, tagPrefix: String = "v", probe: CLIProbe) async throws -> String {
+        guard let url = URL(string: "https://api.github.com/repos/\(repository)/releases/latest") else {
+            throw ShellError(String(localized: "The release feed URL is invalid."))
+        }
+        let json = try feedJSON(try await probe.fetch(url))
+        guard let tag = json["tag_name"] as? String else {
+            throw ShellError(String(localized: "The release feed's version could not be read."))
+        }
+        let raw = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unprefixed = raw.hasPrefix(tagPrefix) ? String(raw.dropFirst(tagPrefix.count)) : raw
+        let version = unprefixed.hasPrefix("v") ? String(unprefixed.dropFirst()) : unprefixed
+        guard versionToken(exact: version) != nil else {
+            throw ShellError(String(localized: "The release feed's version could not be read."))
+        }
+        return version
+    }
+
+    /// Standalone installer feed: https://chatgpt.com/codex/install.sh
+    /// https://releases.openai.com/codex/channels/latest
+    private static func codexStandaloneVersion(probe: CLIProbe) async throws -> String {
+        do {
+            let json = try feedJSON(try await probe.fetch(URL(string: "https://releases.openai.com/codex/channels/latest")!))
+            guard let tag = json["tag_name"] as? String else {
+                throw ShellError(String(localized: "The release feed's version could not be read."))
+            }
+            let raw = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            let version = raw.hasPrefix("rust-v") ? String(raw.dropFirst(6)) : (raw.hasPrefix("v") ? String(raw.dropFirst()) : raw)
+            guard versionToken(exact: version) != nil else {
+                throw ShellError(String(localized: "The release feed's version could not be read."))
+            }
+            return version
+        } catch {
+            return try await githubReleaseVersion("openai/codex", tagPrefix: "rust-v", probe: probe)
+        }
+    }
+
+    /// Generic macOS feeds append <channel>-mac.yml to the configured URL, which already owns the architecture.
+    /// https://github.com/electron-userland/electron-builder/blob/master/packages/electron-updater/src/providers/GenericProvider.ts
+    /// https://github.com/electron-userland/electron-builder/blob/master/packages/electron-updater/src/providers/Provider.ts
+    private static func dshDesktopVersion(bundle: String, installed: String?, probe: CLIProbe) async throws -> String? {
+        guard let installed, versionToken(exact: installed) != nil,
+              let plist = probe.readFile(bundle + "/Contents/Info.plist"),
+              let info = try? PropertyListSerialization.propertyList(from: plist, options: [], format: nil) as? [String: Any],
+              let appVersion = info["CFBundleShortVersionString"] as? String, appVersion == installed,
+              let config = probe.readFile(bundle + "/Contents/Resources/app-update.yml"),
+              yamlScalar("provider", in: config) == "generic",
+              let rawURL = yamlScalar("url", in: config),
+              var url = URLComponents(string: rawURL), url.scheme == "https", url.host != nil,
+              let channel = yamlScalar("channel", in: config), !channel.isEmpty,
+              channel.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) else { return nil }
+        if !url.path.hasSuffix("/") { url.path += "/" }
+        url.path += channel + "-mac.yml"
+        url.fragment = nil
+        guard let feed = url.url else { return nil }
+        let data = try await probe.fetch(feed)
+        guard let version = yamlScalar("version", in: data), versionToken(exact: version) != nil else {
+            throw ShellError(String(localized: "The release feed's version could not be read."))
+        }
+        return version
+    }
+
+    /// Read only unambiguous top-level scalar fields from the desktop update documents.
+    /// https://download.deepseek.com/dsh-desk/feeds/mac-arm64/nightly-mac.yml
+    private static func yamlScalar(_ key: String, in data: Data) -> String? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        let matches = text.split(whereSeparator: \.isNewline).filter { $0.hasPrefix(key + ":") }
+        guard matches.count == 1, let line = matches.first else { return nil }
+        var value = line.dropFirst(key.count + 1).trimmingCharacters(in: .whitespaces)
+        if let quote = value.first, quote == "\"" || quote == "'" {
+            guard value.count >= 2, value.last == quote else { return nil }
+            value = String(value.dropFirst().dropLast())
+            guard !value.contains(quote), !value.contains("\\") else { return nil }
+        } else {
+            guard !value.isEmpty, !value.contains(where: { $0.isWhitespace || "#{}[]&*!|>\"'".contains($0) }) else { return nil }
+        }
+        return value
+    }
+
+    /// The install script pins its download URL to a date and commit hash.
+    /// https://cursor.com/install
+    private static func cursorVersion(probe: CLIProbe) async throws -> String {
+        let data = try await probe.fetch(URL(string: "https://cursor.com/install")!)
+        guard let script = String(data: data, encoding: .utf8) else {
+            throw ShellError(String(localized: "The release feed's version could not be read."))
+        }
+        let expression = try NSRegularExpression(pattern: #"https://downloads\.cursor\.com/lab/([0-9]+\.[0-9]+\.[0-9]+-[0-9a-fA-F]+)/"#)
+        let matches = expression.matches(in: script, range: NSRange(script.startIndex..., in: script))
+        let versions = Set(matches.compactMap { match -> String? in
+            guard let range = Range(match.range(at: 1), in: script) else { return nil }
+            return String(script[range])
+        })
+        guard versions.count == 1, let version = versions.first, versionToken(exact: version) != nil else {
+            throw ShellError(String(localized: "The release feed's version could not be read."))
+        }
+        return version
+    }
+
+    /// Version feeds do not grant update ownership. Claude's native `stable` to npm tag mapping
+    /// is not documented: https://code.claude.com/docs/en/setup#configure-release-channel
+    /// Cursor uses its installer; Antigravity uses https://github.com/google-antigravity/antigravity-cli/releases.
+    /// Native Codex and Pi feeds are selected by their self-update channels above. App-bundled dsh
+    /// is handled before channel dispatch; only non-app dsh installs use the npm feed here.
     private static func unmanagedVersion(_ provider: ProviderKind, environment: [String: String], probe: CLIProbe) async throws -> String? {
         switch provider {
         case .claude:
@@ -630,7 +801,9 @@ enum CLIUpdates {
         case .codex:
             return try await registryVersion("@openai/codex", tag: "latest", probe: probe)
         case .copilot: return try await registryVersion("@github/copilot", tag: "latest", probe: probe)
-        case .opencode: return nil
+        case .opencode: return try await registryVersion("@opencode/cli", tag: "latest", probe: probe)
+        case .cursor: return try await cursorVersion(probe: probe)
+        case .antigravity: return try await githubReleaseVersion("google-antigravity/antigravity-cli", probe: probe)
         case .pi: return try await registryVersion("@earendil-works/pi-coding-agent", tag: "latest", probe: probe)
         case .omp: return nil
         case .minimaxCode: return try await registryVersion("@minimax-ai/code", tag: "latest", probe: probe)
@@ -911,16 +1084,18 @@ enum CLIUpdates {
     // MARK: - Paths
 
     /// Package identities follow the official install docs: code.claude.com/docs/en/setup,
-    /// learn.chatgpt.com/docs/codex/cli, opencode.ai/docs, pi.dev/docs/latest/quickstart,
+    /// learn.chatgpt.com/docs/codex/cli, opencode.ai/docs, opencode.ai/v2/docs, pi.dev/docs/latest/quickstart,
     /// docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli,
     /// commandcode.ai/docs, and github.com/can1357/oh-my-pi#install.
+    /// Grok: https://registry.npmjs.org/@xai-official/grok/latest and https://docs.x.ai/build/overview
     /// Other packages do not grant update permission.
     private static func knownPackages(_ provider: ProviderKind) -> Set<String> {
         switch provider {
         case .claude: ["@anthropic-ai/claude-code"]
         case .codex: ["@openai/codex"]
+        case .grok: ["@xai-official/grok"]
         case .copilot: ["@github/copilot"]
-        case .opencode: ["opencode-ai"]
+        case .opencode: ["opencode-ai", "@opencode/cli"]
         case .pi: ["@earendil-works/pi-coding-agent"]
         case .omp: []
         case .kimi: ["@moonshot-ai/kimi-code"]

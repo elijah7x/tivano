@@ -74,12 +74,28 @@ enum MCPProviderConfig {
         return .object(["mcpServers": .object(entries)])
     }
 
-    static func acpServers(allowsHTTP: Bool) -> JSONValue {
+    static func acpServers(allowsHTTP: Bool) -> (servers: JSONValue, skipped: [String]) {
         guard let data = try? Data(contentsOf: MCPPaths.claudeConfigURL),
               let parsed = JSONValue.parse(data),
               let object = parsed["mcpServers"]?.object, !object.isEmpty
-        else { return .array([]) }
+        else { return (.array([]), []) }
         var servers: [JSONValue] = []
+        var skipped: [String] = []
+        var resolvedCommands: [String: URL?] = [:]
+        func resolveCommand(_ command: String) -> URL? {
+            if let cached = resolvedCommands[command] { return cached }
+            let resolved: URL?
+            if command.isEmpty {
+                resolved = nil
+            } else if command.contains("/") {
+                let path = (command as NSString).expandingTildeInPath
+                resolved = FileManager.default.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
+            } else {
+                resolved = LoginEnvironment.which(command)
+            }
+            resolvedCommands.updateValue(resolved, forKey: command)
+            return resolved
+        }
         for id in object.keys.sorted() {
             let entry = object[id] ?? .null
             if entry["type"]?.string == "http" || entry["url"]?.string != nil {
@@ -96,6 +112,10 @@ enum MCPProviderConfig {
                         "headers": .array(headerList),
                     ]))
                 } else {
+                    guard let resolved = resolveCommand("npx") else {
+                        skipped.append(id)
+                        continue
+                    }
                     var args: [JSONValue] = [.string("-y"), .string("mcp-remote"), .string(url)]
                     var envList: [JSONValue] = []
                     // mcp-remote expands ${NAME} in --header values from its own
@@ -107,25 +127,29 @@ enum MCPProviderConfig {
                     }
                     servers.append(.object([
                         "name": .string(id),
-                        "command": .string("npx"),
+                        "command": .string(resolved.path),
                         "args": .array(args),
                         "env": .array(envList),
                     ]))
                 }
             } else {
+                guard let resolved = resolveCommand(entry["command"]?.string ?? "") else {
+                    skipped.append(id)
+                    continue
+                }
                 let env = entry["env"]?.object ?? [:]
                 let envList = env.keys.sorted().map { key in
                     JSONValue.object(["name": .string(key), "value": .string(env[key]?.string ?? "")])
                 }
                 servers.append(.object([
                     "name": .string(id),
-                    "command": .string(entry["command"]?.string ?? ""),
+                    "command": .string(resolved.path),
                     "args": .array(entry["args"]?.array ?? []),
                     "env": .array(envList),
                 ]))
             }
         }
-        return .array(servers)
+        return (.array(servers), skipped)
     }
 
     static func gemini(_ servers: [MCPResolvedServer]) -> JSONValue {

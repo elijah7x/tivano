@@ -257,6 +257,7 @@ extension AppModel {
             headsLabel: label,
             workerModel: keepsModel ? pair?.workerModel : nil,
             workerEffort: workerEffort,
+            workerDshMode: keepsModel && headsProvider == .dsh ? pair?.workerDshMode : nil,
             // The lower of the pair's cap and the Hydra page's; with neither, the heads run uncapped.
             maxHeads: [pair?.maxHeads, settings.hydraMaxHeads].compactMap { $0 }.min(),
             headProfiles: pair?.headProfiles ?? [],
@@ -596,6 +597,7 @@ extension AppModel {
             runtimeMode: .fullAccess,
             fastMode: false
         )
+        if headsProvider == launch?.headsProvider { head.dshMode = launch?.workerDshMode }
         head.parentThreadID = parentID
         head.isInPanel = true
         head.worktreePath = needsRoute ? nil : (sameProject ? parent.worktreePath : nil)
@@ -726,7 +728,7 @@ extension AppModel {
 
     /// A head is done: its status and report land on it, and its lead hears about it. The
     /// report is relayed by the lead's runtime, which waits for the rest of a batch.
-    func finishHydraHead(_ id: UUID, status: TurnStatus, summary: String?, landing: HydraLanding? = nil) {
+    func finishHydraHead(_ id: UUID, status: TurnStatus, summary: String?, landing: HydraLanding? = nil, startupFailure: Bool = false) {
         guard let head = thread(id), let info = head.hydra, !info.isFinished else { return }
         // A head the watchdog stopped tells its lead why, ahead of whatever it had said.
         var summary = summary
@@ -765,13 +767,15 @@ extension AppModel {
                 if leadRuntime.hydraPoppedHeadID == id { leadRuntime.hydraPoppedHeadID = nil }
                 leadRuntime.hydraAutoPopHeld.remove(id)
                 leadRuntime.hydraAutoPanelDocks[id] = nil
+                leadRuntime.hydraAutoPanelPlaced[id] = nil
                 leadRuntime.panelStackOrder.removeAll { $0 == .auto(id) }
             }
         }
         guard let parentID = head.parentThreadID, let finished = thread(id)?.hydra else { return }
         let leadRuntime = runtime(for: parentID)
         let copyPath = info.hasOwnCopy ? head.worktreePath : nil
-        leadRuntime.hydraHeadFinished(head.id, info: finished, status: outcome, summary: summary, landing: landing, copyPath: copyPath)
+        leadRuntime.hydraHeadFinished(head.id, info: finished, status: outcome, summary: summary, landing: landing, copyPath: copyPath,
+                                       provider: head.provider.displayName, startupFailure: outcome == .failed && startupFailure)
         // The copy goes back only once the lead has the report, and only from a head that
         // finished: a head that was stopped or that failed hands its report the path to
         // its copy, where its half-done work is, and that folder has to still be there
@@ -815,6 +819,14 @@ extension AppModel {
                 return message.text
             } ?? ""
         let report = status == .failed ? Self.failedTurnReport(error: error, partial: spoken) : spoken
+        // Failed with an error of its own before a tool ran or a word was said, in this turn
+        // or a retried one: nothing about the brief was reached, so the provider is at fault.
+        let startupFailure = status == .failed && error != nil && !Self.isTransientFailure(error ?? "")
+            && spoken.trimmed.isEmpty && headRuntime?.entries.contains(where: { entry in
+                if entry.kind == .tool { return true }
+                guard case .assistant(let message) = entry.item.content else { return false }
+                return !message.text.trimmed.isEmpty
+            }) == false
         if let headRuntime {
             let tools = headRuntime.entries.count { $0.kind == .tool }
             updateHydraHead(head.id) { $0.toolCalls = tools }
@@ -872,7 +884,7 @@ extension AppModel {
             // The head reported; a report arriving on an already-finished head (the user
             // steered it on from the panel) goes to the lead as a fresh one.
             if thread(head.id)?.hydra?.isFinished == true { updateHydraHead(head.id) { $0.status = .running } }
-            finishHydraHead(head.id, status: status, summary: report, landing: landing)
+            finishHydraHead(head.id, status: status, summary: report, landing: landing, startupFailure: startupFailure)
             if let headRuntime, let historySession {
                 headRuntime.archiveCodexHeadHistory(completion: historySession)
             }
@@ -895,6 +907,18 @@ extension AppModel {
         let text = report.lowercased()
         return ["database is locked", "database locked", "sqlite_busy", "did not start a session", "the agent exited", "stopped unexpectedly"]
             .contains { text.contains($0) }
+    }
+
+    /// Whether a failure is likely to clear on its own, rather than showing that the
+    /// provider cannot start the head at all.
+    private static func isTransientFailure(_ error: String) -> Bool {
+        let text = error.lowercased()
+        return [
+            "rate limit", "rate-limit", "ratelimit", "429", "too many requests", "overloaded",
+            "try again", "timed out", "timeout", "network", "connection", "offline",
+            "503", "502", "500", "504", "service unavailable", "bad gateway",
+            "temporarily", "usage limit", "quota", "econnreset", "enotfound", "socket",
+        ].contains { text.contains($0) }
     }
 
     /// Carries what changed in a head's copy since its base into the lead's checkout: the

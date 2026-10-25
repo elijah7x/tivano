@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import Observation
 
@@ -33,3 +34,4 @@ final class HeroPreview {
         }
     }
 }
+#endif

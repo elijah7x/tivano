@@ -96,6 +96,14 @@ fi
 
 step "Generating the Xcode project"
 xcodegen generate --quiet
+# XcodeGen orders the two top-level "Tivano" groups (the app's synced folder and the CLI's
+# shared sources) at random. When that order is the only difference, keep the committed
+# project so the release builds dev's exact tree and leaves the worktree clean for ship.sh.
+PROJECT_FILE=Tivano.xcodeproj/project.pbxproj
+if ! git diff --quiet -- "$PROJECT_FILE" \
+  && cmp -s <(git show "HEAD:$PROJECT_FILE" | LC_ALL=C sort) <(LC_ALL=C sort "$PROJECT_FILE"); then
+  git checkout --quiet -- "$PROJECT_FILE"
+fi
 
 step "Archiving $APP_NAME $VERSION"
 rm -rf "$BUILD"

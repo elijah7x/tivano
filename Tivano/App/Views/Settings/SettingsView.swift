@@ -73,7 +73,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var keywords: [String] {
         switch self {
-        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "token", "tokens", "activity", "usage", "panel", "limits", "credits", "heatmap", "daily", "weekly", "cumulative", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies"]
+        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "usage", "limits", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies"]
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
@@ -548,9 +548,6 @@ private struct GeneralSettingsPage: View {
 
     var body: some View {
         @Bindable var settings = model.settings
-        // The Token activity heatmap leads the page: it summarizes what the
-        // settings below configure, rather than configuring anything itself.
-        TokenActivitySection()
         ChromeSection(title: "New threads") {
             ChromeCard {
                 newThreadModelRow
@@ -609,10 +606,6 @@ private struct GeneralSettingsPage: View {
                 ChromeRowDivider()
                 ChromeRow(title: "Confirm before deleting threads") {
                     SettingsSwitch(isOn: $settings.confirmBeforeDeleting)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Continue after a usage limit", detail: "When the provider's limit is spent, the chat waits for the reset and then tells the agent to carry on") {
-                    SettingsSwitch(isOn: $settings.autoContinueAfterLimit)
                 }
             }
         }

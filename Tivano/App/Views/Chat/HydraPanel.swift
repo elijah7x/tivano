@@ -109,8 +109,12 @@ struct HydraPanel: View {
                         shape.fill(Chrome.glassTint.opacity(isDark ? 0.22 : 0.16))
                     }
             } else {
+                // Without glass the panel has neither its edge nor its shadow, and the
+                // window's solid backdrop is the same colour: the floating surfaces' flat
+                // recipe (control fill and rim) keeps it apart from the chat under it.
                 shape
-                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .overlay { shape.strokeBorder(Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1) }
             }
         }
         // Glass supplies the edge (as in `WindowBackdrop`): a hairline on top of it

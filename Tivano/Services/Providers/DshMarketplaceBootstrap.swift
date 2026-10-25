@@ -1,10 +1,12 @@
+import Foundation
+
 enum DshMarketplaceBootstrap {
     static var errorMessages: [String: String] {
         [
             "read": AppText.localized("Cannot read marketplace input: %@"),
             "changed": AppText.localized("The DeepSeek Harness profile changed while preparing this session. Try again."),
             "format": AppText.localized("Cannot read %@. Check its format, installation and permissions."),
-            "version": AppText.localized("Read-only marketplace inheritance currently requires DeepSeek Harness 0.2.1-rc.2."),
+            "version": String(format: AppText.localized("Read-only marketplace inheritance currently requires DeepSeek Harness %@."), DshCLI.supportedMarketplaceVersion),
             "home": AppText.localized("The DeepSeek Harness home changed during launch. Restart with a consistent DSH_HOME."),
             "selection": AppText.localized("Invalid bundle selection in %@/package.json"),
             "exemptions": AppText.localized("Invalid version exemptions in %@/compatibility.json"),
@@ -89,7 +91,7 @@ enum DshMarketplaceBootstrap {
             return { ...result, url: pathToFileURL(fs.realpathSync(fileURLToPath(officeDestination + canonical.slice(officeSource.length)))).href };
         } });
         const boot = await load('@deepseek-ai/dsh-app-boot');
-        if (boot.getDshRuntimeVersion() !== '0.2.1-rc.2') fail(message('version'));
+        if (boot.getDshRuntimeVersion() !== '\#(DshCLI.supportedMarketplaceVersion)') fail(message('version'));
         const { Context } = await load('@deepseek-ai/cordis');
         const { default: Loader } = await load('@deepseek-ai/cordis-plugin-loader');
         const { default: Group } = await load('@deepseek-ai/cordis-plugin-group');
@@ -117,7 +119,7 @@ enum DshMarketplaceBootstrap {
             if (optional && fingerprints.get(file) === null) return [];
             return read(`patch ${file}`, () => boot.loadOverlayPatches('dsh', file));
         }
-        function bundle(name) {
+        function loadBundle(name) {
             const directory = read(`bundle ${name}`, () => boot.resolveBundleDir('dsh', name, anchor, source));
             track(path.join(directory, 'package.json'));
             const data = read(`bundle manifest ${name}`, () => boot.readProfileManifest('dsh', directory));
@@ -125,7 +127,10 @@ enum DshMarketplaceBootstrap {
             const issue = boot.evaluatePluginCompatibility(data, compatibility.exemptions);
             if (issue && !issue.exempted) fail(message('compatibility', name));
             const patchPaths = read(`bundle patch paths ${name}`, () => boot.bundlePatchPaths(directory, data.dsh.bundle));
-            const layer = { packageName: name, packageDir: directory, patchPaths, patches: patchPaths.flatMap(file => patches(file)) };
+            return { packageName: name, packageDir: directory, patchPaths, patches: patchPaths.flatMap(file => patches(file)) };
+        }
+        function bundle(name) {
+            const layer = loadBundle(name);
             layers.push(layer);
             return layer;
         }
@@ -141,9 +146,25 @@ enum DshMarketplaceBootstrap {
         for (const entry of resolution.entries) track(path.join(entry.packageDir, 'package.json'));
         const inputs = layers.map(layer => ({ label: layer.packageName, patches: layer.patches }));
         const inheritedRows = boot.composeEntries(inputs.map(input => input.patches));
+        const surfacePatchLists = [];
+        for (const name of surfaces) {
+            try { surfacePatchLists.push(loadBundle(name).patches); } catch {}
+        }
+        let surfaceRows = [];
+        try { surfaceRows = boot.composeEntries([...layers.map(l => l.patches), ...surfacePatchLists]); } catch {}
+        function collectIds(rows, ids = new Set()) {
+            for (const row of rows) {
+                ids.add(row.id);
+                if (Array.isArray(row.config)) collectIds(row.config, ids);
+            }
+            return ids;
+        }
+        const inheritedIds = collectIds(inheritedRows);
+        const surfaceIds = collectIds(surfaceRows);
         const optionalDesktopUI = new Set(['ui-settings-account', 'ui-chat', 'ui-settings']);
+        // These patches belong to the desktop surface Tivano does not load.
         const userPatches = patches(profile.patchPath, true).filter(patch =>
-            !optionalDesktopUI.has(patch.id) || inheritedRows.some(row => row.id === patch.id));
+            !(typeof patch.id === 'string' && !inheritedIds.has(patch.id) && (surfaceIds.has(patch.id) || optionalDesktopUI.has(patch.id))));
         inputs.push({ label: profile.patchPath, patches: userPatches });
         const homePatch = path.join(options.home, 'cordis.patch.yml');
         inputs.push({ label: homePatch, patches: patches(homePatch, true) });
@@ -177,7 +198,9 @@ enum DshMarketplaceBootstrap {
             if (name === 'cordis:group') return name;
             if (name.startsWith('cordis:')) fail(message('entry', name));
             if (name.startsWith('file:') || path.isAbsolute(name)) {
-                let directory = path.dirname(name.startsWith('file:') ? fileURLToPath(name) : name);
+                const filePath = name.startsWith('file:') ? fileURLToPath(name) : name;
+                if (!fs.existsSync(filePath)) fail(message('plugin', name));
+                let directory = path.dirname(filePath);
                 while (true) {
                     const file = path.join(directory, 'package.json');
                     if (fs.existsSync(file)) {

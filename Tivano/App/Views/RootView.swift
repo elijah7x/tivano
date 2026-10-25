@@ -58,7 +58,6 @@ struct RootView: View {
                     // sidebar or off the window's edge until they landed.
                     .clipped()
                     .opacity(settingsShown ? 0 : 1)
-                    .disabled(settingsShown)
                     .allowsHitTesting(!settingsShown)
                     .accessibilityHidden(settingsShown)
                 if voiceStageShown {
@@ -223,6 +222,8 @@ struct DetailView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Covered by Settings: the thread columns block their own input, this does it here.
+            .disabled(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented)
             .detailSheet()
         }
     }
@@ -346,6 +347,14 @@ private struct ThreadColumns: NSViewRepresentable {
             liveResize.setPaneOwner(isCovered ? nil : id, resizing: paneIsResizing(id, model: model))
             if let shown, let previous = columns[shown] {
                 previous.acceptsInteraction = false
+                // Hiding a view holding the first responder makes AppKit search the whole
+                // window for the next key view, querying every kept column; the shown
+                // column's composer takes focus itself.
+                if let window = previous.window,
+                   let responder = window.firstResponder as? NSView,
+                   responder.isDescendant(of: previous) {
+                    window.makeFirstResponder(nil)
+                }
                 previous.isHidden = true
                 scopes[shown]?.setVisible(false)
                 previous.autoresizingMask = []

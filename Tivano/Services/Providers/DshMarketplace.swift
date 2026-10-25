@@ -5,6 +5,7 @@ struct DshLaunchPlan: Sendable {
     let arguments: [String]
     let environment: [String: String]
     let ownedDirectory: URL?
+    var warning: String? = nil
 
     func cleanup() {
         guard let ownedDirectory,
@@ -66,7 +67,27 @@ enum DshMarketplace {
                (manifest["peerDependencies"] as? [String: Any] ?? [:]).isEmpty {
                 return DshLaunchPlan(executable: executable, arguments: arguments, environment: environment, ownedDirectory: nil)
             }
-            throw ProviderError.failed(AppText.localized("This DeepSeek Harness installation does not support read-only marketplace inheritance. Use the bundled desktop CLI."))
+            throw ProviderError.failed(String(format: AppText.localized("DeepSeek Harness at %@ cannot inherit the desktop app's marketplace profile, and retrying will fail the same way. Use the CLI bundled with the DeepSeek Harness app, or set it as the Binary path in Settings → Providers → DeepSeek Harness."), executable.path))
+        }
+        let runtimeVersion = DshCLI.bundledRuntimeVersion(of: launcher)
+        if runtimeVersion != DshCLI.supportedMarketplaceVersion {
+            let inherited = DshCLI.userProfilePatch(environment: environment)?.path
+            var plainArguments: [String] = []
+            var index = 0
+            while index < arguments.count {
+                if arguments[index] == "--patch", index + 1 < arguments.count {
+                    if arguments[index + 1] != inherited {
+                        plainArguments.append(arguments[index])
+                        plainArguments.append(arguments[index + 1])
+                    }
+                    index += 2
+                } else {
+                    plainArguments.append(arguments[index])
+                    index += 1
+                }
+            }
+            let warning = String(format: AppText.localized("DeepSeek Harness %@ is newer or older than the %@ Tivano supports, so desktop profiles are off for this chat."), runtimeVersion ?? AppText.localized("unknown"), DshCLI.supportedMarketplaceVersion)
+            return DshLaunchPlan(executable: executable, arguments: plainArguments, environment: environment, ownedDirectory: nil, warning: warning)
         }
         let state = DshCLI.home
         let root = state.appendingPathComponent("marketplace-runs", isDirectory: true)

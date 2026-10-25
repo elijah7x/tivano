@@ -143,6 +143,12 @@ enum WebsiteCaptures {
             thread(ID.liveActivity, ID.ios, "Live Activity for Pomodoro", .claude, "opus", "high", age: 3 * day, status: .completed, now),
             thread(ID.widgets, ID.ios, "Widget snapshots", .antigravity, "gemini-3.8-flash", "high", age: 6 * day, status: .completed, now),
         ]
+        if HeroSwitchProbe.isColdRequested {
+            for (index, id) in HeroSwitchProbe.longThreadIDs.enumerated() {
+                let number = index + 1
+                library.threads.append(thread(id, ID.tivanoApp, "Long history \(number)", .claude, "opus", "high", age: Double(19 + number) * day, status: .completed, now))
+            }
+        }
         if CaptureRun.isEnabled {
             ProductCaptures.addHydraMocks(to: &library, storageRoot: root, repos: repos, now: now)
         }
@@ -151,6 +157,11 @@ enum WebsiteCaptures {
         write(composerHistory(now), to: root.appendingPathComponent("threads/\(ID.composer.uuidString).json"))
         write(finalAnswerHistory(now), to: root.appendingPathComponent("threads/\(ID.finalAnswer.uuidString).json"))
         write(pricingHistory(now), to: root.appendingPathComponent("threads/\(ID.pricing.uuidString).json"))
+        if HeroSwitchProbe.isColdRequested {
+            for (index, id) in HeroSwitchProbe.longThreadIDs.enumerated() {
+                write(longHistory(id, seed: index + 1, now), to: root.appendingPathComponent("threads/\(id.uuidString).json"))
+            }
+        }
     }
 
     private static func write<Value: Encodable>(_ value: Value, to url: URL) {
@@ -195,6 +206,64 @@ enum WebsiteCaptures {
         thread.interactionMode = plan ? .plan : .build
         thread.branch = "main"
         return thread
+    }
+
+    private static func longHistory(_ id: UUID, seed: Int, _ now: Date) -> ThreadDocument {
+        var document = ThreadDocument(threadID: id)
+        for index in 0..<120 {
+            let completedAt = now.addingTimeInterval(-20 * 86_400 - Double(119 - index) * 60)
+            var turn = TurnRecord(index: index)
+            turn.startedAt = completedAt.addingTimeInterval(-50)
+            turn.completedAt = completedAt
+            turn.status = .completed
+            let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
+                text: "Review pass \(index + 1) of long history \(seed) for cold-switch rendering costs. Keep the existing timeline structure and report what this exchange shows.")))
+            turn.userItemID = user.id
+            let reasoning = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(2), content: .reasoning(ReasoningBlock(
+                text: "Pass \(index + 1) begins with the cached row state for fixture \(seed). The source read shows which values can be reused. The command output checks that the same path still builds. I will keep the conclusion limited to this pass.")))
+            let source = (1...40).map { line in
+                "let cachedRow\(line) = HistoryRow(pass: \(index + 1), fixture: \(seed), offset: \(line))"
+            }.joined(separator: "\n")
+            var read = ToolCall(kind: .read, title: "Read", detail: "Tivano/App/Views/RootView.swift")
+            read.status = .completed
+            read.output = source
+            read.startedAt = turn.startedAt.addingTimeInterval(4)
+            read.finishedAt = turn.startedAt.addingTimeInterval(10)
+            let readItem = TimelineItem(turnID: turn.id, date: read.startedAt, content: .tool(read))
+            let buildLog = (1...15).map { line in
+                "Pass \(index + 1), fixture \(seed), step \(line)/15: Compiling HistoryRow\(line).swift"
+            }.joined(separator: "\n")
+            var command = ToolCall(kind: .command, title: "xcodebuild -scheme Tivano build", detail: "Long history \(seed), pass \(index + 1)")
+            command.status = .completed
+            command.output = buildLog
+            command.startedAt = turn.startedAt.addingTimeInterval(12)
+            command.finishedAt = turn.startedAt.addingTimeInterval(20)
+            let commandItem = TimelineItem(turnID: turn.id, date: command.startedAt, content: .tool(command))
+            let code = (1...12).map { line in
+                "let value\(line) = cache.value(pass: \(index + 1), fixture: \(seed), offset: \(line))"
+            }.joined(separator: "\n")
+            let markdown = """
+            Pass \(index + 1) for long history \(seed) keeps the existing timeline behavior and reuses its cached row data. The values below are specific to this exchange.
+
+            The read and build results support a narrow change rather than a new layout. The fixture remains deterministic while every response stays distinct.
+
+            ```swift
+            \(code)
+            ```
+
+            - Preserve the existing row components.
+            - Reuse the cached values for pass \(index + 1).
+            - Keep the current loading and error states.
+            - Record the result for fixture \(seed).
+            """
+            let answer = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(30), content: .assistant(AssistantMessage(text: markdown)))
+            let end = TimelineItem(turnID: turn.id, date: turn.completedAt!, content: .turnEnd(TurnSummary(
+                turnID: turn.id, status: .completed, duration: 50, filesChanged: 0, additions: 0, deletions: 0)))
+            document.turns.append(turn)
+            document.items.append(contentsOf: [user, reasoning, readItem, commandItem, answer, end])
+        }
+        document.usage = ContextUsage(usedTokens: 180_000, windowTokens: 200_000)
+        return document
     }
 
     /// The composer thread's earlier turn: a question about the strip, answered.
@@ -317,6 +386,14 @@ enum WebsiteCaptures {
         }
         if KeepsakePreview.isRequested {
             await KeepsakePreview.run(model: model)
+            return
+        }
+        if UsageLimitPreview.isRequested {
+            await UsageLimitPreview.run(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--hydra-panels-preview") {
+            await ProductCaptures.panelsPreview(model: model)
             return
         }
         if HeroPreview.isRequested {

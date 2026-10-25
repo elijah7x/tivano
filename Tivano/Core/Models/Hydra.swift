@@ -64,6 +64,10 @@ struct HydraPair: Codable, Hashable, Identifiable, Sendable {
     var workerProvider: ProviderKind?
     var workerModel: String?
     var workerEffort: String?
+    /// DeepSeek Harness's agent mode a chat takes on entering the pair as its lead; nil is the standard one.
+    var orchestratorDshMode: DshAgentMode?
+    /// DeepSeek Harness's agent mode for heads on it; nil runs them in the standard mode.
+    var workerDshMode: DshAgentMode?
     /// How many heads may work at once; nil puts no cap on them, as with no pair at all.
     var maxHeads: Int?
     /// The name the user gave the pair, shown wherever the pair is named in place of its models; nil or blank is none.
@@ -89,6 +93,8 @@ struct HydraPair: Codable, Hashable, Identifiable, Sendable {
         workerProvider = container.value(.workerProvider, default: nil)
         workerModel = container.value(.workerModel, default: nil)
         workerEffort = container.value(.workerEffort, default: nil)
+        orchestratorDshMode = container.value(.orchestratorDshMode, default: nil)
+        workerDshMode = container.value(.workerDshMode, default: nil)
         name = container.value(.name, default: nil)
         maxHeads = Self.clampedCap(container.value(.maxHeads, default: nil))
         headProfiles = container.value(.headProfiles, default: [])
@@ -134,6 +140,8 @@ struct HydraLaunch: Hashable, Sendable {
     /// (on the lead's provider) or take the heads' provider's default (elsewhere).
     var workerModel: String?
     var workerEffort: String?
+    /// The agent mode heads on DeepSeek Harness start in; nil is the standard one.
+    var workerDshMode: DshAgentMode?
     /// The cap on heads at work at once: the lower of the pair's and the Hydra page's;
     /// nil, with neither set, lets as many out as the work asks for.
     var maxHeads: Int?
@@ -568,6 +576,11 @@ struct HydraReport: Hashable, Sendable {
     var copyPath: String?
     var elapsed: TimeInterval?
     var toolCalls = 0
+    /// The head's provider, as the user knows it.
+    var provider: String?
+    /// The head failed with an error before a tool ran or a word was said: its provider's
+    /// environment (install, sign-in, configuration, MCP servers) is at fault, not its task.
+    var startupFailure = false
 }
 
 /// The per-request budgets behind a lead's delegation blocks: how many rounds of heads
@@ -991,12 +1004,37 @@ enum HydraPrompts {
     /// Whether the reply holds a delegation block already marked sent or on its way out
     /// (see `markingDelegationBlockSent` and `markingDelegationBlockLeaving`).
     static func hasSentDelegationBlock(in text: String) -> Bool {
-        text.contains(#/```[ \t]*hydra-(?:sent|leaving)[ \t]*\r?\n/#.ignoresCase())
+        mayOpenDelegationFence(text) && text.contains(sentBlockOpener)
     }
 
     /// Whether the reply's delegation block is fading out (its info string is `hydra-leaving`).
     static func hasLeavingDelegationBlock(in text: String) -> Bool {
-        text.contains(#/```[ \t]*hydra-leaving[ \t]*\r?\n/#.ignoresCase())
+        mayOpenDelegationFence(text) && text.contains(leavingBlockOpener)
+    }
+
+    // Built once: a regex literal is parsed and compiled again on every call, which was
+    // most of installing a long history (one check per reply). `Regex` is not marked
+    // Sendable, but a built one is only read when matching, so sharing it is safe.
+    nonisolated(unsafe) private static let sentBlockOpener = #/```[ \t]*hydra-(?:sent|leaving)[ \t]*\r?\n/#.ignoresCase()
+    nonisolated(unsafe) private static let leavingBlockOpener = #/```[ \t]*hydra-leaving[ \t]*\r?\n/#.ignoresCase()
+
+    /// Whether some fence's info string starts with an h, after spaces or tabs: every
+    /// delegation opener does, so a reply without one skips the regex.
+    private static func mayOpenDelegationFence(_ text: String) -> Bool {
+        var text = text
+        return text.withUTF8 { bytes in
+            let backtick = UInt8(ascii: "`")
+            var index = 0
+            while index + 3 < bytes.count {
+                if bytes[index] == backtick, bytes[index + 1] == backtick, bytes[index + 2] == backtick {
+                    var after = index + 3
+                    while after < bytes.count, bytes[after] == UInt8(ascii: " ") || bytes[after] == UInt8(ascii: "\t") { after += 1 }
+                    if after < bytes.count, bytes[after] | 0x20 == UInt8(ascii: "h") { return true }
+                }
+                index += 1
+            }
+            return false
+        }
     }
 
     /// The reply with its sent block's info string turned into `hydra-leaving`: the card fades
@@ -1126,6 +1164,17 @@ enum HydraPrompts {
             opening += " \(list(stillWorking)) \(stillWorking.count == 1 ? "is" : "are") still at work; \(stillWorking.count == 1 ? "its report comes" : "their reports come") as a later message."
         }
 
+        // Heads that failed to start on one provider with the same error share one cause;
+        // the lead hears it once, so it does not read N failures as N tasks to send again.
+        var startupGroups: [String: [HydraReport]] = [:]
+        var startupProviders: [String] = []
+        for report in reports where report.status == .failed && report.startupFailure {
+            let provider = report.provider ?? "their provider"
+            if startupGroups[provider] == nil { startupProviders.append(provider) }
+            startupGroups[provider, default: []].append(report)
+        }
+        var firstWithError: [String: String] = [:]
+
         var sections: [String] = []
         for report in reports {
             let persona = HydraRoster.persona(at: report.headIndex)
@@ -1142,6 +1191,15 @@ enum HydraPrompts {
             var lines = ["## \(persona.name): \(report.task)\(outcome)\(took)"]
             if let landing = landingLine(for: report) { lines.append(landing) }
             let body = report.text.trimmed
+            if report.status == .failed, report.startupFailure, !body.isEmpty {
+                let key = (report.provider ?? "") + "\u{0}" + body
+                if let first = firstWithError[key] {
+                    lines.append("Same startup failure as \(first).")
+                    sections.append(lines.joined(separator: "\n"))
+                    continue
+                }
+                firstWithError[key] = persona.name
+            }
             lines.append(body.isEmpty ? "No report." : body)
             sections.append(lines.joined(separator: "\n"))
         }
@@ -1171,7 +1229,17 @@ enum HydraPrompts {
             guard let landing = report.landing, let path = landing.patchPath else { continue }
             closing.append("\(HydraRoster.persona(at: report.headIndex).name)'s changes would not apply on their own; the patch is at \(path). Apply it with `git apply --3way \(path)` and settle what conflicts.")
         }
-        if reports.contains(where: { $0.status == .failed }) {
+        for provider in startupProviders {
+            let names = (startupGroups[provider] ?? []).map { HydraRoster.persona(at: $0.headIndex).name }
+            let providerReports = reports.filter { ($0.provider ?? "their provider") == provider }
+            if providerReports.contains(where: { $0.status == .completed }) {
+                closing.append("\(list(names)) failed on \(provider) before doing any work while other heads on \(provider) succeeded, so the failure is likely temporary: you may send their parts to \(provider) again or do them yourself.")
+            } else if !providerReports.contains(where: { $0.status == .running }) {
+                let one = names.count == 1
+                closing.append("\(list(names)) failed on \(provider) before doing any work. The cause is \(provider)'s environment (its install, sign-in, configuration or MCP servers), not the task: sending heads to \(provider) again fails the same way. Do \(one ? "its part" : "their parts") yourself, and tell the user in one line the error above and that it needs fixing on \(provider)'s side.")
+            }
+        }
+        if reports.contains(where: { $0.status == .failed && !$0.startupFailure }) {
             closing.append("A head that failed leaves its part to you: do it yourself or send it out again.")
         }
         if reports.contains(where: { $0.status == .stopped }) {

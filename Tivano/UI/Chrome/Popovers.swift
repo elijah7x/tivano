@@ -116,14 +116,18 @@ struct PopoverMenu<Content: View>: View {
 
 struct PopoverSectionHeader: View {
     let title: String
+    let weight: Font.Weight
+    let style: Font.TextStyle
 
-    init(_ title: String) {
+    init(_ title: String, weight: Font.Weight = .semibold, style: Font.TextStyle = .subheadline) {
         self.title = title
+        self.weight = weight
+        self.style = style
     }
 
     var body: some View {
         Text(verbatim: Chrome.localized(title))
-            .font(.ui(.subheadline, weight: .semibold))
+            .font(.ui(style, weight: weight))
             .foregroundStyle(Chrome.secondaryText)
             .padding(.horizontal, 8)
             .padding(.top, 6)

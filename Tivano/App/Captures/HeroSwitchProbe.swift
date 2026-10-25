@@ -7,9 +7,21 @@ import Synchronization
 
 @MainActor
 enum HeroSwitchProbe {
+    static var isColdRequested: Bool { CaptureRun.isEnabled && CommandLine.arguments.contains("--cold-switch-probe") }
+
     static var isRequested: Bool {
-        CaptureRun.isEnabled && CommandLine.arguments.contains("--hero-switch-probe")
+        CaptureRun.isEnabled && (CommandLine.arguments.contains("--hero-switch-probe")
+            || CommandLine.arguments.contains("--cold-switch-probe"))
     }
+
+    static let longThreadIDs: [UUID] = [
+        UUID(uuidString: "C0000000-0000-4000-8000-000000000001")!,
+        UUID(uuidString: "C0000000-0000-4000-8000-000000000002")!,
+        UUID(uuidString: "C0000000-0000-4000-8000-000000000003")!,
+        UUID(uuidString: "C0000000-0000-4000-8000-000000000004")!,
+        UUID(uuidString: "C0000000-0000-4000-8000-000000000005")!,
+        UUID(uuidString: "C0000000-0000-4000-8000-000000000006")!,
+    ]
 
     private static var terminationDeadline: DispatchSourceTimer?
 
@@ -42,7 +54,25 @@ enum HeroSwitchProbe {
         try? await Task.sleep(for: .seconds(3))
 
         let ids = Array(model.threads.filter { !$0.isArchived && !$0.isHydraHead }.prefix(6).map(\.id))
-        report.state.withLock { $0.threadIDs = ids.map(\.uuidString) }
+        report.state.withLock { $0.threadIDs = (isColdRequested ? longThreadIDs : ids).map(\.uuidString) }
+        if isColdRequested {
+            monitor.begin("cold")
+            for id in longThreadIDs {
+                await measure("cold", action: id.uuidString, report: report) { model.openThread(id) }
+                try? await Task.sleep(for: .milliseconds(600))
+            }
+            monitor.end()
+            monitor.begin("warm")
+            for id in longThreadIDs {
+                await measure("warm", action: id.uuidString, report: report) { model.openThread(id) }
+                try? await Task.sleep(for: .milliseconds(600))
+            }
+            monitor.end()
+            displayLink.invalidate()
+            report.state.withLock { $0.completed = true }
+            report.write(to: destination, timedOut: false)
+            exit(0)
+        }
         monitor.begin("switch")
         if ids.isEmpty {
             report.state.withLock { $0.error = "No eligible capture threads; switch phase skipped" }

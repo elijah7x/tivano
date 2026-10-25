@@ -140,7 +140,7 @@ struct VoiceComposerButton: View {
                     Image(systemName: "waveform")
                         .font(Chrome.iconFont)
                 }
-                .buttonStyle(.chip(active: liveHere))
+                .buttonStyle(.iconChip(active: liveHere))
                 .focusable(false)
                 .disabled(liveElsewhere)
                 .help(Text(verbatim: Chrome.localized(help)))

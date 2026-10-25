@@ -290,8 +290,9 @@ struct ThreadTimeline: View, Equatable {
         let hidden = startIndex
         let range = mountedWindow?.range(in: blocks, start: startIndex) ?? startIndex..<blocks.count
         let visible = Array(blocks[range])
-        let topSpace = measurements.height(of: blocks[startIndex..<range.lowerBound])
-        let bottomSpace = measurements.height(of: blocks[range.upperBound..<blocks.count])
+        let sums = measurements.prefix(blocks)
+        let topSpace = sums[range.lowerBound] - sums[startIndex]
+        let bottomSpace = sums[blocks.count] - sums[range.upperBound]
         let outline = blocks.map { (id: $0.id, hasUserMessage: $0.hasUserMessage) }
         measurements.noteArrivals(outline.map(\.id), questions: runtime.questions.map(\.id))
         // The turns a row may offer to revert. Read here, once, so a turn record changing
@@ -1190,10 +1191,10 @@ struct ThreadTimeline: View, Equatable {
     /// of every loaded turn was most of the cost of a scrolled frame on a long chat).
     ///
     /// Runs on every scrolled frame, so it writes view state only when the range moves: a
-    /// block crossing a margin, not a pixel of scroll. Positions come from the measured
-    /// heights, anchored on the first block the stack holds, whose frame is live: a block
-    /// behind a spacer keeps the frame it last laid out at, and loading history above
-    /// makes that stale. Unknown rows use bounded estimates and measure when they come near.
+    /// block crossing a margin, not a pixel of scroll. Positions come from cached prefix sums
+    /// of the measured heights, anchored on the first block the stack holds, whose frame is
+    /// live: a block behind a spacer keeps the frame it last laid out at, and loading history
+    /// above makes that stale. Unknown rows use bounded estimates and measure when they come near.
     private func updateMountedWindow(in blocks: [DisplayBlock], offset: CGFloat, height: CGFloat, narrowAfterMeasurement: Bool = false) {
         guard height > 0, !blocks.isEmpty, !remeasurePending else { return }
         let start = windowStartIndex(in: blocks)
@@ -1202,25 +1203,24 @@ struct ThreadTimeline: View, Equatable {
         guard current.lowerBound < blocks.count,
               let anchorFrame = measurements.frames[blocks[current.lowerBound].id] else { return }
         let spacing = TimelineMetrics.rowSpacing
-        var y = anchorFrame.minY
-        for index in start..<current.lowerBound {
-            y -= measurements.rowHeight(blocks[index].id) + spacing
-        }
+        let sums = measurements.prefix(blocks)
+        let base = anchorFrame.minY - (sums[current.lowerBound] - sums[start])
         let top = offset - Chrome.contentTopInset
         let bottom = top + height
         let mountMargin = Self.mountMargin(height)
         let keepMargin = mountMargin * 2.5
-        var want: (lower: Int?, upper: Int) = (nil, start)
-        var keep: (lower: Int?, upper: Int) = (nil, start)
-        for index in start..<blocks.count {
-            let rowHeight = measurements.rowHeight(blocks[index].id)
-            let end = y + rowHeight
-            if want.lower == nil, end >= top - mountMargin { want.lower = index }
-            if keep.lower == nil, end >= top - keepMargin { keep.lower = index }
-            if y <= bottom + mountMargin { want.upper = index }
-            if y <= bottom + keepMargin { keep.upper = index } else { break }
-            y = end + spacing
-        }
+        let rowTop = { (index: Int) -> CGFloat in base + sums[index] - sums[start] }
+        let rowEnd = { (index: Int) -> CGFloat in base + sums[index + 1] - sums[start] - spacing }
+        let wantEnd = firstIndex(in: start..<blocks.count, where: { rowTop($0) > bottom + mountMargin }) ?? blocks.count
+        let keepEnd = firstIndex(in: start..<blocks.count, where: { rowTop($0) > bottom + keepMargin }) ?? blocks.count
+        let want: (lower: Int?, upper: Int) = (
+            firstIndex(in: start..<blocks.count, where: { rowEnd($0) >= top - mountMargin }),
+            max(start, wantEnd - 1)
+        )
+        let keep: (lower: Int?, upper: Int) = (
+            firstIndex(in: start..<blocks.count, where: { rowEnd($0) >= top - keepMargin }),
+            max(start, keepEnd - 1)
+        )
         // The viewport is past every block (a short thread, a bounce): nothing to place by.
         guard let wantLower = want.lower else { return }
         var lower = min(wantLower, max(current.lowerBound, keep.lower ?? wantLower))
@@ -1240,6 +1240,20 @@ struct ThreadTimeline: View, Equatable {
             ? nil : MountedWindow(proposed, in: blocks)
         guard window != mountedWindow else { return }
         withTransaction(Self.unanimated) { mountedWindow = window }
+    }
+
+    private func firstIndex<Bound: BinaryInteger>(in range: Range<Bound>, where predicate: (Bound) -> Bool) -> Bound? {
+        var lower = range.lowerBound
+        var upper = range.upperBound
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if predicate(middle) {
+                upper = middle
+            } else {
+                lower = middle + 1
+            }
+        }
+        return lower == range.upperBound ? nil : lower
     }
 
     /// How far beyond the viewport blocks are built ahead of the reader, so a block is
@@ -3513,7 +3527,10 @@ final class TimelineBlockCache {
 /// later, and then a page at a time as the reader scrolls back.
 enum TimelineWindow {
     static let firstPaint = 3
-    static let initial = 24
+    /// The blocks built when a thread opens, landing in one pass above the viewport. Every
+    /// block built is laid out in that pass: 24 held a long thread's open for about 200ms,
+    /// 12 for half that, and history further up loads by `page` as the reader scrolls.
+    static let initial = 12
     /// A page of history has never been measured, so all of it is built the frame it lands,
     /// mid-scroll; a small page keeps that frame short, and the next one follows as the
     /// reader goes on up.
@@ -4176,10 +4193,16 @@ private final class TimelineMeasurements {
     private var estimatedHeight: CGFloat = 160
     private var heightTotal: CGFloat = 0
     private var heightCount = 0
+    private var revision = 0
+    // The cache key is the ordered block ids and this height revision.
+    private var cachedIDs: [String] = []
+    private var cachedRevision = -1
+    private var cachedPrefix: [CGFloat] = []
 
     func invalidate(width: CGFloat) {
         estimatedHeight = meanHeight
         generation += 1
+        revision += 1
         self.width = width
         frames.removeAll()
         heightTotal = 0
@@ -4195,6 +4218,7 @@ private final class TimelineMeasurements {
         frames = restored
         heightTotal = 0
         heightCount = 0
+        revision += 1
         for frame in restored.values { accountHeight(frame.height, adding: true) }
     }
 
@@ -4215,6 +4239,7 @@ private final class TimelineMeasurements {
         let changed = previous != frame.height
         frames[id] = frame
         if changed {
+            revision += 1
             if let previous { accountHeight(previous, adding: false) }
             accountHeight(frame.height, adding: true)
         }
@@ -4223,6 +4248,27 @@ private final class TimelineMeasurements {
 
     func height(of blocks: ArraySlice<DisplayBlock>) -> CGFloat {
         blocks.reduce(0) { $0 + rowHeight($1.id) + TimelineMetrics.rowSpacing }
+    }
+
+    func prefix(_ blocks: [DisplayBlock]) -> [CGFloat] {
+        if cachedRevision == revision, cachedIDs.count == blocks.count {
+            var matches = true
+            for index in blocks.indices {
+                if blocks[index].id != cachedIDs[index] {
+                    matches = false
+                    break
+                }
+            }
+            if matches { return cachedPrefix }
+        }
+        var sums = [CGFloat](repeating: 0, count: blocks.count + 1)
+        for index in blocks.indices {
+            sums[index + 1] = sums[index] + rowHeight(blocks[index].id) + TimelineMetrics.rowSpacing
+        }
+        cachedIDs = blocks.map(\.id)
+        cachedRevision = revision
+        cachedPrefix = sums
+        return sums
     }
 
     func window(around index: Int, in blocks: [DisplayBlock], start: Int, viewport: CGFloat) -> Range<Int> {

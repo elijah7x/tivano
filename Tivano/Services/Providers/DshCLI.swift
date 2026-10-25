@@ -44,12 +44,79 @@ enum DshCLI {
         return matches.first(where: { $0.isDefault })?.id ?? matches.first?.id ?? id
     }
 
+    static let supportedMarketplaceVersion = "0.2.1-rc.2"
+
     private struct VersionKey: Hashable, Sendable {
         var path: String
         var modificationDate: Date?
     }
 
+    private struct CachedVersion: Sendable {
+        var value: String?
+    }
+
     private static let versions = Mutex<[VersionKey: Task<String?, Never>]>([:])
+    private static let runtimeVersions = Mutex<[VersionKey: CachedVersion]>([:])
+
+    static func bundledRuntimeVersion(of executable: URL) -> String? {
+        let launcher = executable.resolvingSymlinksInPath()
+        guard launcher.path.hasSuffix("/runtime/cli/bin/dsh") else { return nil }
+        let resources = launcher.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let archive = resources.appendingPathComponent("app.asar")
+        let modificationDate = try? archive.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        let key = VersionKey(path: archive.path, modificationDate: modificationDate)
+        return runtimeVersions.withLock { cache in
+            if let cached = cache[key] { return cached.value }
+            let version = readBundledRuntimeVersion(from: archive)
+            cache[key] = CachedVersion(value: version)
+            return version
+        }
+    }
+
+    private static func readBundledRuntimeVersion(from archive: URL) -> String? {
+        do {
+            let handle = try FileHandle(forReadingFrom: archive)
+            defer { try? handle.close() }
+            guard let prefix = try handle.read(upToCount: 16), prefix.count == 16 else { return nil }
+            let bytes = [UInt8](prefix)
+            func uint32(_ offset: Int) -> UInt32 {
+                UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 | UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24
+            }
+            let headerSize = uint32(4)
+            let jsonSize = uint32(12)
+            let dataStart = UInt64(headerSize) + 8
+            let fileSize = try handle.seekToEnd()
+            // getDshRuntimeVersion() reads this package through Electron's ASAR filesystem.
+            // The two Pickle headers let us read the same manifest without starting Electron.
+            guard jsonSize > 0, jsonSize <= 16 * 1_024 * 1_024,
+                  UInt64(headerSize) >= UInt64(jsonSize) + 8,
+                  dataStart <= fileSize else { return nil }
+            try handle.seek(toOffset: 16)
+            guard let headerData = try handle.read(upToCount: Int(jsonSize)), headerData.count == Int(jsonSize) else { return nil }
+            guard var node = try JSONSerialization.jsonObject(with: headerData) as? [String: Any] else { return nil }
+            for component in ["dsh", "node_modules", "@deepseek-ai", "dsh-app-boot", "package.json"] {
+                guard let files = node["files"] as? [String: Any],
+                      let child = files[component] as? [String: Any] else { return nil }
+                node = child
+            }
+            guard node["unpacked"] as? Bool != true,
+                  let offsetText = node["offset"] as? String,
+                  let offset = UInt64(offsetText),
+                  let sizeValue = node["size"] as? NSNumber else { return nil }
+            let size = sizeValue.uint64Value
+            guard size > 0, size <= 1_024 * 1_024,
+                  offset <= fileSize - dataStart,
+                  size <= fileSize - dataStart - offset else { return nil }
+            try handle.seek(toOffset: dataStart + offset)
+            guard let packageData = try handle.read(upToCount: Int(size)), packageData.count == Int(size),
+                  let package = try JSONSerialization.jsonObject(with: packageData) as? [String: Any],
+                  let version = package["version"] as? String,
+                  !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return version
+        } catch {
+            return nil
+        }
+    }
 
     /// Where Tivano keeps the patch files. dsh's own state, sign-in included, stays in its
     /// own home (`DSH_HOME`, else `~/.dsh`), where the desktop app and `dsh` keep it too.
@@ -284,7 +351,7 @@ enum DshCLI {
                 .resolvingSymlinksInPath().standardizedFileURL
             let row = String(line[separator.upperBound...].dropLast("\" not found".count))
             if file == directory.appendingPathComponent("minimal-optional.yml"), row == "tool-working-directory" { return false }
-            if file == userPatch, ["ui-settings-account", "ui-chat", "ui-settings"].contains(row) { return false }
+            if file == userPatch, row.hasPrefix("ui-") { return false }
             return true
         }
     }

@@ -66,6 +66,7 @@ extension AppModel {
             thread.model = lead.model
             thread.effort = lead.effort
             thread.fastMode = lead.fastMode
+            thread.dshMode = lead.dshMode
             thread.hydraPairID = pair.id
             thread.temporaryHydraPair = temporary ? pair : nil
             thread.hydraEnabled = true
@@ -79,8 +80,8 @@ extension AppModel {
         settings.hydraDefaultEnabled = true
     }
 
-    /// The model, effort and fast mode a chat runs on as a pair's lead.
-    func hydraLead(of pair: HydraPair, for thread: ChatThread) -> (model: String?, effort: String?, fastMode: Bool) {
+    /// The model, effort, fast mode and DeepSeek Harness agent mode a chat runs on as a pair's lead.
+    func hydraLead(of pair: HydraPair, for thread: ChatThread) -> (model: String?, effort: String?, fastMode: Bool, dshMode: DshAgentMode?) {
         let provider = pair.provider
         let switchesProvider = provider != thread.provider
         // A pair with no lead model runs on any model, so the chat keeps the one it is on;
@@ -105,7 +106,9 @@ extension AppModel {
         } else {
             preference.effort.flatMap { (option?.efforts.contains($0) ?? false) ? $0 : nil }
         }
-        return (modelID, effort, (option?.supportsFast ?? false) && preference.fastMode)
+        // Like its effort, the pair's agent mode is the chat's on entering; the chat can change it after.
+        let dshMode = provider == .dsh && pair.orchestratorDshMode != .standard ? pair.orchestratorDshMode : nil
+        return (modelID, effort, (option?.supportsFast ?? false) && preference.fastMode, dshMode)
     }
 
     /// Edits a pair in Settings and moves the chats leading with it along: the pair is
@@ -123,11 +126,12 @@ extension AppModel {
                 continue
             }
             let lead = hydraLead(of: pair, for: thread)
-            guard lead.model != thread.model || lead.effort != thread.effort || lead.fastMode != thread.fastMode else { continue }
+            guard lead.model != thread.model || lead.effort != thread.effort || lead.fastMode != thread.fastMode || lead.dshMode != thread.dshMode else { continue }
             updateThread(thread.id) {
                 $0.model = lead.model
                 $0.effort = lead.effort
                 $0.fastMode = lead.fastMode
+                $0.dshMode = lead.dshMode
             }
             settings.remember(model: lead.model, effort: lead.effort, for: pair.provider)
         }

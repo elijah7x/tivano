@@ -57,22 +57,22 @@ struct DiffStatLabel: View {
 /// A compact, borderless control used inside glass surfaces, where nested glass would muddy the material.
 struct ChipButtonStyle: ButtonStyle {
     var isActive = false
+    /// A lone glyph: a round chip the size of the composer's other icon buttons, where
+    /// the text chip's padding would stretch it into an oval.
+    var isIcon = false
 
     func makeBody(configuration: Configuration) -> some View {
-        ChipBody(configuration: configuration, isActive: isActive)
+        ChipBody(configuration: configuration, isActive: isActive, isIcon: isIcon)
     }
 
     private struct ChipBody: View {
         let configuration: Configuration
         let isActive: Bool
+        let isIcon: Bool
         @State private var isHovering = false
 
         var body: some View {
-            configuration.label
-                .font(.ui(.callout))
-                .lineLimit(1)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
+            label
                 .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 .background {
                     Capsule().fill(fill)
@@ -87,6 +87,19 @@ struct ChipButtonStyle: ButtonStyle {
             if configuration.isPressed { return AnyShapeStyle(.primary.opacity(0.12)) }
             return AnyShapeStyle(.primary.opacity(isHovering ? 0.07 : 0))
         }
+
+        @ViewBuilder private var label: some View {
+            if isIcon {
+                configuration.label
+                    .frame(width: Chrome.capsuleContentHeight, height: Chrome.capsuleContentHeight)
+            } else {
+                configuration.label
+                    .font(.ui(.callout))
+                    .lineLimit(1)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+            }
+        }
     }
 }
 
@@ -95,6 +108,10 @@ extension ButtonStyle where Self == ChipButtonStyle {
 
     static func chip(active: Bool) -> ChipButtonStyle {
         ChipButtonStyle(isActive: active)
+    }
+
+    static func iconChip(active: Bool) -> ChipButtonStyle {
+        ChipButtonStyle(isActive: active, isIcon: true)
     }
 }
 

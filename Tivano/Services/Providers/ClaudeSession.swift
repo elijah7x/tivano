@@ -136,7 +136,7 @@ final class ClaudeSession: ProviderSession {
         readTask = Task { [weak self] in
             for await message in messages {
                 guard let self else { return }
-                self.handle(message)
+                await self.handle(message)
             }
             self?.didClose()
         }
@@ -385,7 +385,7 @@ final class ClaudeSession: ProviderSession {
         }
     }
 
-    private func handle(_ message: JSONValue) {
+    private func handle(_ message: JSONValue) async {
         // A head's message names the tool call that spawned it; the lead's carries null.
         let parent = message["parent_tool_use_id"]?.string
         let type = message["type"]?.string
@@ -436,7 +436,7 @@ final class ClaudeSession: ProviderSession {
                 handleAssistant(message, stream: &mainStream, sink: leadSink)
             }
         case "user":
-            handleToolResults(message, sink: parent.map(agentSink) ?? leadSink)
+            await handleToolResults(message, sink: parent.map(agentSink) ?? leadSink)
         case "result":
             handleResult(message)
         case "rate_limit_event":
@@ -622,7 +622,7 @@ final class ClaudeSession: ProviderSession {
         }
     }
 
-    private func handleToolResults(_ message: JSONValue, sink: (ProviderEvent) -> Void) {
+    private func handleToolResults(_ message: JSONValue, sink: (ProviderEvent) -> Void) async {
         for block in message["message"]?["content"]?.array ?? [] where block["type"]?.string == "tool_result" {
             guard let toolID = block["tool_use_id"]?.string else { continue }
             // The result closes the call, so its name is not needed again.
@@ -630,7 +630,12 @@ final class ClaudeSession: ProviderSession {
             if Self.hiddenResultTools.contains(name) { continue }
             let isError = block["is_error"]?.bool ?? false
             let output = ToolText.blocks(block["content"])
-            let images = name == "Read" ? [] : ToolImages.blocks(block["content"])
+            let images: [Attachment]
+            if name == "Read" {
+                images = []
+            } else {
+                images = await ToolImages.blocks(block["content"])
+            }
             var status: ToolCall.Status = isError ? .failed : .completed
             if isError, output.localizedCaseInsensitiveContains("declined") || output.localizedCaseInsensitiveContains("doesn't want") {
                 status = .declined

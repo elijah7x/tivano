@@ -157,7 +157,6 @@ final class AppSettings {
         static let notify = "notifyWhenFinished"
         static let chime = "chimeWhenFinished"
         static let confirmDelete = "confirmBeforeDeleting"
-        static let autoContinueAfterLimit = "autoContinueAfterLimit"
         static let showReasoning = "showReasoning"
         static let antiSlopEnabled = "antiSlopEnabled"
         static let showsWorkingCard = "showsWorkingCard"
@@ -279,12 +278,6 @@ final class AppSettings {
 
     var confirmBeforeDeleting: Bool {
         didSet { defaults.set(confirmBeforeDeleting, forKey: Key.confirmDelete) }
-    }
-
-    /// A turn that stops on the provider's usage limit is picked back up by itself: the chat
-    /// waits for the limit to reset, then tells the agent to continue where it left off.
-    var autoContinueAfterLimit: Bool {
-        didSet { defaults.set(autoContinueAfterLimit, forKey: Key.autoContinueAfterLimit) }
     }
 
     var showReasoning: Bool {
@@ -895,7 +888,8 @@ final class AppSettings {
         taskSleepMode = TaskSleepMode(rawValue: defaults.string(forKey: Key.taskSleepMode) ?? "")
             ?? (defaults.object(forKey: Key.preventSleepDuringTasks) as? Bool == false ? .off : .system)
         confirmBeforeDeleting = defaults.object(forKey: Key.confirmDelete) as? Bool ?? true
-        autoContinueAfterLimit = defaults.object(forKey: Key.autoContinueAfterLimit) as? Bool ?? false
+        // Auto-continue is now chosen per chat. Drop the old global setting.
+        defaults.removeObject(forKey: "autoContinueAfterLimit")
         showReasoning = defaults.object(forKey: Key.showReasoning) as? Bool ?? false
         antiSlopEnabled = defaults.object(forKey: Key.antiSlopEnabled) as? Bool ?? true
         showsWorkingCard = defaults.object(forKey: Key.showsWorkingCard) as? Bool ?? true

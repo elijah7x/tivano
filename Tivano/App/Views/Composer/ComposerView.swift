@@ -104,11 +104,12 @@ struct ThreadDirectoryError: View {
     }
 }
 
-/// The tab above the pill: the queue while any follow-ups are queued, else the
-/// changes tab. The agent's questions are badges in the conversation now.
+/// The tab above the pill: a usage-limit offer while one is open, else the queue while
+/// any follow-ups are queued, else the changes tab. The agent's questions are badges in the conversation now.
 /// Reading them here keeps stats refreshes and question arrivals off the area,
 /// whose body watches approvals alone.
 private struct TabSlot: View {
+    @Environment(AppModel.self) private var model
     let runtime: ThreadRuntime
     let diffPopover: DiffPopoverCoordinator
     let showsChanges: Bool
@@ -119,9 +120,14 @@ private struct TabSlot: View {
         // fades in over it, and the slot's height glides from one to the other.
         // The slot exists only while a tab does, or the stack's overlap would
         // pull an empty slot's box up by that much.
-        if !runtime.followUps.isEmpty || (showsChanges && runtime.changeStats != nil) {
+        let limitOffer = model.autoContinue.offer(for: runtime.threadID)
+        if limitOffer != nil || !runtime.followUps.isEmpty || (showsChanges && runtime.changeStats != nil) {
             ZStack(alignment: .bottom) {
-                if !runtime.followUps.isEmpty {
+                if let limitOffer {
+                    // A spent limit asks for a decision, so it takes the slot over the queue.
+                    UsageLimitTab(threadID: runtime.threadID, offer: limitOffer)
+                        .transition(.softAppear)
+                } else if !runtime.followUps.isEmpty {
                     // The queued steering prompts take the tab slot while any are queued:
                     // the changes tab hides behind them and reappears once the queue empties.
                     FollowUpQueueTab(runtime: runtime)
@@ -686,7 +692,7 @@ private struct ComposerControls: View {
                 Image(systemName: "paperclip")
                     .font(Chrome.iconFont)
             }
-            .buttonStyle(.chip(active: showingRecents))
+            .buttonStyle(.iconChip(active: showingRecents))
             .focusable(false)
             .help(Text(verbatim: Chrome.localized("Attach files")))
             .accessibilityLabel(Text("Attach files"))
@@ -723,7 +729,8 @@ private struct PermissionMenu: View {
 
     var body: some View {
         let runtimeMode = thread.provider.supported(thread.runtimeMode)
-        ChromeMenuButton(symbol: runtimeMode.symbol, secondary: true, help: "\(Chrome.localized(runtimeMode.title)) · \(Chrome.localized(runtimeMode.summary))") {
+        // The shield's closed outline reads a point smaller than the paperclip beside it.
+        ChromeMenuButton(symbol: runtimeMode.symbol, secondary: true, glyphBoost: runtimeMode == .fullAccess ? 1 : 0, help: "\(Chrome.localized(runtimeMode.title)) · \(Chrome.localized(runtimeMode.summary))") {
             PopoverSectionHeader("Permissions")
             ForEach(RuntimeMode.allCases.filter { thread.provider.supports($0) }) { mode in
                 PopoverItem(mode.title, symbol: mode.symbol, isChecked: runtimeMode == mode) {

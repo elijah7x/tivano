@@ -1,10 +1,10 @@
-import AppKit
 import Foundation
 
-/// Picks a chat back up once its provider's usage limit resets. A turn that stops on the
-/// limit is noted by the runtime; when the turn then fails, a wait is set for the reset
-/// time, and a minute after it the chat is told to continue where it left off. Only
-/// with the setting on; heads are left to their leads.
+/// Offers to pick a chat back up once its provider's usage limit resets. A turn that stops
+/// on the limit is noted by the runtime; when that turn then fails, the chat gets an offer,
+/// shown as a tab on its composer, and waits only if the user says so. The choice belongs to
+/// that one stop: the user can take it back, and a new limit asks again. Heads are left to
+/// their leads, and only providers that report the limit reliably are offered.
 @MainActor
 @Observable
 final class AutoContinue {
@@ -14,132 +14,144 @@ final class AutoContinue {
     /// How long past the reset time the chat waits, so the limit has really lifted.
     static let margin: TimeInterval = 60
 
-    /// The chats waiting for their limit, and when they go on.
+    /// The providers whose limit signal and reset time can be trusted.
+    static let supportedProviders: Set<ProviderKind> = [.claude, .codex, .omp, .commandcode]
+
+    /// One stop on a usage limit. `resetsAt` is nil when no reset time could be found.
+    struct Offer: Equatable, Sendable {
+        let id: UUID
+        let turnID: UUID
+        let provider: ProviderKind
+        let model: String?
+        var resetsAt: Date?
+        /// Whether the user chose to continue once the limit resets.
+        var isWaiting = false
+    }
+
+    /// The chats with an open offer, read by their composer tab.
+    private(set) var offers: [UUID: Offer] = [:]
+
+    /// The chats waiting for their limit, and when they go on. Only chats whose user chose
+    /// to wait are here: this is what reads as work in progress and keeps the Mac awake.
     private(set) var resumesAt: [UUID: Date] = [:] {
         didSet { app?.updateTaskSleepPrevention() }
     }
 
-    /// How a chat's wait ended, once it is over. The notice's row reads this for its words
-    /// after the wait; a fresh wait clears it.
-    enum LimitOutcome: Equatable, Sendable {
-        case cancelled
-        case handedOff(UUID)
-        case resumed
-    }
-
-    private(set) var outcomes: [UUID: LimitOutcome] = [:]
-
     @ObservationIgnored private weak var app: AppModel?
-    /// Limits hit by the running turn: the thread and the reset time, when the provider said.
-    @ObservationIgnored private var noted: [UUID: Date?] = [:]
-    @ObservationIgnored private var waits: [UUID: Task<Void, Never>] = [:]
-    /// Which wait each thread's countdown belongs to. A wait that ends after it was
-    /// replaced leaves its successor's countdown and task where they are.
-    @ObservationIgnored private var waitTokens: [UUID: UUID] = [:]
+    /// Limits hit by the running turn: the turn and the reset time, when the provider said.
+    @ObservationIgnored private var noted: [UUID: (turnID: UUID, resetsAt: Date?)] = [:]
+    /// The countdown, or the reset-time lookup, of each chat's offer.
+    @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
 
     init(app: AppModel) {
         self.app = app
     }
 
-    /// The provider said its usage limit is spent, during a turn of this thread.
-    func noteLimit(_ threadID: UUID, resetsAt: Date?) {
+    /// The provider said its usage limit is spent, during this turn of the thread.
+    func noteLimit(_ threadID: UUID, turnID: UUID, resetsAt: Date?) {
         // A later note with a time beats an earlier one without.
-        if let existing = noted[threadID], existing != nil, resetsAt == nil { return }
-        noted[threadID] = resetsAt
+        if let existing = noted[threadID], existing.turnID == turnID, existing.resetsAt != nil, resetsAt == nil { return }
+        noted[threadID] = (turnID, resetsAt)
     }
 
-    /// The thread's turn ended. Returns whether the thread now waits for its limit to reset,
-    /// in which case the app does not chime or notify about the failure.
-    func turnFinished(_ threadID: UUID, status: TurnStatus, continues: Bool) -> Bool {
-        guard let note = noted.removeValue(forKey: threadID) else { return false }
-        guard let app, app.settings.autoContinueAfterLimit, status == .failed, !continues,
-              let thread = app.thread(threadID), !thread.isHydraHead else { return false }
-        waits[threadID]?.cancel()
-        resumesAt[threadID] = nil
-        outcomes[threadID] = nil
-        let turnID = app.existingRuntime(for: threadID)?.turns.last?.id
-        let token = UUID()
-        waitTokens[threadID] = token
-        waits[threadID] = Task { [weak self] in
-            await self?.wait(threadID, turnID: turnID, resetsAt: note, provider: thread.provider, token: token)
-        }
-        return true
-    }
-
-    /// Cancels a wait, when the user picks the thread up themselves.
-    func cancel(_ threadID: UUID) {
-        waits[threadID]?.cancel()
-        waits[threadID] = nil
-        waitTokens[threadID] = nil
-        resumesAt[threadID] = nil
-        outcomes[threadID] = .cancelled
-    }
-
-    /// Cancels the wait and picks the work up in a new chat of the same project, whose
-    /// composer holds a hand-off of the turn that stopped. The user chooses the model
-    /// there and sends it themselves.
-    func handOff(_ threadID: UUID) {
-        guard let app, let thread = app.thread(threadID), let runtime = app.existingRuntime(for: threadID) else { return }
-        let text = LimitHandoff.text(for: runtime, title: thread.title)
-        cancel(threadID)
-        guard let made = app.newThread(affiliation: thread.projectID.map { .project($0) } ?? .standalone) else { return }
-        outcomes[threadID] = .handedOff(made.id)
-        app.runtime(for: made.id).draft.text = text
-    }
-
-    private func wait(_ threadID: UUID, turnID: UUID?, resetsAt: Date?, provider: ProviderKind, token: UUID) async {
-        defer {
-            if waitTokens[threadID] == token {
-                resumesAt[threadID] = nil
-                waits[threadID] = nil
-                waitTokens[threadID] = nil
-            }
-        }
-        guard let app else { return }
-        var schedule = resetsAt.flatMap { Self.schedule(resetTime: $0) }
-        // Missing or invalid message times fall back to the account's spent window.
-        if schedule == nil {
-            let accountReset = await readResetTime(provider)
-            schedule = accountReset.flatMap { Self.schedule(resetTime: $0) }
-        }
-        guard !Task.isCancelled, waitTokens[threadID] == token else { return }
-        guard let schedule else {
-            notice(threadID, .warning, "Usage limit reached, and the provider did not say when it resets. Send a message to continue.")
-            notify(threadID, "Usage limit reached. Send a message to continue.")
-            waits[threadID] = nil
-            waitTokens[threadID] = nil
+    /// The thread's turn ended. A turn that failed on its limit opens an offer; the failure
+    /// itself is reported as usual, since nothing waits until the user chooses to.
+    func turnFinished(_ threadID: UUID, turnID: UUID, status: TurnStatus, continues: Bool, userStopped: Bool) {
+        guard let note = noted.removeValue(forKey: threadID), note.turnID == turnID,
+              status == .failed, !continues, !userStopped,
+              let app, let thread = app.thread(threadID), !thread.isHydraHead,
+              Self.supportedProviders.contains(thread.provider) else { return }
+        clear(threadID)
+        let resetsAt = note.resetsAt.flatMap { UsageLimitSignal.supportsResetTime($0) ? $0 : nil }
+        let offer = Offer(id: UUID(), turnID: turnID, provider: thread.provider, model: thread.model, resetsAt: resetsAt)
+        guard resetsAt == nil else {
+            offers[threadID] = offer
             return
         }
-        let resumeAt = schedule.date
-        resumesAt[threadID] = resumeAt
-        let when = Self.format(resumeAt)
-        notice(threadID, .info, "Usage limit reached. Continuing automatically at \(when).", limitMark: true)
-        notify(threadID, "Usage limit reached. Continuing at \(when).")
-        try? await Task.sleep(for: .seconds(schedule.seconds))
-        // A wait that was cancelled or replaced while it slept leaves the countdown and
-        // the task alone: they belong to whatever took its place.
-        guard !Task.isCancelled, waitTokens[threadID] == token else { return }
-        resumesAt[threadID] = nil
-        waits[threadID] = nil
-        waitTokens[threadID] = nil
-        guard app.settings.autoContinueAfterLimit,
-              let runtime = app.existingRuntime(for: threadID), !runtime.isRunning,
-              // The user has since picked the chat up themselves: nothing to continue.
-              runtime.turns.last?.id == turnID else { return }
-        outcomes[threadID] = .resumed
-        runtime.enqueueFollowUp(text: Self.continueMessage, attachments: [])
-        if let prompt = runtime.followUps.last(where: { $0.text == Self.continueMessage }) {
-            runtime.sendFollowUpNow(prompt.id)
+        // No time in the message: read the account's spent window before showing anything,
+        // so the tab does not flash "no reset time" while the answer is on its way.
+        tasks[threadID] = Task { [weak self] in
+            let reset = await self?.readResetTime(thread.provider)
+            // Clearing the offer cancels this task, so one that is not cancelled is still current.
+            guard let self, !Task.isCancelled else { return }
+            self.tasks[threadID] = nil
+            var resolved = offer
+            resolved.resetsAt = reset
+            self.offers[threadID] = resolved
         }
     }
 
-    private static func schedule(resetTime: Date, now: Date = .now) -> (date: Date, seconds: TimeInterval)? {
-        guard UsageLimitSignal.supportsResetTime(resetTime, now: now) else { return nil }
-        let seconds = max(resetTime.timeIntervalSince(now) + margin, 5)
-        guard UsageLimitSignal.supportsWait(seconds) else { return nil }
-        let date = now.addingTimeInterval(seconds)
-        guard UsageLimitSignal.supportsResetTime(date, now: now) else { return nil }
-        return (date, seconds)
+    /// The offer the chat's composer shows, if it still applies: a chat whose model changed
+    /// since the stop has moved on, and the old limit is no longer its question.
+    func offer(for threadID: UUID) -> Offer? {
+        guard let offer = offers[threadID], let thread = app?.thread(threadID),
+              !thread.isArchived, thread.model == offer.model else { return nil }
+        return offer
+    }
+
+    /// The user chose to continue once the limit resets.
+    func wait(_ threadID: UUID) {
+        guard var offer = offers[threadID], let resetsAt = offer.resetsAt else { return }
+        tasks[threadID]?.cancel()
+        offer.isWaiting = true
+        offers[threadID] = offer
+        let resumeAt = resetsAt.addingTimeInterval(Self.margin)
+        resumesAt[threadID] = resumeAt
+        let offerID = offer.id
+        tasks[threadID] = Task { [weak self] in
+            // Short sleeps, measured against the wall clock each time, so a Mac that slept
+            // through the reset or a clock that moved still goes on at the right moment.
+            while true {
+                let remaining = resumeAt.timeIntervalSinceNow
+                guard remaining > 0 else { break }
+                try? await Task.sleep(for: .seconds(min(remaining, 60)))
+                if Task.isCancelled { return }
+            }
+            self?.resume(threadID, offerID: offerID)
+        }
+    }
+
+    /// The user took back the choice to wait: the offer stands again.
+    func stopWaiting(_ threadID: UUID) {
+        guard var offer = offers[threadID], offer.isWaiting else { return }
+        tasks.removeValue(forKey: threadID)?.cancel()
+        offer.isWaiting = false
+        offers[threadID] = offer
+        resumesAt[threadID] = nil
+    }
+
+    /// The limit has reset and the user asked to continue now.
+    func continueNow(_ threadID: UUID) {
+        guard let app, offers[threadID] != nil else { return }
+        clear(threadID)
+        app.runtime(for: threadID).sendLimitContinuation(Self.continueMessage)
+    }
+
+    /// The user does not want this offer, or the chat went away.
+    func dismiss(_ threadID: UUID) {
+        clear(threadID)
+    }
+
+    /// A new turn opened in the chat: whatever started it, the stop is behind it now.
+    func turnOpened(_ threadID: UUID) {
+        guard offers[threadID] != nil || tasks[threadID] != nil else { return }
+        clear(threadID)
+    }
+
+    private func resume(_ threadID: UUID, offerID: UUID) {
+        guard let app, let offer = offers[threadID], offer.id == offerID, offer.isWaiting else { return }
+        clear(threadID)
+        // The chat moved on while it waited: nothing to continue.
+        guard let thread = app.thread(threadID), !thread.isArchived, thread.model == offer.model,
+              let runtime = app.existingRuntime(for: threadID), !runtime.isRunning,
+              runtime.turns.last?.id == offer.turnID else { return }
+        runtime.sendLimitContinuation(Self.continueMessage)
+    }
+
+    private func clear(_ threadID: UUID) {
+        tasks.removeValue(forKey: threadID)?.cancel()
+        offers[threadID] = nil
+        if resumesAt[threadID] != nil { resumesAt[threadID] = nil }
     }
 
     /// The reset time of the account's most-spent window, read fresh.
@@ -155,29 +167,24 @@ final class AutoContinue {
             limits = await PlanLimitsReader.read(provider, executable: executable, environment: app.providers.environment(for: provider))
         }
         var spent: PlanLimits.Window?
-        let now = Date.now
         for window in limits?.windows ?? [] {
-            guard let resetsAt = window.resetsAt,
-                  Self.schedule(resetTime: resetsAt, now: now) != nil else { continue }
+            guard let resetsAt = window.resetsAt, UsageLimitSignal.supportsResetTime(resetsAt) else { continue }
             if spent == nil || window.percent > spent!.percent { spent = window }
         }
         guard let spent, spent.percent >= 95 else { return nil }
         return spent.resetsAt
     }
 
-    private func notice(_ threadID: UUID, _ level: Notice.Level, _ message: String, limitMark: Bool = false) {
-        var notice = Notice(level: level, message: message)
-        if limitMark { notice.limit = LimitNotice(threadID: threadID) }
-        app?.existingRuntime(for: threadID)?.rehearse(.notice(notice))
+    #if DEBUG
+    /// Opens an offer without a stop behind it, for `UsageLimitPreview`.
+    func preview(_ threadID: UUID, resetsAt: Date?, waiting: Bool) {
+        guard let thread = app?.thread(threadID) else { return }
+        let turnID = app?.existingRuntime(for: threadID)?.turns.last?.id ?? UUID()
+        offers[threadID] = Offer(id: UUID(), turnID: turnID, provider: thread.provider, model: thread.model, resetsAt: resetsAt)
+        if waiting { wait(threadID) }
     }
+    #endif
 
-    private func notify(_ threadID: UUID, _ body: String) {
-        guard let app, app.settings.notifyWhenFinished, let thread = app.thread(threadID) else { return }
-        let onScreen = NSApp.isActive && app.selectedThreadID == threadID
-        guard !onScreen else { return }
-        app.notify(threadID: threadID, title: thread.title, body: body)
-    }
-
-    /// The reset time as the notices print it; the formatter lives with the signal so provider sessions can use it too.
+    /// The reset time as the tab prints it; the formatter lives with the signal so provider sessions can use it too.
     static func format(_ date: Date) -> String { UsageLimitSignal.format(date) }
 }

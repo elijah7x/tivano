@@ -41,12 +41,45 @@
         }
       }
     },
+    "DeepSeek Harness %@ is newer or older than the %@ Tivano supports, so desktop profiles are off for this chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek Harness %@ 与 Tivano 支持的 %@ 版本不一致，本次对话不启用桌面配置。"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness at %@ cannot inherit the desktop app's marketplace profile, and retrying will fail the same way. Use the CLI bundled with the DeepSeek Harness app, or set it as the Binary path in Settings → Providers → DeepSeek Harness." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "位于 %@ 的 DeepSeek Harness 无法继承桌面应用的市场配置，重试也会以同样方式失败。请使用 DeepSeek Harness 应用自带的 CLI，或在“设置 → 服务商 → DeepSeek Harness”中将其设为可执行文件路径。"
+          }
+        }
+      }
+    },
     "Finish or abort the merge, rebase or cherry-pick in progress, then rename the branch." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "请先完成或中止正在进行的合并、变基或拣选，再重命名分支。"
+          }
+        }
+      }
+    },
+    "MCP servers skipped for this session because their command was not found on PATH: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以下 MCP 服务器的命令未在 PATH 中找到，本次会话已跳过：%@"
           }
         }
       }
@@ -80,6 +113,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "错误"
+          }
+        }
+      }
+    },
+    "Read-only marketplace inheritance currently requires DeepSeek Harness %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以只读方式继承市场配置目前需要 DeepSeek Harness %@。"
           }
         }
       }
@@ -130,6 +174,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此分支已推送为 %@。只会修改本地名称：远端分支和拉取请求仍保留旧名称，之后推送可能需要重新设置上游。"
+          }
+        }
+      }
+    },
+    "unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知"
           }
         }
       }
@@ -651,6 +706,17 @@
         }
       }
     },
+    "%@ left" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还剩 %@"
+          }
+        }
+      }
+    },
     "%@ needs an API key. Nothing to install." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -750,28 +816,6 @@
         }
       }
     },
-    "%@ tokens" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ tokens"
-          }
-        }
-      }
-    },
-    "%@ tokens have an unknown source and may overlap imported history." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ tokens 来源未知，可能与导入的历史记录重叠。"
-          }
-        }
-      }
-    },
     "%@ tool" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -790,6 +834,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 工具"
+          }
+        }
+      }
+    },
+    "%@ usage limit has reset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 额度已恢复"
+          }
+        }
+      }
+    },
+    "%@ usage limit reached" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 额度已用完"
           }
         }
       }
@@ -2748,6 +2814,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "回答问题后即可发送"
+          }
+        }
+      }
+    },
+    "Antigravity's installation source could not be verified. Update it with agy update from its official installer." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认 Antigravity 的安装来源。请用官方安装器安装的 agy 运行 agy update 更新。"
           }
         }
       }
@@ -5436,13 +5513,13 @@
         }
       }
     },
-    "Continue after a usage limit" : {
+    "Continue after reset" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "额度恢复后继续"
+            "value" : "恢复后自动继续"
           }
         }
       }
@@ -5454,6 +5531,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "需要时继续"
+          }
+        }
+      }
+    },
+    "Continues at %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 自动继续"
           }
         }
       }
@@ -5949,17 +6037,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "致谢"
-          }
-        }
-      }
-    },
-    "Cumulative" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "累计"
           }
         }
       }
@@ -7053,6 +7130,17 @@
         }
       }
     },
+    "Don't wait" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不等了"
+          }
+        }
+      }
+    },
     "Done" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7218,17 +7306,6 @@
         }
       }
     },
-    "Each day on its own, against the busiest day of the year" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "每天单独统计，与全年最忙的一天对比"
-          }
-        }
-      }
-    },
     "Each head after the first gets a panel of its own beside the chat while there is room, left and right until each side is full." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7302,17 +7379,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在对话名称前显示项目的表情或符号，每个对话一行"
-          }
-        }
-      }
-    },
-    "Each week as one shade, against the busiest week" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "每周以一种深浅表示，与最忙的一周对比"
           }
         }
       }
@@ -8637,6 +8703,17 @@
         }
       }
     },
+    "Group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分组"
+          }
+        }
+      }
+    },
     "Gruvbox Light" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9920,17 +9997,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "休闲娱乐"
-          }
-        }
-      }
-    },
-    "Less" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "少"
           }
         }
       }
@@ -11559,6 +11625,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无报告。"
+          }
+        }
+      }
+    },
+    "No reset time given" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有提供恢复时间"
           }
         }
       }
@@ -13378,17 +13455,6 @@
         }
       }
     },
-    "Read-only marketplace inheritance currently requires DeepSeek Harness 0.2.1-rc.2." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "以只读方式继承市场配置目前需要 DeepSeek Harness 0.2.1-rc.2。"
-          }
-        }
-      }
-    },
     "Read-only marketplace startup failed. Check the selected bundles and their ACP compatibility." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13737,28 +13803,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "从选择器中移除"
-          }
-        }
-      }
-    },
-    "Remove group heading" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移除分组标题"
-          }
-        }
-      }
-    },
-    "Remove group heading. Models stay in the list." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移除分组标题。模型仍会保留在列表中。"
           }
         }
       }
@@ -16370,6 +16414,17 @@
         }
       }
     },
+    "Stop waiting for the usage limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不再等待额度恢复"
+          }
+        }
+      }
+    },
     "Stop%@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -17811,17 +17866,6 @@
         }
       }
     },
-    "The running total, so the year fills as it goes" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "累计总量，随时间推移逐渐填满全年"
-          }
-        }
-      }
-    },
     "The selected API-key route has no key. Configure it with mcode provider set-minimax-key; mcode login is for the separate Token Plan route." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -18291,17 +18335,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此 ACP 智能体无法恢复原会话。"
-          }
-        }
-      }
-    },
-    "This DeepSeek Harness installation does not support read-only marketplace inheritance. Use the bundled desktop CLI." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当前安装的 DeepSeek Harness 不支持以只读方式继承市场配置。请使用桌面应用自带的 CLI。"
           }
         }
       }
@@ -19109,17 +19142,6 @@
         }
       }
     },
-    "Token activity" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Token 活动"
-          }
-        }
-      }
-    },
     "Tool-free reporting is not enabled for MiniMax Code in Tivano." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -19149,17 +19171,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "充值"
-          }
-        }
-      }
-    },
-    "Total tokens recorded this year." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "今年记录的 token 总量。"
           }
         }
       }
@@ -19446,6 +19457,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "撤销此对话所做的文件改动"
+          }
+        }
+      }
+    },
+    "Ungroup" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解散分组"
+          }
+        }
+      }
+    },
+    "Ungroup. Models stay in the list." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解散分组。模型仍会保留在列表中。"
           }
         }
       }
@@ -20143,6 +20176,17 @@
         }
       }
     },
+    "Wait for the usage limit to reset, then continue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等额度恢复后自动继续"
+          }
+        }
+      }
+    },
     "Waiting" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -20359,17 +20403,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "我们要构建什么？"
-          }
-        }
-      }
-    },
-    "When the provider's limit is spent, the chat waits for the reset and then tells the agent to carry on" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "服务商额度用尽时，对话会等待额度恢复，然后通知智能体继续工作"
           }
         }
       }

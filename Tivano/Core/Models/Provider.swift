@@ -303,7 +303,7 @@ enum RuntimeMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .supervised: "hand.raised"
         case .autoAcceptEdits: "pencil.line"
         case .auto: "wand.and.sparkles"
-        case .fullAccess: "key"
+        case .fullAccess: "checkmark.shield"
         }
     }
 }

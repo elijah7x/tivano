@@ -6,7 +6,7 @@ or settles a task.
 
 | Indicator | Condition | Opening the rendered conversation |
 | --- | --- | --- |
-| Spinner | Turn, helper, background task, merge, or limit continuation still pending | Remains |
+| Spinner | Turn, helper, background task, merge, or user-chosen limit wait still pending | Remains |
 | Yellow | Unresolved approval | Remains until resolved |
 | Purple | Unresolved question | Remains until resolved |
 | Green | Unread successful terminal result | Clears |
@@ -16,11 +16,18 @@ or settles a task.
 
 Priority: approval, question, live work, unread terminal result.
 
+A usage-limit offer (limit reached, not waiting) is an ordinary failed turn for
+unread status, the Dock badge, the chime and notifications. Only a chat whose
+user chose to wait counts as working in the sidebar and keeps the Mac awake.
+Any send in the chat clears the offer. Offers and waits are not persisted across
+quitting the app.
+
 Read receipts come from mounted timeline views in an active, visible window,
 after history loads. Hidden child conversations are not read merely by selecting
 the parent. Receipts compare `unreadRevision`; an older rendered snapshot cannot
 clear a newer result. `lastAttentionTurnID` suppresses repeated completion events.
-Pending work is persisted and recovered as an interruption after restart.
+Pending work other than usage-limit offers and waits is persisted and recovered
+as an interruption after restart.
 
 ## Verification (2026-10-09)
 

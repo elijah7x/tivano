@@ -360,6 +360,12 @@ final class ThreadRuntime {
     /// Heads whose automatic panel the user dragged: they keep that corner and count
     /// against its room.
     var hydraAutoPanelDocks: [UUID: PanelDockCorner] = [:]
+    /// The corner each automatic panel was first given, with the team panel's corner and
+    /// whether the pane held both sides then. A head keeps it while that corner has room and
+    /// the team panel and the pane's width class are unchanged, so a new head arriving or
+    /// another leaving never moves a panel already on screen. Not observed: it records what
+    /// is on screen and never decides a render alone.
+    @ObservationIgnored var hydraAutoPanelPlaced: [UUID: (corner: PanelDockCorner, team: PanelDockCorner, bothSides: Bool)] = [:]
     /// The Hydra panel was dismissed; the next head to start brings it back.
     var isHydraPanelHidden = false
     /// Heads by the tool row that stands for them in this timeline, so the row can show
@@ -1354,6 +1360,13 @@ final class ThreadRuntime {
         }
     }
 
+    /// Sends the usage-limit continuation straight away. It never joins the queue: a chat
+    /// that is busy again has moved on, and the continuation is dropped.
+    func sendLimitContinuation(_ text: String) {
+        guard phase == .idle, !isReverting else { return }
+        Task { await ensureLoaded(); await startTurn(text: text, attachments: []) }
+    }
+
     func enqueueFollowUp(text: String, attachments: [Attachment]) {
         let prompt = FollowUpPrompt(
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1550,6 +1563,13 @@ final class ThreadRuntime {
     }
 
     private func startTurn(text: String, attachments: [Attachment], hydraHeads: [Int]? = nil, hydraBrief: Bool = false, externalTurnID: UUID? = nil) async {
+        #if DEBUG
+        // The usage-limit preview shows the tab's buttons; none of them may reach a provider.
+        if UsageLimitPreview.isRequested {
+            appendNotice(.info, "Preview: nothing was sent.")
+            return
+        }
+        #endif
         // External requests reject races instead of entering the UI's implicit queue.
         if let externalTurnID {
             do { try validateExternalSubmission(externalTurnID, idle: true) }
@@ -1625,6 +1645,7 @@ final class ThreadRuntime {
         turns.append(turn)
         saveRevision += 1
         currentTurnID = turn.id
+        app.autoContinue.turnOpened(threadID)
         currentProviderDiff = nil
         currentProviderAnchor = nil
         append(userItem)
@@ -3041,6 +3062,7 @@ final class ThreadRuntime {
 
     private func openBackgroundTurn() {
         rehearseTurn(nil)
+        app?.autoContinue.turnOpened(threadID)
         // Pi has no background tasks: it resumes after a failed run, and its retry notices say so.
         if isVoiceOrchestrator || thread?.provider == .pi { return }
         let name = thread?.provider.displayName ?? Chrome.localized("The agent")
@@ -3131,7 +3153,7 @@ final class ThreadRuntime {
         case .notice(let notice):
             appendNotice(notice.level, notice.message)
         case .usageLimit(let resetsAt):
-            app?.autoContinue.noteLimit(threadID, resetsAt: resetsAt)
+            if let currentTurnID { app?.autoContinue.noteLimit(threadID, turnID: currentTurnID, resetsAt: resetsAt) }
         case .modeChanged(let mode):
             app?.updateThread(threadID) { $0.interactionMode = mode }
         case .models(let list, _):
@@ -3541,7 +3563,7 @@ final class ThreadRuntime {
     /// version's native head has its tool row completed; a Tivano-run head's report goes to
     /// the lead, once its batch is complete. A head reporting again (steered on from the
     /// panel) replaces any report of its own still waiting.
-    func hydraHeadFinished(_ headID: UUID, info: HydraHeadInfo, status: HydraHeadInfo.Status, summary: String?, landing: HydraLanding? = nil, copyPath: String? = nil) {
+    func hydraHeadFinished(_ headID: UUID, info: HydraHeadInfo, status: HydraHeadInfo.Status, summary: String?, landing: HydraLanding? = nil, copyPath: String? = nil, provider: String? = nil, startupFailure: Bool = false) {
         switch info.kind {
         case .native:
             guard let toolID = info.toolUseID, let entry = entryIndex[toolID], case .tool(let call) = entry.item.content, call.status == .running else { return }
@@ -3554,7 +3576,8 @@ final class ThreadRuntime {
         case .tivano:
             let report = HydraReport(
                 headIndex: info.index, task: info.task, origin: info.origin, status: status, text: summary ?? "",
-                landing: landing, copyPath: copyPath, elapsed: Date.now.timeIntervalSince(info.startedAt), toolCalls: info.toolCalls
+                landing: landing, copyPath: copyPath, elapsed: Date.now.timeIntervalSince(info.startedAt), toolCalls: info.toolCalls,
+                provider: provider, startupFailure: startupFailure
             )
             hydraPendingReports.removeAll { $0.headIndex == info.index }
             if let batchID = info.batchID, hydraBatches[batchID] != nil {

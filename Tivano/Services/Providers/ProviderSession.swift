@@ -255,12 +255,34 @@ enum ToolImages {
     /// The images among a content-block array (or a single block). Reads Anthropic's
     /// `source.data` + `source.media_type`, MCP's `data` + `mimeType`, and ACP's
     /// `{"type": "content", "content": <block>}` wrapper.
-    static func blocks(_ value: JSONValue?) -> [Attachment] {
+    nonisolated static func blocks(_ value: JSONValue?) async -> [Attachment] {
         guard let value, !value.isNull else { return [] }
-        return (value.array ?? [value]).compactMap(attachment(block:))
+        let items = value.array ?? [value]
+        // Most results hold no image: they skip the hop to a background task.
+        guard items.contains(where: { item in
+            item["type"]?.string == "image" || (item["type"]?.string == "content" && item["content"]?["type"]?.string == "image")
+        }) else { return [] }
+        // Multi-megabyte agent images must not decode or write to disk on the main actor.
+        return await Task.detached(priority: .userInitiated) {
+            items.compactMap(importAttachment(block:))
+        }.value
     }
 
-    static func attachment(block: JSONValue) -> Attachment? {
+    nonisolated static func attachment(block: JSONValue) async -> Attachment? {
+        await Task.detached(priority: .userInitiated) {
+            importAttachment(block: block)
+        }.value
+    }
+
+    /// An image file the agent saved, copied into app storage so the row keeps it after the
+    /// original moves. Nil when it is missing or not an image.
+    nonisolated static func file(at path: String) async -> Attachment? {
+        await Task.detached(priority: .userInitiated) {
+            importFile(at: path)
+        }.value
+    }
+
+    private static func importAttachment(block: JSONValue) -> Attachment? {
         var block = block
         if block["type"]?.string == "content", let inner = block["content"] { block = inner }
         guard block["type"]?.string == "image" else { return nil }
@@ -271,14 +293,12 @@ enum ToolImages {
             return stored(data, mimeType: mimeType)
         }
         if let uri = block["uri"]?.string, uri.hasPrefix("file://"), let path = URL(string: uri)?.path {
-            return file(at: path)
+            return importFile(at: path)
         }
         return nil
     }
 
-    /// An image file the agent saved, copied into app storage so the row keeps it after the
-    /// original moves. Nil when it is missing or not an image.
-    static func file(at path: String) -> Attachment? {
+    private static func importFile(at path: String) -> Attachment? {
         let url = URL(fileURLWithPath: path)
         guard let type = UTType(filenameExtension: url.pathExtension.lowercased()), type.conforms(to: .image),
               FileManager.default.fileExists(atPath: path),

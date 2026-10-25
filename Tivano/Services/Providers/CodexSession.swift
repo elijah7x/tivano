@@ -32,6 +32,7 @@ final class CodexSession: ProviderSession {
 
     private let configuration: SessionConfiguration
     private var connection: JSONRPCConnection?
+    private var eventTask: Task<Void, Never>?
     private var threadID: String?
     private var turnID: String?
     private var completionFallback: Task<Void, Never>?
@@ -94,9 +95,21 @@ final class CodexSession: ProviderSession {
             directory: configuration.workingDirectory,
             environment: configuration.environment
         ) { [weak self] connection in
-            connection.onNotification = { self?.handleNotification($0, $1) }
-            connection.onRequest = { self?.handleRequest($0, $1, $2) }
-            connection.onClose = { self?.handleClose($0) }
+            connection.onNotification = { [weak self] method, params in
+                self?.enqueueEvent { [weak self] in
+                    await self?.handleNotification(method, params)
+                }
+            }
+            connection.onRequest = { [weak self] id, method, params in
+                self?.enqueueEvent { [weak self] in
+                    self?.handleRequest(id, method, params)
+                }
+            }
+            connection.onClose = { [weak self] tail in
+                self?.enqueueEvent { [weak self] in
+                    self?.handleClose(tail)
+                }
+            }
         }
         self.connection = connection
         var started = false
@@ -409,6 +422,7 @@ final class CodexSession: ProviderSession {
         let connection = connection
         stop()
         await connection?.closeAndWait(timeout: timeout)
+        await eventTask?.value
     }
 
     func stop() {
@@ -736,7 +750,15 @@ final class CodexSession: ProviderSession {
 
     // MARK: - Notifications
 
-    private func handleNotification(_ method: String, _ params: JSONValue) {
+    private func enqueueEvent(_ operation: @escaping @MainActor () async -> Void) {
+        let previous = eventTask
+        eventTask = Task {
+            await previous?.value
+            await operation()
+        }
+    }
+
+    private func handleNotification(_ method: String, _ params: JSONValue) async {
         if method.hasPrefix("thread/realtime/") || method == "account/updated" {
             onVoiceNotification?(method, params)
             return
@@ -774,7 +796,7 @@ final class CodexSession: ProviderSession {
         case "item/started":
             if let item = params["item"] { itemStarted(item, target: target, sink: sink) }
         case "item/completed":
-            if let item = params["item"] { itemCompleted(item, target: target, sink: sink) }
+            if let item = params["item"] { await itemCompleted(item, target: target, sink: sink) }
         case "item/agentMessage/delta":
             if let id = params["itemId"]?.string, let delta = params["delta"]?.string {
                 if case .lead = target {
@@ -996,7 +1018,7 @@ final class CodexSession: ProviderSession {
         }
     }
 
-    private func itemCompleted(_ item: JSONValue, target: Target, sink: (ProviderEvent) -> Void) {
+    private func itemCompleted(_ item: JSONValue, target: Target, sink: (ProviderEvent) -> Void) async {
         guard let id = item["id"]?.string else { return }
         switch item["type"]?.string {
         case "agentMessage":
@@ -1014,7 +1036,8 @@ final class CodexSession: ProviderSession {
         default:
             if let call = toolCall(from: item) {
                 sink(.toolStarted(id: id, call: call))
-                sink(.toolUpdated(id: id, update: toolUpdate(from: item)))
+                let update = await toolUpdate(from: item)
+                sink(.toolUpdated(id: id, update: update))
             }
             // On either target: the payload says whose head it is, whatever thread the
             // server filed the notice under.
@@ -1132,7 +1155,7 @@ final class CodexSession: ProviderSession {
         }
     }
 
-    private func toolUpdate(from item: JSONValue) -> ToolUpdate {
+    private func toolUpdate(from item: JSONValue) async -> ToolUpdate {
         var update = ToolUpdate()
         let rawStatus = item["status"]?.string
         switch item["type"]?.string {
@@ -1156,7 +1179,7 @@ final class CodexSession: ProviderSession {
             } else if let content = item["result"]?["content"]?.array {
                 update.output = content.compactMap { $0["text"]?.string }.joined(separator: "\n")
             }
-            let images = ToolImages.blocks(item["result"]?["content"])
+            let images = await ToolImages.blocks(item["result"]?["content"])
             if !images.isEmpty { update.images = images }
             update.status = Self.toolStatus(rawStatus, exitCode: nil)
         case "webSearch", "imageView", "enteredReviewMode", "exitedReviewMode":
@@ -1164,10 +1187,10 @@ final class CodexSession: ProviderSession {
         case "imageGeneration":
             update.status = Self.toolStatus(rawStatus, exitCode: nil)
             if let path = item["savedPath"]?.string, !path.isEmpty,
-               let attachment = ToolImages.file(at: path) {
+               let attachment = await ToolImages.file(at: path) {
                 update.images = [attachment]
             } else if let result = item["result"]?.string, !result.isEmpty,
-                      let attachment = ToolImages.attachment(block: ["type": "image", "data": .string(result), "mimeType": "image/png"]) {
+                      let attachment = await ToolImages.attachment(block: ["type": "image", "data": .string(result), "mimeType": "image/png"]) {
                 update.images = [attachment]
             }
         default:

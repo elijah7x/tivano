@@ -58,7 +58,15 @@ struct SidebarHero: View {
     }
 
     private var card: some View {
-        HeroWeatherCard(weather: HeroPreview.shared.weather ?? weather, onActivate: { model.newThread() })
+        HeroWeatherCard(weather: shownWeather, onActivate: { model.newThread() })
             .frame(height: 96)
+    }
+
+    private var shownWeather: HeroWeather {
+        #if DEBUG
+        HeroPreview.shared.weather ?? weather
+        #else
+        weather
+        #endif
     }
 }

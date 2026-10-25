@@ -451,6 +451,13 @@ final class ProviderRegistry {
         guard !provider.isAPIKeyBased else { return nil }
         let custom = settings.binaryPath(for: provider)
         guard !custom.isEmpty || !provider.executableName.isEmpty else { return nil }
+        if provider == .dsh, custom.isEmpty {
+            // The npm package lacks the desktop host that marketplace profiles need.
+            let bundled = ["/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh", "\(LoginEnvironment.homeDirectory)/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"]
+            if let path = bundled.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+                return URL(fileURLWithPath: path)
+            }
+        }
         if let found = LoginEnvironment.which(custom.isEmpty ? provider.executableName : custom) { return found }
         guard custom.isEmpty else { return nil }
         return Self.fallbackExecutables(for: provider).first { FileManager.default.isExecutableFile(atPath: $0.path) }
@@ -493,6 +500,7 @@ final class ProviderRegistry {
             var candidates = ["\(home)/.npm-global/bin/\(name)", "/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)", "\(home)/.volta/bin/\(name)", "\(home)/.bun/bin/\(name)"]
             if provider == .dsh {
                 candidates.append("/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh")
+                candidates.append("\(home)/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh")
             }
             return candidates.map { URL(fileURLWithPath: $0) }
         default:

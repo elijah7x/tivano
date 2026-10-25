@@ -521,6 +521,8 @@ struct ChromeIconLabel: View {
     var prominent = false
     var glyphSize: CGFloat? = nil
     var secondary = false
+    /// Points added to the icon font, for a glyph that reads small beside its neighbours.
+    var glyphBoost: CGFloat = 0
 
     /// "asset:" names a template image in the asset catalog, for glyphs SF Symbols lacks.
     private var glyph: Image {
@@ -537,13 +539,17 @@ struct ChromeIconLabel: View {
                     .frame(width: glyphSize, height: glyphSize)
             } else {
                 glyph
-                    .font(prominent ? .ui(.title3, weight: .semibold) : Chrome.iconFont)
+                    .font(prominent ? .ui(.title3, weight: .semibold) : glyphBoost == 0 ? Chrome.iconFont : .ui(size: TypeScale.stockPointSize(.callout) + glyphBoost, weight: .semibold))
             }
         }
-            .foregroundStyle(secondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(foreground))
+            .foregroundStyle(secondary ? (isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)) : AnyShapeStyle(foreground))
             .frame(width: prominent ? Chrome.capsuleHeight : Chrome.capsuleContentHeight, height: prominent ? Chrome.capsuleHeight : Chrome.capsuleContentHeight)
             .background {
-                if isActive || (prominent && isHovering) {
+                // Secondary icons sit among the composer's chips and wear their round fill.
+                if secondary {
+                    Circle()
+                        .fill(isActive ? AnyShapeStyle(.tint.opacity(0.16)) : AnyShapeStyle(.primary.opacity(isHovering ? 0.07 : 0)))
+                } else if isActive || (prominent && isHovering) {
                     Circle()
                         .fill(Chrome.overlay(isActive ? 0.12 : 0.08))
                         .shadow(color: Chrome.primaryText.opacity(prominent && isHovering ? 0.1 : 0), radius: Chrome.capsuleVerticalPadding * 2, y: Chrome.capsuleVerticalPadding)
@@ -583,10 +589,11 @@ private struct ChromeHoverIcon: View {
     var prominent = false
     var glyphSize: CGFloat? = nil
     var secondary = false
+    var glyphBoost: CGFloat = 0
     @State private var isHovering = false
 
     var body: some View {
-        ChromeIconLabel(symbol: symbol, isEnabled: isEnabled, isActive: isActive, isHovering: isHovering, prominent: prominent, glyphSize: glyphSize, secondary: secondary)
+        ChromeIconLabel(symbol: symbol, isEnabled: isEnabled, isActive: isActive, isHovering: isHovering, prominent: prominent, glyphSize: glyphSize, secondary: secondary, glyphBoost: glyphBoost)
             .onHover { hovering in
                 guard isHovering != hovering else { return }
                 withAnimation(Chrome.hover) { isHovering = hovering }
@@ -630,6 +637,7 @@ struct ChromePresentationPreference: PreferenceKey {
 struct ChromeMenuButton<Content: View>: View {
     let symbol: String
     var secondary = false
+    var glyphBoost: CGFloat = 0
     let help: String
     @ViewBuilder var content: Content
 
@@ -639,7 +647,7 @@ struct ChromeMenuButton<Content: View>: View {
         Button {
             isPresented.toggle()
         } label: {
-            ChromeHoverIcon(symbol: symbol, isActive: isPresented, secondary: secondary)
+            ChromeHoverIcon(symbol: symbol, isActive: isPresented, secondary: secondary, glyphBoost: glyphBoost)
         }
         .buttonStyle(.plain)
         .help(Text(verbatim: Chrome.localized(help)))

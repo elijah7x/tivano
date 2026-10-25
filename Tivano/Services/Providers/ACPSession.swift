@@ -71,6 +71,7 @@ final class ACPSession: ProviderSession {
 
     private let configuration: SessionConfiguration
     private var connection: JSONRPCConnection?
+    private var eventTask: Task<Void, Never>?
     private var sessionID: String?
     private var expectedSessionID: String?
     private var isStarting = false
@@ -126,6 +127,7 @@ final class ACPSession: ProviderSession {
     private var currentModel: String?
     private var initialDSHModel: String?
     private var dshReportGuardReady = false
+    private var dshDegradationWarningSent = false
     private var currentEffort: String?
     private var currentFast: String?
     /// Cursor only exposes effort/fast selectors when the client opts into its parameterized picker.
@@ -213,9 +215,21 @@ final class ACPSession: ProviderSession {
             rejectsInvalidJSON: configuration.provider == .minimaxCode
         )
         let connection = JSONRPCConnection(process: process, sendsVersion: true, strictResponses: configuration.provider == .minimaxCode)
-        connection.onNotification = { [weak self] method, params in self?.handleNotification(method, params) }
-        connection.onRequest = { [weak self] id, method, params in self?.handleRequest(id, method, params) }
-        connection.onClose = { [weak self] tail in self?.handleClose(tail) }
+        connection.onNotification = { [weak self] method, params in
+            self?.enqueueEvent { [weak self] in
+                await self?.handleNotification(method, params)
+            }
+        }
+        connection.onRequest = { [weak self] id, method, params in
+            self?.enqueueEvent { [weak self] in
+                self?.handleRequest(id, method, params)
+            }
+        }
+        connection.onClose = { [weak self] tail in
+            self?.enqueueEvent { [weak self] in
+                self?.handleClose(tail)
+            }
+        }
         self.connection = connection
         defer {
             if !isReady {
@@ -286,6 +300,10 @@ final class ACPSession: ProviderSession {
         try Task.checkCancellation()
         guard !isStopping, !connection.isClosed else { throw ProviderError.notRunning }
         isReady = true
+        if let warning = launchPlan?.warning, !dshDegradationWarningSent {
+            dshDegradationWarningSent = true
+            onEvent?(.notice(Notice(level: .warning, message: warning)))
+        }
         return sessionID
     }
 
@@ -437,6 +455,7 @@ final class ACPSession: ProviderSession {
         await miniMaxRestoreTask?.value
         miniMaxRestoreTask = nil
         await connection?.closeAndWait(timeout: timeout)
+        await eventTask?.value
     }
 
     func stop() {
@@ -648,7 +667,10 @@ final class ACPSession: ProviderSession {
     private func openSession(_ connection: JSONRPCConnection) async throws -> JSONValue {
         // The connected servers ride into every new session through ACP's own field,
         // HTTP ones directly where the agent says it speaks HTTP MCP, else through `mcp-remote`.
-        let servers = MCPProviderConfig.acpServers(allowsHTTP: supportsHTTPMCP)
+        let (servers, skipped) = MCPProviderConfig.acpServers(allowsHTTP: supportsHTTPMCP)
+        if !skipped.isEmpty {
+            onEvent?(.notice(Notice(level: .warning, message: String(format: AppText.localized("MCP servers skipped for this session because their command was not found on PATH: %@"), skipped.joined(separator: ", ")))))
+        }
         return try await openSession(connection, servers: servers)
     }
 
@@ -1142,7 +1164,15 @@ final class ACPSession: ProviderSession {
         }
     }
 
-    private func handleNotification(_ method: String, _ params: JSONValue) {
+    private func enqueueEvent(_ operation: @escaping @MainActor () async -> Void) {
+        let previous = eventTask
+        eventTask = Task {
+            await previous?.value
+            await operation()
+        }
+    }
+
+    private func handleNotification(_ method: String, _ params: JSONValue) async {
         if method == "tivano/report_guard_ready", configuration.provider == .dsh,
            configuration.dshFinalReport, !isStopping, params["version"]?.int == 1 {
             dshReportGuardReady = true
@@ -1153,7 +1183,7 @@ final class ACPSession: ProviderSession {
         switch update["sessionUpdate"]?.string {
         case "agent_message_chunk":
             if let content = update["content"], content["type"]?.string == "image",
-               let image = ToolImages.attachment(block: content) {
+               let image = await ToolImages.attachment(block: content) {
                 messageID = nil
                 thoughtID = nil
                 onEvent?(.toolUpdated(id: nextID("image"), update: ToolUpdate(title: AppText.localized("Image"), status: .completed, images: [image], kind: .other)))
@@ -1183,7 +1213,7 @@ final class ACPSession: ProviderSession {
             let call = makeToolCall(update)
             toolKinds[id] = call.kind
             onEvent?(.toolStarted(id: id, call: call))
-            let initial = makeToolUpdate(update)
+            let initial = await makeToolUpdate(update)
             if initial.output != nil || initial.status != nil || initial.images != nil { onEvent?(.toolUpdated(id: id, update: initial)) }
         case "tool_call_update":
             guard let id = update["toolCallId"]?.string else { return }
@@ -1194,7 +1224,8 @@ final class ACPSession: ProviderSession {
                 if !steps.isEmpty { onEvent?(.todos(steps)) }
                 return
             }
-            onEvent?(.toolUpdated(id: id, update: makeToolUpdate(update)))
+            let result = await makeToolUpdate(update)
+            onEvent?(.toolUpdated(id: id, update: result))
         case "plan":
             let steps = Self.parseTodoItems(update["entries"])
             onEvent?(.todos(steps))
@@ -1511,7 +1542,7 @@ final class ACPSession: ProviderSession {
         return call
     }
 
-    private func makeToolUpdate(_ update: JSONValue) -> ToolUpdate {
+    private func makeToolUpdate(_ update: JSONValue) async -> ToolUpdate {
         var result = ToolUpdate()
         result.kind = toolKind(update)
         let kind = result.kind ?? toolKinds[update["toolCallId"]?.string ?? ""] ?? .other
@@ -1560,7 +1591,12 @@ final class ACPSession: ProviderSession {
             result.exitCode = Int(line.dropFirst("[exit code: ".count).dropLast())
         }
         if !output.isEmpty, output != "(no output)" { result.output = output }
-        let images = kind == .read ? [] : ToolImages.blocks(update["content"])
+        let images: [Attachment]
+        if kind == .read {
+            images = []
+        } else {
+            images = await ToolImages.blocks(update["content"])
+        }
         if !images.isEmpty { result.images = images }
         if let exitCode = result.exitCode, exitCode != 0, result.status == .completed { result.status = .failed }
         return result

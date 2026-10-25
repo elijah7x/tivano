@@ -341,8 +341,12 @@ struct SubagentPanel: View {
                         shape.fill(Chrome.glassTint.opacity(isDark ? 0.22 : 0.16))
                     }
             } else {
+                // Without glass the panel has neither its edge nor its shadow, and the
+                // window's solid backdrop is the same colour: the floating surfaces' flat
+                // recipe (control fill and rim) keeps it apart from the chat under it.
                 shape
-                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .overlay { shape.strokeBorder(Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1) }
             }
         }
         // Glass supplies the edge (as in `WindowBackdrop`): a hairline on top of it
@@ -533,6 +537,7 @@ struct PlacedPanel<Content: View>: View {
 /// panel's own body is never re-run for a pointer move.
 private struct PanelPlacement: ViewModifier {
     @Environment(WindowLiveResize.self) private var liveResize
+    @Environment(\.panelsSnap) private var panelsSnap
     let drag: PanelDragState
     let rest: CGPoint
     let size: CGSize
@@ -542,7 +547,7 @@ private struct PanelPlacement: ViewModifier {
         let origin = drag.position ?? rest
         // Read now, so the slide turning off and on is one settle from the current
         // spot: an origin kept from before the resize would swing in from stale.
-        let settles = drag.position == nil && !isResizing && !liveResize.isActive
+        let settles = drag.position == nil && !isResizing && !liveResize.isActive && !panelsSnap
         content
             .offset(x: origin.x, y: origin.y)
             .animation(settles ? Chrome.panelSlide : nil, value: origin)

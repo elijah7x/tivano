@@ -1628,7 +1628,7 @@ private struct SidebarHelperRow: View, Equatable {
             SidebarHelperInteraction(
                 isSelected: isSelected,
                 onSelect: { model.openThread(thread.id) },
-                onWarm: { model.warmDocuments([thread.id]) },
+                onWarm: { model.warmDocuments([thread.id], urgent: true) },
                 actions: makeActions,
                 label:
                 HStack(spacing: 6) {
@@ -1775,7 +1775,7 @@ private struct HeadCardsRow: View {
                                         }
                                 }
                                 .buttonStyle(.plain)
-                                .modifier(HeadGlyphHover(onWarm: { model.warmDocuments([head.id]) }))
+                                .modifier(HeadGlyphHover(onWarm: { model.warmDocuments([head.id], urgent: true) }))
                                 .help(Text(verbatim: "\(info.persona.name) · \(info.task)"))
                                 // Snapshots only: the menu builder must not capture the row, so the AppKit menu
                                 // it builds cannot pin the row's state storage (and its responder with it).
@@ -2036,7 +2036,7 @@ private struct SidebarThreadRow: View, Equatable {
             updatedAt: thread.updatedAt,
             windowFrame: windowFrame,
             onSelect: { model.openThread(thread.id) },
-            onWarm: { model.warmDocuments([thread.id]) },
+            onWarm: { model.warmDocuments([thread.id], urgent: true) },
             onArchive: archiveWithGenie,
             onToggleFold: onToggleFold,
             actions: makeActions,
@@ -2137,11 +2137,13 @@ private struct SidebarThreadInteraction<Label: View>: View {
 
     @State private var isHovering = false
     @State private var isMenuPresented = false
+    /// The tag's drawn width: the title runs up to the tag it has, not to the widest one could be.
+    @State private var tagWidth = SidebarTagLabel.maxWidth
 
     var body: some View {
         let showsActions = (isHovering || isMenuPresented) && !isDragged
         let showsFold = showsActions && onToggleFold != nil
-        let clearance: CGFloat = showsActions ? 52 + (showsFold ? 20 : 0) : (isDetailed ? 18 : tag != nil ? SidebarTagLabel.maxWidth + 12 : 52)
+        let clearance: CGFloat = showsActions ? 52 + (showsFold ? 20 : 0) : (isDetailed ? 18 : tag != nil ? tagWidth + 10 : 52)
         let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
         Button(action: onSelect) {
             label.padding(.trailing, clearance)
@@ -2174,6 +2176,7 @@ private struct SidebarThreadInteraction<Label: View>: View {
                     }
                 } else if let tag {
                     SidebarTagLabel(text: tag, date: updatedAt)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tagWidth = $0 }
                 } else if !isDetailed {
                     RelativeTimeLabel(date: updatedAt)
                 }

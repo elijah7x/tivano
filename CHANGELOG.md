@@ -8,6 +8,88 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.0.22] - 2026-10-25
+
+### English
+
+### New features
+
+- The global "Continue after a usage limit" setting is gone. When Claude, Codex, OMP or Command Code stops because its usage limit is spent, a tab on that chat's composer shows when the limit resets and offers to continue automatically then. You can take back that choice, and the chat never waits unless you ask it to.
+- A Hydra pair whose lead or heads run on DeepSeek Harness shows an Agent mode picker for them in its editor: a chat that joins the pair takes the lead's mode, which you can still change in the chat afterwards, the way a pair's effort works, and heads on DeepSeek Harness start in the mode you pick instead of always Standard.
+
+### Bug fixes
+
+- In performance mode, the Hydra team panel and a popped-out head keep a solid surface and a thin edge, instead of losing their outline and blending into the chat behind them.
+
+- Hydra no longer tells the lead a provider is broken when a head hits a rate limit, a dropped connection or another passing error, or when other heads on that provider succeeded in the same batch.
+- DeepSeek Harness chats start even when the DeepSeek Harness app is a version Tivano does not support: desktop profiles are off for that chat, and a notice says so.
+- With Hide outdated models on, searching the composer's model picker finds every model again, as Settings already did.
+- DeepSeek Harness sessions and Hydra heads use the CLI bundled with the DeepSeek Harness app when it is installed, instead of an older npm `dsh` that happens to be first on PATH; when the CLI in use cannot load the desktop profile, the error names its path.
+- DeepSeek Harness no longer fails to start after you change the theme or dismiss the welcome notice in the DeepSeek Harness app; desktop-only settings in its profile are skipped, and a plugin file that no longer exists is reported by name.
+- MCP servers reach ACP agents such as DeepSeek Harness with their command's full path, so a bare `npx` no longer rejects the whole session; a server whose command is not found is skipped with one notice instead.
+
+### Refinements
+
+- Switching to a chat with Hydra or helper panels lays them and the conversation out in place instead of sliding them there, and a head's own panel keeps its corner when other heads arrive or leave.
+
+- Settings › Providers finds new versions of more agent CLIs and updates more of them in place: Antigravity installed with its official installer (with `agy update`), Cursor, OpenCode's new `@opencode/cli` package, Codex and Pi installed with their official installers, Grok's `agent` launcher and its npm package, and the DeepSeek Harness desktop app's own update channel, which Tivano reports but leaves to the app.
+
+- In Today focus, thread titles run up to the project or task name beside them instead of stopping where the longest name would end, so short names leave the titles nearly as long as in the full list.
+
+- Settings › General no longer shows the Token activity heatmap.
+- Images that agents send are decoded and saved off the main thread, so a large screenshot no longer stalls the window.
+- The model picker keeps its trimmed list between renders instead of rebuilding it on every keystroke.
+- Full access is marked with a checked shield instead of a key, and the permission, attach and voice buttons under the composer share one round hover and highlight instead of an oval attach button.
+
+- When Hydra heads fail before doing any work, the lead hears one cause per provider instead of a separate failure for each head, and is told that sending heads to that provider again would fail the same way, so it takes over their parts and tells you what to fix instead of retrying.
+- Removing a model group in Settings › Models is now called Ungroup, since it keeps the models and only takes the group away, and a new group you leave unnamed is called Group.
+- In the model picker, Recent, Pairs, Models and the Other models fold now read bolder and slightly larger than your group titles, so the sections and the groups inside them are easier to tell apart.
+- Opening and closing Settings stutters far less: frames over 50 ms during the slide dropped by about two thirds, and closing settles about 25 ms sooner.
+- Switching threads settles about 10 ms sooner, threads under the pointer and beside the selection load their history first, and scrolling a very long thread no longer gets slower the further back you go.
+- Opening a long thread for the first time freezes far less: frames over 100 ms while it opens are about halved and it costs about a quarter less work, because mentions are found with a byte search, the Hydra block check no longer rebuilds its pattern for every reply, and the history above the screen lands 12 turns at a time instead of 24.
+
+### 简体中文
+
+### 新功能
+
+- 全局的“额度恢复后继续”设置已移除。Claude、Codex、OMP 或 Command Code 因额度用完而停止时，该对话输入框上的标签页会显示恢复时间，并提供恢复后自动继续的选项。你可以撤销这个选择，对话只会在你要求时等待。
+- Hydra 组合的领队或子代理使用 DeepSeek Harness 时，编辑器会为其显示“代理模式”选择器：对话进入组合时采用领队的模式，之后仍可在对话中手动修改，与组合的推理强度一致；DeepSeek Harness 上的子代理按所选模式启动，不再固定为标准模式。
+
+### 问题修复
+
+- 性能模式下，Hydra 团队面板和弹出的子智能体卡片保留实色底和细边框，不再失去外框、与后方对话融为一体。
+
+- Hydra 子代理遇到限流、连接中断等临时错误，或同一批里同一服务商的其他子代理已经成功时，不再告诉主代理该服务商已损坏。
+- DeepSeek Harness 应用的版本与 Tivano 支持的版本不一致时，对话仍能启动：本次对话不启用桌面配置，并会给出提示。
+- 开启“隐藏过时模型”后，在输入框的模型选择器中搜索也能找到全部模型，与设置页一致。
+- 已安装 DeepSeek Harness 应用时，DeepSeek Harness 会话和 Hydra 子代理改用应用自带的 CLI，不再误用 PATH 上靠前的旧版 npm `dsh`；当前 CLI 无法加载桌面配置时，报错会写明它的路径。
+- 在 DeepSeek Harness 应用中切换主题或关闭欢迎提示后，DeepSeek Harness 不再启动失败：配置中仅属于桌面端的设置会被跳过，已不存在的插件文件会按名称报错。
+- MCP 服务器以命令的完整路径传给 DeepSeek Harness 等 ACP 代理，裸 `npx` 不再导致整个会话被拒绝；找不到命令的服务器会被跳过并提示一次。
+
+### 优化改进
+
+- 切换到带有 Hydra 或子智能体卡片的对话时，卡片和对话内容直接出现在最终位置，不再滑动过去；其他子智能体加入或离开时，已弹出的卡片保持在原来的角落。
+
+- 设置 › 服务商能发现更多智能体 CLI 的新版本，并在应用内更新其中更多 CLI：官方安装器安装的 Antigravity（通过 `agy update`）、Cursor、OpenCode 的新包 `@opencode/cli`、官方安装器安装的 Codex 和 Pi、Grok 的 `agent` 启动器及其 npm 包；DeepSeek Harness 桌面版按其自身的更新频道提示新版本，更新仍交给桌面应用。
+
+- “今日聚焦”中，会话标题延伸到右侧项目或任务名之前，不再按最长名称预留空间；名称较短时，标题长度接近普通列表。
+
+- 设置 › 通用中不再显示 Token 活动热力图。
+- 代理发来的图片改在后台解码和保存，大截图不再让窗口卡住。
+- 模型选择器会保留裁剪后的列表，不再每敲一个字就重新计算。
+- “完全访问”的图标由钥匙改为带勾的盾牌；输入框下方的权限、附件和语音按钮统一为相同的圆形悬停与高亮，附件按钮不再是椭圆形。
+
+- Hydra 子代理在开始工作前就失败时，主代理会按服务商收到一条合并的原因，不再逐个子代理报失败，并被告知再派给同一服务商也会以同样方式失败；它会自己接手这部分工作并告诉你需要修复什么，而不是反复重试。
+- 设置 › 模型中的“移除分组标题”改称“解散分组”，因为它只移除分组、保留其中的模型；新建分组不填名称时，名称为“分组”。
+- 模型选择器中，“最近”“组合”“模型”和“其他模型”标题比你的分组标题更粗、字号略大，分区与其中的分组更容易分辨。
+- 打开和关闭设置时的卡顿明显减少：滑动过程中超过 50 毫秒的卡帧减少约三分之二，关闭后约快 25 毫秒恢复。
+- 切换会话约快 10 毫秒恢复；鼠标悬停的会话和当前会话两侧的会话会优先预加载历史；在很长的会话里往回翻得越远，滚动也不再越慢。
+- 第一次打开长会话时的卡顿明显减少：打开过程中超过 100 毫秒的卡帧约减半，工作量约少四分之一。原因是提及名字改用字节查找，检查 Hydra 委派块时不再为每条回复重新编译正则，屏幕上方的历史一次装载 12 轮而不是 24 轮。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.0.6] - 2026-10-23
 
 ### English

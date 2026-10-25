@@ -231,4 +231,19 @@ extension String {
     /// The string without leading or trailing whitespace and newlines. The one trim
     /// every call site means; narrower sets keep `trimmingCharacters(in:)`.
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Whether `needle`'s bytes appear in the string: `memmem` over the UTF-8 storage. The
+    /// generic `utf8.firstRange(of:)` it replaces walked a long history's every paragraph
+    /// once per roster name, tens of milliseconds of each cold thread open.
+    nonisolated func containsBytes(_ needle: String) -> Bool {
+        guard !needle.isEmpty else { return true }
+        var haystack = self
+        var needle = needle
+        return haystack.withUTF8 { text in
+            needle.withUTF8 { pattern in
+                text.count >= pattern.count
+                    && memmem(text.baseAddress, text.count, pattern.baseAddress, pattern.count) != nil
+            }
+        }
+    }
 }
