@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import Synchronization
 
 struct DshLaunchPlan: Sendable {
     let executable: URL
@@ -24,6 +26,27 @@ struct DshLaunchPlan: Sendable {
 }
 
 enum DshMarketplace {
+    /// The launch without the desktop profile: the arguments with the profile's own patch
+    /// left out, for a runtime the profile bootstrap does not fit (see `DshCLI.prepareLaunch`).
+    static func plainPlan(executable: URL, arguments: [String], environment: [String: String], warning: String?) -> DshLaunchPlan {
+        let inherited = DshCLI.userProfilePatch(environment: environment)?.path
+        var plainArguments: [String] = []
+        var index = 0
+        while index < arguments.count {
+            if arguments[index] == "--patch", index + 1 < arguments.count {
+                if arguments[index + 1] != inherited {
+                    plainArguments.append(arguments[index])
+                    plainArguments.append(arguments[index + 1])
+                }
+                index += 2
+            } else {
+                plainArguments.append(arguments[index])
+                index += 1
+            }
+        }
+        return DshLaunchPlan(executable: executable, arguments: plainArguments, environment: environment, ownedDirectory: nil, warning: warning)
+    }
+
     static func prepare(executable: URL, arguments: [String], environment: [String: String]) throws -> DshLaunchPlan {
         let fm = FileManager.default
         let profiles = DshCLI.accountHome(environment: environment).appendingPathComponent("profiles")
@@ -68,26 +91,6 @@ enum DshMarketplace {
                 return DshLaunchPlan(executable: executable, arguments: arguments, environment: environment, ownedDirectory: nil)
             }
             throw ProviderError.failed(String(format: AppText.localized("DeepSeek Harness at %@ cannot inherit the desktop app's marketplace profile, and retrying will fail the same way. Use the CLI bundled with the DeepSeek Harness app, or set it as the Binary path in Settings → Providers → DeepSeek Harness."), executable.path))
-        }
-        let runtimeVersion = DshCLI.bundledRuntimeVersion(of: launcher)
-        if runtimeVersion != DshCLI.supportedMarketplaceVersion {
-            let inherited = DshCLI.userProfilePatch(environment: environment)?.path
-            var plainArguments: [String] = []
-            var index = 0
-            while index < arguments.count {
-                if arguments[index] == "--patch", index + 1 < arguments.count {
-                    if arguments[index + 1] != inherited {
-                        plainArguments.append(arguments[index])
-                        plainArguments.append(arguments[index + 1])
-                    }
-                    index += 2
-                } else {
-                    plainArguments.append(arguments[index])
-                    index += 1
-                }
-            }
-            let warning = String(format: AppText.localized("DeepSeek Harness %@ is newer or older than the %@ Tivano supports, so desktop profiles are off for this chat."), runtimeVersion ?? AppText.localized("unknown"), DshCLI.supportedMarketplaceVersion)
-            return DshLaunchPlan(executable: executable, arguments: plainArguments, environment: environment, ownedDirectory: nil, warning: warning)
         }
         let state = DshCLI.home
         let root = state.appendingPathComponent("marketplace-runs", isDirectory: true)
@@ -136,5 +139,72 @@ enum DshMarketplace {
             try? fm.removeItem(at: directory)
             throw error
         }
+    }
+}
+
+/// Whether a DeepSeek Harness runtime fits the desktop-profile bootstrap, found by running
+/// the bootstrap once in check mode rather than pinning one version: the internal modules
+/// it reads are not a public API, but most releases leave them as they were. The answer is
+/// kept per runtime version and bootstrap, so a new release or a new Tivano asks again.
+enum DshMarketplaceCompatibility {
+    enum Verdict: Sendable {
+        case compatible
+        case incompatible
+        /// The check could not tell (the profile itself was refused, or it timed out): the
+        /// launch goes ahead and the session reports what it finds, as it always did.
+        case unknown
+    }
+
+    private static let verdictsKey = "dshMarketplaceCompatibility"
+    private static let warnedKey = "dshMarketplaceIncompatibleWarned"
+    private static let checks = Mutex<[String: Task<Verdict, Never>]>([:])
+    private static let bootstrapDigest = SHA256.hash(data: Data(DshMarketplaceBootstrap.source.utf8))
+        .prefix(8).map { String(format: "%02x", $0) }.joined()
+
+    private static func key(_ version: String?) -> String {
+        "\(version ?? "unknown")|\(bootstrapDigest)"
+    }
+
+    static func verdict(for plan: DshLaunchPlan, version: String?) async -> Verdict {
+        let key = key(version)
+        if let known = (UserDefaults.standard.dictionary(forKey: verdictsKey) as? [String: Bool])?[key] {
+            return known ? .compatible : .incompatible
+        }
+        let task = checks.withLock { running in
+            if let task = running[key] { return task }
+            let task = Task<Verdict, Never> {
+                var environment = plan.environment
+                environment["TIVANO_DSH_CHECK"] = "1"
+                guard let result = try? await Shell.run(plan.executable, plan.arguments, in: FileManager.default.temporaryDirectory, environment: environment, timeout: 90) else {
+                    return .unknown
+                }
+                let verdict: Verdict = switch result.status {
+                case 0: .compatible
+                case 3: .incompatible
+                default: .unknown
+                }
+                if verdict != .unknown {
+                    var stored = UserDefaults.standard.dictionary(forKey: verdictsKey) as? [String: Bool] ?? [:]
+                    stored[key] = verdict == .compatible
+                    UserDefaults.standard.set(stored, forKey: verdictsKey)
+                }
+                return verdict
+            }
+            running[key] = task
+            return task
+        }
+        let verdict = await task.value
+        checks.withLock { $0[key] = nil }
+        return verdict
+    }
+
+    /// The notice for a runtime that does not fit, the first time only for each version.
+    static func takeWarning(version: String?) -> String? {
+        let key = key(version)
+        var warned = UserDefaults.standard.stringArray(forKey: warnedKey) ?? []
+        guard !warned.contains(key) else { return nil }
+        warned.append(key)
+        UserDefaults.standard.set(warned, forKey: warnedKey)
+        return String(format: AppText.localized("DeepSeek Harness %@ changed what Tivano reads to load your desktop profile, so chats on it run without the profile's plugins until Tivano catches up."), version ?? AppText.localized("unknown"))
     }
 }

@@ -8,6 +8,24 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-26
+
+### English
+
+### Bug fixes
+
+- DeepSeek Harness no longer turns desktop profiles off and warns in every chat each time the DeepSeek Harness app updates: Tivano checks each new version once and keeps loading the profile whenever it fits. Only a version that really changed what Tivano reads runs without the profile, with one notice for that version.
+
+### 简体中文
+
+### 问题修复
+
+- DeepSeek Harness 应用每次更新后，不再在每个对话中关闭桌面配置并提示版本不一致：Tivano 会对每个新版本检测一次，兼容时照常加载桌面配置；只有确实改变了 Tivano 所依赖内部结构的版本才会不加载桌面配置，且该版本只提示一次。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.1.0] - 2026-10-26
 
 ### English

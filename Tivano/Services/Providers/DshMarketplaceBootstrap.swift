@@ -6,7 +6,6 @@ enum DshMarketplaceBootstrap {
             "read": AppText.localized("Cannot read marketplace input: %@"),
             "changed": AppText.localized("The DeepSeek Harness profile changed while preparing this session. Try again."),
             "format": AppText.localized("Cannot read %@. Check its format, installation and permissions."),
-            "version": String(format: AppText.localized("Read-only marketplace inheritance currently requires DeepSeek Harness %@."), DshCLI.supportedMarketplaceVersion),
             "home": AppText.localized("The DeepSeek Harness home changed during launch. Restart with a consistent DSH_HOME."),
             "selection": AppText.localized("Invalid bundle selection in %@/package.json"),
             "exemptions": AppText.localized("Invalid version exemptions in %@/compatibility.json"),
@@ -41,6 +40,11 @@ enum DshMarketplaceBootstrap {
     const require = createRequire(anchor);
     const load = name => import(pathToFileURL(require.resolve(name)).href);
     class AdmissionError extends Error {}
+    // The runtime's internal modules no longer have the shape this bootstrap reads.
+    class RuntimeMismatch extends Error {}
+    // `TIVANO_DSH_CHECK=1`: admit and activate the profile, then shut down instead of
+    // serving ACP. Exit 0 is compatible, 1 a profile problem, 3 a runtime mismatch.
+    const checking = process.env.TIVANO_DSH_CHECK === '1';
     const fail = message => { throw new AdmissionError(message); };
     const message = (key, value) => options.errors[key].replace('%@', () => String(value));
     const readonly = message('readonly');
@@ -91,7 +95,10 @@ enum DshMarketplaceBootstrap {
             return { ...result, url: pathToFileURL(fs.realpathSync(fileURLToPath(officeDestination + canonical.slice(officeSource.length)))).href };
         } });
         const boot = await load('@deepseek-ai/dsh-app-boot');
-        if (boot.getDshRuntimeVersion() !== '\#(DshCLI.supportedMarketplaceVersion)') fail(message('version'));
+        // No version pin: whether this runtime fits is decided by its shape, here and by
+        // every load and call below (any error that is not an admission is a mismatch).
+        const required = ['auditStartupEntries', 'bundlePatchPaths', 'composeEntries', 'createRuntimeResolution', 'evaluatePluginCompatibility', 'installFailLoud', 'loadLayeredEnv', 'loadOverlayPatches', 'prepareProfileEntries', 'readProfileCompatibility', 'readProfileManifest', 'resolveBundleDir', 'resolveTelemetryPatch', 'PluginPackages'];
+        if (required.some(name => typeof boot[name] !== 'function')) throw new RuntimeMismatch();
         const { Context } = await load('@deepseek-ai/cordis');
         const { default: Loader } = await load('@deepseek-ai/cordis-plugin-loader');
         const { default: Group } = await load('@deepseek-ai/cordis-plugin-group');
@@ -320,6 +327,10 @@ enum DshMarketplaceBootstrap {
         }
         unchanged();
         if (ctx.fiber.state !== 2 || !ctx.get('loader')) fail(message('stopped'));
+        if (checking) {
+            await shutdown(0);
+            process.exit(0);
+        }
         ready = true;
         for (const listener of listeners) listener();
         listeners.clear();
@@ -329,7 +340,7 @@ enum DshMarketplaceBootstrap {
         try { await ctx?.fiber.dispose(); } catch {}
         try { await disposeProxy?.(); } catch {}
         process.stderr.write(`dsh: ${error instanceof AdmissionError ? error.message : message('startup')}\n`);
-        process.exit(1);
+        process.exit(error instanceof AdmissionError ? 1 : 3);
     }
     """#
 }

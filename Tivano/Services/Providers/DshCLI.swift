@@ -44,7 +44,6 @@ enum DshCLI {
         return matches.first(where: { $0.isDefault })?.id ?? matches.first?.id ?? id
     }
 
-    static let supportedMarketplaceVersion = "0.2.1-rc.2"
 
     private struct VersionKey: Hashable, Sendable {
         var path: String
@@ -288,12 +287,27 @@ enum DshCLI {
     }
 
     static func prepareLaunch(executable: URL, mode: DshAgentMode, delegationOff: Bool, environment: [String: String], finalReport: Bool = false) async throws -> DshLaunchPlan {
-        let plan = try await Task.detached {
-            var environment = environment
-            applyBaseEnvironment(&environment, apiKey: environment["DEEPSEEK_API_KEY"] ?? "")
-            let arguments = launchArguments(mode: mode, delegationOff: delegationOff, environment: environment, finalReport: finalReport)
-            return try DshMarketplace.prepare(executable: executable, arguments: arguments, environment: environment)
+        var baseEnvironment = environment
+        applyBaseEnvironment(&baseEnvironment, apiKey: environment["DEEPSEEK_API_KEY"] ?? "")
+        let arguments = launchArguments(mode: mode, delegationOff: delegationOff, environment: baseEnvironment, finalReport: finalReport)
+        let prepared = try await Task.detached { [baseEnvironment] in
+            try DshMarketplace.prepare(executable: executable, arguments: arguments, environment: baseEnvironment)
         }.value
+        // A desktop profile is only inherited where this runtime fits the bootstrap, which
+        // is checked once per DeepSeek Harness version instead of pinned to one; where it
+        // does not, the chat runs without the profile and says so once per version.
+        var plan = prepared
+        if prepared.ownedDirectory != nil {
+            let version = bundledRuntimeVersion(of: executable)
+            switch await DshMarketplaceCompatibility.verdict(for: prepared, version: version) {
+            case .compatible, .unknown:
+                break
+            case .incompatible:
+                prepared.cleanup()
+                let warning = DshMarketplaceCompatibility.takeWarning(version: version)
+                plan = DshMarketplace.plainPlan(executable: executable, arguments: arguments, environment: baseEnvironment, warning: warning)
+            }
+        }
         do {
             try Task.checkCancellation()
             // The marketplace bootstrap admits the exact in-memory composition before

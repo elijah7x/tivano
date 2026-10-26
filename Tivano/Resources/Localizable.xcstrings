@@ -74,6 +74,17 @@
         }
       }
     },
+    "DeepSeek Harness %@ changed what Tivano reads to load your desktop profile, so chats on it run without the profile's plugins until Tivano catches up." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek Harness %@ 调整了 Tivano 加载桌面配置所依赖的内部结构，在 Tivano 适配前，该版本的对话将不加载桌面配置中的插件。"
+          }
+        }
+      }
+    },
     "DeepSeek Harness %@ is newer or older than the %@ Tivano supports, so desktop profiles are off for this chat." : {
       "extractionState" : "manual",
       "localizations" : {
