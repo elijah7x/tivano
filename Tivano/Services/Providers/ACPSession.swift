@@ -968,7 +968,6 @@ final class ACPSession: ProviderSession {
             }
         }
         let fallback = rows.first { $0.value == initialDSHModel }?.value ?? usable.first?.value ?? rows.first?.value
-        let qualified = Set(rows.map(\.route)).count > 1
         let routeRank = { (route: String) in route == "deepseek-account" ? 0 : route == "deepseek-official" ? 1 : 2 }
         rows = rows.enumerated().sorted { (routeRank($0.element.route), $0.offset) < (routeRank($1.element.route), $1.offset) }.map(\.element)
         let knownModels = Array(known.values)
@@ -981,7 +980,9 @@ final class ACPSession: ProviderSession {
                 efforts: kept?.efforts ?? [],
                 defaultEffort: kept?.defaultEffort,
                 isDefault: row.value == fallback,
-                group: qualified ? row.group : nil
+                // Every row keeps its route, whichever routes this listing happened to hold:
+                // what is shown with it is decided where it is shown (`ModelOption.label`).
+                group: row.group.isEmpty ? nil : row.group
             )
             model.fastTier = kept?.fastTier
             return model

@@ -270,7 +270,8 @@ extension AppModel {
             reviewsHeads: settings.hydraReviewHeads,
             projects: ownRefs,
             headsNote: pair?.headsNote?.trimmed.nilIfEmpty,
-            headsMatchLead: headsMatchLead
+            headsMatchLead: headsMatchLead,
+            tilt: settings.hydraTilt
         )
     }
 

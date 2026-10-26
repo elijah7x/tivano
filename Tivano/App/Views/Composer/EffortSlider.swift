@@ -288,7 +288,7 @@ private struct ModelEffortPanel: View {
         let pair = model.hydraIsOn(thread) ? model.hydraPair(for: thread) : nil
         let pairLook = pair.map { EffortPairLook($0, registry: model.providers, resolvedHeadsEffort: model.hydraLaunch(for: thread)?.workerEffort) }
         return EffortSliderCard(
-            modelName: option?.qualifiedName ?? fallbackName,
+            modelName: option.map { $0.label(among: model.pinnedOptions(for: thread.provider)) } ?? fallbackName,
             provider: thread.provider,
             pair: pairLook,
             efforts: option?.efforts ?? [],
@@ -493,8 +493,8 @@ struct ModelList: View {
                             let locked = isLocked(entry)
                             ModelListRow(
                                 entry: entry,
-                                // A model listed once per route says which route under its name.
-                                detail: locked ? "New chats only" : ([showsProviders ? entry.provider.displayName : nil, entry.option.group].compactMap { $0 }.joined(separator: " · ").nilIfEmpty),
+                                // A model listed on two routes here says which route under its name.
+                                detail: locked ? "New chats only" : ([showsProviders ? entry.provider.displayName : nil, routeShown(entry, in: rows)].compactMap { $0 }.joined(separator: " · ").nilIfEmpty),
                                 showsIcon: showsProviders,
                                 rowHeight: rowHeight,
                                 isSelected: !leadsWithPair && entry.provider == thread.provider && entry.option.id == thread.model,
@@ -641,6 +641,16 @@ struct ModelList: View {
             if collapsed { return }
         }
         rows.append(contentsOf: entries.map { .entry($0, recent: false) })
+    }
+
+    /// The route a row names under its model, when this list also holds the same model of
+    /// that provider on another route.
+    private func routeShown(_ entry: ModelCatalog.Entry, in rows: [DisplayRow]) -> String? {
+        let others = rows.compactMap { row -> ModelOption? in
+            guard case .entry(let other, _) = row, other.provider == entry.provider else { return nil }
+            return other.option
+        }
+        return entry.option.label(among: others) == entry.option.shortName ? nil : entry.option.group
     }
 
     private func headingRow(_ title: Text, weight: Font.Weight, style: Font.TextStyle, collapsed: Bool, count: Int?, height: CGFloat, action: @escaping () -> Void) -> some View {

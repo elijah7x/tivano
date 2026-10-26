@@ -181,11 +181,32 @@ struct HydraSettingsPage: View {
                     toggleRow("Lower the default reasoning effort for heads", detail: "Effort set in a pair is unaffected. When no effort is specified and the head uses the same provider as the lead, the head stays at the standard effort (usually medium); if the lead uses a lower effort, the head inherits it.", isOn: $settings.hydraTempersHeadEffort)
                 }
             }
-            ChromeSection(title: "Messages") {
-                ChromeCard {
-                    toggleRow("Send queued follow-ups to heads", detail: "Each one goes to a head as soon as there is room, instead of waiting for the lead.", isOn: $settings.hydraQueueHeads, blockedBy: settings.hydraAlwaysHeads ? "Heads are already preferred for messages." : nil)
-                    ChromeRowDivider()
-                    toggleRow("Prefer heads for messages", detail: "Use heads when there is room. Commands and messages that cannot be delegated stay with the lead.", isOn: $settings.hydraAlwaysHeads)
+            if settings.isHydra2Enabled {
+                // Hydra 2.0 replaces v1's message-routing switches with one tilt: every
+                // message goes to the lead, which decides what the heads take.
+                ChromeSection(title: "Delegation") {
+                    ChromeCard {
+                        ChromeRow(
+                            title: "How much heads take on",
+                            detail: settings.hydraTilt == .active
+                                ? "The lead prefers to hand heads what it can brief on its own, single edits included, and splits larger work to run in parallel. It keeps judgement, design, integration and small or delicate pieces."
+                                : "Heads take parallel pieces, heavy reading and larger self-contained pieces as the job calls for them; the lead keeps small edits and coupled work."
+                        ) {
+                            GlassPickerButton(
+                                options: [(HydraTilt.restrained, "Restrained"), (HydraTilt.active, "Proactive")],
+                                selection: $settings.hydraTilt
+                            )
+                            .accessibilityLabel(Text("How much heads take on"))
+                        }
+                    }
+                }
+            } else {
+                ChromeSection(title: "Messages") {
+                    ChromeCard {
+                        toggleRow("Send queued follow-ups to heads", detail: "Each one goes to a head as soon as there is room, instead of waiting for the lead.", isOn: $settings.hydraQueueHeads, blockedBy: settings.hydraAlwaysHeads ? "Heads are already preferred for messages." : nil)
+                        ChromeRowDivider()
+                        toggleRow("Prefer heads for messages", detail: "Use heads when there is room. Commands and messages that cannot be delegated stay with the lead.", isOn: $settings.hydraAlwaysHeads)
+                    }
                 }
             }
             ChromeSection(title: "When the team is done") {
@@ -584,7 +605,7 @@ struct HydraPairEditor: View {
             }
             editorRow("Model") {
                 GlassPickerButton(
-                    options: [(String?.none, "Any model")] + options.map { (Optional($0.id), $0.qualifiedName) },
+                    options: [(String?.none, "Any model")] + options.map { (Optional($0.id), $0.label(among: options)) },
                     selection: Binding(
                         get: { pair.orchestratorModel },
                         set: { id in
@@ -646,7 +667,7 @@ struct HydraPairEditor: View {
             }
             editorRow("Model") {
                 GlassPickerButton(
-                    options: [(String?.none, pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat")] + headsOptions.map { (Optional($0.id), $0.qualifiedName) },
+                    options: [(String?.none, pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat")] + headsOptions.map { (Optional($0.id), $0.label(among: headsOptions)) },
                     selection: Binding(
                         get: { pair.workerModel },
                         set: { id in

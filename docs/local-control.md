@@ -9,9 +9,10 @@ permissions.
 
 This is a **same-account capability**, not protection against malicious processes
 with your UID. Other processes in your account can read exposed conversation
-history and perform the allowed actions while it is enabled. There is no TCP
-listener, background daemon, MCP implementation, automatic App launch or direct
-CLI access to library files.
+history and perform the allowed actions while it is enabled. Local control
+itself has no TCP listener, background daemon, automatic App launch or direct CLI
+access to library files. [Remote MCP](remote-mcp.md) is a separate Alpha gate that
+serves the same commands to cloud agents over a loopback HTTP listener.
 
 ## Install, repair and remove the PATH entry
 

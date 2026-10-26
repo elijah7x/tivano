@@ -107,10 +107,14 @@ extension AppModel {
             $0.reviewFindings = findingCount
         }
         guard findingCount > 0 else { return false }
-        // The review took minutes: the user may have sent the lead something meanwhile.
-        guard runtime.phase == .idle, !runtime.isReverting else { return skip("lead busy") }
         let text = HydraPrompts.v2ReviewMessage(reviewer: selected.reviewer, findings: findings)
-        await runtime.sendHydraReview(text)
+        // The review took minutes: the user may have sent the lead something meanwhile.
+        // The findings wait for the lead's next settle rather than being dropped.
+        guard runtime.phase == .idle, !runtime.isReverting else {
+            updateHydraJob(jobID, of: leadID) { $0.pendingReview = text }
+            return false
+        }
+        await runtime.sendHydraReview(text, jobID: jobID)
         return true
     }
 

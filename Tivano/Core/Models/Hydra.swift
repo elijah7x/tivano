@@ -173,6 +173,8 @@ struct HydraLaunch: Hashable, Sendable {
     /// pair that changes nothing. Hydra 2 then delegates only for parallel or
     /// context-isolating work.
     var headsMatchLead = true
+    /// Hydra 2's delegation tilt, from Settings › Hydra.
+    var tilt: HydraTilt = .active
 
     /// How many Tivano-run heads may work at once for a pair with no cap of its own. The
     /// tasks past it wait their turn (`ThreadRuntime.spawnWaitingHeads`) and go out as

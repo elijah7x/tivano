@@ -7,15 +7,20 @@ extension HydraPrompts {
     static func v2Policy(_ launch: HydraLaunch) -> String {
         let team = launch.maxHeads.map { "a team of up to \($0) helper agents" } ?? "a team of helper agents"
         let headsLabel = launch.headsLabel ?? "the selected partner model"
-        let modelRule: String
-        if launch.headsMatchLead {
-            modelRule = "Your heads run on the same model as you. Delegate only for parallelism (two or more independent pieces) or context isolation (heavy reading: audits, research across many files or sites); never send a single head for ordinary work."
-        } else {
-            var rule = "Your heads run on \(headsLabel). Delegate for parallelism (two or more independent pieces) or context isolation, and also send bounded mechanical edits and heavy reading even when there is only one, because the heads are the cheaper or better-suited model."
+        // Both tilts lean towards heads; the guard is the same: never split work that
+        // needs judging while reading, and never give one file to two heads.
+        var modelRule: String
+        switch launch.tilt {
+        case .restrained:
+            modelRule = "Delegate for parallelism (two or more independent pieces) and for heavy reading (audits, research across many files or sites). Also send out a single self-contained piece when it is substantial, such as a mechanical change across several files, so your context stays on judgement; keep small edits and anything you would have to judge while reading."
+        case .active:
+            modelRule = "Lean on your heads: prefer sending out work that can be written as a self-contained brief, single bounded edits and reading included, and split larger work into independent pieces that run in parallel. Keep what needs judging while reading, cross-file design, integration and the final check, and do a trivial edit or a quality-sensitive piece yourself when that serves the result better; never split coupled work just to delegate more."
+        }
+        if !launch.headsMatchLead {
+            modelRule += " Your heads run on \(headsLabel)."
             if let note = launch.headsNote?.trimmed, !note.isEmpty {
-                rule += " The pair says the heads are good at \"\(note)\". Route such work to them."
+                modelRule += " The pair says the heads are good at \"\(note)\". Route such work to them."
             }
-            modelRule = rule
         }
         let profileRule = launch.headProfiles.isEmpty ? "" : " Some heads are tuned for a purpose: \(launch.headProfiles.map(\.briefLabel).joined(separator: ", ")). Route a task to one with \"profile\", as in `{\"task\": \"...\", \"prompt\": \"...\", \"profile\": \"\(launch.headProfiles[0].name)\"}`; a task that fits none of them goes without a profile and runs on the heads' shared model, as does one whose profile names none of these."
         let projectsRule = launch.projects.count > 1 ? " " + projectRule(launch.projects) : ""
@@ -41,11 +46,13 @@ extension HydraPrompts {
 
     /// The short reminder in front of every user-authored v2 turn.
     static func v2DelegationRequest(_ launch: HydraLaunch) -> String {
+        let heads = launch.headsMatchLead ? "heads" : "\(launch.headsLabel ?? "partner-model") heads"
         let rule: String
-        if launch.headsMatchLead {
-            rule = "Delegate only self-contained work whose result fits a few report lines; with heads on your model, delegate only for parallelism (two or more independent pieces) or context-isolating heavy reading, never one head for ordinary work, and keep tightly coupled work that needs judging while reading yourself."
-        } else {
-            rule = "Keep tightly coupled, judgement-heavy work yourself; delegate self-contained work whose result fits a few report lines for parallelism or context isolation, and also route bounded mechanical edits and heavy reading to your \(launch.headsLabel ?? "the selected partner model") heads even singly because they are the cheaper or better-suited model."
+        switch launch.tilt {
+        case .restrained:
+            rule = "Keep tightly coupled, judgement-heavy work yourself; send your \(heads) parallel pieces, heavy reading and substantial self-contained pieces, and keep small edits."
+        case .active:
+            rule = "Lean on your \(heads): prefer sending out pieces that fit a self-contained brief, single bounded edits and reading included, and split larger work into parallel pieces; keep judgement while reading, cross-file design, integration and the final check, and trivial or quality-sensitive pieces when doing them yourself serves the result better."
         }
         return """
         [Hydra setting: enabled]

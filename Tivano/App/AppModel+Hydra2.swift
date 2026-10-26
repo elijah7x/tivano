@@ -48,6 +48,7 @@ extension AppModel {
             headsModel: launch?.workerModel,
             headsEffort: launch?.workerEffort,
             headsNote: launch?.headsNote,
+            tilt: launch?.tilt,
             baseCommit: baseCommit,
             baseDirty: baseDirty,
             reviewEngine: nil,
@@ -63,6 +64,14 @@ extension AppModel {
     /// The end of a v2 lead turn with the whole team back and nothing waiting: review
     /// once, then merge (with auto-merge on) and close the job.
     func settleHydraJob(of leadID: UUID) async {
+        // A review that found the lead busy goes first, whichever job it belongs to.
+        if let waiting = thread(leadID)?.hydraJobs.last(where: { $0.pendingReview != nil }),
+           let text = waiting.pendingReview,
+           let runtime = existingRuntime(for: leadID), runtime.phase == .idle, !runtime.isReverting {
+            updateHydraJob(waiting.id, of: leadID) { $0.pendingReview = nil }
+            await runtime.sendHydraReview(text, jobID: waiting.id)
+            return
+        }
         guard let job = openHydraJob(of: leadID) else { return }
         let turns = existingRuntime(for: leadID)?.turns ?? []
         let leadTouchedFiles: Bool

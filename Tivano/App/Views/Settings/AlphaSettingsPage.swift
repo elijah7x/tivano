@@ -28,7 +28,7 @@ struct AlphaSettingsPage: View {
                         Text("Alpha")
                             .font(.ui(.title3, weight: .semibold))
                             .foregroundStyle(Chrome.primaryText)
-                        Text("Features here are early versions and may be unstable. Turning Alpha off ends the current voice call and disables local control. Individual feature choices are kept.")
+                        Text("Features here are early versions and may be unstable. Turning Alpha off ends the current voice call and disables local control and remote MCP. Individual feature choices are kept.")
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -83,6 +83,12 @@ struct AlphaSettingsPage: View {
             // turns local control on.
             CLIInstallationSettings()
         }
+        ChromeSection(title: "Remote MCP") {
+            ChromeCard {
+                RemoteMCPSettingsRows()
+            }
+        }
+        .modifier(AlphaGated(isOn: settings.alphaEnabled))
     }
 }
 

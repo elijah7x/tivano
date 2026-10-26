@@ -8,6 +8,46 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.1.8] - 2026-10-26
+
+### English
+
+### New features
+
+- Settings › Storage (formerly Archive) shows how much space Tivano uses on this Mac, split into chats, archived chats and worktrees. Each worktree lists who uses it and how much is dependencies and build output; Free up space deletes just the build files, or an unused worktree whose branch and commits stay. Archived chats are managed on the same page, and deleting one can take its worktree with it.
+- Alpha › Remote MCP lets cloud agents such as Muse or Grok Bot control Tivano over MCP through a tunnel you run. Tivano listens on this Mac only, each agent signs in with OAuth and needs your approval in Tivano once, and connected agents can be disconnected at any time. Agents can list and read chats, create chats and send messages; approvals and questions inside chats still wait for you unless you turn on Run remote threads without approval. Off by default.
+
+### Refinements
+
+- With Hydra 2.0 on, Settings › Hydra replaces the two message switches with one choice of how much heads take on: Restrained gives heads parallel pieces, heavy reading and larger self-contained pieces as the job calls for them; Proactive prefers to hand them whatever the lead can brief on its own, single edits included, while the lead keeps small or delicate pieces. Every message now goes to the lead, which decides what the heads take.
+
+### Bug fixes
+
+- Hydra 2.0's review is no longer lost when the lead is busy as it finishes: its findings reach the lead at the end of the lead's next turn. The job record now also keeps how many findings the lead accepted, whether the lead ran a build, and the edits it made after the heads' reports.
+
+- A pinned DeepSeek Harness model no longer switches between "V4.1 Flash" and "V4.1 Flash · DeepSeek account" depending on what the last model listing held: the route is named only where the same model also appears on another route.
+
+### 简体中文
+
+### 新功能
+
+- 设置中的“归档”改为“存储空间”：显示 Tivano 在此 Mac 上的占用，分为聊天、已归档的聊天和 worktree。每个 worktree 会注明谁在使用、其中多少是依赖和构建产物；“释放空间”可只删除构建文件，或删除无人使用的 worktree（分支和提交保留）。已归档的聊天也在同一页管理，删除时可一并删除它的 worktree。
+- Alpha › 远程 MCP：Muse、Grok Bot 等云端代理可通过你自己运行的隧道，以 MCP 控制 Tivano。Tivano 只在本机监听，每个代理通过 OAuth 登录，并需先在 Tivano 中获得你的一次批准；已连接的代理可随时断开。代理可以列出和读取对话、新建对话和发送消息；对话中的审批和问题仍需你处理，除非开启“远程对话免审批运行”。默认关闭。
+
+### 优化改进
+
+- 开启 Hydra 2.0 后，设置 › Hydra 里的两个消息开关换成一个选项：heads 承担多少工作。“克制”按需把可并行的部分、大量阅读和较大的独立部分交给 heads；“积极”会优先把能单独写清任务的部分交给 heads，单项修改也包括在内，细小或要求精细的部分仍由主智能体处理。所有消息都先交给主智能体，由它决定哪些交给 heads。
+
+### 问题修复
+
+- Hydra 2.0 的审查结果不再因审查完成时主智能体正忙而丢失：它会在主智能体下一轮结束时送达。任务记录现在也会保存主智能体采纳了几条意见、是否运行过构建，以及在 heads 回报后做了多少修改。
+
+- 已固定的 DeepSeek Harness 模型不再因最近一次模型列表的内容，在“V4.1 Flash”和“V4.1 Flash · DeepSeek 账号”之间来回切换：只有同一处也出现该模型的另一条线路时，才会注明线路。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.1.1] - 2026-10-26
 
 ### English

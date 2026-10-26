@@ -395,7 +395,7 @@ V2_JOB_FIELDS = [
     'lead_edits_after_reports', 'lead_built', 'continuations_total',
     'report_format_compliant_heads', 'report_format_observed_heads',
     'flagged_heads', 'flags_observed_heads', 'review_engine', 'review_findings',
-    'review_accepted', 'review_skipped_reason', 'merge_outcome', 'merge_success', 'same_model'
+    'review_accepted', 'review_skipped_reason', 'merge_outcome', 'merge_success', 'same_model', 'tilt'
 ]
 V2_HEAD_FIELDS = [
     'job_key', 'edition', 'lead_id', 'job_id', 'head_id', 'head_name',
@@ -615,7 +615,8 @@ def extract_v2(libraries, now):
                     review_findings=number(record.get('reviewFindings')),
                     review_accepted=number(record.get('reviewAccepted')),
                     review_skipped_reason=record.get('reviewSkipped'),
-                    merge_outcome=merge, merge_success=merge_success, same_model=same_model)
+                    merge_outcome=merge, merge_success=merge_success, same_model=same_model,
+                    tilt=record.get('tilt') or '')
                 jobs.append(job)
         inventory.append(f'{edition}: {len(threads)} threads, {len(jobs) - before_jobs} v2 jobs, '
                          f'{len(heads)} cumulative v2 heads ({library})')
@@ -701,6 +702,15 @@ def comparison_markdown(now, v1_jobs, v1_heads, v2_jobs, v2_heads, inventory, re
               '|---|' + '|'.join(['---:'] * len(labels)) + '|']
     for label, value in [('Same-model', True), ('Paired', False), ('Unknown', None)]:
         subset = [j for j in v2_jobs if j.get('same_model') is value]
+        values = dict(metric_values(subset, v2_heads, True))
+        lines.append('| ' + label + ' | ' + ' | '.join(values[name] for name in labels) + ' |')
+
+    lines += ['', '## Hydra 2 by delegation tilt', '',
+              'Restrained delegates only for parallel pieces or heavy reading; proactive also sends single bounded pieces out. Blank means a record from before the setting.', '',
+              '| Tilt | ' + ' | '.join(labels) + ' |',
+              '|---|' + '|'.join(['---:'] * len(labels)) + '|']
+    for label, value in [('Restrained', 'restrained'), ('Proactive', 'active'), ('Unknown', '')]:
+        subset = [j for j in v2_jobs if (j.get('tilt') or '') == value]
         values = dict(metric_values(subset, v2_heads, True))
         lines.append('| ' + label + ' | ' + ' | '.join(values[name] for name in labels) + ' |')
 

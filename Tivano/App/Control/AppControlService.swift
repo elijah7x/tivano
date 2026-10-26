@@ -1,6 +1,8 @@
 import Foundation
 import Observation
 
+enum ControlSource { case local, remote }
+
 struct ControlTurnUpdate {
     var state: ControlOperationState
     var turnStatus: String? = nil
@@ -72,9 +74,16 @@ final class AppControlService {
         refreshListening()
     }
 
-    func handle(_ request: ControlRequest) async -> ControlResponse {
+    func handle(_ request: ControlRequest, source: ControlSource = .local) async -> ControlResponse {
         do {
-            guard let app, app.settings.isExternalControlEnabled, listening else { throw ControlFailure(code: .disabled) }
+            guard let app else { throw ControlFailure(code: .disabled) }
+            switch source {
+            case .local:
+                guard app.settings.isExternalControlEnabled, listening else { throw ControlFailure(code: .disabled) }
+            case .remote:
+                guard app.settings.isRemoteMCPEnabled, app.remoteMCP.listening else { throw ControlFailure(code: .disabled) }
+                if case .settingsSet = request.command { throw ControlFailure(code: .permission) }
+            }
             guard !isShuttingDown else { throw ControlFailure(code: .shutdown) }
             guard request.instance == instance else { throw ControlFailure(code: .instanceMismatch) }
             guard activeRequests < LocalControl.maxConnections else { throw ControlFailure(code: .busy) }
@@ -95,7 +104,7 @@ final class AppControlService {
             case .operation(let ticket): result = .operation(ledger.outcome(ticket))
             case .settingsGet: result = .settings(settingsSnapshot(app))
             case .create, .submit, .interrupt, .settingsSet:
-                result = .operation(try performWrite(request.command, app: app))
+                result = .operation(try performWrite(request.command, app: app, source: source))
             }
             return ControlResponse(id: request.id, result: result)
         } catch {
@@ -103,7 +112,7 @@ final class AppControlService {
         }
     }
 
-    private func performWrite(_ command: ControlCommand, app: AppModel) throws -> ControlOutcome {
+    private func performWrite(_ command: ControlCommand, app: AppModel, source: ControlSource) throws -> ControlOutcome {
         try app.requireExternalPersistence()
         let accepted = try ledger.accept(command)
         guard accepted.isNew, let ticket = command.ticket else { return accepted.outcome }
@@ -116,7 +125,8 @@ final class AppControlService {
                     guard model.utf8.count <= 512, let option = app.providers.model(model, for: provider) else { throw ControlFailure(code: .unsupported, detail: "model_unavailable") }
                     resolved.model = option.id
                 }
-                let thread = try app.createExternalThread(resolved, provider: provider)
+                let mode: RuntimeMode = source == .remote && app.settings.isRemoteMCPFullAccess ? .fullAccess : .supervised
+                let thread = try app.createExternalThread(resolved, provider: provider, runtimeMode: mode)
                 ledger.update(ticket) { $0.threadID = thread.id; $0.state = request.workspace == .worktree ? .preparing : .ready }
                 if request.workspace == .worktree {
                     Task { [weak self, weak app] in

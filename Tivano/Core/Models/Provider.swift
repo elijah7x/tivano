@@ -343,7 +343,7 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
     /// The route or account a model is reached through, when the provider lists the same
     /// model once per route (DeepSeek Harness: the DeepSeek account and an API key). The
     /// name stays the model's own; lists set the routes apart under headings, and plain
-    /// menus through `qualifiedName`.
+    /// menus and the pinned list through `label(among:)`.
     var group: String?
 
     init(
@@ -405,10 +405,12 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         variants.first { $0.id == providerID }
     }
 
-    /// The short name with the route after it, for a plain menu that has no headings to
-    /// tell two routes of one model apart: "V4 Pro · DeepSeek account".
-    var qualifiedName: String {
-        group.map { "\(shortName) · \($0)" } ?? shortName
+    /// The short name, with the route after it ("V4 Pro · DeepSeek account") only where
+    /// `others` holds the same model on another route, so the name stays the same however
+    /// the provider's catalogue looks at the moment.
+    func label(among others: [ModelOption]) -> String {
+        guard let group, others.contains(where: { $0.id != id && $0.shortName == shortName && $0.group != group }) else { return shortName }
+        return "\(shortName) · \(group)"
     }
 
     /// The name as the picker shows it, such as "5.6 Terra" for "GPT-5.6-Terra".

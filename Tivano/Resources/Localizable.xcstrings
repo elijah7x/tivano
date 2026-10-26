@@ -6866,6 +6866,17 @@
         }
       }
     },
+    "Delegation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "委派"
+          }
+        }
+      }
+    },
     "Delete" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9066,6 +9077,17 @@
         }
       }
     },
+    "Heads take parallel pieces, heavy reading and larger self-contained pieces as the job calls for them; the lead keeps small edits and coupled work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "heads 按需承担可并行的部分、大量阅读和较大的独立部分；小改动和相互耦合的工作由主智能体自己处理。"
+          }
+        }
+      }
+    },
     "Heads work at a working effort" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9348,6 +9370,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "子智能体的工作方式"
+          }
+        }
+      }
+    },
+    "How much heads take on" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "heads 承担多少工作"
           }
         }
       }
@@ -13268,6 +13301,17 @@
         }
       }
     },
+    "Proactive" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "积极"
+          }
+        }
+      }
+    },
     "Progress" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -14298,6 +14342,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "恢复"
+          }
+        }
+      }
+    },
+    "Restrained" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "克制"
           }
         }
       }
@@ -17697,6 +17752,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "主导模型只接收汇报。"
+          }
+        }
+      }
+    },
+    "The lead prefers to hand heads what it can brief on its own, single edits included, and splits larger work to run in parallel. It keeps judgement, design, integration and small or delicate pieces." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主智能体会优先把能单独写清任务的部分交给 heads，单项修改也包括在内，较大的工作则拆开并行。判断、设计、集成以及细小或要求精细的部分由它自己负责。"
           }
         }
       }
@@ -22515,6 +22581,707 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "简体中文"
+          }
+        }
+      }
+    },
+    "Storage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存储空间"
+          }
+        }
+      }
+    },
+    "Archived chats" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已归档的聊天"
+          }
+        }
+      }
+    },
+    "Git no longer knows this folder, so it is moved to the Trash." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 已不再记录这个文件夹，因此会把它移到废纸篓。"
+          }
+        }
+      }
+    },
+    "Not used by any chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未被任何聊天使用"
+          }
+        }
+      }
+    },
+    "%lld uncommitted changes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 处未提交的改动"
+          }
+        }
+      }
+    },
+    "Could not delete build files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法删除构建文件"
+          }
+        }
+      }
+    },
+    "Delete thread, keep worktree" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除对话，保留 worktree"
+          }
+        }
+      }
+    },
+    "Its history will be removed. Removing its worktree frees its space; its branch and commits stay, and a worktree with uncommitted changes is kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它的历史记录将被移除。移除 worktree 可释放其占用的空间；分支和提交会保留，有未提交改动的 worktree 也会保留。"
+          }
+        }
+      }
+    },
+    "On this Mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Mac"
+          }
+        }
+      }
+    },
+    "Chats, attachments and the worktrees Tivano made for your projects." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天、附件，以及 Tivano 为你的项目创建的 worktree。"
+          }
+        }
+      }
+    },
+    "Tivano uses %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 已占用 %@"
+          }
+        }
+      }
+    },
+    "Measuring…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在计算…"
+          }
+        }
+      }
+    },
+    "%@ of the worktrees is dependencies and build output, which can be deleted and rebuilt." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "worktree 中有 %@ 是依赖和构建产物，可以删除，需要时再重新生成。"
+          }
+        }
+      }
+    },
+    "Each worktree is a separate copy of a project, made so a chat can work without touching your checkout. Most of its space is usually dependencies and build output." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个 worktree 都是项目的一份独立副本，让聊天可以工作而不影响你的主目录。占用的空间大多来自依赖和构建产物。"
+          }
+        }
+      }
+    },
+    "Delete the worktree \"%@\"?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 worktree“%@”？"
+          }
+        }
+      }
+    },
+    "Delete worktree (%@)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 worktree（%@）"
+          }
+        }
+      }
+    },
+    "The whole folder is deleted. Its branch and commits stay in the repository." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "整个文件夹将被删除。它的分支和提交仍保留在仓库中。"
+          }
+        }
+      }
+    },
+    "Used by archived chat “%@”" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已归档的聊天“%@”在用"
+          }
+        }
+      }
+    },
+    "Used by chat “%@”" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天“%@”在用"
+          }
+        }
+      }
+    },
+    "Leftover folder, not a worktree" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残留文件夹，不是 worktree"
+          }
+        }
+      }
+    },
+    "%@, of which %@ build files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，其中构建文件 %@"
+          }
+        }
+      }
+    },
+    "A chat still uses it. Delete that chat to delete its worktree." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍有聊天在使用它。删除那个聊天时可一并删除它的 worktree。"
+          }
+        }
+      }
+    },
+    "It has uncommitted changes. Commit or discard them first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它有未提交的改动。请先提交或丢弃。"
+          }
+        }
+      }
+    },
+    "It is in use by a project." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它正被某个项目使用。"
+          }
+        }
+      }
+    },
+    "Free up space…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "释放空间…"
+          }
+        }
+      }
+    },
+    "Delete build files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除构建文件"
+          }
+        }
+      }
+    },
+    "Deletes node_modules and other dependency and build folders. Your code and changes stay; the next install or build brings them back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 node_modules 等依赖和构建文件夹。你的代码和改动都不受影响，下次安装或构建时会重新生成。"
+          }
+        }
+      }
+    },
+    "Delete worktree" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除 worktree"
+          }
+        }
+      }
+    },
+    "Deletes this whole copy. Its branch and commits stay in the repository." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这整份副本。它的分支和提交仍保留在仓库中。"
+          }
+        }
+      }
+    },
+    "Chats you archive leave the sidebar and wait here. Nothing is archived yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "归档的聊天会从侧边栏移到这里。目前还没有归档的聊天。"
+          }
+        }
+      }
+    },
+    "Restore a chat to the sidebar, or delete it for good. A chat's worktree can go with it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以把聊天恢复到侧边栏，或永久删除。删除时可一并删除它的 worktree。"
+          }
+        }
+      }
+    },
+    "Worktree %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "worktree %@"
+          }
+        }
+      }
+    },
+    "Allow %@ to control Tivano?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 %@ 控制 Tivano？"
+          }
+        }
+      }
+    },
+    "Allow full control" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许完全控制"
+          }
+        }
+      }
+    },
+    "Allow read only" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许只读访问"
+          }
+        }
+      }
+    },
+    "Approve on your Mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你的 Mac 上批准"
+          }
+        }
+      }
+    },
+    "Approve or deny the requests already waiting in Tivano, then try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先在 Tivano 中批准或拒绝等待中的请求，然后重试。"
+          }
+        }
+      }
+    },
+    "Code %@. Check that it matches the page in your browser. It returns to %@. Full control can create threads and send messages; approvals and questions still wait for you in Tivano." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "验证码为 %@。请确认它与浏览器页面显示的一致。授权后将返回 %@。完全控制权限允许创建对话和发送消息；审批和问题仍需你在 Tivano 中处理。"
+          }
+        }
+      }
+    },
+    "Connection request not valid" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接请求无效"
+          }
+        }
+      }
+    },
+    "Copy server URL" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制服务器 URL"
+          }
+        }
+      }
+    },
+    "Disconnect all" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "断开所有连接"
+          }
+        }
+      }
+    },
+    "Enter an HTTPS address. Plain HTTP works only for this Mac." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 HTTPS 地址。HTTP 仅可用于本机访问。"
+          }
+        }
+      }
+    },
+    "Features here are early versions and may be unstable. Turning Alpha off ends the current voice call and disables local control and remote MCP. Individual feature choices are kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这里的功能尚处早期，可能不稳定。关闭 Alpha 会结束当前语音通话，并停用本地控制和远程 MCP。各项功能的开关选择会保留。"
+          }
+        }
+      }
+    },
+    "Full control" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完全控制"
+          }
+        }
+      }
+    },
+    "Last used %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次使用：%@"
+          }
+        }
+      }
+    },
+    "Let cloud agents such as Muse or Grok Bot control this edition of Tivano over MCP, through a tunnel you run. Each agent needs your approval here once. Approvals and questions in threads still wait in Tivano." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 Muse 或 Grok Bot 等云端代理通过你运行的隧道，以 MCP 控制当前版本的 Tivano。每个代理都需要先在这里获得你的批准。对话中的审批和问题仍需你在 Tivano 中处理。"
+          }
+        }
+      }
+    },
+    "Listening on 127.0.0.1:%d" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在监听 127.0.0.1:%d"
+          }
+        }
+      }
+    },
+    "Public address" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公网地址"
+          }
+        }
+      }
+    },
+    "Read only" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只读"
+          }
+        }
+      }
+    },
+    "Remote MCP" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程 MCP"
+          }
+        }
+      }
+    },
+    "Remote MCP could not start. Retry after freeing the port." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程 MCP 无法启动。请释放端口后重试。"
+          }
+        }
+      }
+    },
+    "Remote MCP status" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程 MCP 状态"
+          }
+        }
+      }
+    },
+    "Request expired" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求已过期"
+          }
+        }
+      }
+    },
+    "Retry remote MCP" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试远程 MCP"
+          }
+        }
+      }
+    },
+    "Run remote threads without approval" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程对话免审批运行"
+          }
+        }
+      }
+    },
+    "Server URL" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器 URL"
+          }
+        }
+      }
+    },
+    "Start the connection again from your agent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请从代理重新发起连接。"
+          }
+        }
+      }
+    },
+    "This client or its return address is not registered with Tivano." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此客户端或其返回地址未在 Tivano 中注册。"
+          }
+        }
+      }
+    },
+    "This page refreshes by itself. You can close it after your agent says it is connected." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此页面会自动刷新。代理提示已连接后，你可以关闭此页面。"
+          }
+        }
+      }
+    },
+    "Threads that cloud agents create start in Full access: commands and file changes run without asking. Threads created while this is off, and your own threads, keep their permissions. Questions still wait in Tivano." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "云端代理新建的对话以“完全访问”权限启动：命令和文件修改无需询问即可执行。关闭此项期间创建的对话以及你自己的对话保持原有权限。问题仍需你在 Tivano 中回答。"
+          }
+        }
+      }
+    },
+    "Tivano is waiting for you to approve %@ on your Mac. Check that Tivano shows this code:" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 正在等待你在 Mac 上批准 %@。请确认 Tivano 显示以下验证码："
+          }
+        }
+      }
+    },
+    "Too many requests waiting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待中的请求过多"
+          }
+        }
+      }
+    },
+    "Your tunnel's HTTPS address, forwarding to http://127.0.0.1:%d. Leave empty to allow only this Mac." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的隧道的 HTTPS 地址，转发至 http://127.0.0.1:%d。留空则仅允许本机访问。"
+          }
+        }
+      }
+    },
+    "Paste your tunnel's HTTPS address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴你的隧道 HTTPS 地址"
           }
         }
       }

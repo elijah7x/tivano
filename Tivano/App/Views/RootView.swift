@@ -141,6 +141,22 @@ struct RootView: View {
         } message: { alert in
             Text(verbatim: Chrome.localized(alert.message))
         }
+        .alert(
+            String(format: Chrome.localized("Allow %@ to control Tivano?"), model.remoteMCP.pendingApprovals.first?.clientName ?? ""),
+            isPresented: Binding(
+                get: { model.remoteMCP.pendingApprovals.first != nil },
+                set: { _ in }
+            ),
+            presenting: model.remoteMCP.pendingApprovals.first
+        ) { request in
+            if request.requestedScopes.contains(.write) {
+                Button("Allow full control") { model.remoteMCP.decide(request, .allow(request.requestedScopes)) }
+            }
+            Button("Allow read only") { model.remoteMCP.decide(request, .allow([.read])) }
+            Button("Deny", role: .cancel) { model.remoteMCP.decide(request, .deny) }
+        } message: { request in
+            Text(verbatim: String(format: Chrome.localized("Code %@. Check that it matches the page in your browser. It returns to %@. Full control can create threads and send messages; approvals and questions still wait for you in Tivano."), request.code, request.redirectHost))
+        }
     }
 
     @discardableResult

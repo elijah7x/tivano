@@ -498,7 +498,7 @@ private struct PinnedModelRow: View {
                     ProviderIcon(provider: pin.provider, size: 16)
                         .foregroundStyle(Chrome.primaryText)
                         .frame(width: 22)
-                    Text(verbatim: option?.qualifiedName ?? pin.displayName)
+                    Text(verbatim: option.map { $0.label(among: model.pinnedOptions(for: pin.provider)) } ?? pin.displayName)
                         .font(.ui(size: 13))
                         .foregroundStyle(Chrome.primaryText)
                         .lineLimit(1)
@@ -895,7 +895,8 @@ private struct ProviderModelsSection: View {
     /// The rows, with a heading over each route's models when the provider lists one model
     /// per route; the routes keep the order the provider gave them.
     private func rows(_ catalogue: [ModelOption], pinned: Set<ModelPin>, isFiltering: Bool) -> [Row] {
-        guard catalogue.contains(where: { $0.group != nil }) else {
+        // Headings only where the provider lists models on more than one route.
+        guard Set(catalogue.compactMap(\.group)).count > 1 else {
             return ungroupedRows(catalogue, pinned: pinned, isFiltering: isFiltering)
         }
         var order: [String] = []

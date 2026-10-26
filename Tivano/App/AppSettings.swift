@@ -173,6 +173,10 @@ final class AppSettings {
         static let alphaVoiceEnabled = "alphaVoiceEnabled"
         static let alphaHydra2Enabled = "alphaHydra2Enabled"
         static let externalControlEnabled = "externalControlEnabled"
+        static let remoteMCPEnabled = "remoteMCPEnabled"
+        static let remoteMCPPublicURL = "remoteMCPPublicURL"
+        static let remoteMCPPort = "remoteMCPPort"
+        static let remoteMCPFullAccess = "remoteMCPFullAccess"
         static let cliInstallationTarget = "cliInstallationTarget"
         static let appTheme = "appTheme"
         static let backdropOpacity = "backdropOpacity"
@@ -217,6 +221,7 @@ final class AppSettings {
         static let hydraDefaultEnabled = AppSettings.hydraDefaultEnabledKey
         static let hydraQueueHeads = "hydraQueueHeads"
         static let hydraAlwaysHeads = "hydraAlwaysHeads"
+        static let hydraTilt = "hydraTilt"
         static let hydraIsolateHeads = "hydraIsolateHeads"
         static let hydraAutoMerge = "hydraAutoMerge"
         static let hydraReviewHeads = "hydraReviewHeads"
@@ -397,6 +402,27 @@ final class AppSettings {
         }
     }
     var isExternalControlEnabled: Bool { alphaEnabled && externalControlEnabled }
+
+    var remoteMCPEnabled: Bool {
+        didSet {
+            defaults.set(remoteMCPEnabled, forKey: Key.remoteMCPEnabled)
+            onExternalControlChanged?()
+        }
+    }
+    /// Saved as typed; the server picks it up when editing ends (`RemoteMCPService.refresh`).
+    var remoteMCPPublicURL: String {
+        didSet { defaults.set(remoteMCPPublicURL, forKey: Key.remoteMCPPublicURL) }
+    }
+    var remoteMCPPort: Int {
+        didSet { defaults.set(remoteMCPPort, forKey: Key.remoteMCPPort) }
+    }
+    var isRemoteMCPEnabled: Bool { alphaEnabled && remoteMCPEnabled }
+    /// Default false. Only threads Remote MCP creates while it is on start in Full access;
+    /// existing threads keep their permissions.
+    var remoteMCPFullAccess: Bool {
+        didSet { defaults.set(remoteMCPFullAccess, forKey: Key.remoteMCPFullAccess) }
+    }
+    var isRemoteMCPFullAccess: Bool { isRemoteMCPEnabled && remoteMCPFullAccess }
 
     /// Receipt for user-action-only PATH repair/removal; not an authorization gate.
     var cliInstallationTarget: String? {
@@ -799,6 +825,17 @@ final class AppSettings {
         didSet { defaults.set(hydraAlwaysHeads, forKey: Key.hydraAlwaysHeads) }
     }
 
+    /// Hydra 2.0's one delegation control. The two routing switches above are v1's:
+    /// with Hydra 2.0 on every message goes to the lead, which decides what heads take.
+    var hydraTilt: HydraTilt {
+        didSet { defaults.set(hydraTilt.rawValue, forKey: Key.hydraTilt) }
+    }
+
+    /// Whether queued follow-ups go straight to heads: v1's switches, off under Hydra 2.0.
+    var hydraQueuesToHeads: Bool { !isHydra2Enabled && (hydraQueueHeads || hydraAlwaysHeads) }
+    /// Whether every message goes straight to a head: v1's switch, off under Hydra 2.0.
+    var hydraSendsToHeads: Bool { !isHydra2Enabled && hydraAlwaysHeads }
+
     /// A head Tivano runs gets a copy of the checkout of its own, so no head ever
     /// sees another's half-done work; its changes land in the chat's checkout when it
     /// reports. Off, the heads work in the checkout itself.
@@ -916,6 +953,10 @@ final class AppSettings {
         alphaVoiceEnabled = defaults.bool(forKey: Key.alphaVoiceEnabled)
         alphaHydra2Enabled = defaults.bool(forKey: Key.alphaHydra2Enabled)
         externalControlEnabled = defaults.bool(forKey: Key.externalControlEnabled)
+        remoteMCPEnabled = defaults.bool(forKey: Key.remoteMCPEnabled)
+        remoteMCPPublicURL = defaults.string(forKey: Key.remoteMCPPublicURL) ?? ""
+        remoteMCPPort = defaults.integer(forKey: Key.remoteMCPPort)
+        remoteMCPFullAccess = defaults.bool(forKey: Key.remoteMCPFullAccess)
         cliInstallationTarget = defaults.string(forKey: Key.cliInstallationTarget)
         backdropOpacity = defaults.object(forKey: Key.backdropOpacity) as? Double ?? Self.defaultBackdropOpacity
         clearerBackdrop = defaults.object(forKey: Key.clearerBackdrop) as? Bool ?? true
@@ -973,6 +1014,7 @@ final class AppSettings {
         }
         hydraQueueHeads = defaults.object(forKey: Key.hydraQueueHeads) as? Bool ?? true
         hydraAlwaysHeads = defaults.object(forKey: Key.hydraAlwaysHeads) as? Bool ?? false
+        hydraTilt = defaults.string(forKey: Key.hydraTilt).flatMap(HydraTilt.init(rawValue:)) ?? .active
         hydraIsolateHeads = defaults.object(forKey: Key.hydraIsolateHeads) as? Bool ?? true
         hydraMaxHeads = HydraPair.clampedCap(defaults.object(forKey: Key.hydraMaxHeads) as? Int)
         hydraAutoMerge = defaults.object(forKey: Key.hydraAutoMerge) as? Bool ?? false

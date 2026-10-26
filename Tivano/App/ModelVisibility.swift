@@ -9,6 +9,12 @@ extension AppModel {
     /// The rows a picker lists for `provider`. `ids` protects extra rows: the picker's
     /// current choice, whose row the list must keep even when the trim drops it.
     @MainActor
+    /// The models of a provider pinned to the picker, as the catalogue has them: what a
+    /// pinned model's name is told apart from (see `ModelOption.label`).
+    func pinnedOptions(for provider: ProviderKind) -> [ModelOption] {
+        settings.modelList.filter { $0.provider == provider }.compactMap { providers.model($0.modelID, for: provider) }
+    }
+
     func pickerModels(for provider: ProviderKind, keeping ids: Set<String> = []) -> [ModelOption] {
         let sorted = providers.sortedModels(for: provider)
         guard settings.hidesOutdatedModels else { return sorted }

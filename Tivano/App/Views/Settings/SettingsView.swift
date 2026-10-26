@@ -28,7 +28,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .hydra: "Hydra"
         case .sourceControl: "Source control"
         case .shortcuts: "Shortcuts"
-        case .archive: "Archive"
+        case .archive: "Storage"
         case .keepsakes: "Keepsakes"
         case .about: "About"
         }
@@ -48,7 +48,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .hydra: "point.3.connected.trianglepath.dotted"
         case .sourceControl: "arrow.triangle.branch"
         case .shortcuts: "command"
-        case .archive: "archivebox"
+        case .archive: "internaldrive"
         case .keepsakes: "tag"
         case .about: "info.circle"
         }
@@ -82,7 +82,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
         case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "实验室", "实验", "语音", "麦克风", "通话"]
         case .shortcuts: ["keyboard", "keys"]
-        case .archive: ["archived", "restore"]
+        case .archive: ["storage", "space", "disk", "worktree", "worktrees", "build", "cache", "clean", "archive", "archived", "restore", "存储", "空间", "归档", "清理", "缓存"]
         case .keepsakes: ["keepsake", "early supporter", "信物"]
         case .about: ["version", "license"]
         }
@@ -362,24 +362,6 @@ struct SettingsDetail: View {
     }
 }
 
-private struct SettingsArchiveDetail<Content: View>: View {
-    @Environment(AppModel.self) private var model
-    let content: Content
-
-    var body: some View {
-        if model.archivedThreads.isEmpty {
-            // An empty archive is one symbol in the middle of the pane: no sentence, no chrome,
-            // no button with nothing to delete.
-            Image(systemName: "archivebox")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(Chrome.secondaryText.opacity(0.6))
-                .accessibilityLabel(Text("No archived threads"))
-        } else {
-            content
-        }
-    }
-}
-
 private struct SettingsPageScroll: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var keepsakeOverlayShown = false
@@ -392,13 +374,7 @@ private struct SettingsPageScroll: View {
     @State private var scrollTracker = SettingsScrollTracker()
 
     var body: some View {
-        Group {
-            if page == .archive {
-                SettingsArchiveDetail(content: pageScroll)
-            } else {
-                pageScroll
-            }
-        }
+        pageScroll
         .onDisappear { scrollTracker.end() }
         .onChange(of: page, initial: true) {
             scrollChrome.update(travel: 0)
@@ -454,8 +430,7 @@ private struct SettingsPageScroll: View {
                 page: page,
                 scrollChrome: scrollChrome,
                 modelSearch: $modelSearch,
-                mcpSearch: $mcpSearch,
-                archiveFilter: $archiveFilter
+                mcpSearch: $mcpSearch
             )
             .opacity(keepsakeOverlayShown ? 0 : 1)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: keepsakeOverlayShown)
@@ -463,7 +438,7 @@ private struct SettingsPageScroll: View {
     }
 
     private var pageHasChromeControls: Bool {
-        page == .providers || page == .models || page == .mcp || page == .archive || page == .about
+        page == .providers || page == .models || page == .mcp || page == .about
     }
 
     @ViewBuilder
@@ -479,7 +454,7 @@ private struct SettingsPageScroll: View {
         case .alpha: AlphaSettingsPage()
         case .sourceControl: SourceControlSettingsPage()
         case .shortcuts: ShortcutsSettingsPage()
-        case .archive: ArchiveSettingsPage(filter: $archiveFilter)
+        case .archive: StorageSettingsPage(filter: $archiveFilter)
         case .keepsakes: KeepsakesSettingsPage()
         case .about: AboutSettingsPage()
         }
@@ -495,7 +470,6 @@ private struct SettingsPageChrome: View {
     let scrollChrome: ChromeScrollModel
     @Binding var modelSearch: String
     @Binding var mcpSearch: String
-    @Binding var archiveFilter: ArchiveFilter
 
     var body: some View {
         HStack(spacing: 10) {
@@ -505,9 +479,6 @@ private struct SettingsPageChrome: View {
             }
             if page == .mcp {
                 ChromeSearchField(query: $mcpSearch, prompt: "Search servers")
-            }
-            if page == .archive {
-                ArchiveChromeControls(filter: $archiveFilter)
             }
             if page == .providers {
                 ProvidersRefreshButton()
@@ -803,7 +774,7 @@ private struct NewThreadModelPicker: View {
             }
             editorRow("Model") {
                 GlassPickerButton(
-                    options: [(String?.none, "Choose a model")] + options.map { (Optional($0.id), $0.qualifiedName) },
+                    options: [(String?.none, "Choose a model")] + options.map { (Optional($0.id), $0.label(among: options)) },
                     selection: Binding(
                         get: { selectedOption?.id },
                         set: { id in
@@ -1547,48 +1518,8 @@ private struct CursorOriginStatusRow: View {
     }
 }
 
-private struct ArchiveDeleteAllButton: View {
-    @Environment(AppModel.self) private var model
-    let threadIDs: Set<UUID>
-    let isFiltered: Bool
-    @State private var isConfirming = false
-    @State private var pendingIDs: Set<UUID> = []
-    @State private var pendingIsFiltered = false
-
-    var body: some View {
-        ChromeTextButton(
-            symbol: "trash",
-            title: String(format: Chrome.localized(isFiltered ? "Delete matching chats (%lld)" : "Delete all archived chats (%lld)"), threadIDs.count),
-            help: isFiltered ? "Delete matching archived chats" : "Delete every archived thread",
-            isEnabled: !threadIDs.isEmpty,
-            isDestructive: true
-        ) {
-            if model.settings.confirmBeforeDeleting {
-                pendingIDs = threadIDs
-                pendingIsFiltered = isFiltered
-                isConfirming = true
-            } else {
-                model.deleteArchivedThreads(ids: threadIDs)
-            }
-        }
-        .popover(isPresented: $isConfirming, arrowEdge: .bottom) {
-            PopoverMenu {
-                PopoverSectionHeader(pendingIsFiltered ? "Delete matching archived chats?" : "Delete all archived threads?")
-                PopoverNote(String(format: Chrome.localized(pendingIsFiltered
-                    ? "The histories of the %lld matching chats will be removed. Files in your projects stay as they are."
-                    : "The histories of all %lld threads will be removed. Files in your projects stay as they are."), pendingIDs.count))
-                PopoverDivider()
-                PopoverItem(String(format: Chrome.localized("Delete %lld threads"), pendingIDs.count), symbol: "trash", isDestructive: true) {
-                    model.deleteArchivedThreads(ids: pendingIDs)
-                    isConfirming = false
-                }
-            }
-        }
-    }
-}
-
-/// What the archive page shows: lifted into the settings scroll so the chrome row's search
-/// field and Delete all act on the same rows as the page.
+/// Which archived chats the storage page shows, kept by the settings scroll so it resets
+/// when the page changes; its search field and Delete all act on the same rows.
 struct ArchiveFilter: Equatable {
     enum ChatType: CaseIterable {
         case all, chats, heads
@@ -1633,118 +1564,6 @@ struct ArchiveFilter: Equatable {
                 $0.range(of: search, options: [.caseInsensitive, .diacriticInsensitive]) != nil
             }
             return matchesType && matchesProject && matchesSearch
-        }
-    }
-}
-
-/// The archive page's chrome row: its search field and Delete all, which deletes what is shown.
-private struct ArchiveChromeControls: View {
-    @Environment(AppModel.self) private var model
-    @Binding var filter: ArchiveFilter
-
-    var body: some View {
-        let archived = model.archivedThreads
-        let known = Set(ArchiveFilter.projects(in: archived, from: model.projects).map(\.id))
-        ChromeSearchField(query: $filter.query, prompt: "Search archived chats")
-        ArchiveDeleteAllButton(threadIDs: Set(filter.apply(to: archived, known: known).map(\.id)), isFiltered: filter.isActive)
-    }
-}
-
-private struct ArchiveSettingsPage: View {
-    @Environment(AppModel.self) private var model
-    @Binding var filter: ArchiveFilter
-    @State private var pendingDeletion: ArchiveRow?
-
-    private struct ArchiveRow: Identifiable {
-        let thread: ChatThread
-        let title: String
-        var id: UUID { thread.id }
-    }
-
-    private struct ArchiveGroup: Identifiable {
-        let id: ArchiveFilter.ProjectScope
-        let title: String
-        let rows: [ArchiveRow]
-    }
-
-    var body: some View {
-        let archived = model.archivedThreads
-        let projects = ArchiveFilter.projects(in: archived, from: model.projects)
-        let known = Set(projects.map(\.id))
-        let options: [(value: ArchiveFilter.ProjectScope, title: String)] = [(.all, "All projects")]
-            + projects.map { (.project($0.id), $0.name) } + [(.none, "No project")]
-        let rows = filter.apply(to: archived, known: known).map { thread in
-            let title: String
-            if let info = thread.hydra, !info.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                title = "\(info.persona.name) · \(info.task)"
-            } else {
-                title = thread.title
-            }
-            return ArchiveRow(thread: thread, title: title)
-        }
-        let grouped = Dictionary(grouping: rows) { ArchiveFilter.scope(of: $0.thread, known: known) }
-        let groups = options.filter { $0.value != .all }.compactMap { option -> ArchiveGroup? in
-            guard let rows = grouped[option.value], !rows.isEmpty else { return nil }
-            return ArchiveGroup(id: option.value, title: option.title, rows: rows)
-        }
-        VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
-            HStack(spacing: 8) {
-                GlassPickerButton(options: ArchiveFilter.ChatType.allCases.map { ($0, $0.title) }, selection: $filter.chatType)
-                    .accessibilityLabel(Text("Chat type"))
-                GlassPickerButton(options: options, selection: $filter.project, symbol: { _ in "folder" })
-                    .accessibilityLabel(Text("Project"))
-            }
-            if groups.isEmpty {
-                Text("No matching chats")
-                    .font(.ui(.body))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, Chrome.sectionSpacing)
-            }
-            ForEach(groups) { group in
-                ChromeSection(
-                    title: group.title,
-                    trailing: AnyView(Text(verbatim: String(format: Chrome.localized("%lld chats"), group.rows.count))
-                        .font(.ui(.body))
-                        .foregroundStyle(Chrome.secondaryText))
-                ) {
-                    ChromeCard(lazy: true) {
-                        ForEach(group.rows) { row in
-                            if row.id != group.rows.first?.id { ChromeRowDivider() }
-                            ChromeRow(title: row.title) {
-                                HStack(spacing: 8) {
-                                    Button("Restore") { model.unarchive(row.id) }
-                                        .buttonStyle(.glass)
-                                    Button("Delete", role: .destructive) {
-                                        if model.settings.confirmBeforeDeleting {
-                                            pendingDeletion = row
-                                        } else {
-                                            model.delete(row.id)
-                                        }
-                                    }
-                                    .buttonStyle(.glass)
-                                }
-                                .controlSize(.small)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .confirmationDialog(
-            pendingDeletion.map { String(format: Chrome.localized("Delete \"%@\"?"), $0.title) } ?? Chrome.localized("Delete the archived thread?"),
-            isPresented: Binding(
-                get: { pendingDeletion != nil },
-                set: { if !$0 { pendingDeletion = nil } }
-            ),
-            presenting: pendingDeletion
-        ) { row in
-            Button("Delete thread", role: .destructive) {
-                model.delete(row.id)
-                pendingDeletion = nil
-            }
-        } message: { _ in
-            Text("Its history will be removed. Files in your project stay as they are.")
         }
     }
 }

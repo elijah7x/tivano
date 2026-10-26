@@ -336,7 +336,7 @@ struct ComposerView: View {
             // With every message sent to a head, the lead never works the message itself:
             // it goes straight out and comes back as a report, which is worth saying here
             // because nothing else in the box shows it.
-            if model.settings.hydraAlwaysHeads {
+            if model.settings.hydraSendsToHeads {
                 return String(format: Chrome.localized("Goes to a head; %@ leads and reports back"), thread.provider.displayName)
             }
             return String(format: Chrome.localized("Ask %@ for anything; big jobs go out to a team of heads"), thread.provider.displayName)
@@ -346,13 +346,13 @@ struct ComposerView: View {
 
     /// Whether the next message is handed to a head rather than worked by the lead.
     private func goesToHead(_ thread: ChatThread) -> Bool {
-        model.settings.hydraAlwaysHeads && model.hydraIsOn(thread)
+        model.settings.hydraSendsToHeads && model.hydraIsOn(thread)
     }
 
     /// Whether a message queued behind the running turn is handed to a head of its own
     /// rather than waiting for the lead.
     private func queueGoesToHead(_ thread: ChatThread) -> Bool {
-        (model.settings.hydraQueueHeads || model.settings.hydraAlwaysHeads) && model.hydraIsOn(thread)
+        model.settings.hydraQueuesToHeads && model.hydraIsOn(thread)
     }
 
     /// The pair's heads provider when it differs from the lead's, so the usage popover

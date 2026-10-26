@@ -376,6 +376,11 @@ final class ThreadRuntime {
     @ObservationIgnored private(set) var hydraJobMode: HydraMode = .v1
     @ObservationIgnored private var hydraJobID: UUID?
     @ObservationIgnored private var hydraJobPacketRequest: HydraHandoffPacket?
+    /// What the running v2 lead turn is, for the job ledger: the user's request, a turn of
+    /// head reports, or a review turn, and the job a review turn answers for.
+    private enum HydraLedgerTurn { case request, report, review }
+    @ObservationIgnored private var hydraLedgerTurn: HydraLedgerTurn?
+    @ObservationIgnored private var hydraReviewJobID: UUID?
     /// Reports from Tivano-run heads waiting for the lead to be idle.
     @ObservationIgnored private var hydraPendingReports: [HydraReport] = []
     /// The reports' turn is on its way (see `flushHydraReports`): a head finishing in the
@@ -1411,7 +1416,7 @@ final class ThreadRuntime {
     /// Hands a queued prompt to a Tivano-run head, when the app and the chat allow it and
     /// the pair has room for one more. Returns whether the head went out.
     private func dispatchQueuedHead(_ prompt: FollowUpPrompt) -> Bool {
-        guard let app, app.settings.hydraQueueHeads || app.settings.hydraAlwaysHeads else { return false }
+        guard let app, app.settings.hydraQueuesToHeads else { return false }
         return dispatchHead(prompt, origin: .queued)
     }
 
@@ -1419,7 +1424,7 @@ final class ThreadRuntime {
     /// message goes to heads and the pair has room. The local commands stay with the chat.
     /// Returns whether the head went out; if not, the message goes the ordinary way.
     private func dispatchSentHead(text: String, attachments: [Attachment]) -> Bool {
-        guard let app, app.settings.hydraAlwaysHeads else { return false }
+        guard let app, app.settings.hydraSendsToHeads else { return false }
         let prompt = FollowUpPrompt(text: text.trimmingCharacters(in: .whitespacesAndNewlines), attachments: attachments)
         guard !prompt.isEmpty, prompt.text != "/plan", prompt.text != "/compact" else { return false }
         return dispatchHead(prompt, origin: .sent)
@@ -1698,6 +1703,11 @@ final class ThreadRuntime {
         // `hydraHeads == nil` marks a turn of the user's own: it starts the request's
         // delegation budget over. Turns carrying head reports or a refusal notice continue it.
         hydraBudget.beginTurn(userAuthored: hydraHeads == nil)
+        if hydraJobMode == .v2, !hydraBrief, initialThread.hydra == nil {
+            hydraLedgerTurn = hydraHeads == nil ? .request : (hydraHeads?.isEmpty == true ? .review : .report)
+        } else {
+            hydraLedgerTurn = nil
+        }
         // A finished head told more from the panel is at work again: its lead's team
         // counts it, and its next report goes out as a fresh one.
         if let info = initialThread.hydra, info.kind == .tivano, info.isFinished {
@@ -3527,6 +3537,10 @@ final class ThreadRuntime {
             }
         }
         app?.turnFinished(threadID, status: status, continues: continues, turnID: turnID, userStopped: userStopped)
+        if let app, let kind = hydraLedgerTurn {
+            recordHydraLedger(app: app, turnID: turnID, kind: kind)
+            hydraLedgerTurn = nil
+        }
         // The job is done: the lead has answered, every head is back and nothing is
         // waiting. A v2 job settles its review and merge here; a v1 job auto-merges only
         // with the setting on. A merge while any head is still at work would commit its
@@ -3706,11 +3720,45 @@ final class ThreadRuntime {
 
     /// Hydra 2: hands the cross-vendor review of the job's work to the lead as a turn of
     /// its own, like a report (see `AppModel.reviewHydraJob`).
-    func sendHydraReview(_ text: String) async {
+    func sendHydraReview(_ text: String, jobID: UUID? = nil) async {
         guard phase == .idle, !isReverting else { return }
+        hydraReviewJobID = jobID
         autoStartedTurnToken &+= 1
         await ensureLoaded()
         await startTurn(text: text, attachments: [], hydraHeads: [])
+    }
+
+    /// Folds a finished v2 lead turn into its job's ledger: whether it ran a build, the
+    /// edits it made once reports or a review were in, and the review findings it took.
+    private func recordHydraLedger(app: AppModel, turnID: UUID, kind: HydraLedgerTurn) {
+        guard let jobID = (kind == .review ? hydraReviewJobID : nil) ?? hydraJobID else { return }
+        var calls: [ToolCall] = []
+        var reply = ""
+        for entry in entries where entry.item.turnID == turnID {
+            switch entry.item.content {
+            case .tool(let call): calls.append(call)
+            case .assistant(let message): reply = message.text
+            default: break
+            }
+        }
+        let builds = ["xcodebuild", "swift build", "npm run build", "pnpm build", "yarn build", "cargo build", "go build", "make", "gradle", "package_local.sh", "quick_run.sh"]
+        let built = calls.contains { call in
+            guard call.kind == .command else { return false }
+            let text = call.title + " " + (call.detail ?? "")
+            return builds.contains { text.contains($0) }
+        }
+        let edits = calls.count { $0.status == .completed && ($0.kind == .edit || !$0.edits.isEmpty) }
+        // The template's own placeholder line is not a decision.
+        let accepted = reply.components(separatedBy: .newlines).count { line in
+            line.range(of: #"Finding \d+:\s*accepted"#, options: [.regularExpression, .caseInsensitive]) != nil
+                && !line.contains("<what you changed>")
+        }
+        app.updateHydraJob(jobID, of: threadID) { job in
+            if built { job.leadBuilt = true }
+            if kind != .request { job.leadEditsAfterReports += edits }
+            if kind == .review { job.reviewAccepted = (job.reviewAccepted ?? 0) + accepted }
+        }
+        if kind == .review { hydraReviewJobID = nil }
     }
 
     /// How many tasks one delegation block may send out. Well past what a lead writes in

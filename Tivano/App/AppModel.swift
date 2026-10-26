@@ -52,6 +52,7 @@ final class AppModel {
     @ObservationIgnored private(set) var autoContinue: AutoContinue!
     @ObservationIgnored private(set) var voice: VoiceController!
     @ObservationIgnored private(set) var localControl: AppControlService!
+    @ObservationIgnored private(set) var remoteMCP: RemoteMCPService!
     /// How often each Tivano-run head has been started again after failing at the door
     /// (see `hydraHeadTurnFinished`); a head gets two more goes.
     @ObservationIgnored var hydraHeadRetries: [UUID: Int] = [:]
@@ -190,7 +191,11 @@ final class AppModel {
         autoContinue = AutoContinue(app: self)
         voice = VoiceController(app: self)
         localControl = AppControlService(app: self)
-        settings.onExternalControlChanged = { [weak self] in self?.localControl.refreshListening() }
+        remoteMCP = RemoteMCPService(app: self)
+        settings.onExternalControlChanged = { [weak self] in
+            self?.localControl.refreshListening()
+            self?.remoteMCP.refresh()
+        }
         settings.onSleepPreventionChanged = { [weak self] in
             self?.updateTaskSleepPrevention()
         }
@@ -394,6 +399,7 @@ final class AppModel {
         threads = library.threads + threads.filter { !knownThreads.contains($0.id) }
         isLibraryLoaded = true
         localControl.refreshListening()
+        remoteMCP.refresh()
         updateDockBadge()
         libraryLoad = nil
         let permissionsLowered = announceLoweredPermissions()
@@ -1802,15 +1808,16 @@ final class AppModel {
         guard commitLibrary(currentLibrary()) else { throw ControlFailure(code: .persistence) }
     }
 
-    func createExternalThread(_ request: ControlCreate, provider: ProviderKind) throws -> ChatThread {
+    func createExternalThread(_ request: ControlCreate, provider: ProviderKind, runtimeMode: RuntimeMode = .supervised) throws -> ChatThread {
         try requireExternalPersistence()
         if let projectID = request.projectID, project(projectID) == nil { throw ControlFailure(code: .missingProject) }
         guard request.workspace != .worktree || request.projectID != nil else { throw ControlFailure(code: .unsupported) }
-        // Never grant permissions implicitly to a provider that cannot ask first.
-        guard provider.supports(.supervised) else { throw ControlFailure(code: .unsupported) }
+        // Never grant permissions implicitly to a provider that cannot ask first. Full access
+        // comes only from the owner's explicit Remote MCP setting.
+        guard provider.supports(runtimeMode) else { throw ControlFailure(code: .unsupported) }
         if let project = project(request.projectID) { try Self.requireControlDirectory(project.path) }
         var thread = ChatThread(projectID: request.projectID, provider: provider, model: request.model,
-                                effort: nil, runtimeMode: .supervised)
+                                effort: nil, runtimeMode: runtimeMode)
         thread.hydraEnabled = false
         thread.hydraPairID = nil
         thread.temporaryHydraPair = nil
@@ -1963,8 +1970,14 @@ final class AppModel {
         // No externally-admitted operation may write beyond the updater's flush barrier.
         // Refuse rather than silently cancel accepted turns or half-created worktrees.
         localControl.suspendForShutdown()
+        remoteMCP.refresh()
         var flushed = false
-        defer { if !flushed { localControl.restoreAfterFailedShutdown() } }
+        defer {
+            if !flushed {
+                localControl.restoreAfterFailedShutdown()
+                remoteMCP.refresh()
+            }
+        }
         guard !localControl.hasPendingMutations else {
             alert = AppAlert(title: "Local control is busy", message: "Wait for accepted local-control operations to end before quitting or updating.")
             return false

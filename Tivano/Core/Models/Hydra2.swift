@@ -11,6 +11,14 @@ enum HydraMode: String, Codable, Hashable, Sendable {
     case v2
 }
 
+/// How readily a v2 lead hands work to heads. Restrained delegates only for parallel
+/// pieces or heavy reading; active also sends bounded mechanical work out, even one
+/// piece. Replaces v1's message-routing switches while Hydra 2.0 is on.
+enum HydraTilt: String, Codable, CaseIterable, Hashable, Sendable {
+    case restrained
+    case active
+}
+
 /// The three lines every v2 head ends its report with. Nil fields mean the head wrote
 /// "none"; a report without the lines parses to nil and the raw reply stands alone.
 struct HydraReportNotes: Codable, Hashable, Sendable {
@@ -97,6 +105,8 @@ struct HydraJobRecord: Codable, Hashable, Identifiable, Sendable {
     var headsModel: String?
     var headsEffort: String?
     var headsNote: String?
+    /// The delegation tilt the request ran on; nil on records from before it existed.
+    var tilt: HydraTilt?
     /// The lead checkout's HEAD when the request started, and whether it had
     /// uncommitted work: the base a replay of this job starts from.
     var baseCommit: String?
@@ -112,6 +122,8 @@ struct HydraJobRecord: Codable, Hashable, Identifiable, Sendable {
     var reviewFindings: Int?
     var reviewAccepted: Int?
     var reviewSkipped: String?
+    /// A review that came back while the lead was busy: delivered at its next settle.
+    var pendingReview: String?
     var merge: MergeOutcome?
 
     var isOpen: Bool { finishedAt == nil }
