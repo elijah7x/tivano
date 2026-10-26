@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v2.1.1",
-      "name": "Tivano 2.1.1",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v2.1.1/Tivano-2.1.1.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## Bug fixes\n\n- DeepSeek Harness no longer turns desktop profiles off and warns in every chat each time the DeepSeek Harness app updates: Tivano checks each new version once and keeps loading the profile whenever it fits. Only a version that really changed what Tivano reads runs without the profile, with one notice for that version.\n\n## 简体中文\n\n## 问题修复\n\n- DeepSeek Harness 应用每次更新后，不再在每个对话中关闭桌面配置并提示版本不一致：Tivano 会对每个新版本检测一次，兼容时照常加载桌面配置；只有确实改变了 Tivano 所依赖内部结构的版本才会不加载桌面配置，且该版本只提示一次。\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-10-26T06:55:53Z",
+      "tag_name": "v2.1.8",
+      "name": "Tivano 2.1.8",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v2.1.8/Tivano-2.1.8.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## New features\n\n- Settings › Storage (formerly Archive) shows how much space Tivano uses on this Mac, split into chats, archived chats and worktrees. Each worktree lists who uses it and how much is dependencies and build output; Free up space deletes just the build files, or an unused worktree whose branch and commits stay. Archived chats are managed on the same page, and deleting one can take its worktree with it.\n- Alpha › Remote MCP lets cloud agents such as Muse or Grok Bot control Tivano over MCP through a tunnel you run. Tivano listens on this Mac only, each agent signs in with OAuth and needs your approval in Tivano once, and connected agents can be disconnected at any time. Agents can list and read chats, create chats and send messages; approvals and questions inside chats still wait for you unless you turn on Run remote threads without approval. Off by default.\n\n## Refinements\n\n- With Hydra 2.0 on, Settings › Hydra replaces the two message switches with one choice of how much heads take on: Restrained gives heads parallel pieces, heavy reading and larger self-contained pieces as the job calls for them; Proactive prefers to hand them whatever the lead can brief on its own, single edits included, while the lead keeps small or delicate pieces. Every message now goes to the lead, which decides what the heads take.\n\n## Bug fixes\n\n- Hydra 2.0's review is no longer lost when the lead is busy as it finishes: its findings reach the lead at the end of the lead's next turn. The job record now also keeps how many findings the lead accepted, whether the lead ran a build, and the edits it made after the heads' reports.\n\n- A pinned DeepSeek Harness model no longer switches between \"V4.1 Flash\" and \"V4.1 Flash · DeepSeek account\" depending on what the last model listing held: the route is named only where the same model also appears on another route.\n\n## 简体中文\n\n## 新功能\n\n- 设置中的“归档”改为“存储空间”：显示 Tivano 在此 Mac 上的占用，分为聊天、已归档的聊天和 worktree。每个 worktree 会注明谁在使用、其中多少是依赖和构建产物；“释放空间”可只删除构建文件，或删除无人使用的 worktree（分支和提交保留）。已归档的聊天也在同一页管理，删除时可一并删除它的 worktree。\n- Alpha › 远程 MCP：Muse、Grok Bot 等云端代理可通过你自己运行的隧道，以 MCP 控制 Tivano。Tivano 只在本机监听，每个代理通过 OAuth 登录，并需先在 Tivano 中获得你的一次批准；已连接的代理可随时断开。代理可以列出和读取对话、新建对话和发送消息；对话中的审批和问题仍需你处理，除非开启“远程对话免审批运行”。默认关闭。\n\n## 优化改进\n\n- 开启 Hydra 2.0 后，设置 › Hydra 里的两个消息开关换成一个选项：heads 承担多少工作。“克制”按需把可并行的部分、大量阅读和较大的独立部分交给 heads；“积极”会优先把能单独写清任务的部分交给 heads，单项修改也包括在内，细小或要求精细的部分仍由主智能体处理。所有消息都先交给主智能体，由它决定哪些交给 heads。\n\n## 问题修复\n\n- Hydra 2.0 的审查结果不再因审查完成时主智能体正忙而丢失：它会在主智能体下一轮结束时送达。任务记录现在也会保存主智能体采纳了几条意见、是否运行过构建，以及在 heads 回报后做了多少修改。\n\n- 已固定的 DeepSeek Harness 模型不再因最近一次模型列表的内容，在“V4.1 Flash”和“V4.1 Flash · DeepSeek 账号”之间来回切换：只有同一处也出现该模型的另一条线路时，才会注明线路。\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-10-26T14:33:47Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-2.1.1.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v2.1.1/Tivano-2.1.1.dmg",
-          "size": 9910396,
-          "sha256": "a391364278df1c0d55957e395fd77b0f1c66baf5c55abd11e81ebf2f6287779a"
+          "name": "Tivano-2.1.8.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v2.1.8/Tivano-2.1.8.dmg",
+          "size": 10017046,
+          "sha256": "04b316d1d32f5a6240b07649aa3c2bb2898af996cad708b08610c27125f3190b"
         }
       ]
     }
