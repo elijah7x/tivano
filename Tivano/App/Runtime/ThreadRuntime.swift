@@ -371,6 +371,11 @@ final class ThreadRuntime {
     /// Heads by the tool row that stands for them in this timeline, so the row can show
     /// who was sent out.
     private(set) var hydraToolHeads: [String: UUID] = [:]
+    /// The decision layer and ledger of the lead's current request. A v2 packet keeps only
+    /// the user's request here; each delegation block adds its own team before it goes out.
+    @ObservationIgnored private(set) var hydraJobMode: HydraMode = .v1
+    @ObservationIgnored private var hydraJobID: UUID?
+    @ObservationIgnored private var hydraJobPacketRequest: HydraHandoffPacket?
     /// Reports from Tivano-run heads waiting for the lead to be idle.
     @ObservationIgnored private var hydraPendingReports: [HydraReport] = []
     /// The reports' turn is on its way (see `flushHydraReports`): a head finishing in the
@@ -452,6 +457,8 @@ final class ThreadRuntime {
     private struct HydraBatch {
         var pending: Set<UUID>
         var reports: [HydraReport] = []
+        var jobID: UUID? = nil
+        var packet: HydraHandoffPacket? = nil
     }
     var diffSelection: UUID?
     /// The view the changes popover should open on: a tool row's label, a turn's Review
@@ -703,6 +710,11 @@ final class ThreadRuntime {
     init(threadID: UUID, app: AppModel) {
         self.threadID = threadID
         self.app = app
+        if let job = app.openHydraJob(of: threadID), job.mode == .v2 {
+            hydraJobMode = .v2
+            hydraJobID = job.id
+            hydraJobPacketRequest = HydraHandoffPacket(request: job.request)
+        }
         isLoadingHistory = true
         let prefetched = DocumentPrefetch.shared.take(threadID)
         if let prefetched { install(prefetched, prepared: true) }
@@ -875,6 +887,12 @@ final class ThreadRuntime {
                 : "This chat's history couldn't be read. Tivano kept the files in %@."), keptAt.path)
             append(TimelineItem(turnID: nil, content: .notice(Notice(level: .warning, message: message))))
             saveRevision += 1
+        }
+        if hydraJobMode == .v2, let job = app?.openHydraJob(of: threadID), job.id == hydraJobID,
+           let turnID = job.turnID, let turn = turns.first(where: { $0.id == turnID }),
+           let itemID = turn.userItemID, let entry = entryIndex[itemID],
+           case .user(let message) = entry.item.content {
+            hydraJobPacketRequest?.attachments = message.attachments.map(\.path)
         }
         if saveRevision != lastSavedRevision { scheduleSave() }
     }
@@ -1410,8 +1428,9 @@ final class ThreadRuntime {
     /// Sends a prompt out as a Tivano-run head with a note on what the lead is doing, or
     /// that it is idle. Returns whether the head went out.
     private func dispatchHead(_ prompt: FollowUpPrompt, origin: HydraHeadInfo.Origin) -> Bool {
-        guard let app, let thread, !thread.isArchived, let launch = app.hydraLaunch(for: thread),
-              launch.hasRoom(running: app.runningTivanoHeads(of: threadID)) else { return false }
+        guard let app, let thread, !thread.isArchived, var launch = app.hydraLaunch(for: thread) else { return false }
+        launch.mode = hydraJobMode
+        guard launch.hasRoom(running: app.runningTivanoHeads(of: threadID)) else { return false }
         guard app.beginThreadTurn(threadID) else { return false }
         let task = TextCleanup.singleLine(prompt.text, limit: 60)
         let context = app.hydraChatContext(for: threadID)
@@ -1664,6 +1683,16 @@ final class ThreadRuntime {
             $0.unreadRevision = UUID()
         }
         app.updateDockBadge()
+        if hydraHeads == nil, !hydraBrief, initialThread.hydra == nil, app.hydraIsOn(initialThread) {
+            hydraJobMode = app.settings.isHydra2Enabled ? .v2 : .v1
+            if hydraJobMode == .v2 {
+                hydraJobPacketRequest = HydraHandoffPacket(request: text, attachments: attachments.map(\.path))
+                hydraJobID = await app.beginHydraJob(for: threadID, turnID: turn.id, request: text)
+            } else {
+                hydraJobID = nil
+                hydraJobPacketRequest = nil
+            }
+        }
         endDelegationStream()
         hydraCurrentTurnTouchedPaths = []
         // `hydraHeads == nil` marks a turn of the user's own: it starts the request's
@@ -1796,12 +1825,30 @@ final class ThreadRuntime {
             // and Claude, Codex and Copilot) gets the team note here; every other CLI also
             // gets the policy, having nowhere else to keep it. The user's enabled delegation
             // request is added below both paths.
-            if let launch = app.hydraLaunch(for: thread) {
+            if var launch = app.hydraLaunch(for: thread) {
+                launch.mode = hydraJobMode
                 let merge = launch.autoMerges ? HydraPrompts.mergeStatus(merges: hydraMerges, unmergedFiles: app.hydraUnmergedFileCount(of: threadID)) : nil
                 let team = HydraPrompts.teamStatus(app.hydraTeam(of: threadID).compactMap(\.hydra))
                 let canDelegate = hydraBudget.canDelegate
+                // A v2 review turn (`hydraHeads == []`) carries no reports: it gets the plain
+                // note, not the report note's invitation to send heads out again.
+                let isReview = hydraJobMode == .v2 && hydraHeads?.isEmpty == true
                 if Self.keepsHydraPolicyInSystemPrompt(thread.provider) {
-                    prompt = (hydraHeads == nil ? HydraPrompts.fallbackTurnNote(team: team, merge: merge) : HydraPrompts.fallbackReportNote(team: team, merge: merge, canDelegate: canDelegate)) + prompt
+                    if hydraHeads == nil || isReview {
+                        prompt = HydraPrompts.fallbackTurnNote(team: team, merge: merge) + prompt
+                    } else {
+                        let note = hydraJobMode == .v2
+                            ? HydraPrompts.v2ReportNote(team: team, merge: merge, canDelegate: canDelegate)
+                            : HydraPrompts.fallbackReportNote(team: team, merge: merge, canDelegate: canDelegate)
+                        prompt = note + prompt
+                    }
+                } else if hydraJobMode == .v2 {
+                    if hydraHeads == nil || isReview {
+                        let note = HydraPrompts.fallbackTurnNote(team: team, merge: merge)
+                        prompt = HydraPrompts.v2Policy(launch) + "\n\n" + (note.isEmpty ? "---\n\n" : note) + prompt
+                    } else {
+                        prompt = HydraPrompts.v2Policy(launch) + "\n\n" + HydraPrompts.v2ReportNote(team: team, merge: merge, canDelegate: canDelegate) + prompt
+                    }
                 } else if hydraHeads == nil {
                     prompt = HydraPrompts.fallbackPreamble(launch, team: team, merge: merge) + prompt
                 } else {
@@ -1811,7 +1858,7 @@ final class ThreadRuntime {
                 // user-input boundary as well as keeping the routing policy in the session.
                 // Automatic reports retain their round limit and review-only instructions.
                 if hydraHeads == nil {
-                    prompt = HydraPrompts.delegationRequest(launch) + prompt
+                    prompt = (hydraJobMode == .v2 ? HydraPrompts.v2DelegationRequest(launch) : HydraPrompts.delegationRequest(launch)) + prompt
                 }
             }
             // Leave slash commands at the start of the input; deliver guidance with the next ordinary message.
@@ -1992,7 +2039,8 @@ final class ThreadRuntime {
         if app.hydraIsOn(thread), let pair = app.hydraPair(for: thread), app.hydraHeadsProvider(of: pair) != thread.provider {
             await app.providers.loadCatalog(app.hydraHeadsProvider(of: pair))
         }
-        let hydra = app.hydraLaunch(for: thread)
+        var hydra = app.hydraLaunch(for: thread)
+        hydra?.mode = hydraJobMode
         let signature = SessionSignature(
             provider: thread.provider,
             directory: directory,
@@ -3480,16 +3528,19 @@ final class ThreadRuntime {
         }
         app?.turnFinished(threadID, status: status, continues: continues, turnID: turnID, userStopped: userStopped)
         // The job is done: the lead has answered, every head is back and nothing is
-        // waiting. With the setting on, the work goes out and lands by itself, whether
-        // heads took part or the lead did it all; a job that changed no file is let be.
-        // A merge while any head is still at work would commit its half-done files and
-        // then, the head having finished before the next turn began, never come back for
-        // the rest.
+        // waiting. A v2 job settles its review and merge here; a v1 job auto-merges only
+        // with the setting on. A merge while any head is still at work would commit its
+        // half-done files and then never come back for the rest.
         if !continues, status == .completed,
            hydraPendingReports.isEmpty, hydraBatches.isEmpty, hydraWaiting.isEmpty,
-           let app, let thread, app.hydraIsOn(thread), app.settings.hydraAutoMerge,
+           let app, let thread, app.hydraIsOn(thread),
+           hydraJobMode == .v2 || app.settings.hydraAutoMerge,
            app.runningHydraHeads(of: threadID) == 0 {
-            Task { await app.autoMergeHydraWork(of: threadID) }
+            if hydraJobMode == .v2 {
+                Task { await app.settleHydraJob(of: threadID) }
+            } else if app.settings.hydraAutoMerge {
+                Task { await app.autoMergeHydraWork(of: threadID) }
+            }
         }
     }
 
@@ -3581,7 +3632,7 @@ final class ThreadRuntime {
             let report = HydraReport(
                 headIndex: info.index, task: info.task, origin: info.origin, status: status, text: summary ?? "",
                 landing: landing, copyPath: copyPath, elapsed: Date.now.timeIntervalSince(info.startedAt), toolCalls: info.toolCalls,
-                provider: provider, startupFailure: startupFailure
+                provider: provider, startupFailure: startupFailure, notes: info.reportNotes
             )
             hydraPendingReports.removeAll { $0.headIndex == info.index }
             if let batchID = info.batchID, hydraBatches[batchID] != nil {
@@ -3646,9 +3697,20 @@ final class ThreadRuntime {
         let sent = Set(reports.map(\.headIndex))
         hydraPendingReports.removeAll { sent.contains($0.headIndex) }
         let stillWorking = app.workingHydraHeadNames(of: threadID, excluding: sent)
-        let text = HydraPrompts.reportMessage(reports, stillWorking: stillWorking, reviewsHeads: app.settings.hydraReviewHeads)
+        let text = hydraJobMode == .v2
+            ? HydraPrompts.v2ReportMessage(reports, stillWorking: stillWorking)
+            : HydraPrompts.reportMessage(reports, stillWorking: stillWorking, reviewsHeads: app.settings.hydraReviewHeads)
         await ensureLoaded()
         await startTurn(text: text, attachments: [], hydraHeads: reports.map(\.headIndex))
+    }
+
+    /// Hydra 2: hands the cross-vendor review of the job's work to the lead as a turn of
+    /// its own, like a report (see `AppModel.reviewHydraJob`).
+    func sendHydraReview(_ text: String) async {
+        guard phase == .idle, !isReverting else { return }
+        autoStartedTurnToken &+= 1
+        await ensureLoaded()
+        await startTurn(text: text, attachments: [], hydraHeads: [])
     }
 
     /// How many tasks one delegation block may send out. Well past what a lead writes in
@@ -3707,14 +3769,18 @@ final class ThreadRuntime {
         // The row holding the block: the last reply row that has one, since a reply can
         // come as several rows with tool calls between them and the block may sit in any
         // of them; with none, the last reply row (which may be empty of blocks).
-        guard let app, let thread, let launch = app.hydraLaunch(for: thread),
+        guard let app, let thread, var launch = app.hydraLaunch(for: thread),
               let entry = entries.last(where: { $0.turnID == turnID && $0.kind == .assistant && Self.holdsDelegationBlock($0) })
                 ?? entries.last(where: { $0.turnID == turnID && $0.kind == .assistant }),
               case .assistant(var message) = entry.item.content else { return .none }
+        launch.mode = hydraJobMode
         // A block read as it streamed: an entry that closed after the last flush goes out
-        // now, then the block is finished here rather than read again from the top.
-        scanStreamedDelegations(entryID: hydraStream?.entryID ?? entry.id, turnID: turnID, text: message.text)
-        if let stream = hydraStream, stream.turnID == turnID,
+        // now, then the block is finished here rather than read again from the top. V2
+        // waits for the complete reply so every brief can carry the whole team.
+        if hydraJobMode == .v1 {
+            scanStreamedDelegations(entryID: hydraStream?.entryID ?? entry.id, turnID: turnID, text: message.text)
+        }
+        if hydraJobMode == .v1, let stream = hydraStream, stream.turnID == turnID,
            let streamedEntry = entryIndex[stream.entryID],
            case .assistant(var streamedMessage) = streamedEntry.item.content {
             hydraStream = nil
@@ -3776,6 +3842,9 @@ final class ThreadRuntime {
             scheduleSave()
             return refuseBlock(HydraPrompts.heldBackMessage(count: delegations.count), dropped: "This request has had all \(HydraPrompts.maxDelegationRounds) of its rounds of heads, and the lead had been told so already.")
         }
+        if hydraJobMode == .v2 {
+            return spawnV2DelegatedHeads(app: app, thread: thread, launch: launch, entry: entry, message: message, stripped: stripped, delegations: delegations)
+        }
         hydraBudget.chargeRound()
         // The card stays a moment in its sent state, then leaves the reply (see `holdSentDelegationBlock`).
         message.text = HydraPrompts.markingDelegationBlockSent(message.text)
@@ -3799,6 +3868,148 @@ final class ThreadRuntime {
         settleBatches()
         scheduleSave()
         return hydraBatches.isEmpty && hydraWaiting.isEmpty ? .none : .headsOut
+    }
+
+    private func spawnV2DelegatedHeads(app: AppModel, thread: ChatThread, launch: HydraLaunch, entry: TimelineEntry, message: AssistantMessage, stripped: String, delegations: [HydraDelegation]) -> DelegationOutcome {
+        var message = message
+        let planned = v2DelegationsWithRosterNames(delegations, app: app, thread: thread)
+        func refuse(_ refusal: String) -> DelegationOutcome {
+            message.text = stripped.isEmpty ? "Asking for heads." : stripped
+            entry.item.content = .assistant(message)
+            saveRevision += 1
+            scheduleSave()
+            return refuseBlock(refusal, dropped: "Its delegation block was refused, and it had been told so already.")
+        }
+        let missing = planned.filter { $0.continueHead == nil && $0.files.isEmpty }
+        guard missing.isEmpty else {
+            return refuse(HydraPrompts.v2MissingFilesRefusal(tasks: missing.map(\.task)))
+        }
+        var owners: [String: [String]] = [:]
+        for delegation in planned {
+            let name = delegation.continueHead ?? delegation.name ?? delegation.task
+            var seen: Set<String> = []
+            for file in delegation.files {
+                let path = Self.v2OwnershipPath(file)
+                guard !path.isEmpty, seen.insert(path).inserted else { continue }
+                owners[path, default: []].append(name)
+            }
+        }
+        let overlaps = owners.filter { $0.value.count > 1 }
+        guard overlaps.isEmpty else {
+            return refuse(HydraPrompts.v2OverlapRefusal(overlaps))
+        }
+
+        hydraBudget.chargeRound()
+        if let jobID = hydraJobID {
+            app.updateHydraJob(jobID, of: threadID) { $0.rounds += 1 }
+        }
+        let dispatched = Array(planned.prefix(Self.maxDelegatedTasks))
+        var packet = hydraJobPacketRequest ?? HydraHandoffPacket(request: app.openHydraJob(of: threadID)?.request ?? "")
+        packet.team = dispatched.map {
+            HydraHandoffPacket.Member(name: $0.continueHead ?? $0.name ?? $0.task, task: $0.task, files: $0.files)
+        }
+        message.text = HydraPrompts.markingDelegationBlockSent(message.text)
+        entry.item.content = .assistant(message)
+        saveRevision += 1
+        let batchID = UUID()
+        hydraBatches[batchID] = HydraBatch(pending: [], jobID: hydraJobID, packet: packet)
+        hydraWaiting += dispatched.filter { $0.continueHead == nil }.map { (delegation: $0, batchID: batchID, queuedAt: Date.now) }
+        if delegations.count > Self.maxDelegatedTasks {
+            let dropped = delegations.count - Self.maxDelegatedTasks
+            appendHydraNote("""
+                Not every task went out
+                \(Self.maxDelegatedTasks) of the \(delegations.count) tasks in that block went to heads. The last \(dropped) did not: ask for them again once these report back.
+                """)
+        }
+
+        var refusals: [String] = []
+        for delegation in dispatched {
+            guard let name = delegation.continueHead else { continue }
+            guard let head = app.hydraTeam(of: threadID).first(where: {
+                $0.hydra?.persona.name.compare(name, options: .caseInsensitive) == .orderedSame
+            }) else {
+                refusals.append(HydraPrompts.v2ContinueRefusal(name: name, reason: "no such head in this job"))
+                continue
+            }
+            // Pending before it is sent back, so a report that comes quickly still joins
+            // this batch instead of going out on its own.
+            let previousBatch = head.hydra?.batchID
+            app.updateHydraHead(head.id) { $0.batchID = batchID }
+            hydraBatches[batchID]?.pending.insert(head.id)
+            if let reason = app.continueHydraHead(named: name, of: threadID, delegation: delegation, packet: packet) {
+                hydraBatches[batchID]?.pending.remove(head.id)
+                app.updateHydraHead(head.id) { $0.batchID = previousBatch }
+                refusals.append(HydraPrompts.v2ContinueRefusal(name: name, reason: reason))
+                continue
+            }
+            if let jobID = hydraJobID {
+                app.updateHydraJob(jobID, of: threadID) { job in
+                    if let index = job.heads.firstIndex(where: { $0.headID == head.id }) {
+                        job.heads[index].continuations += 1
+                    } else {
+                        var record = HydraJobHeadRecord(headID: head.id, name: head.hydra?.persona.name ?? name, files: delegation.files)
+                        record.continuations = 1
+                        job.heads.append(record)
+                    }
+                }
+            }
+        }
+        spawnWaitingHeads(launch: launch)
+
+        let hasPending = hydraBatches[batchID]?.pending.isEmpty == false
+        let hasWaiting = hydraWaiting.contains { $0.batchID == batchID }
+        if !refusals.isEmpty, !hasPending, !hasWaiting {
+            hydraBatches[batchID] = nil
+            message.text = stripped.isEmpty ? "Asking for more heads." : stripped
+            entry.item.content = .assistant(message)
+            saveRevision += 1
+            scheduleSave()
+            return refuseBlock(refusals.joined(separator: "\n\n"), dropped: "Its continuation was refused, and it had been told so already.")
+        }
+        holdSentDelegationBlock(entry.id)
+        settleBatches()
+        scheduleSave()
+        if !refusals.isEmpty {
+            let outcome = refuseBlock(refusals.joined(separator: "\n\n"), dropped: "Its continuation was refused, and it had been told so already.")
+            if outcome == .none, !hydraBatches.isEmpty || !hydraWaiting.isEmpty { return .headsOut }
+            return outcome
+        }
+        return hydraBatches.isEmpty && hydraWaiting.isEmpty ? .none : .headsOut
+    }
+
+    /// Resolves the roster names before any head goes out, so the packet can name the whole
+    /// block. This mirrors the spawner's pin/fallback order without creating the heads.
+    private func v2DelegationsWithRosterNames(_ delegations: [HydraDelegation], app: AppModel, thread: ChatThread) -> [HydraDelegation] {
+        let team = app.hydraTeam(of: threadID)
+        var taken = Set(team.compactMap { $0.hydra?.index })
+        let finished = Set(team.filter { $0.hydra?.isFinished == true }.compactMap { $0.hydra?.index })
+        let rosterCount = HydraRoster.personas.count
+        var spawnCount = thread.hydraSpawnCount
+        var sequential = team.isEmpty ? 0 : spawnCount
+        return delegations.map { delegation in
+            guard delegation.continueHead == nil else { return delegation }
+            var pinned: Int?
+            if let base = delegation.name.flatMap(HydraRoster.index(named:)) {
+                var candidate = base
+                while taken.contains(candidate), finished.contains(candidate) { candidate += rosterCount }
+                if !taken.contains(candidate) { pinned = candidate }
+            }
+            var fallback = sequential
+            while taken.contains(fallback) { fallback += 1 }
+            let index = pinned ?? fallback
+            taken.insert(index)
+            spawnCount = max((pinned == nil ? index : sequential) + 1, spawnCount + 1)
+            sequential = spawnCount
+            var planned = delegation
+            planned.name = HydraRoster.persona(at: index).name
+            return planned
+        }
+    }
+
+    private static func v2OwnershipPath(_ file: String) -> String {
+        var path = file.trimmingCharacters(in: .whitespacesAndNewlines)
+        while path.hasPrefix("./") { path.removeFirst(2) }
+        return path
     }
 
     /// The delegation card keeps its place for `HydraPrompts.delegationSentHold` once the
@@ -3841,10 +4052,10 @@ final class ThreadRuntime {
         return .turnStarted
     }
 
-    /// Heads go out as their entries close so the first is at work while the lead writes
+    /// V1 heads go out as their entries close so the first is at work while the lead writes
     /// the rest; the batch is made on the first entry and the round counted then; the cap
     /// paces the rest through `hydraWaiting`; `spawnDelegatedHeads` finishes the block
-    /// at the end of the turn.
+    /// at the end of the turn. V2 skips this reader and dispatches the complete block.
     ///
     /// The block is read by `delegationParser`, which keeps its place in the row between
     /// flushes, so a long reply is walked once rather than from the top on every flush.
@@ -3852,8 +4063,10 @@ final class ThreadRuntime {
     /// the last flush. Entries are held to once per parser: the count already out lives in
     /// `hydraStream`, so a re-read row cannot send a head twice.
     private func scanStreamedDelegations(entryID: String, turnID: UUID, text: String, isDelta: Bool = false) {
-        guard let app, let thread, let launch = app.hydraLaunch(for: thread),
+        guard hydraJobMode == .v1 else { return }
+        guard let app, let thread, var launch = app.hydraLaunch(for: thread),
               entryIndex[entryID]?.turnID == turnID else { return }
+        launch.mode = hydraJobMode
         if let hydraStream, hydraStream.entryID != entryID || hydraStream.turnID != turnID { return }
         var parser: HydraDelegationStreamParser
         if isDelta, let existing = delegationParser, existing.entryID == entryID, existing.turnID == turnID {
@@ -3895,7 +4108,8 @@ final class ThreadRuntime {
     /// a pair, or an uncapped one, all of them.
     private func spawnWaitingHeads(launch: HydraLaunch? = nil) {
         guard let app, let thread, !hydraWaiting.isEmpty else { return }
-        let launch = launch ?? app.hydraLaunch(for: thread)
+        var launch = launch ?? app.hydraLaunch(for: thread)
+        launch?.mode = hydraJobMode
         // Heads not on the provider the pair names (it is off or not installed): said once
         // per job, in the lead's timeline, rather than never.
         if let pair = app.hydraPair(for: thread), let note = app.hydraHeadsFallbackNote(of: pair), hydraFallbackNoted != pair.id {
@@ -3905,15 +4119,30 @@ final class ThreadRuntime {
         while !hydraWaiting.isEmpty, launch?.hasRoom(running: app.runningTivanoHeads(of: threadID)) ?? true {
             let next = hydraWaiting.removeFirst()
             let delegation = next.delegation
+            let batch = hydraBatches[next.batchID]
+            let packet = batch?.packet
             // The lead's announced name is authoritative: resolving it here pins the
             // spawned head to exactly that roster name. Unknown or already-taken names
             // resolve to nil and the head goes out next in order, as before.
             let preferredIndex = delegation.name.flatMap(HydraRoster.index(named:))
             guard let head = app.spawnTivanoHead(from: threadID, task: delegation.task, origin: .delegated, batchID: next.batchID, preferredIndex: preferredIndex, project: delegation.project, profile: delegation.profile, brief: { persona, workplace in
-                HydraPrompts.delegatedHeadPrompt(persona: persona, delegation: delegation, workplace: workplace)
+                if let packet {
+                    return HydraPrompts.v2HeadPrompt(persona: persona, delegation: delegation, workplace: workplace, packet: packet)
+                }
+                return HydraPrompts.delegatedHeadPrompt(persona: persona, delegation: delegation, workplace: workplace)
             }) else { continue }
             app.updateHydraHead(head.id) { $0.queuedAt = next.queuedAt }
             hydraBatches[next.batchID, default: HydraBatch(pending: [])].pending.insert(head.id)
+            if let jobID = batch?.jobID {
+                let name = head.hydra?.persona.name ?? delegation.name ?? delegation.task
+                app.updateHydraJob(jobID, of: threadID) { job in
+                    if let index = job.heads.firstIndex(where: { $0.headID == head.id }) {
+                        job.heads[index].files = delegation.files
+                    } else {
+                        job.heads.append(HydraJobHeadRecord(headID: head.id, name: name, files: delegation.files))
+                    }
+                }
+            }
         }
     }
 

@@ -803,7 +803,7 @@ private struct NewThreadModelPicker: View {
             }
             editorRow("Model") {
                 GlassPickerButton(
-                    options: [(String?.none, "Choose a model")] + options.map { (Optional($0.id), $0.shortName) },
+                    options: [(String?.none, "Choose a model")] + options.map { (Optional($0.id), $0.qualifiedName) },
                     selection: Binding(
                         get: { selectedOption?.id },
                         set: { id in

@@ -73,6 +73,32 @@ enum TextGeneration {
         return message.isEmpty ? nil : message
     }
 
+    static func review(_ prompt: String, engine: Engine, directory: URL) async -> String? {
+        switch engine {
+        case .claude(let executable, let environment):
+            let arguments = [
+                "-p", "--output-format", "text", "--tools", "",
+                "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
+                "--no-session-persistence",
+            ]
+            guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900),
+                  result.succeeded else { return nil }
+            return result.trimmedOutput.nilIfEmpty
+        case .codex(let executable, let environment, let model):
+            let output = FileManager.default.temporaryDirectory.appendingPathComponent("tivano-\(UUID().uuidString).txt")
+            defer { try? FileManager.default.removeItem(at: output) }
+            let arguments = [
+                "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model,
+                "--config", "model_reasoning_effort=\"high\"", "--output-last-message", output.path, "-",
+            ]
+            guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900),
+                  result.succeeded else { return nil }
+            return (try? String(contentsOf: output, encoding: .utf8))?
+                .trimmed
+                .nilIfEmpty
+        }
+    }
+
     private static func run(_ prompt: String, engine: Engine, directory: URL) async -> String? {
         switch engine {
         case .claude(let executable, let environment):

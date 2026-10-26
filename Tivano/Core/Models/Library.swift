@@ -217,6 +217,9 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var hydraSpawnCount = 0
     /// Set on a head: the thread is one of its parent's team.
     var hydra: HydraHeadInfo?
+    /// Hydra 2 (Labs): one record per user request a lead ran on v2, for scoring.
+    /// Append-only; see `HydraJobRecord`.
+    var hydraJobs: [HydraJobRecord] = []
 
     /// Spawned from another thread, whichever side of the panel it is on.
     var isHelper: Bool { parentThreadID != nil }
@@ -345,6 +348,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         temporaryHydraPair = container.value(.temporaryHydraPair, default: nil)
         hydraSpawnCount = container.value(.hydraSpawnCount, default: 0)
         hydra = container.value(.hydra, default: nil)
+        hydraJobs = container.value(.hydraJobs, default: [])
     }
 }
 

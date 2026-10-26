@@ -75,6 +75,9 @@ struct HydraPair: Codable, Hashable, Identifiable, Sendable {
     /// The purpose-tuned heads of the pair's advanced mode; empty, every head runs on the
     /// shared worker fields above, as before.
     var headProfiles: [HydraHeadProfile]
+    /// What the pair's heads are good at, in the user's words ("fast, for mechanical
+    /// edits", "front-end"). Hydra 2 puts it in the lead's policy; nil or blank is none.
+    var headsNote: String?
 
     static let maxHeadsRange = 1...8
 
@@ -98,6 +101,7 @@ struct HydraPair: Codable, Hashable, Identifiable, Sendable {
         name = container.value(.name, default: nil)
         maxHeads = Self.clampedCap(container.value(.maxHeads, default: nil))
         headProfiles = container.value(.headProfiles, default: [])
+        headsNote = container.value(.headsNote, default: nil)
     }
 
     /// The provider the heads run on: the lead's, unless the pair sends them elsewhere.
@@ -160,6 +164,15 @@ struct HydraLaunch: Hashable, Sendable {
     /// The projects in the sidebar, the chat's own first: the lead may send a head to any
     /// of them by name, and its work lands and merges there.
     var projects: [HydraProjectRef] = []
+    /// The decision layer this launch runs (Hydra 2.0 in Labs). Part of the session
+    /// signature, so a flip of the switch rebuilds the session on the other policy.
+    var mode: HydraMode = .v1
+    /// The pair's note on what its heads are good at; Hydra 2 only.
+    var headsNote: String?
+    /// Whether the heads run on exactly the lead's provider and model: no pair, or a
+    /// pair that changes nothing. Hydra 2 then delegates only for parallel or
+    /// context-isolating work.
+    var headsMatchLead = true
 
     /// How many Tivano-run heads may work at once for a pair with no cap of its own. The
     /// tasks past it wait their turn (`ThreadRuntime.spawnWaitingHeads`) and go out as
@@ -389,6 +402,12 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
     /// lead's turns, and a merge that only counted heads finished since its first
     /// unmerged turn began skipped exactly those, leaving their files in the checkout.
     var mergedAt: Date?
+    /// Hydra 2: the decision layer the head was sent out under, and the three lines its
+    /// last report ended with. Nil on v1 heads.
+    var mode: HydraMode?
+    var reportNotes: HydraReportNotes?
+    /// Hydra 2: the job in the lead's `hydraJobs` this head belongs to.
+    var jobID: UUID?
 
     /// Explicit provenance for heads created by this version. Older/imported heads
     /// decode false; persona names or prompt text never establish ownership.
@@ -451,6 +470,9 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
         pendingProjectReference = container.value(.pendingProjectReference, default: nil)
         landing = container.value(.landing, default: nil)
         mergedAt = container.value(.mergedAt, default: nil)
+        mode = container.value(.mode, default: nil)
+        reportNotes = container.value(.reportNotes, default: nil)
+        jobID = container.value(.jobID, default: nil)
         tracksProviderHistory = container.value(.tracksProviderHistory, default: false)
         ownedCodexSessionID = container.value(.ownedCodexSessionID, default: nil)
         ownedCodexWorkingDirectory = container.value(.ownedCodexWorkingDirectory, default: nil)
@@ -528,6 +550,12 @@ struct HydraDelegation: Hashable, Sendable {
     /// The head profile the lead routed the task to (`"profile"` in the block); nil runs
     /// the head on the pair's shared worker model and effort.
     var profile: String?
+    /// Hydra 2: the paths this head owns (`"files"`). Two entries of one block may not
+    /// share a path.
+    var files: [String] = []
+    /// Hydra 2: the name of a finished head of this lead's job to send back to its part
+    /// in its own session (`"continue"`), instead of a new head.
+    var continueHead: String?
 }
 
 /// The stages a Hydra merge walks through, in this order, one dot each on the merging
@@ -581,6 +609,8 @@ struct HydraReport: Hashable, Sendable {
     /// The head failed with an error before a tool ran or a word was said: its provider's
     /// environment (install, sign-in, configuration, MCP servers) is at fault, not its task.
     var startupFailure = false
+    /// Hydra 2: the three lines the head's report ended with, when it wrote them.
+    var notes: HydraReportNotes?
 }
 
 /// The per-request budgets behind a lead's delegation blocks: how many rounds of heads
@@ -661,7 +691,7 @@ enum HydraPrompts {
     /// What a head is told about the checkout it works in and what it may do to it. The
     /// shared case is a head's lot when its project cannot be copied or the user turned
     /// the copies off.
-    private static func workplaceRules(_ workplace: Workplace) -> String {
+    static func workplaceRules(_ workplace: Workplace) -> String {
         switch workplace {
         case .ownCopy(let path):
             """
@@ -676,7 +706,7 @@ enum HydraPrompts {
     }
 
     /// How a head goes about its task, whatever provider runs it.
-    private static let howToWork = """
+    static let howToWork = """
     - Start on the task right away: read what you need and no more, then make the change.
     - A brief that names the file, the line and the change needs no second reading: make that edit first, then the next. Think briefly between tool calls; if you find yourself weighing designs for minutes, take the simplest reading of the brief and do it, and mention the choice in your report.
     - Do exactly this task and only this. Do not widen it, do not touch files it does not name unless it cannot be done otherwise, and never revert, reformat or clean up work that is not yours.
@@ -690,18 +720,18 @@ enum HydraPrompts {
     /// file, the line, the symbol and the exact change, nothing left open. A brief that
     /// offers alternatives or asks the head to read and reason first leaves a head on a
     /// slow model thinking for minutes between tool calls, and some never make an edit.
-    private static let briefRule = "Write each brief as numbered, executable steps naming the file, symbol or line anchor, and exact change. Resolve design choices first; ask no questions and offer no alternatives. Give enough context to begin editing within a few tool calls."
+    static let briefRule = "Write each brief as numbered, executable steps naming the file, symbol or line anchor, and exact change. Resolve design choices first; ask no questions and offer no alternatives. Give enough context to begin editing within a few tool calls."
 
     /// A lead may not put a check in a brief: every check is the lead's own. The rule
     /// says so in words the lead cannot mistake for its own.
-    private static let verificationRule = "Heads edit or research and report; they never build, test, lint or verify. Do not assign checks or request pass reports. Run required validation yourself in the checkout after the heads return."
+    static let verificationRule = "Heads edit or research and report; they never build, test, lint or verify. Do not assign checks or request pass reports. Run required validation yourself in the checkout after the heads return."
 
     /// Where heads work and where their work lands: this chat's project unless an entry
     /// names another. A worktree of a repository already in the sidebar reuses that
     /// project and keeps the named checkout; only a new repository is added. The merge
     /// goes out per checkout. The lead's own tools run in this chat's checkout, but
     /// nothing keeps it to that project.
-    private static func projectRule(_ projects: [HydraProjectRef]) -> String {
+    static func projectRule(_ projects: [HydraProjectRef]) -> String {
         let own = projects.first.map { "this chat's project, \($0.name) (`\($0.path)`)" } ?? "this chat's project"
         let others = projects.dropFirst()
         let named = others.isEmpty ? "" : " The other projects in the sidebar: " + others.map { "\($0.name) (`\($0.path)`)" }.joined(separator: ", ") + "."
@@ -711,7 +741,7 @@ enum HydraPrompts {
     /// What a lead is told when the setting has Tivano land the work: the merge is
     /// the app's, not the lead's, whatever else it has been told about merging, and asking
     /// for one is a job it finishes by replying.
-    private static let autoMergeRule = "Tivano handles branches, commits and merge requests after all heads return and you finish. Never run or delegate those operations. For merge/status questions, use only the current [Hydra] note: if merged, give its link; if files remain, say they land when your answer ends; if it says Tivano retries by itself, say the work lands by itself and ask nothing; if merging failed or files are outside every project, give the stated reason and required user action. A merge never waits on another chat or session: never say it does, and never ask the user to merge. If nothing is pending, promise no merge. Never claim a merge without the note confirming it."
+    static let autoMergeRule = "Tivano handles branches, commits and merge requests after all heads return and you finish. Never run or delegate those operations. For merge/status questions, use only the current [Hydra] note: if merged, give its link; if files remain, say they land when your answer ends; if it says Tivano retries by itself, say the work lands by itself and ask nothing; if merging failed or files are outside every project, give the stated reason and required user action. A merge never waits on another chat or session: never say it does, and never ask the user to merge. If nothing is pending, promise no merge. Never claim a merge without the note confirming it."
 
     /// What a lead is told when the setting has it check the heads' work: a quick read of
     /// every file a report names, with the fixes made by the lead itself, so the check
@@ -721,7 +751,7 @@ enum HydraPrompts {
     /// How the lead tells the user what the heads did: one short human sentence per
     /// head, head's name first, everyday words for what changed for the user, file
     /// details on one short second line only, no audit-speak, no icons.
-    private static let reportStyleRule = "For each head, give one plain sentence starting with its name and describing the user-visible result; add the file details only when useful, and keep the whole account bounded to a line or two per head. Omit repeated summaries, audit jargon and decorative symbols. Say plainly what you still need from the user and what you settled or fixed yourself."
+    static let reportStyleRule = "For each head, give one plain sentence starting with its name and describing the user-visible result; add the file details only when useful, and keep the whole account bounded to a line or two per head. Omit repeated summaries, audit jargon and decorative symbols. Say plainly what you still need from the user and what you settled or fixed yourself."
 
     // MARK: - Tivano-run heads
 
@@ -795,7 +825,8 @@ enum HydraPrompts {
     /// The policy for a lead whose session keeps it in its system prompt: the API
     /// providers, and Claude, Codex and Copilot, which define it at launch.
     static func fallbackPolicy(_ launch: HydraLaunch) -> String {
-        fallbackPolicy(maxHeads: launch.maxHeads, isolated: launch.isolatesHeads, autoMerges: launch.autoMerges, reviewsHeads: launch.reviewsHeads, heads: launch.headsLabel, projects: launch.projects, profiles: launch.headProfiles)
+        if launch.mode == .v2 { return v2Policy(launch) }
+        return fallbackPolicy(maxHeads: launch.maxHeads, isolated: launch.isolatesHeads, autoMerges: launch.autoMerges, reviewsHeads: launch.reviewsHeads, heads: launch.headsLabel, projects: launch.projects, profiles: launch.headProfiles)
     }
 
     /// The true merge state for the front of a lead's message, so it never promises a merge that already happened or claims one that failed.
@@ -1274,7 +1305,7 @@ enum HydraPrompts {
 
     /// One line on where a head's work went, for its section of the report. Nothing for
     /// a head that worked in the checkout itself: its changes are simply there.
-    private static func landingLine(for report: HydraReport) -> String? {
+    static func landingLine(for report: HydraReport) -> String? {
         guard let landing = report.landing else {
             guard let path = report.copyPath else { return nil }
             return report.status == .completed ? "Changed nothing." : "Nothing landed; its unfinished work is in its copy at \(path)."
@@ -1293,12 +1324,12 @@ enum HydraPrompts {
         return "Landed in your checkout: \(listed)\(omitted)."
     }
 
-    private static func duration(_ seconds: TimeInterval) -> String {
+    static func duration(_ seconds: TimeInterval) -> String {
         Duration.seconds(Int(seconds))
             .formatted(.units(allowed: [.seconds, .minutes], width: .narrow, maximumUnitCount: 2, fractionalPart: .hide(rounded: .down)))
     }
 
-    private static func list(_ names: [String]) -> String {
+    static func list(_ names: [String]) -> String {
         switch names.count {
         case 0: ""
         case 1: names[0]

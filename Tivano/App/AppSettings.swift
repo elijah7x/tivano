@@ -171,6 +171,7 @@ final class AppSettings {
         static let codexVoice = "codexVoice"
         static let alphaEnabled = "alphaEnabled"
         static let alphaVoiceEnabled = "alphaVoiceEnabled"
+        static let alphaHydra2Enabled = "alphaHydra2Enabled"
         static let externalControlEnabled = "externalControlEnabled"
         static let cliInstallationTarget = "cliInstallationTarget"
         static let appTheme = "appTheme"
@@ -379,6 +380,14 @@ final class AppSettings {
     }
 
     var isVoiceEnabled: Bool { alphaEnabled && alphaVoiceEnabled }
+
+    /// Hydra 2.0: every new request of a Hydra lead runs the v2 decision layer
+    /// (docs/hydra2.md). Read once per request, see `ThreadRuntime.startTurn`.
+    var alphaHydra2Enabled: Bool {
+        didSet { defaults.set(alphaHydra2Enabled, forKey: Key.alphaHydra2Enabled) }
+    }
+
+    var isHydra2Enabled: Bool { alphaEnabled && alphaHydra2Enabled }
 
     /// Dedicated, default-false permission. Installing the command never changes it.
     var externalControlEnabled: Bool {
@@ -905,6 +914,7 @@ final class AppSettings {
         codexVoice = defaults.string(forKey: Key.codexVoice)
         alphaEnabled = defaults.bool(forKey: Key.alphaEnabled)
         alphaVoiceEnabled = defaults.bool(forKey: Key.alphaVoiceEnabled)
+        alphaHydra2Enabled = defaults.bool(forKey: Key.alphaHydra2Enabled)
         externalControlEnabled = defaults.bool(forKey: Key.externalControlEnabled)
         cliInstallationTarget = defaults.string(forKey: Key.cliInstallationTarget)
         backdropOpacity = defaults.object(forKey: Key.backdropOpacity) as? Double ?? Self.defaultBackdropOpacity

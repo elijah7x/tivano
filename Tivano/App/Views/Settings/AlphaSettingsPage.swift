@@ -10,7 +10,8 @@ struct AlphaMarkImage: View {
     }
 }
 
-/// Alpha: early features behind one master switch, each with a switch of its own.
+/// Alpha: early features behind one master switch, each with a switch of its own. Each
+/// feature is a section of its own, named for what it is, so another one is a section more.
 struct AlphaSettingsPage: View {
     @Environment(AppModel.self) private var model
 
@@ -47,7 +48,7 @@ struct AlphaSettingsPage: View {
                     .padding(.horizontal, 4)
             }
         }
-        ChromeSection(title: "Features") {
+        ChromeSection(title: "Realtime voice") {
             ChromeCard {
                 ChromeRow(title: "Codex realtime voice", detail: "Talk with Codex out loud. Start a call from Start voice in the sidebar, or from the waveform button in any Codex chat to continue that chat by voice. Codex listens, answers and does the work in the chat. Needs Codex 0.159 or later, signed in with ChatGPT. Turning this off ends the current call.") {
                     SettingsSwitch(isOn: $settings.alphaVoiceEnabled)
@@ -57,17 +58,43 @@ struct AlphaSettingsPage: View {
                     ChromeRowDivider()
                     VoiceStyleRow()
                 }
-                LocalControlSettingsRows()
             }
         }
-        .disabled(!settings.alphaEnabled)
-        .opacity(settings.alphaEnabled ? 1 : 0.5)
-        .animation(.smooth(duration: 0.2), value: settings.alphaEnabled)
+        .modifier(AlphaGated(isOn: settings.alphaEnabled))
         // Switching voice off, either way, ends a call underway.
         .onChange(of: settings.isVoiceEnabled) { _, enabled in
             if !enabled { model.voice.end() }
         }
-        CLIInstallationSettings()
+        ChromeSection(title: "Hydra") {
+            ChromeCard {
+                ChromeRow(title: "Hydra 2.0", detail: "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model reviews the changes before they merge. Turning it off returns new requests to the current Hydra.") {
+                    SettingsSwitch(isOn: $settings.alphaHydra2Enabled)
+                        .accessibilityLabel(Text("Hydra 2.0"))
+                }
+            }
+        }
+        .modifier(AlphaGated(isOn: settings.alphaEnabled))
+        ChromeSection(title: "Local control") {
+            ChromeCard {
+                LocalControlSettingsRows()
+            }
+            .modifier(AlphaGated(isOn: settings.alphaEnabled))
+            // The command can be installed or removed with Alpha off: installing it never
+            // turns local control on.
+            CLIInstallationSettings()
+        }
+    }
+}
+
+/// A feature's controls while Alpha is off: shown, dimmed and out of reach.
+private struct AlphaGated: ViewModifier {
+    let isOn: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .disabled(!isOn)
+            .opacity(isOn ? 1 : 0.5)
+            .animation(.smooth(duration: 0.2), value: isOn)
     }
 }
 

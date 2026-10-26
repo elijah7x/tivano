@@ -657,6 +657,8 @@ struct PanelDragHandle: View {
     var cursor: NSCursor = .openHand
     var dragCursor: NSCursor = .closedHand
     var onDoubleClick: (() -> Void)? = nil
+    /// A press that never moved far enough to drag (see `DragHandleView.onClick`).
+    var onClick: (() -> Void)? = nil
 
     var body: some View {
         DragHandle(
@@ -666,7 +668,8 @@ struct PanelDragHandle: View {
             slop: 2,
             onChange: onDrag,
             onEnd: onDragEnd,
-            onDoubleClick: onDoubleClick
+            onDoubleClick: onDoubleClick,
+            onClick: onClick
         )
     }
 }

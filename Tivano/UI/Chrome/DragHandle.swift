@@ -34,6 +34,9 @@ final class DragHandleView: NSView {
     var onChange: ((CGSize) -> Void)?
     var onEnd: (() -> Void)?
     var onDoubleClick: (() -> Void)?
+    /// A press released within the slop, so it never became a drag: the handle doubles as
+    /// a button. Only with a slop, since without one every press starts a drag.
+    var onClick: (() -> Void)?
     var axis: Axis = .horizontal
     var grip: Grip?
     var cursor: NSCursor = .arrow {
@@ -220,7 +223,10 @@ final class DragHandleView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard isDragging else { return }
+        guard isDragging else {
+            if slop > 0, event.clickCount == 1 { onClick?() }
+            return
+        }
         let travel = travel(to: event)
         isDragging = false
         if dragCursor != nil { NSCursor.pop() }
@@ -278,6 +284,7 @@ struct DragHandle: NSViewRepresentable {
     var onChange: ((CGSize) -> Void)?
     var onEnd: (() -> Void)?
     var onDoubleClick: (() -> Void)?
+    var onClick: (() -> Void)?
 
     func makeNSView(context: Context) -> DragHandleView {
         let view = DragHandleView(frame: .zero)
@@ -300,5 +307,6 @@ struct DragHandle: NSViewRepresentable {
         view.onChange = onChange
         view.onEnd = onEnd
         view.onDoubleClick = onDoubleClick
+        view.onClick = onClick
     }
 }

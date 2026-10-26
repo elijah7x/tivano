@@ -451,7 +451,7 @@ struct ModelsSettingsPage: View {
     /// Whether a model matches the search by name, description or provider.
     static func matches(_ option: ModelOption?, id: String, provider: ProviderKind, query: String) -> Bool {
         guard !query.isEmpty else { return true }
-        let fields = [option?.shortName, option?.name, option?.detail, id, provider.displayName]
+        let fields = [option?.shortName, option?.name, option?.detail, option?.group, id, provider.displayName]
         return fields.contains { $0?.localizedCaseInsensitiveContains(query) == true }
     }
 }
@@ -498,7 +498,7 @@ private struct PinnedModelRow: View {
                     ProviderIcon(provider: pin.provider, size: 16)
                         .foregroundStyle(Chrome.primaryText)
                         .frame(width: 22)
-                    Text(verbatim: option?.shortName ?? pin.displayName)
+                    Text(verbatim: option?.qualifiedName ?? pin.displayName)
                         .font(.ui(size: 13))
                         .foregroundStyle(Chrome.primaryText)
                         .lineLimit(1)
@@ -786,9 +786,12 @@ private struct ProviderModelsSection: View {
         case model(ModelOption, earlier: Int = 0, lineage: String? = nil)
         case trials(count: Int)
         case fusion(count: Int)
+        /// The route the models below it are reached through (see `ModelOption.group`).
+        case group(String)
 
         var id: String {
             switch self {
+            case .group(let name): "group/" + name
             case .model(let option, _, _): "model/" + option.id
             case .trials: "trials"
             case .fusion: "fusion"
@@ -833,10 +836,19 @@ private struct ProviderModelsSection: View {
                     // mounting every hidden one (each with its own tooltip tracking area)
                     // made the page re-measure them all on every hover, keystroke and resize.
                     ForEach(rows) { row in
-                        if row.id != rows.first?.id {
+                        if row.id != rows.first?.id, !isGroupHeading(row) {
                             ChromeRowDivider()
                         }
                         switch row {
+                        case .group(let name):
+                            Text(verbatim: name)
+                                .font(.ui(.subheadline, weight: .semibold))
+                                .foregroundStyle(Chrome.secondaryText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 16)
+                                .padding(.top, row.id == rows.first?.id ? 12 : 16)
+                                .padding(.bottom, 2)
+                                .accessibilityAddTraits(.isHeader)
                         case .model(let option, let earlier, let lineage):
                             modelRow(option, earlier: earlier, lineage: lineage, pinned: pinned, isFull: isFull, isFiltering: isFiltering)
                         case .trials(let count):
@@ -875,7 +887,36 @@ private struct ProviderModelsSection: View {
     /// order. Expanded shows everything; a long catalogue (see `foldingThreshold`) shows
     /// each line's newest version with the earlier ones folded under it, and the free
     /// and preview models as one row. A chosen model always shows.
+    private func isGroupHeading(_ row: Row) -> Bool {
+        if case .group = row { return true }
+        return false
+    }
+
+    /// The rows, with a heading over each route's models when the provider lists one model
+    /// per route; the routes keep the order the provider gave them.
     private func rows(_ catalogue: [ModelOption], pinned: Set<ModelPin>, isFiltering: Bool) -> [Row] {
+        guard catalogue.contains(where: { $0.group != nil }) else {
+            return ungroupedRows(catalogue, pinned: pinned, isFiltering: isFiltering)
+        }
+        var order: [String] = []
+        for option in model.providers.models(for: provider) {
+            if let group = option.group, !order.contains(group) { order.append(group) }
+        }
+        let rank = { (option: ModelOption) in option.group.flatMap { order.firstIndex(of: $0) } ?? order.count }
+        let sorted = catalogue.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
+        var out: [Row] = []
+        var current: String?
+        for row in ungroupedRows(sorted, pinned: pinned, isFiltering: isFiltering) {
+            if case .model(let option, _, _) = row, let group = option.group, group != current {
+                out.append(.group(group))
+                current = group
+            }
+            out.append(row)
+        }
+        return out
+    }
+
+    private func ungroupedRows(_ catalogue: [ModelOption], pinned: Set<ModelPin>, isFiltering: Bool) -> [Row] {
         let isPinned = { (option: ModelOption) in pinned.contains(ModelPin(provider: provider, modelID: option.id)) }
         if isFiltering {
             return catalogue.map { .model($0) }

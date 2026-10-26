@@ -216,10 +216,11 @@ extension ProductCaptures {
     }
 
     /// `--website-captures <folder> --hydra-panels-preview`: the team panel and a popped-out
-    /// head over the lead's chat, left open in performance mode for judging by hand while the
-    /// theme is switched. Runs on the capture's isolated storage and defaults.
+    /// head over the lead's chat, left open for judging by hand; add `--performance-mode`
+    /// to see them as performance mode draws them. Runs on the capture's isolated storage
+    /// and defaults.
     static func panelsPreview(model: AppModel) async {
-        CaptureRun.defaults?.set(true, forKey: "performanceMode")
+        CaptureRun.defaults?.set(CommandLine.arguments.contains("--performance-mode"), forKey: "performanceMode")
         await model.bootstrap()
         model.settings.hasSeenHydraIntro = true
         model.settings.theme = .system
@@ -250,5 +251,54 @@ extension ProductCaptures {
     }
 
     private static var windowHolder: NSWindow?
+
+    /// `--website-captures <folder> --dsh-routes-preview`: DeepSeek Harness listing each
+    /// model once per route (the DeepSeek account and an API key), shown in Settings › Models
+    /// and in the picker for judging by hand. Runs on the capture's isolated storage.
+    static func dshRoutesPreview(model: AppModel) async {
+        await model.bootstrap()
+        model.settings.hasSeenHydraIntro = true
+        model.settings.theme = .system
+        model.settings.setEnabled(true, for: .dsh)
+        let account = "DeepSeek account", key = "API key"
+        let pro = "Stronger agentic coding, knowledge, and difficult reasoning; suited to complex or quality-critical tasks at higher cost."
+        func option(_ route: String, _ id: String, _ name: String, _ group: String, detail: String? = nil) -> ModelOption {
+            ModelOption(id: "[\"\(route)\",\"\(id)\"]", name: name, detail: detail, efforts: ["off", "low", "high", "max"], defaultEffort: "high", group: Chrome.localized(group))
+        }
+        model.providers.updateCatalog([
+            option("deepseek-account", "deepseek-v4-pro", "V4 Pro", account, detail: pro),
+            option("deepseek-account", "deepseek-flash", "V4.1 Flash", account),
+            option("deepseek-official", "deepseek-v4-pro", "V4 Pro", key, detail: pro),
+            option("deepseek-official", "deepseek-flash", "V4.1 Flash", key),
+        ], for: .dsh)
+        model.settings.addToModelList(ModelPin(provider: .dsh, modelID: "[\"deepseek-account\",\"deepseek-flash\"]"))
+        model.settings.addToModelList(ModelPin(provider: .dsh, modelID: "[\"deepseek-official\",\"deepseek-v4-pro\"]"))
+        let window = WindowManager.shared.makeCaptureWindow(size: NSSize(width: 1200, height: 800))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        dshPreviewWindow = window
+        SettingsNavigation.shared.present(page: .models)
+    }
+
+    private static var dshPreviewWindow: NSWindow?
+
+    /// `--website-captures <folder> --settings-page-preview <page>`: Settings open on one
+    /// page (a `SettingsPage` raw value, such as `alpha`) for judging its layout by hand.
+    static func settingsPagePreview(model: AppModel) async {
+        await model.bootstrap()
+        model.settings.hasSeenHydraIntro = true
+        model.settings.theme = .system
+        let arguments = CommandLine.arguments
+        let name = arguments.firstIndex(of: "--settings-page-preview").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+        let window = WindowManager.shared.makeCaptureWindow(size: NSSize(width: 1100, height: 780))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        settingsPreviewWindow = window
+        SettingsNavigation.shared.present(page: name.flatMap(SettingsPage.init(rawValue:)) ?? .general)
+    }
+
+    private static var settingsPreviewWindow: NSWindow?
 }
 #endif

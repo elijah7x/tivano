@@ -252,10 +252,14 @@ extension AppModel {
         } else {
             workerEffort = nil
         }
+        let workerModel = keepsModel ? pair?.workerModel : nil
+        let headsMatchLead = pair == nil || (headsProvider == thread.provider
+            && (workerModel ?? thread.model) == thread.model
+            && (workerEffort ?? thread.effort) == thread.effort)
         return HydraLaunch(
             headsProvider: headsProvider,
             headsLabel: label,
-            workerModel: keepsModel ? pair?.workerModel : nil,
+            workerModel: workerModel,
             workerEffort: workerEffort,
             workerDshMode: keepsModel && headsProvider == .dsh ? pair?.workerDshMode : nil,
             // The lower of the pair's cap and the Hydra page's; with neither, the heads run uncapped.
@@ -264,7 +268,9 @@ extension AppModel {
             isolatesHeads: settings.hydraIsolateHeads,
             autoMerges: settings.hydraAutoMerge,
             reviewsHeads: settings.hydraReviewHeads,
-            projects: ownRefs
+            projects: ownRefs,
+            headsNote: pair?.headsNote?.trimmed.nilIfEmpty,
+            headsMatchLead: headsMatchLead
         )
     }
 
@@ -346,7 +352,7 @@ extension AppModel {
     }
 
     /// The checkout a lead works in: its worktree, else the project folder.
-    private func hydraCheckout(of lead: ChatThread) -> String? {
+    func hydraCheckout(of lead: ChatThread) -> String? {
         try? executionDirectory(for: lead)
     }
 
@@ -618,8 +624,24 @@ extension AppModel {
         info.batchID = batchID
         info.pendingProjectReference = needsRoute ? project : nil
         info.canStop = true
+        if let job = openHydraJob(of: parentID), job.mode == .v2,
+           existingRuntime(for: parentID)?.hydraJobMode == .v2 {
+            info.mode = .v2
+            info.jobID = job.id
+        }
         head.hydra = info
         insertThread(head)
+        if let jobID = info.jobID {
+            updateHydraJob(jobID, of: parentID) { job in
+                job.heads.append(HydraJobHeadRecord(
+                    headID: head.id,
+                    name: info.persona.name,
+                    provider: head.provider.rawValue,
+                    model: head.model,
+                    effort: head.effort
+                ))
+            }
+        }
         runtime(for: head.id).hydraStartupPending = true
 
         // A new head brings the panel back and takes the stage.
@@ -683,6 +705,12 @@ extension AppModel {
             $0.executionFinishedAt = nil
         }
         let headBrief = brief(info.persona, workplace)
+        if info.mode == .v2, let jobID = info.jobID {
+            updateHydraJob(jobID, of: parentID) { job in
+                guard let index = job.heads.firstIndex(where: { $0.headID == id }) else { return }
+                job.heads[index].briefChars = headBrief.count
+            }
+        }
         headRuntime.sendHydraBrief(headBrief, attachments: attachments)
         briefSent = true
     }
@@ -742,12 +770,14 @@ extension AppModel {
         case .interrupted: .stopped
         case .running: .running
         }
+        let reportNotes = info.mode == .v2 && status == .completed ? HydraReportNotes.parse(summary ?? "") : nil
         // The progress the head reported while it ran lands on the record now, once.
         let live = existingRuntime(for: id)
         updateHydraHead(id) {
             $0.status = outcome
             $0.summary = summary ?? $0.summary
             $0.finishedAt = .now
+            if info.mode == .v2 { $0.reportNotes = reportNotes }
             if let landing { $0.landing = landing }
             if let live {
                 if let activity = live.hydraActivity { $0.activity = activity }
@@ -772,16 +802,31 @@ extension AppModel {
             }
         }
         guard let parentID = head.parentThreadID, let finished = thread(id)?.hydra else { return }
+        if finished.mode == .v2, let jobID = finished.jobID {
+            let seconds = finished.executionStartedAt.flatMap { started in
+                finished.executionFinishedAt.map { $0.timeIntervalSince(started) }
+            }
+            updateHydraJob(jobID, of: parentID) { job in
+                guard let index = job.heads.firstIndex(where: { $0.headID == id }) else { return }
+                job.heads[index].status = outcome
+                job.heads[index].seconds = seconds
+                if let landing {
+                    job.heads[index].landedFiles = landing.landed ? landing.files.count : 0
+                    job.heads[index].conflicts = landing.conflicts.count
+                }
+                job.heads[index].notes = reportNotes
+                job.heads[index].followedReportFormat = status == .completed ? reportNotes != nil : nil
+            }
+        }
         let leadRuntime = runtime(for: parentID)
         let copyPath = info.hasOwnCopy ? head.worktreePath : nil
         leadRuntime.hydraHeadFinished(head.id, info: finished, status: outcome, summary: summary, landing: landing, copyPath: copyPath,
                                        provider: head.provider.displayName, startupFailure: outcome == .failed && startupFailure)
-        // The copy goes back only once the lead has the report, and only from a head that
-        // finished: a head that was stopped or that failed hands its report the path to
-        // its copy, where its half-done work is, and that folder has to still be there
-        // when the lead reads it. Those copies go when the heads are cleared by hand, or
-        // when the head is steered on for another turn.
-        if outcome == .completed {
+        // A completed v1 copy goes back once the lead has the report; a v2 copy stays for
+        // continuations until its job settles. A stopped or failed head keeps its copy too:
+        // its report points there when its half-done work never landed. Those copies go when
+        // the heads are cleared by hand, or when the head is steered on for another turn.
+        if outcome == .completed, finished.mode != .v2 {
             releaseHydraCopy(of: id)
         }
     }
@@ -808,11 +853,14 @@ extension AppModel {
                 return note.message
             }
         } else { nil }
-        // A completed turn's report is its last reply, as ever. A failed turn's prose is
-        // output it did not finish, so it is read from this turn alone.
+        // A failed turn's prose, and a v2 completed report, come from this turn alone;
+        // v1 completed turns keep the previous last-reply behavior.
         let spoken = headRuntime?.entries.last(where: { entry in
             guard case .assistant(let message) = entry.item.content else { return false }
-            return status != .failed || (turnID != nil && entry.turnID == turnID && !message.text.trimmed.isEmpty)
+            if status == .failed || (info.mode == .v2 && status == .completed) {
+                return turnID != nil && entry.turnID == turnID && !message.text.trimmed.isEmpty
+            }
+            return true
         })
             .flatMap { entry -> String? in
                 guard case .assistant(let message) = entry.item.content else { return nil }

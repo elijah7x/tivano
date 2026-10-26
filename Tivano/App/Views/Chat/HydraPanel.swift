@@ -43,6 +43,8 @@ struct HydraPanel: View {
 
     /// A head that finished while on stage holds it for `finishHold`.
     @State private var hold: StageHold?
+    /// The pointer is over the name on the strip, which opens the head's chat.
+    @State private var isNameHovering = false
 
     var body: some View {
         // The head on stage: the one picked, else the newest still working, else the newest.
@@ -62,7 +64,9 @@ struct HydraPanel: View {
                     head: selected,
                     height: size.height,
                     workingDirectory: workingDirectory,
-                    projectName: projectName
+                    projectName: projectName,
+                    onDrag: onDrag,
+                    onDragEnd: onDragEnd
                 )
                 .id(selected.id)
                 // The next head fades in over the last rather than popping into place.
@@ -92,6 +96,13 @@ struct HydraPanel: View {
         }
         .overlay(alignment: .top) {
             strip(selected: selected)
+        }
+        // What the strip's buttons do, and opening the head's chat, from anywhere on the
+        // panel: no control of its own needed.
+        .contextMenu {
+            if let selected {
+                panelMenu(selected)
+            }
         }
         .frame(width: size.width, height: size.height)
         // The frame follows the pane every frame of a live resize: the strip's
@@ -160,16 +171,36 @@ struct HydraPanel: View {
                         // How long the head has been at it, or took: its own clock, so the
                         // strip itself is still drawn once.
                         HydraElapsedTime(startedAt: info.startedAt, finishedAt: info.finishedAt, isRunning: info.status == .running)
+                        // Under the pointer the name reads as a way in: the chevron says the
+                        // chat opens. Its room is kept, so the capsule never changes width.
+                        Image(systemName: "chevron.right")
+                            .font(Chrome.chevronFont)
+                            .foregroundStyle(Chrome.secondaryText)
+                            .opacity(isNameHovering ? 1 : 0)
                     }
                     .padding(.horizontal, Chrome.capsuleHorizontalPadding)
                     .frame(height: Chrome.capsuleContentHeight)
                     .padding(.vertical, Chrome.capsuleVerticalPadding)
                     .fixedSize()
+                    .background {
+                        Capsule(style: .continuous)
+                            .fill(Chrome.overlay(isNameHovering ? 0.08 : 0))
+                    }
                     .chromeGlassCapsule()
-                    // The name is a label, not a control, so it drags the panel too:
-                    // it is where the hand goes when there is little room beside it.
+                    .animation(Chrome.hover, value: isNameHovering)
+                    // A click on the name opens the head's chat; a press that moves drags
+                    // the panel, since it is where the hand goes when there is little room
+                    // beside it.
                     .overlay {
-                        PanelDragHandle(onDrag: onDrag, onDragEnd: onDragEnd)
+                        // The pointing hand says the name opens the chat; the stage below
+                        // and the strip's empty room are where the panel is moved from.
+                        PanelDragHandle(onDrag: onDrag, onDragEnd: onDragEnd, cursor: .pointingHand, onClick: {
+                            model.openThread(selected.id)
+                        })
+                        .onHover { isNameHovering = $0 }
+                        .help(Text(verbatim: String(format: Chrome.localized("Open %@'s chat"), info.displayName)))
+                        .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("Open %@'s chat"), info.displayName)))
+                        .accessibilityAddTraits(.isButton)
                     }
                     .transition(.softAppear)
                 }
@@ -207,6 +238,31 @@ struct HydraPanel: View {
         }
         .animation(liveResize.isActive ? nil : Chrome.panelSlide, value: selected?.id)
         .animation(liveResize.isActive ? nil : Chrome.panelSlide, value: heads.count > 1)
+    }
+}
+
+extension HydraPanel {
+    /// The panel's menu: open the head's chat, then what the strip's buttons do.
+    @ViewBuilder
+    fileprivate func panelMenu(_ head: ChatThread) -> some View {
+        let name = head.hydra?.displayName ?? Chrome.localized("this head")
+        Button(String(format: Chrome.localized("Open %@'s chat"), name)) {
+            model.openThread(head.id)
+        }
+        if let info = head.hydra, info.status == .running, info.canStop {
+            Button(String(format: Chrome.localized("Stop %@"), name)) {
+                model.stopHydraHead(head.id)
+            }
+        }
+        Divider()
+        if isPoppedOut {
+            Button(String(format: Chrome.localized("Put %@ back in the team panel"), name)) { dismiss() }
+        } else {
+            if let popOut, heads.count > 1 {
+                Button(String(format: Chrome.localized("Pop %@ out into its own panel"), name)) { popOut(head.id) }
+            }
+            Button(Chrome.localized("Dismiss the panel; heads keep working")) { dismiss() }
+        }
     }
 }
 
@@ -400,6 +456,9 @@ private struct HydraHeadTranscript: View {
     let height: CGFloat
     let workingDirectory: String?
     let projectName: String?
+    /// The panel's move, for the stage: in progress mode it has nothing to click.
+    let onDrag: (CGSize) -> Void
+    let onDragEnd: () -> Void
 
     @State private var scrollChrome = ChromeScrollModel()
     @State private var scrollState = TimelineScrollState()
@@ -426,7 +485,14 @@ private struct HydraHeadTranscript: View {
             } else {
                 // The task and the progress bar stand in for the steps, which the
                 // sidebar shows; the chat box below still steers the head.
+                // Nothing on the stage answers the pointer, and it is most of the panel:
+                // it moves the panel, as the strip does. The full transcript scrolls and
+                // selects text instead, so it keeps the pointer.
                 HydraHeadProgress(head: head, runtime: runtime)
+                    .overlay {
+                        PanelDragHandle(onDrag: onDrag, onDragEnd: onDragEnd)
+                            .padding(.top, HydraPanel.stripHeight)
+                    }
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {

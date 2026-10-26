@@ -340,6 +340,11 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
     /// and Fast variant as a model of its own (Devin, Grok's Fast). Empty for a row that
     /// is the provider's model as is. See `ModelFamilies`.
     var variants: [ModelVariant]
+    /// The route or account a model is reached through, when the provider lists the same
+    /// model once per route (DeepSeek Harness: the DeepSeek account and an API key). The
+    /// name stays the model's own; lists set the routes apart under headings, and plain
+    /// menus through `qualifiedName`.
+    var group: String?
 
     init(
         id: String,
@@ -349,7 +354,8 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         defaultEffort: String? = nil,
         isDefault: Bool = false,
         fastTier: String? = nil,
-        variants: [ModelVariant] = []
+        variants: [ModelVariant] = [],
+        group: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -359,6 +365,7 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         self.isDefault = isDefault
         self.fastTier = fastTier
         self.variants = variants
+        self.group = group
     }
 
     init(from decoder: Decoder) throws {
@@ -371,6 +378,7 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
         isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
         fastTier = try container.decodeIfPresent(String.self, forKey: .fastTier)
         variants = try container.decodeIfPresent([ModelVariant].self, forKey: .variants) ?? []
+        group = try container.decodeIfPresent(String.self, forKey: .group)
     }
 
     var supportsFast: Bool { fastTier != nil }
@@ -395,6 +403,12 @@ struct ModelOption: Codable, Hashable, Identifiable, Sendable {
     /// The variant behind a provider id this row stands for, when it is one of its variants.
     func variant(_ providerID: String) -> ModelVariant? {
         variants.first { $0.id == providerID }
+    }
+
+    /// The short name with the route after it, for a plain menu that has no headings to
+    /// tell two routes of one model apart: "V4 Pro · DeepSeek account".
+    var qualifiedName: String {
+        group.map { "\(shortName) · \($0)" } ?? shortName
     }
 
     /// The name as the picker shows it, such as "5.6 Terra" for "GPT-5.6-Terra".

@@ -5,7 +5,6 @@ struct LocalControlSettingsRows: View {
 
     var body: some View {
         @Bindable var settings = model.settings
-        ChromeRowDivider()
         ChromeRow(title: "Local control", detail: "Let a command-line client control this running edition of Tivano. Other processes in your account can use this access. Approvals stay in Tivano. No network listener or automatic app launch.") {
             SettingsSwitch(isOn: $settings.externalControlEnabled)
                 .accessibilityLabel(Text("Local control"))
@@ -35,13 +34,11 @@ struct CLIInstallationSettings: View {
     private var helper: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/" + ControlCLIInstaller.helperName) }
 
     var body: some View {
-        ChromeSection(title: "CLI command") {
-            ChromeCard {
-                ChromeRow(title: "CLI command", detail: "Install the command in ~/.local/bin on your request only. Installation never enables local control. Add that directory to PATH yourself if needed; Tivano does not edit shell configuration.") {
-                    HStack {
-                        ChromeTextButton(symbol: "terminal", title: "Install or repair CLI", help: "Install or repair CLI", isEnabled: true) { install() }
-                        ChromeTextButton(symbol: "trash", title: "Uninstall CLI", help: "Uninstall CLI", isEnabled: model.settings.cliInstallationTarget != nil, isDestructive: true) { uninstall() }
-                    }
+        ChromeCard {
+            ChromeRow(title: "CLI command", detail: "Install the command in ~/.local/bin on your request only. Installation never enables local control. Add that directory to PATH yourself if needed; Tivano does not edit shell configuration.") {
+                HStack {
+                    ChromeTextButton(symbol: "terminal", title: "Install or repair CLI", help: "Install or repair CLI", isEnabled: true) { install() }
+                    ChromeTextButton(symbol: "trash", title: "Uninstall CLI", help: "Uninstall CLI", isEnabled: model.settings.cliInstallationTarget != nil, isDestructive: true) { uninstall() }
                 }
             }
         }

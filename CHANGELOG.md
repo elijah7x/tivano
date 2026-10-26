@@ -8,6 +8,44 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-26
+
+### English
+
+### New features
+
+- Settings › Alpha has Hydra 2.0. With it on, every new request in a Hydra chat runs a new team design: the lead keeps judgement and does tightly coupled work itself, each head gets your request verbatim and the team's file split, reports its deviations and open points, and can be sent back to rework its part, and a model from another vendor reviews the changes before they merge. A Hydra pair can say what its heads are good at. Turning it off returns new requests to the current Hydra.
+
+### Refinements
+
+- Settings › Alpha gives each feature a section of its own: Realtime voice, and Local control with the CLI command beside it.
+
+- The middle of a head's Hydra panel, its task and progress bar, now moves the panel too, so there is a large area to drag it by while the name keeps opening the chat.
+
+- When DeepSeek Harness has both a signed-in DeepSeek account and an API key, Settings › Models lists each route's models under its own heading, account first as the DeepSeek Harness app does, instead of suffixing every model name; the picker and menus name the route beside the model.
+
+- A head's name at the top of its Hydra panel opens that head's chat with a click, showing a small chevron under the pointer, and dragging it still moves the panel. Right-clicking the panel offers opening the chat, stopping the head, popping it out or back, and dismissing the panel.
+
+### 简体中文
+
+### 新功能
+
+- 设置 › 实验室新增 Hydra 2.0。开启后，Hydra 对话里的每条新请求都使用新的团队设计：主智能体负责判断，亲自处理相互耦合的工作；每个 head 会收到你的原话和团队的文件分工，汇报偏差和待决问题，也可以被要求返工自己负责的部分；改动合入前由另一家服务商的模型审查。Hydra 组合可以注明 heads 擅长什么。关闭后，新请求恢复为当前的 Hydra 工作方式。
+
+### 优化改进
+
+- 设置 › 实验室按功能分区：实时语音，以及本地控制（CLI 命令放在同一分区）。
+
+- Hydra 卡片中间显示任务和进度条的区域现在也可以拖动卡片，拖动区域更大；点击名称仍会打开对话。
+
+- DeepSeek Harness 同时登录 DeepSeek 账号并配置 API 密钥时，设置 › 模型按线路分组列出模型，账号线路在前，与 DeepSeek Harness 应用一致，不再在每个模型名后加后缀；模型选择器和菜单在模型旁注明所走线路。
+
+- 单击 Hydra 卡片顶部的子智能体名称即可打开它的对话，悬停时会显示一个小箭头；拖动名称仍可移动卡片。在卡片上右键可打开对话、停止子智能体、弹出或放回卡片，以及收起面板。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.0.23] - 2026-10-25
 
 ### English

@@ -396,6 +396,14 @@ enum WebsiteCaptures {
             await ProductCaptures.panelsPreview(model: model)
             return
         }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--dsh-routes-preview") {
+            await ProductCaptures.dshRoutesPreview(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--settings-page-preview") {
+            await ProductCaptures.settingsPagePreview(model: model)
+            return
+        }
         if HeroPreview.isRequested {
             await HeroPreview.run(model: model)
             return

@@ -531,6 +531,26 @@ struct HydraPairEditor: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
             }
+            if model.settings.isHydra2Enabled {
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("", text: Binding(
+                        get: { pair.headsNote ?? "" },
+                        set: { text in update { $0.headsNote = text.isEmpty ? nil : text } }
+                    ), prompt: Text("What the heads are good at"))
+                    .textFieldStyle(.plain)
+                    .font(.ui(.title3, weight: .semibold))
+                    .foregroundStyle(Chrome.primaryText)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Chrome.overlay(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    Text("Hydra 2.0 tells the lead, so it sends this kind of work to the heads. For example: fast, for mechanical edits; or front-end.")
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .padding(.horizontal, 2)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+            }
             sectionLabel("Lead")
             editorRow("Provider") {
                 GlassPickerButton(
@@ -564,7 +584,7 @@ struct HydraPairEditor: View {
             }
             editorRow("Model") {
                 GlassPickerButton(
-                    options: [(String?.none, "Any model")] + options.map { (Optional($0.id), $0.shortName) },
+                    options: [(String?.none, "Any model")] + options.map { (Optional($0.id), $0.qualifiedName) },
                     selection: Binding(
                         get: { pair.orchestratorModel },
                         set: { id in
@@ -626,7 +646,7 @@ struct HydraPairEditor: View {
             }
             editorRow("Model") {
                 GlassPickerButton(
-                    options: [(String?.none, pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat")] + headsOptions.map { (Optional($0.id), $0.shortName) },
+                    options: [(String?.none, pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat")] + headsOptions.map { (Optional($0.id), $0.qualifiedName) },
                     selection: Binding(
                         get: { pair.workerModel },
                         set: { id in

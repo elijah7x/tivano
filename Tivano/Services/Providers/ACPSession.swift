@@ -922,7 +922,8 @@ final class ACPSession: ProviderSession {
     /// dsh groups its models by route: `deepseek-official` takes an API key, `deepseek-account`
     /// the signed-in DeepSeek account, and lists the account route only when one is signed in.
     /// With no key the official route cannot answer, so only the account's models are offered;
-    /// with both, each name says which route it is on. Preserve the initial current model
+    /// with both, each model carries its route as its group, the account's first, as the
+    /// DeepSeek Harness app lists them. Preserve the initial current model
     /// when its route is usable, including while probing other models.
     private func dshModels(_ option: JSONValue, known: [String: ModelOption]) -> [ModelOption] {
         struct Row {
@@ -968,16 +969,19 @@ final class ACPSession: ProviderSession {
         }
         let fallback = rows.first { $0.value == initialDSHModel }?.value ?? usable.first?.value ?? rows.first?.value
         let qualified = Set(rows.map(\.route)).count > 1
+        let routeRank = { (route: String) in route == "deepseek-account" ? 0 : route == "deepseek-official" ? 1 : 2 }
+        rows = rows.enumerated().sorted { (routeRank($0.element.route), $0.offset) < (routeRank($1.element.route), $1.offset) }.map(\.element)
         let knownModels = Array(known.values)
         return rows.map { row in
             let kept = known[row.value] ?? known[DshCLI.resolvedModelID(row.value, in: knownModels)]
             var model = ModelOption(
                 id: row.value,
-                name: qualified ? "\(row.name) · \(row.group)" : row.name,
+                name: row.name,
                 detail: row.detail,
                 efforts: kept?.efforts ?? [],
                 defaultEffort: kept?.defaultEffort,
-                isDefault: row.value == fallback
+                isDefault: row.value == fallback,
+                group: qualified ? row.group : nil
             )
             model.fastTier = kept?.fastTier
             return model

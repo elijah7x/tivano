@@ -139,6 +139,17 @@
         }
       }
     },
+    "Open %@'s chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 %@ 的对话"
+          }
+        }
+      }
+    },
     "Open it to light it" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -179,6 +190,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "以只读方式继承市场配置目前需要 DeepSeek Harness %@。"
+          }
+        }
+      }
+    },
+    "Realtime voice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时语音"
           }
         }
       }
@@ -7878,6 +7900,17 @@
         }
       }
     },
+    "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model reviews the changes before they merge. Turning it off returns new requests to the current Hydra." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 聊天中的每条新请求都使用新的团队设计：主智能体负责判断，亲自处理相互耦合的工作；heads 会收到你的请求和团队的文件分工，报告偏差和待决问题，也可以被要求重做各自负责的部分；另一家服务商的模型会在改动合入前进行审查。关闭后，新请求将恢复为当前的 Hydra 工作方式。"
+          }
+        }
+      }
+    },
     "Every provider, whatever the model" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9315,6 +9348,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "窗口透出桌面的程度"
+          }
+        }
+      }
+    },
+    "Hydra" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra"
+          }
+        }
+      }
+    },
+    "Hydra 2.0" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 2.0"
+          }
+        }
+      }
+    },
+    "Hydra 2.0 tells the lead, so it sends this kind of work to the heads. For example: fast, for mechanical edits; or front-end." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 2.0 会把这段说明告诉主智能体，让它把这类工作交给 heads。例如：速度快，适合机械性修改；或前端。"
           }
         }
       }
@@ -20524,6 +20590,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "我们要构建什么？"
+          }
+        }
+      }
+    },
+    "What the heads are good at" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "heads 擅长什么"
           }
         }
       }

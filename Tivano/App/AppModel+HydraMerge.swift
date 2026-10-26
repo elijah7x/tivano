@@ -217,7 +217,10 @@ extension AppModel {
             // does not prove that an interrupted merge reached the remote.
             if recovering, stray.isEmpty { return }
             guard !stray.isEmpty else {
-                guard project != nil else { return }
+                guard project != nil else {
+                    recordHydraJobMerge(.nothing, of: leadID)
+                    return
+                }
                 // Nothing to send and nothing outside a project: whatever the turns
                 // recorded is already on the branch, ignored, build output, or gone. Mark
                 // it spent, or the merge note counts those files forever.
@@ -227,10 +230,12 @@ extension AppModel {
                 if runtime.hydraMerges.last?.outcome == .held {
                     recordHydraSettlement(leadID: leadID, runtime: runtime)
                 }
+                recordHydraJobMerge(.nothing, of: leadID)
                 return
             }
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
             note(leadID, "Hydra did not merge: the team's files are outside every project.", strayBody(stray), status: .failed)
+            recordHydraJobMerge(.failed, of: leadID)
             return
         }
         let several = groups.count > 1
@@ -238,7 +243,11 @@ extension AppModel {
         for group in groups {
             outcomes.append(await mergeHydraProject(of: leadID, lead: lead, project: group.project, checkout: group.checkout, work: group.work, runtime: runtime, several: several, syncsProjectCheckout: group.syncsProjectCheckout))
         }
-        guard !outcomes.contains(.failed), !outcomes.contains(.deferred) else { return }
+        if outcomes.contains(.failed) {
+            recordHydraJobMerge(.failed, of: leadID)
+            return
+        }
+        guard !outcomes.contains(.deferred) else { return }
         if recovering, outcomes.allSatisfy({ $0 == .alreadyOnMain }) { return }
         // Another job that waited on this one, or was put off by it, goes now rather than
         // at the next sweep. Scheduled, so it starts once this merge has let go.
@@ -255,6 +264,8 @@ extension AppModel {
         } else if outcomes.allSatisfy({ $0 == .alreadyOnMain }) {
             recordHydraSettlement(leadID: leadID, runtime: runtime)
         }
+        let outcome: HydraJobRecord.MergeOutcome = !stray.isEmpty ? .failed : outcomes.allSatisfy({ $0 == .alreadyOnMain }) ? .nothing : .merged
+        recordHydraJobMerge(outcome, of: leadID)
     }
 
     /// A path no sidebar project could ever hold: a head's copy of a checkout under the
@@ -1132,6 +1143,11 @@ extension AppModel {
         guard hydraUnmergedFileCount(of: leadID) == 0 else { return }
         runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .settled, project: nil, label: nil, url: nil, files: 0, detail: nil))
         note(leadID, "Already on main: nothing to merge.", "Every change from this chat is on main already, taken along by an earlier merge request (this chat's or another's) or committed by hand. Nothing was sent and no new merge request was opened.")
+    }
+
+    private func recordHydraJobMerge(_ outcome: HydraJobRecord.MergeOutcome, of leadID: UUID) {
+        guard let job = thread(leadID)?.hydraJobs.last, job.mode == .v2 else { return }
+        updateHydraJob(job.id, of: leadID) { $0.merge = outcome }
     }
 
     private static func filesLine(_ files: [DiffFile]) -> String {

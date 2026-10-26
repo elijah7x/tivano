@@ -288,7 +288,7 @@ private struct ModelEffortPanel: View {
         let pair = model.hydraIsOn(thread) ? model.hydraPair(for: thread) : nil
         let pairLook = pair.map { EffortPairLook($0, registry: model.providers, resolvedHeadsEffort: model.hydraLaunch(for: thread)?.workerEffort) }
         return EffortSliderCard(
-            modelName: option?.shortName ?? fallbackName,
+            modelName: option?.qualifiedName ?? fallbackName,
             provider: thread.provider,
             pair: pairLook,
             efforts: option?.efforts ?? [],
@@ -493,7 +493,8 @@ struct ModelList: View {
                             let locked = isLocked(entry)
                             ModelListRow(
                                 entry: entry,
-                                detail: locked ? "New chats only" : (showsProviders ? entry.provider.displayName : nil),
+                                // A model listed once per route says which route under its name.
+                                detail: locked ? "New chats only" : ([showsProviders ? entry.provider.displayName : nil, entry.option.group].compactMap { $0 }.joined(separator: " · ").nilIfEmpty),
                                 showsIcon: showsProviders,
                                 rowHeight: rowHeight,
                                 isSelected: !leadsWithPair && entry.provider == thread.provider && entry.option.id == thread.model,
