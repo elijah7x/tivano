@@ -278,17 +278,16 @@ final class CodexSession: ProviderSession {
         ]
         if let model = configuration.model { params["model"] = .string(model) }
         var config: [String: JSONValue] = [:]
-        if let hydra = configuration.hydra {
+        if let instructions = voiceInstructions {
+            config["features"] = ["multi_agent": false, "multi_agent_v2": false]
+            params["developerInstructions"] = .string(instructions)
+        } else if let hydra = configuration.hydra {
             // The heads are Tivano-run: the lead asks for them with the delegation block,
             // and Codex's own agents are switched off for the thread, whatever the user's
             // config enables. Told only in words, a lead still reached for spawn_agent and
             // ran its heads inside its own session, out of the app's sight.
             config["features"] = ["multi_agent": .bool(false), "multi_agent_v2": .bool(false)]
             params["developerInstructions"] = .string(HydraPrompts.fallbackPolicy(hydra))
-        }
-        if let instructions = voiceInstructions {
-            config["features"] = ["multi_agent": false, "multi_agent_v2": false]
-            params["developerInstructions"] = .string(instructions)
         }
         if !config.isEmpty { params["config"] = .object(config) }
         // Anti-slop guidance rides along for every thread, Hydra or not, and combines with

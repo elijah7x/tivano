@@ -57,7 +57,7 @@ struct HydraHeadReportPopover: View {
     @MainActor
     init(head: HydraHeadInfo) {
         self.head = head
-        let summary = head.summary?.trimmed ?? ""
+        let summary = HydraReportFlagsRows.withoutTrailingFlags(head.summary?.trimmed ?? "")
         blocks = summary.isEmpty ? [] : MarkdownView.blocks(for: summary)
     }
 
@@ -76,7 +76,8 @@ struct HydraHeadReportPopover: View {
             // before it opens (see `PopoverScroll`), so a lazy stack only measured
             // differently once shown and the panel cut its header off.
             PopoverScroll(maxHeight: 460, width: Self.width) {
-                Group {
+                VStack(alignment: .leading, spacing: 10) {
+                    HydraReportFlagsRows(head: head)
                     if blocks.isEmpty {
                         Text("No report yet.")
                             .font(.ui(.callout))

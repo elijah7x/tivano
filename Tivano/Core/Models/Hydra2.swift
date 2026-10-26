@@ -14,6 +14,23 @@ enum HydraMode: String, Codable, Hashable, Sendable {
 /// How readily a v2 lead hands work to heads. Restrained delegates only for parallel
 /// pieces or heavy reading; active also sends bounded mechanical work out, even one
 /// piece. Replaces v1's message-routing switches while Hydra 2.0 is on.
+/// The job a head belongs to and the decision layer it runs under, fixed when its
+/// delegation block was dispatched. A delayed head takes its batch's stamp, never the
+/// lead's current job.
+struct HydraJobStamp: Hashable, Sendable {
+    var mode: HydraMode
+    var jobID: UUID?
+}
+
+/// How a v2 job ends: the lead answered, or its last turn failed, was stopped, or
+/// Hydra was switched off under it. Only a completed job is merged.
+enum HydraJobEnding: String, Codable, Sendable {
+    case completed
+    case interrupted
+    case hydraOff
+    case recovered
+}
+
 enum HydraTilt: String, Codable, CaseIterable, Hashable, Sendable {
     case restrained
     case active
@@ -124,6 +141,12 @@ struct HydraJobRecord: Codable, Hashable, Identifiable, Sendable {
     var reviewSkipped: String?
     /// A review that came back while the lead was busy: delivered at its next settle.
     var pendingReview: String?
+    /// The tree of each checkout the job worked in, keyed by checkout path, taken when the
+    /// job started (and when a head first lands in a new checkout): the review diffs
+    /// against these, so work that was already there is not shown as the job's.
+    var baseTrees: [String: String]?
+    /// How the job ended; nil while open, and on records from before this existed.
+    var ending: HydraJobEnding?
     var merge: MergeOutcome?
 
     var isOpen: Bool { finishedAt == nil }
@@ -146,4 +169,59 @@ struct HydraHandoffPacket: Hashable, Sendable {
     var team: [Member] = []
 
     static let requestLimit = 6_000
+}
+
+extension HydraJobHeadRecord {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        headID = container.value(.headID, default: UUID())
+        name = container.value(.name, default: "")
+        provider = container.value(.provider, default: nil)
+        model = container.value(.model, default: nil)
+        effort = container.value(.effort, default: nil)
+        briefChars = container.value(.briefChars, default: 0)
+        files = container.value(.files, default: [])
+        status = container.value(.status, default: .running)
+        seconds = container.value(.seconds, default: nil)
+        landedFiles = container.value(.landedFiles, default: 0)
+        conflicts = container.value(.conflicts, default: 0)
+        notes = container.value(.notes, default: nil)
+        followedReportFormat = container.value(.followedReportFormat, default: nil)
+        continuations = container.value(.continuations, default: 0)
+    }
+}
+
+extension HydraJobRecord {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = container.value(.id, default: UUID())
+        mode = container.value(.mode, default: .v2)
+        turnID = container.value(.turnID, default: nil)
+        startedAt = container.value(.startedAt, default: Date.now)
+        finishedAt = container.value(.finishedAt, default: nil)
+        request = container.value(.request, default: "")
+        leadProvider = container.value(.leadProvider, default: nil)
+        leadModel = container.value(.leadModel, default: nil)
+        leadEffort = container.value(.leadEffort, default: nil)
+        pairID = container.value(.pairID, default: nil)
+        headsProvider = container.value(.headsProvider, default: nil)
+        headsModel = container.value(.headsModel, default: nil)
+        headsEffort = container.value(.headsEffort, default: nil)
+        headsNote = container.value(.headsNote, default: nil)
+        tilt = container.value(.tilt, default: nil)
+        baseCommit = container.value(.baseCommit, default: nil)
+        baseDirty = container.value(.baseDirty, default: nil)
+        rounds = container.value(.rounds, default: 0)
+        heads = container.value(.heads, default: [])
+        leadEditsAfterReports = container.value(.leadEditsAfterReports, default: 0)
+        leadBuilt = container.value(.leadBuilt, default: false)
+        reviewEngine = container.value(.reviewEngine, default: nil)
+        reviewFindings = container.value(.reviewFindings, default: nil)
+        reviewAccepted = container.value(.reviewAccepted, default: nil)
+        reviewSkipped = container.value(.reviewSkipped, default: nil)
+        pendingReview = container.value(.pendingReview, default: nil)
+        baseTrees = container.value(.baseTrees, default: nil)
+        ending = container.value(.ending, default: nil)
+        merge = container.value(.merge, default: nil)
+    }
 }

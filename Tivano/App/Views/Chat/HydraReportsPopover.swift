@@ -14,6 +14,8 @@ struct HydraReportDigest {
         let outcome: Outcome
         let effort: String?
         let landing: Landing
+        let flags: HydraReportNotes
+        let reportFormatMissing: Bool
         let body: String
     }
 
@@ -63,6 +65,41 @@ struct HydraReportDigest {
             while let first = rest.first, first.trimmed.isEmpty {
                 rest.removeFirst()
             }
+            var flags = HydraReportNotes()
+            var reportFormatMissing = false
+            let hasFlagsBlock = rest.first?.trimmed == "Flags:"
+            if hasFlagsBlock {
+                rest.removeFirst()
+                let hasLanding = rest.contains(where: Self.landingPrefix)
+                var currentLabel: String?
+                while let first = rest.first {
+                    let line = first.trimmed
+                    if Self.landingPrefix(line) { break }
+                    if line.isEmpty || line.lowercased() == "none" {
+                        rest.removeFirst()
+                        continue
+                    }
+                    if line == "Report format not followed." {
+                        reportFormatMissing = true
+                    } else if let label = HydraReportNotes.labels.first(where: { line.hasPrefix($0 + ":") }) {
+                        currentLabel = label
+                        let value = String(line.dropFirst(label.count + 1)).trimmed
+                        let flag = value.isEmpty || value.lowercased() == "none" ? nil : value
+                        switch label {
+                        case "Deviations": flags.deviations = flag
+                        case "Unfinished": flags.unfinished = flag
+                        default: flags.uncertain = flag
+                        }
+                    } else if hasLanding, let label = currentLabel {
+                        switch label {
+                        case "Deviations": flags.deviations = [flags.deviations, line].compactMap { $0 }.joined(separator: "\n")
+                        case "Unfinished": flags.unfinished = [flags.unfinished, line].compactMap { $0 }.joined(separator: "\n")
+                        default: flags.uncertain = [flags.uncertain, line].compactMap { $0 }.joined(separator: "\n")
+                        }
+                    } else { break }
+                    rest.removeFirst()
+                }
+            }
             var landing = Landing.none
             if let first = rest.first, Self.landingPrefix(first) {
                 landing = parseLanding(first.trimmed)
@@ -70,7 +107,7 @@ struct HydraReportDigest {
             }
             var body = rest.joined(separator: "\n").trimmed
             if index == sections.count - 1 { body = withoutLeadInstructions(body) }
-            heads.append(Head(id: name, name: name, task: task, outcome: outcome, effort: effort, landing: landing, body: body))
+            heads.append(Head(id: name, name: name, task: task, outcome: outcome, effort: effort, landing: landing, flags: flags, reportFormatMissing: reportFormatMissing, body: hasFlagsBlock ? HydraReportFlagsRows.withoutTrailingFlags(body) : body))
         }
         return HydraReportDigest(intro: intro.isEmpty ? nil : intro, heads: heads)
     }
@@ -502,6 +539,7 @@ struct HydraReportsPopover: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            HydraReportFlagsRows(notes: head.flags, formatMissing: head.reportFormatMissing)
             landingRows(head.landing)
             if !collapsible || expanded.contains(head.name) {
                 reportBody(head)
@@ -651,5 +689,47 @@ struct HydraReportsPopover: View {
                 .controlSize(.small)
                 .padding(.vertical, 8)
         }
+    }
+}
+
+struct HydraReportFlagsRows: View {
+    let notes: HydraReportNotes?
+    var formatMissing = false
+
+    init(notes: HydraReportNotes?, formatMissing: Bool = false) {
+        self.notes = notes
+        self.formatMissing = formatMissing
+    }
+
+    init(head: HydraHeadInfo) {
+        notes = head.reportNotes
+        formatMissing = head.mode == .v2 && head.isFinished && head.reportNotes == nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if formatMissing {
+                Text("Report format not followed.")
+                    .foregroundStyle(Chrome.warning)
+            }
+            if let value = notes?.unfinished { flag("Unfinished: %@", value: value) }
+            if let value = notes?.deviations { flag("Deviations: %@", value: value) }
+            if let value = notes?.uncertain { flag("Uncertain: %@", value: value) }
+        }
+        .font(.ui(.subheadline))
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+    }
+
+    private func flag(_ key: String, value: String) -> some View {
+        Text(verbatim: String(format: Chrome.localized(key), value))
+            .foregroundStyle(Chrome.warning)
+    }
+
+    static func withoutTrailingFlags(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        guard let start = lines.lastIndex(where: { $0.trimmed.hasPrefix("Deviations:") }),
+              HydraReportNotes.parse(lines[start...].joined(separator: "\n")) != nil else { return text }
+        return lines[..<start].joined(separator: "\n").trimmed
     }
 }

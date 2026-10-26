@@ -41,6 +41,7 @@ extension HydraCookbook {
         pair.workerModel = heads?.id
         pair.workerEffort = effort(recipe.heads.effort, for: heads ?? registry.defaultModel(for: headsProvider))
         pair.maxHeads = recipe.maxHeads
+        pair.headsNote = recipe.headsNote
         return pair
     }
 

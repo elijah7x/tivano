@@ -305,8 +305,9 @@ struct HydraReportRow: View {
         // A heads' report keeps its full text for the popover, but the pill reads a
         // short human summary with the heads first, never the file-heavy detail.
         let parts = message.text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
-        let title = personas.isEmpty ? Self.withoutTrailingStop(String(parts.first ?? "Hydra")) : Self.reportSummary(names: names, text: message.text)
-        let body = personas.isEmpty ? String(parts.count > 1 ? parts[1] : "").trimmed : message.text
+        let review = Self.review(in: message.text)
+        let title = review.map { String(format: Chrome.localized("Independent review by %@"), $0.reviewer) } ?? (personas.isEmpty ? Self.withoutTrailingStop(String(parts.first ?? "Hydra")) : Self.reportSummary(names: names, text: message.text))
+        let body = review?.findings ?? (personas.isEmpty ? String(parts.count > 1 ? parts[1] : "").trimmed : message.text)
         // A merge note puts the merge request's address on the body's first line: that becomes
         // a link on the pill, and the chevron stays only for what the note says after it.
         let link = personas.isEmpty ? Self.leadingURL(in: body) : nil
@@ -387,6 +388,26 @@ struct HydraReportRow: View {
         .accessibilityLabel(Text(title))
     }
 
+    private static func review(in text: String) -> (reviewer: String, findings: String)? {
+        guard text.hasPrefix("[Hydra] Review") else { return nil }
+        let lines = text.components(separatedBy: "\n")
+        let header = lines.first ?? ""
+        let prefix = "[Hydra] Review: an independent review by "
+        let reviewer = header.hasPrefix(prefix)
+            ? String(header.dropFirst(prefix.count)).components(separatedBy: " of this job").first ?? "Hydra"
+            : "Hydra"
+        let body = lines.dropFirst().joined(separator: "\n").trimmed
+        let bodyLines = body.components(separatedBy: "\n")
+        if let separator = bodyLines.indices.first(where: { index in
+            bodyLines[index].trimmed == "---"
+                && bodyLines.dropFirst(index + 1).first(where: { !$0.trimmed.isEmpty })?.trimmed.hasPrefix("For the lead:") == true
+        }) {
+            return (reviewer, bodyLines[..<separator].joined(separator: "\n").trimmed)
+        }
+        let findings = body.components(separatedBy: "\n\nFor each finding, write one line").first ?? body
+        return (reviewer, findings.trimmed)
+    }
+
     /// The title without the one full stop a note's first line ends on.
     nonisolated static func withoutTrailingStop(_ title: String) -> String {
         title.hasSuffix(".") ? String(title.dropLast()) : title
@@ -397,6 +418,14 @@ struct HydraReportRow: View {
     /// whose `## Name: task (failed)` section says otherwise is named with its outcome
     /// instead, so a failure never hides behind "done".
     private static func reportSummary(names: [String], text: String) -> String {
+        let digest = HydraReportDigest.parse(text)
+        let flagged = digest.heads.filter { $0.flags.flagsSomething }
+        if let head = flagged.first {
+            return flagged.count == 1
+                ? String(format: Chrome.localized("%@ reported open points"), head.name)
+                : String(format: Chrome.localized("%d heads reported open points"), flagged.count)
+        }
+        if digest.heads.contains(where: \.reportFormatMissing) { return Chrome.localized("Report format not followed.") }
         let outcomes = reportOutcomes(in: text)
         let done = names.filter { outcomes[$0] == nil }
         let others = names.filter { outcomes[$0] != nil }
@@ -726,15 +755,29 @@ private struct HydraReportPopover: View {
 /// is not the chat's own. Never the JSON itself. The card reads the block as it streams
 /// and adds each head as its brief closes; while nothing has closed yet, or when the
 /// block cannot be read, it says the heads are being summoned and nothing more.
+private struct HydraWaitsForBlockEndKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var hydraWaitsForBlockEnd: Bool {
+        get { self[HydraWaitsForBlockEndKey.self] }
+        set { self[HydraWaitsForBlockEndKey.self] = newValue }
+    }
+}
+
 struct HydraDelegationBlock: View {
+    @Environment(\.hydraWaitsForBlockEnd) private var waitsForBlockEnd
     let json: String
     var sent = false
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     var body: some View {
         let reading = Self.reading(of: json)
-        let delegations = reading.delegations
+        let preparing = waitsForBlockEnd && !reading.isComplete
+        let delegations = preparing ? [] : reading.delegations
         let streaming = !reading.isComplete && !sent
+        let hasContinuations = delegations.contains { $0.continueHead != nil }
         // The mark and the title share a line; the heads run under both, each glyph in
         // the mark's column, so the list reads from the card's own left edge.
         VStack(alignment: .leading, spacing: 6) {
@@ -743,10 +786,10 @@ struct HydraDelegationBlock: View {
                     .foregroundStyle(Chrome.secondaryText)
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
-                Text(verbatim: Self.title(for: delegations, streaming: streaming, sent: sent))
+                Text(verbatim: waitsForBlockEnd && !sent ? Chrome.localized("Preparing the delegation…") : Self.title(for: delegations, streaming: streaming, sent: sent))
                     .font(.chat(.callout, weight: .medium))
                     .contentTransition(.opacity)
-                if sent {
+                if sent && !hasContinuations {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.chat(.callout, weight: .medium))
                         .foregroundStyle(.green)
@@ -783,7 +826,7 @@ struct HydraDelegationBlock: View {
             }
         }
         .animation(Chrome.panelSlide, value: sent)
-        .animation(Chrome.panelSlide, value: delegations.count)
+        .animation(waitsForBlockEnd ? nil : Chrome.panelSlide, value: delegations.count)
         .transition(.opacity)
         .accessibilityElement(children: .combine)
     }
@@ -792,7 +835,7 @@ struct HydraDelegationBlock: View {
     /// none), its task, and the project it goes to when the brief sends it elsewhere.
     private func headRow(_ delegation: HydraDelegation) -> some View {
         HStack(alignment: .center, spacing: TimelineMetrics.iconSpacing) {
-            if let persona = Self.persona(named: delegation.name) {
+            if let persona = Self.persona(named: delegation.continueHead ?? delegation.name) {
                 HydraGlyph(persona: persona, size: 16)
                     .accessibilityLabel(Text(persona.name))
             } else {
@@ -801,7 +844,7 @@ struct HydraDelegationBlock: View {
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
             }
-            Text(verbatim: delegation.task)
+            Text(verbatim: delegation.continueHead.map { String(format: Chrome.localized("Sending %@ back: %@"), $0, delegation.task) } ?? delegation.task)
                 .font(.chat(.caption))
                 .foregroundStyle(Chrome.primaryText.opacity(0.75))
                 .lineLimit(1)
@@ -826,6 +869,16 @@ struct HydraDelegationBlock: View {
     /// are going (or went) out, the one head by name when the lead named it.
     private static func title(for delegations: [HydraDelegation], streaming: Bool, sent: Bool) -> String {
         if streaming || delegations.isEmpty { return Chrome.localized("Summoning heads") }
+        let continuations = delegations.filter { $0.continueHead != nil }
+        if let continuation = continuations.first {
+            // `sent` marks the block consumed, before continuation acceptance is known.
+            if delegations.count == 1 {
+                return String(format: Chrome.localized("Sending %@ back to work"), continuation.continueHead ?? "")
+            }
+            let newHeads = delegations.count - continuations.count
+            if newHeads == 0 { return String(format: Chrome.localized("Sending %d continuations"), continuations.count) }
+            return String(format: Chrome.localized("Sending %d new heads and %d continuations"), newHeads, continuations.count)
+        }
         if delegations.count == 1 {
             if let persona = persona(named: delegations[0].name) { return String(format: Chrome.localized(sent ? "Summoned %@" : "Summoning %@"), persona.name) }
             return Chrome.localized(sent ? "Summoned a head" : "Summoning a head")
@@ -1860,13 +1913,14 @@ struct HydraHeadStepsPopover: View {
         let steps = Self.steps(in: model.runtime(for: headID).entries)
         let report = hydra.flatMap { head -> String? in
             guard head.isFinished else { return nil }
-            let text = (head.summary ?? "").trimmed
+            let text = HydraReportFlagsRows.withoutTrailingFlags((head.summary ?? "").trimmed)
             return text.isEmpty ? nil : text
         }
         PopoverScroll(maxHeight: Self.maxHeight) {
             VStack(alignment: .leading, spacing: 16) {
                 if let hydra {
                     header(hydra)
+                    if hydra.isFinished { HydraReportFlagsRows(head: hydra) }
                     if !hydra.task.isEmpty {
                         Text(verbatim: hydra.task)
                             .font(.chat(.callout))
@@ -2894,5 +2948,23 @@ private struct TurnFileCard: View {
                     .padding(.vertical, 7)
             }
         }
+    }
+}
+
+struct HydraReviewRunningRow: View {
+    let reviewer: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            MiniSpinner(cellSize: 2.4)
+            Text(verbatim: String(format: Chrome.localized("Independent review by %@…"), reviewer))
+                .font(.chat(.callout, weight: .medium))
+                .foregroundStyle(Chrome.primaryText.opacity(0.9))
+        }
+        .padding(.leading, TimelineMetrics.pillLeading)
+        .padding(.trailing, TimelineMetrics.pillTrailing)
+        .padding(.vertical, TimelineMetrics.pillVertical)
+        .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: TimelineMetrics.pillRadius, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

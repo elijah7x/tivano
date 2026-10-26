@@ -265,7 +265,7 @@ final class VoiceController {
         let session = try await runtime.codexSessionForVoice()
         try requireCurrent(epoch)
         // Sent with every start, so a chat that began without voice gets the same brief.
-        guard let instructions = app.voiceInstructions(for: home.id) else { throw VoiceRejection.noProject }
+        guard let instructions = session.voiceInstructions ?? app.voiceInstructions(for: home.id) else { throw VoiceRejection.noProject }
         guard let thread = session.voiceThreadID else { throw VoiceRejection.protocol }
         self.session = session
         session.onVoiceClosed = { [weak self] in self?.fail(epoch: epoch, .protocol) }

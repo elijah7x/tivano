@@ -238,6 +238,7 @@ struct ComposerView: View {
             ComposerWorkingDotsSlot(runtime: runtime)
         }
         .modifier(ComposerSurface())
+        .disabled(headNeedsLead)
         // The pill's width glides as the panels take or give room; the text view and the
         // controls move as one with the glass rather than each on their own frame.
         .geometryGroup()
@@ -329,30 +330,36 @@ struct ComposerView: View {
         if controller.hasFocus { cursorMoved(to: controller.cursorLocation) }
     }
 
+    private var headNeedsLead: Bool {
+        guard let thread = model.thread(runtime.threadID), thread.hydra?.isFinished == true else { return false }
+        return model.hydraHeadIsInOpenJob(thread)
+    }
+
     private func placeholder(for thread: ChatThread?) -> String {
         guard let thread else { return "" }
+        if headNeedsLead { return Chrome.localized("Ask the lead to send this head back") }
         if thread.interactionMode == .plan { return Chrome.localized("Describe what you want to plan") }
         if model.hydraIsOn(thread) {
             // With every message sent to a head, the lead never works the message itself:
             // it goes straight out and comes back as a report, which is worth saying here
             // because nothing else in the box shows it.
-            if model.settings.hydraSendsToHeads {
+            if goesToHead(thread) {
                 return String(format: Chrome.localized("Goes to a head; %@ leads and reports back"), thread.provider.displayName)
             }
-            return String(format: Chrome.localized("Ask %@ for anything; big jobs go out to a team of heads"), thread.provider.displayName)
+            return String(format: Chrome.localized(model.settings.isHydra2Enabled ? "Ask %@ for anything; the lead decides what to do itself and what to delegate" : "Ask %@ for anything; big jobs go out to a team of heads"), thread.provider.displayName)
         }
         return String(format: Chrome.localized("Ask %@ to build, fix or explain. @ for files, / for commands"), thread.provider.displayName)
     }
 
     /// Whether the next message is handed to a head rather than worked by the lead.
     private func goesToHead(_ thread: ChatThread) -> Bool {
-        model.settings.hydraSendsToHeads && model.hydraIsOn(thread)
+        model.existingRuntime(for: thread.id)?.hydraJobMode != .v2 && model.settings.hydraSendsToHeads && model.hydraIsOn(thread)
     }
 
     /// Whether a message queued behind the running turn is handed to a head of its own
     /// rather than waiting for the lead.
     private func queueGoesToHead(_ thread: ChatThread) -> Bool {
-        model.settings.hydraQueuesToHeads && model.hydraIsOn(thread)
+        model.existingRuntime(for: thread.id)?.hydraJobMode != .v2 && model.settings.hydraQueuesToHeads && model.hydraIsOn(thread)
     }
 
     /// The pair's heads provider when it differs from the lead's, so the usage popover
@@ -425,7 +432,7 @@ struct ComposerView: View {
     }
 
     private func send() {
-        guard !runtime.draft.isEmpty else { return }
+        guard !headNeedsLead, !runtime.draft.isEmpty else { return }
         historyIndex = nil
         suggestions = SuggestionState()
         if runtime.isRunning {
@@ -443,7 +450,7 @@ struct ComposerView: View {
     /// the chord while a turn runs; this path only sees it when the command is
     /// disabled or rebound, so it falls back to send once the chord moves.
     private func steer() {
-        guard !runtime.draft.isEmpty else { return }
+        guard !headNeedsLead, !runtime.draft.isEmpty else { return }
         historyIndex = nil
         suggestions = SuggestionState()
         if runtime.canQueue,

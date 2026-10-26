@@ -34,7 +34,7 @@ struct HydraButton: View {
         // lead's own timeline, so the badge pulses as soon as delegation starts.
         let isDelegating = isOn && running == 0 && runtime.isRunning && Self.isLeadDelegating(runtime.entries)
         Button {
-            if !model.settings.hasSeenHydraIntro { isIntroShown = true } else if heads.isEmpty { isExplaining = true } else { togglePanel() }
+            if isDelegating && heads.isEmpty { isExplaining = true } else if !model.settings.hasSeenHydraIntro { isIntroShown = true } else if heads.isEmpty { isExplaining = true } else { togglePanel() }
         } label: {
             ZStack {
                 if isOn {
@@ -81,7 +81,7 @@ struct HydraButton: View {
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
         .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
-            HydraIdlePopover(thread: thread)
+            HydraIdlePopover(thread: thread, isPreparing: isDelegating && heads.isEmpty && runtime.hydraJobMode == .v2)
         }
         .popover(isPresented: $isHydraSwitchShown, arrowEdge: .bottom) {
             HydraSwitchPopover(thread: thread, isOn: isOn, isHydraSwitchShown: $isHydraSwitchShown)
@@ -313,6 +313,7 @@ private final class HydraRightTapHost: NSView {
 private struct HydraIdlePopover: View {
     @Environment(AppModel.self) private var model
     let thread: ChatThread
+    var isPreparing = false
 
     var body: some View {
         PopoverMenu {
@@ -324,7 +325,11 @@ private struct HydraIdlePopover: View {
                 PopoverNote("Heads run on this chat's model and effort.")
             }
             PopoverDivider()
-            PopoverNote("No heads are out yet. Ask for something big enough to split up and this chat sends them out, each with a panel of its own.")
+            PopoverNote(isPreparing
+                ? "Preparing a delegation. No heads go out until the whole block is ready."
+                : model.settings.isHydra2Enabled
+                    ? "No heads are out yet. Send a request and the lead will decide what to do itself and what to delegate. Each head gets a panel of its own."
+                    : "No heads are out yet. Ask for something big enough to split up and this chat sends them out, each with a panel of its own.")
             PopoverDivider()
             PopoverNote("Right-click the mark to switch Hydra off for this chat.")
         }
@@ -654,7 +659,7 @@ private struct HydraSendWorkingBadge: View {
         .background(isSending ? Chrome.glassTint : Chrome.accent, in: Capsule())
         .contentShape(Capsule())
         .animation(Chrome.panelSlide, value: isSending)
-        .help(Text(verbatim: running == 1 ? Chrome.localized("1 head working · Show or hide the Hydra panel") : String(format: Chrome.localized("%d heads working · Show or hide the Hydra panel"), running)))
+        .help(Text(verbatim: isSending && running == 0 ? Chrome.localized("Preparing the delegation · Show or hide the Hydra panel") : running == 1 ? Chrome.localized("1 head working · Show or hide the Hydra panel") : String(format: Chrome.localized("%d heads working · Show or hide the Hydra panel"), running)))
         .accessibilityHidden(true)
     }
 }

@@ -701,9 +701,10 @@ class OpenAICompatibleSession: ProviderSession {
                 if let streamError, !streamError.isEmpty {
                     throw ProviderError.failed(friendlyError(streamError, statusCode: statusCode))
                 }
-                // Delegations can launch while text is streaming. Replaying that
+                // V1 delegations can launch while text is streaming. Replaying that
                 // response could repeat work already dispatched by the runtime.
-                if HydraPrompts.streamedDelegations(in: content)?.delegations.isEmpty == false {
+                if configuration.hydra?.mode != .v2,
+                   HydraPrompts.streamedDelegations(in: content)?.delegations.isEmpty == false {
                     throw ProviderError.failed("\(error.localizedDescription) This response was not retried because it had already streamed a head delegation.")
                 }
                 // The typed error (a URLError, normally) is carried up intact, with

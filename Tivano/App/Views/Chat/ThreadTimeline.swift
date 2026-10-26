@@ -573,6 +573,14 @@ struct ThreadTimeline: View, Equatable {
         return rowTransition
     }
 
+    private func waitsForHydraBlockEnd(_ block: DisplayBlock) -> Bool {
+        guard let turnID = block.turnID else { return false }
+        let jobs = model.thread(runtime.threadID)?.hydraJobs ?? []
+        if let job = jobs.last(where: { $0.turnID == turnID }) { return job.mode == .v2 }
+        guard let date = runtime.entries.first(where: { $0.turnID == turnID })?.item.date else { return false }
+        return jobs.last(where: { $0.startedAt <= date && ($0.finishedAt.map { date <= $0 } ?? true) })?.mode == .v2
+    }
+
     /// The most rows a work group may hold and still arrive with the soft appear.
     private static let softAppearLimit = 8
 
@@ -598,6 +606,7 @@ struct ThreadTimeline: View, Equatable {
         let visibilityOwner = stackGeneration
         return DisplayBlockView(block: block, runtime: runtime, context: context)
             .equatable()
+            .environment(\.hydraWaitsForBlockEnd, waitsForHydraBlockEnd(block))
             .environment(\.timelineBlockID, block.id)
             .environment(\.timelineLiveAppearance, measurements.liveIDs.contains(block.id) && !measurements.materializedIDs.contains(block.id))
             .id(block.id)
@@ -681,6 +690,10 @@ struct ThreadTimeline: View, Equatable {
                         row(block, rewindable: rewindable)
                     }
                     if bottomSpace > 0 { Color.clear.frame(height: max(0, bottomSpace - TimelineMetrics.rowSpacing)) }
+                    if let reviewer = runtime.hydraReviewRunning {
+                        HydraReviewRunningRow(reviewer: reviewer)
+                            .id("hydra-review-running")
+                    }
                     // The agent's questions end the conversation as badges until they are answered.
                     ForEach(runtime.questions) { request in
                         QuestionBadgeRow(request: request, runtime: runtime)

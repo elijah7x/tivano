@@ -8,6 +8,14 @@ extension AppModel {
         thread(leadID)?.hydraJobs.last(where: \.isOpen)
     }
 
+    /// Whether a head belongs to its lead's open v2 job: such a head is steered only
+    /// through the lead (`continue`), never from its own composer.
+    func hydraHeadIsInOpenJob(_ head: ChatThread) -> Bool {
+        guard let info = head.hydra, info.mode == .v2, let jobID = info.jobID,
+              let lead = head.parentThreadID, let job = openHydraJob(of: lead) else { return false }
+        return job.id == jobID
+    }
+
     /// Edits one job record of a lead; a no-op when either is gone.
     func updateHydraJob(_ jobID: UUID, of leadID: UUID, _ change: (inout HydraJobRecord) -> Void) {
         updateThread(leadID) { thread in
@@ -16,20 +24,19 @@ extension AppModel {
         }
     }
 
-    /// Starts a v2 job for a user's request: closes any job left open, records the lead,
+    /// Starts a v2 job for a user's request, or continues its open job; records the lead,
     /// the pair and the checkout's base. Returns the new job's id.
     func beginHydraJob(for leadID: UUID, turnID: UUID, request: String) async -> UUID? {
         guard let lead = thread(leadID) else { return nil }
-        for open in lead.hydraJobs where open.isOpen {
-            updateHydraJob(open.id, of: leadID) { $0.finishedAt = .now }
-            releaseHydraJobCopies(of: leadID, jobID: open.id)
-        }
+        if let open = openHydraJob(of: leadID) { return open.id }
         let pair = hydraPair(for: lead)
         let launch = hydraLaunch(for: lead)
         var baseCommit: String?
         var baseDirty: Bool?
+        var baseTrees: [String: String] = [:]
         if let checkout = hydraCheckout(of: lead) {
             let git = Git(checkout)
+            baseTrees[checkout] = try? await git.currentTree()
             baseCommit = (try? await git.output(["rev-parse", "HEAD"]))?.trimmed.nilIfEmpty
             if let status = try? await git.output(["status", "--porcelain"]) {
                 baseDirty = !status.trimmed.isEmpty
@@ -55,6 +62,7 @@ extension AppModel {
             reviewFindings: nil,
             reviewAccepted: nil,
             reviewSkipped: nil,
+            baseTrees: baseTrees,
             merge: nil
         )
         updateThread(leadID) { $0.hydraJobs.append(job) }
@@ -63,34 +71,78 @@ extension AppModel {
 
     /// The end of a v2 lead turn with the whole team back and nothing waiting: review
     /// once, then merge (with auto-merge on) and close the job.
-    func settleHydraJob(of leadID: UUID) async {
-        // A review that found the lead busy goes first, whichever job it belongs to.
+    func settleHydraJob(of leadID: UUID, ending: HydraJobEnding = .completed) async {
+        guard let job = openHydraJob(of: leadID) else { return }
+        let ending = ending == .completed ? (job.ending ?? ending) : ending
+        if ending != .completed {
+            updateHydraJob(job.id, of: leadID) { $0.ending = ending }
+            if ending != .recovered,
+               hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) { return }
+            await existingRuntime(for: leadID)?.hydraLanding?.value
+            updateHydraJob(job.id, of: leadID) {
+                $0.pendingReview = nil
+                $0.finishedAt = .now
+            }
+            for head in hydraTeam(of: leadID) where head.hydra?.jobID == job.id && head.hydra?.isFinished == true {
+                guard let info = head.hydra, let copy = head.worktreePath, let base = info.baseTree else { continue }
+                let unchanged = (try? await Git(copy).currentTree()) == base
+                guard unchanged || info.landing?.landed == true else { continue }
+                releaseHydraCopy(of: head.id)
+            }
+            scheduleSave()
+            return
+        }
+        let runtime = runtime(for: leadID)
+        guard runtime.phase == .idle, !runtime.isReverting, runtime.hydraReviewRunning == nil else { return }
         if let waiting = thread(leadID)?.hydraJobs.last(where: { $0.pendingReview != nil }),
-           let text = waiting.pendingReview,
-           let runtime = existingRuntime(for: leadID), runtime.phase == .idle, !runtime.isReverting {
+           let text = waiting.pendingReview {
             updateHydraJob(waiting.id, of: leadID) { $0.pendingReview = nil }
             await runtime.sendHydraReview(text, jobID: waiting.id)
             return
         }
-        guard let job = openHydraJob(of: leadID) else { return }
-        let turns = existingRuntime(for: leadID)?.turns ?? []
-        let leadTouchedFiles: Bool
-        if let turnID = job.turnID, let first = turns.firstIndex(where: { $0.id == turnID }) {
-            leadTouchedFiles = turns[first...].contains { !($0.touchedPaths ?? []).isEmpty }
-        } else {
-            leadTouchedFiles = false
+        if job.reviewEngine == nil, job.reviewSkipped == nil {
+            switch await reviewHydraJob(of: leadID, jobID: job.id) {
+            case .started, .pending: return
+            case .skipped: break
+            }
         }
-        let hasWork = job.heads.contains { $0.landedFiles > 0 } || leadTouchedFiles
-        if hasWork, job.reviewEngine == nil, job.reviewSkipped == nil,
-           await reviewHydraJob(of: leadID, jobID: job.id) {
-            return
+        guard let current = openHydraJob(of: leadID), current.id == job.id, current.ending == nil,
+              runtime.phase == .idle, !runtime.isReverting else { return }
+        if settings.hydraAutoMerge, let lead = thread(leadID), hydraIsOn(lead), current.merge == nil {
+            await autoMergeHydraWork(of: leadID, jobID: job.id)
+            // Only a scheduled retry keeps the job open: a merge that returned early without a
+            // result (nothing to merge, merging off for the lead) must not strand it.
+            guard !hasHydraMergePending(of: leadID, jobID: job.id) else { return }
         }
-        if settings.hydraAutoMerge, let lead = thread(leadID), hydraIsOn(lead) {
-            await autoMergeHydraWork(of: leadID)
+        // The review and merge awaited: a follow-up may have sent heads out meanwhile, and
+        // their work belongs to this job, which stays open until they are back.
+        guard openHydraJob(of: leadID)?.id == job.id, runtime.phase == .idle,
+              !runtime.hydraHasOutstandingWork,
+              !hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) else { return }
+        updateHydraJob(job.id, of: leadID) {
+            $0.ending = .completed
+            $0.finishedAt = .now
         }
-        updateHydraJob(job.id, of: leadID) { $0.finishedAt = .now }
         releaseHydraJobCopies(of: leadID, jobID: job.id)
         scheduleSave()
+    }
+
+    func endHydraJobsForHydraOff(of leadID: UUID) {
+        guard let job = openHydraJob(of: leadID) else { return }
+        updateHydraJob(job.id, of: leadID) { $0.ending = .hydraOff }
+        for head in hydraTeam(of: leadID) where head.hydra?.jobID == job.id && head.hydra?.status == .running {
+            stopHydraHead(head.id)
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            // Interrupting a provider is asynchronous; let its final landing finish.
+            while self.hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else { return }
+            }
+            guard self.openHydraJob(of: leadID)?.id == job.id else { return }
+            await self.settleHydraJob(of: leadID, ending: .hydraOff)
+        }
     }
 
     /// Releases the copies retained by finished heads of one settled job.
@@ -124,7 +176,14 @@ extension AppModel {
             $0.status = .running
             $0.finishedAt = nil
         }
-        headRuntime.sendHydraBrief(HydraPrompts.v2ContinuePrompt(delegation: delegation, packet: packet), attachments: [])
+        updateThread(head.id) { $0.isInPanel = true }
+        let workplace: HydraPrompts.Workplace?
+        if info.hasOwnCopy, let path = head.worktreePath {
+            workplace = .ownCopy(path: path)
+        } else {
+            workplace = (info.targetCheckout ?? (try? executionDirectory(for: head))).map { .shared(path: $0) }
+        }
+        headRuntime.sendHydraBrief(HydraPrompts.v2ContinuePrompt(delegation: delegation, packet: packet, workplace: workplace), attachments: [])
         return nil
     }
 }

@@ -180,9 +180,10 @@ def baseline(args):
         by_id = {t['id']: t for t in threads if t.get('id')}
         groups = collections.defaultdict(list)
         for thread in threads:
-            if thread.get('hydra') is not None:
+            if isinstance(thread.get('hydra'), dict) and thread['hydra'].get('mode', 'v1') == 'v1':
                 groups[thread.get('parentThreadID') or 'missing-parent'].append(thread)
-        lead_ids = set(groups) | {t['id'] for t in threads if t.get('hydraSpawnCount', 0) > 0}
+        lead_ids = set(groups) | {t['id'] for t in threads
+                                  if t.get('hydraSpawnCount', 0) > 0 and not t.get('hydraJobs')}
         inventory.append(f'{edition}: {len(threads)} threads, {len(lead_ids)} lead IDs, '
                          f'{sum(len(v) for v in groups.values())} heads ({library})')
         for lead_id in sorted(lead_ids):
@@ -285,7 +286,8 @@ def baseline(args):
                              and payload(i)[1].get('status') == 'completed') if complete and start is not None and returned is not None else None
                 relevant_merges = [m for m in merges if start is not None and timestamp(m.get('at')) is not None
                                    and timestamp(m['at']) >= start and (end is None or timestamp(m['at']) < end)]
-                merge_outcomes = [m.get('outcome') for m in relevant_merges]
+                relevant_merges.sort(key=lambda m: timestamp(m.get('at')))
+                merge_outcomes = [m.get('outcome') for m in relevant_merges if m.get('outcome')]
                 if not merge_outcomes:
                     # hydraMerged is an affirmative legacy signal only; false proves nothing.
                     merge_outcomes = ['merged' for t in turns if t.get('hydraMerged') and start is not None
@@ -295,6 +297,8 @@ def baseline(args):
                 if not final_valid:
                     final = ''
                 job = dict(job_key=key, edition=edition, lead_id=lead_id, request_id=request['id'],
+                           request_at=(dt.datetime.fromtimestamp(start, dt.timezone.utc).isoformat()
+                                       if start is not None else None),
                            task_type=classify(request['text']), request_excerpt=redact(request['text'])[:240],
                            provider=lead.get('provider'), model=lead.get('model'), effort=lead.get('effort'),
                            hydra_pair_id=lead.get('hydraPairID'), temporary_pair_present=bool(lead.get('temporaryHydraPair')),
@@ -305,7 +309,8 @@ def baseline(args):
                            conflict_heads=sum(bool(r['conflicts']) for r in head_rows),
                            landing_observed_heads=sum(r['conflicts'] is not None for r in head_rows),
                            merge_attempts=len(relevant_merges), merge_outcomes=';'.join(str(v) for v in merge_outcomes),
-                           merge_success=(int(all(v in ('merged', 'settled') for v in merge_outcomes)) if merge_outcomes else None),
+                           merge_final_outcome=merge_outcomes[-1] if merge_outcomes else None,
+                           merge_success=merge_result(merge_outcomes[-1] if merge_outcomes else None),
                            transcript_complete=complete, final_reply_observed=bool(final))
                 for field in ['model', 'effort', 'hydraPairID', 'temporaryHydraPair']:
                     if lead.get(field) is None:
@@ -348,7 +353,7 @@ def baseline(args):
               '- Job wall time is request to qualifying final reply; includes waiting, and is NA if final completion is not observed. Head wall time is queuedAt (fallback startedAt/executionStartedAt/createdAt) to finishedAt (fallback executionFinishedAt); missing or negative durations are NA. Ongoing heads are censored, not zero.',
               '- Stalled is running with last thread update/start over one hour old at extraction; stale status can falsely flag completed work. Failed/stopped are failure proxies; manual stops are not necessarily defects. Active current research jobs are included in this live snapshot.',
               '- Conflict denominator is heads with landing metadata. Missing landing is unknown. Landed file counts exclude retained patches/errors, but a conflict count is still reported. Empty landing can mean research/no change. These are stored counts, not a filesystem inspection.',
-              '- Merge success uses explicit hydraMerges outcomes or affirmative turn.hydraMerged. All outcomes must be merged/settled; retries with earlier failures therefore remain non-success. settled means no remaining merge work, not necessarily a new merge. Missing evidence is NA; landing/finished status is never treated as merge success. Prose [Hydra] claims are not promoted to structured merge evidence.',
+              '- Merge success uses explicit hydraMerges outcomes or affirmative turn.hydraMerged. The last timestamp-ordered outcome is used; only merged/failed enter the remote merge success denominator. settled means no remaining merge work and is reported separately. Missing evidence is NA; landing/finished status is never treated as merge success. Prose [Hydra] claims are not promoted to structured merge evidence.',
               '- Only indexed turn revisions are read, never arbitrary newer revisions or unindexed turn files. Inline legacy items and referenced revision items are deduplicated by item ID; referenced revisions win. Missing JSON/revisions are recorded below. Orphaned/deleted threads cannot be reconstructed. No cross-edition deduplication: edition is part of job identity.',
               '- Task types use ordered keyword rules over the request only (release, bugfix, research, UI, refactor, docs, other); bilingual but heuristic, not human labels. Samples are deterministic round-robin across task types, ordered by job key, up to 12 jobs.',
               '- provider/model/effort are current thread fields, not proof of the model for every historical turn. Pair IDs cannot be resolved without settings; settings/credentials/provider histories are never read. temporaryHydraPair presence is captured, not its full content. Token usage/cost is not estimated.',
@@ -388,8 +393,10 @@ def baseline(args):
 
 V2_JOB_FIELDS = [
     'job_key', 'edition', 'lead_id', 'job_id', 'turn_id', 'task_type', 'request_excerpt',
-    'lead_provider', 'lead_model', 'heads_provider', 'heads_model', 'pair_id',
-    'base_commit', 'base_dirty', 'heads', 'single_head', 'rounds', 'job_wall_seconds',
+    'lead_provider', 'lead_model', 'lead_effort', 'heads_provider', 'heads_model',
+    'heads_effort', 'heads_note', 'pair_id', 'pair_same_model',
+    'base_commit', 'base_dirty', 'base_trees', 'ending', 'is_open',
+    'review_pending_delivery', 'review_outcome', 'heads', 'single_head', 'rounds', 'job_wall_seconds',
     'failed_or_stalled_heads', 'failure_observed_heads', 'stalled_heads',
     'conflicts', 'conflict_heads', 'conflict_observed_heads',
     'lead_edits_after_reports', 'lead_built', 'continuations_total',
@@ -400,7 +407,7 @@ V2_JOB_FIELDS = [
 V2_HEAD_FIELDS = [
     'job_key', 'edition', 'lead_id', 'job_id', 'head_id', 'head_name',
     'provider', 'model', 'effort', 'brief_chars', 'owned_files_count', 'status',
-    'wall_seconds', 'landed_files_count', 'conflicts', 'followed_report_format',
+    'execution_seconds', 'landed_files_count', 'conflicts', 'followed_report_format',
     'flags_something', 'continuations', 'stalled', 'failure_or_stall'
 ]
 
@@ -447,6 +454,9 @@ def load_baseline(root):
     for job in jobs:
         for field in ('heads', 'rounds', 'job_wall_seconds', 'rework_edits', 'merge_success'):
             job[field] = number(job.get(field))
+        # Older baseline exports used a different success definition and may not
+        # preserve chronological ordering. Do not reinterpret their aggregate.
+        job['merge_success'] = merge_result(job.get('merge_final_outcome'))
     for head in heads:
         for field in ('conflicts', 'failure_or_stall', 'stalled'):
             head[field] = number(head.get(field))
@@ -467,8 +477,73 @@ def write_rows(path, fieldnames, rows):
     with path.open('x', encoding='utf-8', newline='') as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows({k: redact(v) if isinstance(v, str) else v for k, v in row.items()}
+        writer.writerows({k: export_value(k, v) for k, v in row.items()}
                          for row in rows)
+
+
+
+def merge_result(outcome):
+    return 1 if outcome == 'merged' else (0 if outcome == 'failed' else None)
+
+
+def export_value(field, value):
+    # Preserve only validated Git object IDs; arbitrary text still gets redacted.
+    if field == 'base_commit' and isinstance(value, str) and re.fullmatch(r'[0-9a-fA-F]{40}', value):
+        return value
+    if field == 'base_trees':
+        return value
+    return redact(value) if isinstance(value, str) else value
+
+
+def base_trees_export(value):
+    if value is None:
+        return None
+
+    def scrub(item):
+        if isinstance(item, dict):
+            return {redact(key): scrub(val) for key, val in item.items()}
+        if isinstance(item, list):
+            return [scrub(val) for val in item]
+        if isinstance(item, str):
+            return item if re.fullmatch(r'[0-9a-fA-F]{40}', item) else redact(item)
+        return item
+
+    return json.dumps(scrub(value), ensure_ascii=False, sort_keys=True)
+
+
+def complete_sum(rows, field, known=True):
+    values = [row.get(field) for row in rows]
+    return sum(values) if known and all(value is not None for value in values) else None
+
+
+def pending_delivery(record):
+    value = record.get('pendingReview')
+    if isinstance(value, str):
+        return bool(value.strip())
+    return boolean(value)
+
+
+def review_outcome(record):
+    pending = pending_delivery(record)
+    if pending is True:
+        return 'pending'
+    reason = record.get('reviewSkipped')
+    if isinstance(reason, str) and reason.strip():
+        if re.search(r'fail|error|timed? ?out|timeout', reason, re.I):
+            return 'failed'
+        return 'skipped'
+    if record.get('reviewEngine') and (pending is False or number(record.get('reviewAccepted')) is not None):
+        return 'delivered'
+    return 'unknown'
+
+
+def terminal_job(job, v2):
+    if not v2:
+        return boolean(job.get('final_reply_observed')) is True
+    return (job.get('is_open') is False and
+            job.get('review_pending_delivery') is not True and
+            job.get('review_outcome') in ('delivered', 'skipped', 'failed') and
+            job.get('ending') == 'completed')
 
 
 def med_observed(rows, field):
@@ -523,7 +598,11 @@ def extract_v2(libraries, now):
                 start = timestamp(record.get('startedAt'))
                 finish = timestamp(record.get('finishedAt'))
                 head_rows = []
-                for head in record.get('heads') or []:
+                stored_heads = record.get('heads')
+                heads_known = isinstance(stored_heads, list) and all(isinstance(h, dict) for h in stored_heads)
+                for head in stored_heads if isinstance(stored_heads, list) else []:
+                    if not isinstance(head, dict):
+                        continue
                     head_id = head.get('headID')
                     live = by_id.get(head_id, {})
                     live_h = live.get('hydra') or {}
@@ -558,8 +637,6 @@ def extract_v2(libraries, now):
                     if isinstance(notes, dict):
                         flags = any(notes.get(field) is not None
                                     for field in ('deviations', 'unfinished', 'uncertain'))
-                    elif followed is not None:
-                        flags = False
                     else:
                         flags = None
                     seconds = number(head.get('seconds'))
@@ -569,47 +646,64 @@ def extract_v2(libraries, now):
                         job_key=key, edition=edition, lead_id=lead_id, job_id=job_id,
                         head_id=head_id, head_name=head.get('name'), provider=head.get('provider'),
                         model=head.get('model'), effort=head.get('effort'),
-                        brief_chars=number(head.get('briefChars', 0)),
-                        owned_files_count=len(head.get('files') or []), status=status,
-                        wall_seconds=seconds,
-                        landed_files_count=number(head.get('landedFiles', 0)),
-                        conflicts=number(head.get('conflicts', 0)),
+                        brief_chars=number(head.get('briefChars')),
+                        owned_files_count=len(head['files']) if isinstance(head.get('files'), list) else None, status=status,
+                        execution_seconds=seconds,
+                        landed_files_count=number(head.get('landedFiles')),
+                        conflicts=number(head.get('conflicts')),
                         followed_report_format=followed, flags_something=flags,
-                        continuations=number(head.get('continuations', 0)),
+                        continuations=number(head.get('continuations')),
                         stalled=stalled, failure_or_stall=failure)
                     heads.append(row)
                     head_rows.append(row)
-                merge = record.get('merge')
-                merge_success = (int(merge in ('merged', 'nothing')) if merge in ('merged', 'nothing')
-                                 else (0 if merge == 'failed' else None))
+                # Only this identified ledger job owns its merge result. Never use
+                # the lead's latest merge or another job's recovery outcome.
+                merge = record.get('merge') if record.get('id') else None
+                merge_success = merge_result(merge)
                 model_fields = ('leadProvider', 'leadModel', 'headsProvider', 'headsModel')
-                same_model = (record.get('leadProvider') == record.get('headsProvider') and
+                pair_same_model = (record.get('leadProvider') == record.get('headsProvider') and
                               record.get('leadModel') == record.get('headsModel')
-                              if all(record.get(field) is not None for field in model_fields) else None)
+                              if all(record.get(field) for field in model_fields) else None)
+                actual_models_known = (heads_known and bool(head_rows) and
+                                       bool(record.get('leadProvider')) and bool(record.get('leadModel')) and
+                                       all(h.get('provider') and h.get('model') for h in head_rows))
+                same_model = (all(h['provider'] == record['leadProvider'] and
+                                  h['model'] == record['leadModel'] for h in head_rows)
+                              if actual_models_known else None)
                 known_conflicts = [h['conflicts'] for h in head_rows if h['conflicts'] is not None]
                 job = dict(
                     job_key=key, edition=edition, lead_id=lead_id, job_id=job_id,
                     turn_id=record.get('turnID'), task_type=classify(request),
                     request_excerpt=redact(request)[:240],
                     lead_provider=record.get('leadProvider'), lead_model=record.get('leadModel'),
+                    lead_effort=record.get('leadEffort'),
                     heads_provider=record.get('headsProvider'), heads_model=record.get('headsModel'),
+                    heads_effort=record.get('headsEffort'), heads_note=record.get('headsNote'),
+                    pair_same_model=pair_same_model,
                     pair_id=record.get('pairID'), base_commit=record.get('baseCommit'),
-                    base_dirty=boolean(record.get('baseDirty')), heads=len(head_rows),
-                    single_head=len(head_rows) == 1, rounds=number(record.get('rounds', 0)),
+                    base_dirty=boolean(record.get('baseDirty')),
+                    base_trees=base_trees_export(record.get('baseTrees')), ending=record.get('ending'),
+                    is_open=(False if finish is not None else
+                             (True if start is not None and record.get('finishedAt') is None else None)),
+                    review_pending_delivery=pending_delivery(record), review_outcome=review_outcome(record),
+                    heads=len(head_rows) if heads_known else None,
+                    single_head=(len(head_rows) == 1) if heads_known else None, rounds=number(record.get('rounds')),
                     job_wall_seconds=(round(finish - start, 3) if start is not None and
                                       finish is not None and finish >= start else None),
-                    failed_or_stalled_heads=sum(h['failure_or_stall'] or 0 for h in head_rows),
+                    failed_or_stalled_heads=complete_sum(head_rows, 'failure_or_stall', heads_known),
                     failure_observed_heads=sum(h['failure_or_stall'] is not None for h in head_rows),
-                    stalled_heads=sum(h['stalled'] or 0 for h in head_rows),
-                    conflicts=sum(known_conflicts) if known_conflicts else None,
-                    conflict_heads=sum((h['conflicts'] or 0) > 0 for h in head_rows),
+                    stalled_heads=complete_sum(head_rows, 'stalled', heads_known),
+                    conflicts=complete_sum(head_rows, 'conflicts', heads_known),
+                    conflict_heads=(sum(value > 0 for value in known_conflicts) if known_conflicts else None),
                     conflict_observed_heads=len(known_conflicts),
-                    lead_edits_after_reports=number(record.get('leadEditsAfterReports', 0)),
-                    lead_built=boolean(record.get('leadBuilt', False)),
-                    continuations_total=sum(h['continuations'] or 0 for h in head_rows),
-                    report_format_compliant_heads=sum(h['followed_report_format'] is True for h in head_rows),
+                    lead_edits_after_reports=number(record.get('leadEditsAfterReports')),
+                    lead_built=boolean(record.get('leadBuilt')),
+                    continuations_total=complete_sum(head_rows, 'continuations', heads_known),
+                    report_format_compliant_heads=(sum(h['followed_report_format'] is True for h in head_rows)
+                                                   if any(h['followed_report_format'] is not None for h in head_rows) else None),
                     report_format_observed_heads=sum(h['followed_report_format'] is not None for h in head_rows),
-                    flagged_heads=sum(h['flags_something'] is True for h in head_rows),
+                    flagged_heads=(sum(h['flags_something'] is True for h in head_rows)
+                                   if any(h['flags_something'] is not None for h in head_rows) else None),
                     flags_observed_heads=sum(h['flags_something'] is not None for h in head_rows),
                     review_engine=record.get('reviewEngine'),
                     review_findings=number(record.get('reviewFindings')),
@@ -627,20 +721,22 @@ def metric_values(jobs, heads, v2):
     keys = {j.get('job_key') for j in jobs}
     related_heads = [h for h in heads if h.get('job_key') in keys]
     single_known = [j for j in jobs if j.get('heads') is not None]
-    failures = [h for h in related_heads if h.get('failure_or_stall') is not None]
-    conflicts = [h for h in related_heads if h.get('conflicts') is not None]
-    merges = [j for j in jobs if j.get('merge_success') is not None]
-    rework = 'lead_edits_after_reports' if v2 else 'rework_edits'
+    terminal = [j for j in jobs if terminal_job(j, v2)]
+    terminal_keys = {j.get('job_key') for j in terminal}
+    finished_heads = [h for h in related_heads if h.get('job_key') in terminal_keys]
+    failures = [h for h in finished_heads if h.get('failure_or_stall') is not None]
+    conflicts = [h for h in finished_heads if h.get('conflicts') is not None]
+    merges = [j for j in terminal if j.get('merge_success') is not None]
     return [
         ('Jobs', str(len(jobs))),
+        ('Observed completed jobs', str(len(terminal))),
         ('Jobs with exactly one head', rate(sum(j.get('heads') == 1 for j in single_known), len(single_known))),
         ('Median heads', med_observed(jobs, 'heads')),
-        ('Median rounds', med_observed(jobs, 'rounds')),
-        ('Median job wall seconds', med_observed(jobs, 'job_wall_seconds')),
-        ('Median lead rework edits', med_observed(jobs, rework)),
-        ('Head failure/stall rate', rate(sum(h['failure_or_stall'] for h in failures), len(failures))),
-        ('Conflict rate', rate(sum(h['conflicts'] > 0 for h in conflicts), len(conflicts))),
-        ('Merge success rate', rate(sum(j['merge_success'] == 1 for j in merges), len(merges)))
+        ('Median rounds (completed jobs)', med_observed(terminal, 'rounds')),
+        ('Head failure/stall rate (completed jobs)', rate(sum(h['failure_or_stall'] for h in failures), len(failures))),
+        ('Conflict rate (completed jobs)', rate(sum(h['conflicts'] > 0 for h in conflicts), len(conflicts))),
+        ('Final remote merge success (completed jobs)', rate(sum(j['merge_success'] == 1 for j in merges), len(merges))),
+        ('No new merge needed (completed jobs)', str(sum(j.get('merge_outcome', j.get('merge_final_outcome')) in ('nothing', 'settled') for j in terminal)))
     ]
 
 
@@ -654,82 +750,107 @@ def comparison_table(v1_jobs, v1_heads, v2_jobs, v2_heads):
 
 
 def comparison_markdown(now, v1_jobs, v1_heads, v2_jobs, v2_heads, inventory, reader):
+    delegated_v1 = [j for j in v1_jobs if (j.get('heads') or 0) > 0]
+    delegated_v2 = [j for j in v2_jobs if (j.get('heads') or 0) > 0]
+    no_heads = [j for j in v2_jobs if j.get('heads') == 0]
+    heads_observed = [j for j in v2_jobs if j.get('heads') is not None]
     lines = ['# Hydra 1 vs Hydra 2 comparison', '',
              f'Compared at {now.isoformat()}; sources opened read-only.', '',
-             '## Overall', '']
-    lines += comparison_table(v1_jobs, v1_heads, v2_jobs, v2_heads)
-    lines += ['', '## By task type', '']
-    types = sorted({j.get('task_type') or 'unknown' for j in v1_jobs + v2_jobs})
+             "These are operational health metrics, not task-quality or cost results. They cannot rank Hydra 2 against the owner's quality > cost > time priority. Use matched same-task, same-base replays and blind result review for quality; report provider-observed token/credit/cost only with coverage and units; report time last.", '',
+             '## Delegated-work operational comparison (not whole-policy effectiveness)', '',
+             'Both cohorts require at least one dispatched head. Terminal metrics require a V1 qualifying final reply or a V2 completed ending, finished timestamp and resolved review delivery. Unknown legacy completion evidence is excluded, not filled in.', '']
+    lines += comparison_table(delegated_v1, v1_heads, delegated_v2, v2_heads)
+    lines += ['', '## By task type (delegated work)', '']
+    types = sorted({j.get('task_type') or 'unknown' for j in delegated_v1 + delegated_v2})
     for task_type in types:
-        v1_subset = [j for j in v1_jobs if (j.get('task_type') or 'unknown') == task_type]
-        v2_subset = [j for j in v2_jobs if (j.get('task_type') or 'unknown') == task_type]
-        lines += [f'### {task_type}', '']
-        lines += comparison_table(v1_subset, v1_heads, v2_subset, v2_heads)
-        lines.append('')
+        a = [j for j in delegated_v1 if (j.get('task_type') or 'unknown') == task_type]
+        b = [j for j in delegated_v2 if (j.get('task_type') or 'unknown') == task_type]
+        lines += [f'### {task_type}', ''] + comparison_table(a, v1_heads, b, v2_heads) + ['']
+
+    lines += ['## V2 no-head jobs and delegation rate', '',
+              '- Delegation rate: ' + rate(len(delegated_v2), len(heads_observed)) + '.',
+              '- No-head share: ' + rate(len(no_heads), len(heads_observed)) + '.',
+              f'- Unknown head count: {len(v2_jobs) - len(heads_observed)} jobs.',
+              'The V1 baseline has no whole-policy denominator; no V1 delta is inferred here.', '',
+              '| Task type | No-head jobs | Observed completed | Open | Pending review |',
+              '|---|---:|---:|---:|---:|']
+    for kind in sorted({j.get('task_type') or 'unknown' for j in no_heads}):
+        subset = [j for j in no_heads if (j.get('task_type') or 'unknown') == kind]
+        lines.append(f"| {kind} | {len(subset)} | {sum(terminal_job(j, True) for j in subset)} | {sum(j['is_open'] is True for j in subset)} | {sum(j['review_outcome'] == 'pending' for j in subset)} |")
 
     format_observed = [h for h in v2_heads if h['followed_report_format'] is not None]
     flags_observed = [h for h in v2_heads if h['flags_something'] is not None]
     built_observed = [j for j in v2_jobs if j['lead_built'] is not None]
-    reviewed = [j for j in v2_jobs if j.get('review_engine')]
-    skipped = [j for j in v2_jobs if not j.get('review_engine') and j.get('review_skipped_reason')]
-    unrecorded = [j for j in v2_jobs
-                  if not j.get('review_engine') and not j.get('review_skipped_reason')]
-    acceptance_jobs = [j for j in reviewed
-                       if j['review_findings'] is not None and j['review_accepted'] is not None]
+    delivered = [j for j in v2_jobs if j['review_outcome'] == 'delivered']
+    handled = [j for j in delivered if terminal_job(j, True) and j['review_accepted'] is not None]
+    acceptance_jobs = [j for j in handled if j['review_findings'] is not None]
     findings = sum(j['review_findings'] for j in acceptance_jobs)
     accepted = sum(j['review_accepted'] for j in acceptance_jobs)
-    lines += ['## Hydra 2 mechanisms', '',
+    lines += ['', '## Hydra 2 mechanisms and review outcomes (all jobs)', '',
               '- Report-format compliance: ' + rate(sum(h['followed_report_format'] is True for h in format_observed), len(format_observed)),
-              '- Heads that flagged a deviation, unfinished work or uncertainty: ' + rate(sum(h['flags_something'] is True for h in flags_observed), len(flags_observed)),
+              '- Heads with flags: ' + rate(sum(h['flags_something'] is True for h in flags_observed), len(flags_observed)),
               '- Continuations per job: mean ' + mean_observed(v2_jobs, 'continuations_total') + '; median ' + med_observed(v2_jobs, 'continuations_total') + '.',
-              '- Lead built: ' + rate(sum(j['lead_built'] is True for j in built_observed), len(built_observed)),
-              '- Review ran (engine recorded): ' + rate(len(reviewed), len(v2_jobs)),
-              '- Review skipped (reason recorded, no engine): ' + rate(len(skipped), len(v2_jobs)),
-              '- No review outcome recorded: ' + rate(len(unrecorded), len(v2_jobs)),
-              '- Findings per reviewed job: mean ' + mean_observed(reviewed, 'review_findings') + '; median ' + med_observed(reviewed, 'review_findings') + '.',
-              f'- Review acceptance: {rate(accepted, findings)}; accepted/findings counts both present on {len(acceptance_jobs)}/{len(reviewed)} reviewed jobs.',
-              '', '### Review skip reasons', '']
-    reasons = collections.Counter(one_line(j['review_skipped_reason']) for j in skipped)
-    if reasons:
-        lines += [f'- {reason}: {count} jobs' for reason, count in sorted(reasons.items())]
-    else:
-        lines.append('- None recorded.')
+              '- Lead built (observed command proxy): ' + rate(sum(j['lead_built'] is True for j in built_observed), len(built_observed)),
+              f"- Open jobs: {sum(j['is_open'] is True for j in v2_jobs)}; unknown open state: {sum(j['is_open'] is None for j in v2_jobs)}.", '',
+              '| Review outcome | Jobs | Share |', '|---|---:|---:|']
+    for outcome in ('delivered', 'pending', 'skipped', 'failed', 'unknown'):
+        count = sum(j['review_outcome'] == outcome for j in v2_jobs)
+        lines.append(f'| {outcome} | {count} | {rate(count, len(v2_jobs))} |')
+    lines += ['', '- Findings per delivered review: mean ' + mean_observed(delivered, 'review_findings') + '.',
+              '- Findings per completed, handled review: mean ' + mean_observed(handled, 'review_findings') + '.',
+              f'- Review acceptance: {rate(accepted, findings)}; both counts present on {len(acceptance_jobs)}/{len(handled)} completed, handled jobs.',
+              'Delivered does not by itself mean handled. Pending/open jobs never enter acceptance. Engine presence alone does not prove delivery; absent delivery evidence remains unknown.', '',
+              '### Review skip / failure reasons', '']
+    reasons = collections.Counter((j['review_outcome'], one_line(j['review_skipped_reason']))
+                                  for j in v2_jobs if j['review_outcome'] in ('skipped', 'failed'))
+    lines += [f'- {outcome}: {reason}: {count} jobs' for (outcome, reason), count in sorted(reasons.items())] or ['- None recorded.']
+    lines += ['', 'No changes is a skipped/not-applicable reason, not a failed review. Failure/timeout classification uses the recorded reason text; unknown reasons are not guessed.', '',
+              '### Job endings', '']
+    endings = collections.Counter(str(j.get('ending') or 'unknown') for j in v2_jobs)
+    lines += [f'- {ending}: {count}' for ending, count in sorted(endings.items())]
 
-    lines += ['', '## Hydra 2 same-model vs paired', '',
-              'Same-model means both heads provider and model equal the lead snapshot; paired means at least one differs. Missing fields are unknown.', '']
     labels = [label for label, _ in metric_values([], [], True)]
-    lines += ['| Group | ' + ' | '.join(labels) + ' |',
-              '|---|' + '|'.join(['---:'] * len(labels)) + '|']
-    for label, value in [('Same-model', True), ('Paired', False), ('Unknown', None)]:
-        subset = [j for j in v2_jobs if j.get('same_model') is value]
+    for title, field in [('Actual head models', 'same_model'), ('Shared pair snapshot', 'pair_same_model')]:
+        lines += ['', f'## V2 {title} (delegated work)', '',
+                  '| Group | ' + ' | '.join(labels) + ' |', '|---|' + '|'.join(['---:'] * len(labels)) + '|']
+        for label, value in [('Same-model', True), ('Paired', False), ('Unknown', None)]:
+            subset = [j for j in delegated_v2 if j.get(field) is value]
+            values = dict(metric_values(subset, v2_heads, True))
+            lines.append('| ' + label + ' | ' + ' | '.join(values[name] for name in labels) + ' |')
+    lines += ['', 'Actual same-model requires every head provider/model to match the lead; any missing model makes it unknown. Shared pair settings may differ from profiles. Effort is exported separately.', '',
+              '## V2 by delegation tilt (delegated work)', '',
+              'Restrained allows parallel work, heavy reading and substantial self-contained single pieces. Proactive prefers self-contained pieces including single bounded edits. Missing tilt is unknown; unrecognised values remain separate.', '',
+              '| Tilt | ' + ' | '.join(labels) + ' |', '|---|' + '|'.join(['---:'] * len(labels)) + '|']
+    for label, value in [('Restrained', 'restrained'), ('Proactive', 'active'), ('Unknown', ''), ('Unrecognised', None)]:
+        subset = [j for j in delegated_v2 if ((j.get('tilt') or '') == value if value is not None
+                                            else j.get('tilt') not in (None, '', 'restrained', 'active'))]
         values = dict(metric_values(subset, v2_heads, True))
         lines.append('| ' + label + ' | ' + ' | '.join(values[name] for name in labels) + ' |')
 
-    lines += ['', '## Hydra 2 by delegation tilt', '',
-              'Restrained delegates only for parallel pieces or heavy reading; proactive also sends single bounded pieces out. Blank means a record from before the setting.', '',
-              '| Tilt | ' + ' | '.join(labels) + ' |',
-              '|---|' + '|'.join(['---:'] * len(labels)) + '|']
-    for label, value in [('Restrained', 'restrained'), ('Proactive', 'active'), ('Unknown', '')]:
-        subset = [j for j in v2_jobs if (j.get('tilt') or '') == value]
-        values = dict(metric_values(subset, v2_heads, True))
-        lines.append('| ' + label + ' | ' + ' | '.join(values[name] for name in labels) + ' |')
-
-    lines += ['', '## Coverage', '',
-              f'- V1: {len(v1_jobs)} jobs and {len(v1_heads)} heads from the baseline CSV files.',
-              f'- V2: {len(v2_jobs)} jobs and {len(v2_heads)} heads from library job ledgers.',
+    lines += ['', '## Version-specific timing and edit proxies (completed jobs only)', '',
+              'These rows have different boundaries and must not be interpreted as version deltas.', '',
+              '| Measurement | Median |', '|---|---:|']
+    for label, rows, field in [
+            ('V1 request to qualifying final reply (seconds)', [j for j in delegated_v1 if terminal_job(j, False)], 'job_wall_seconds'),
+            ('V2 start to settle including review/merge (seconds)', [j for j in delegated_v2 if terminal_job(j, True)], 'job_wall_seconds'),
+            ('V1 edits after first head finish', [j for j in delegated_v1 if terminal_job(j, False)], 'rework_edits'),
+            ('V2 edits in report/review turns', [j for j in delegated_v2 if terminal_job(j, True)], 'lead_edits_after_reports')]:
+        lines.append(f'| {label} | {med_observed(rows, field)} |')
+    lines += ['', '## Coverage and limits', '',
+              f'- V1: {len(v1_jobs)} baseline jobs, {len(v1_heads)} heads; delegated cohort: {len(delegated_v1)}.',
+              f'- V2: {len(v2_jobs)} ledger jobs, {len(v2_heads)} heads; delegated cohort: {len(delegated_v2)}.',
               *['- ' + one_line(line) for line in inventory],
               f'- Read issues: {dict(reader.issues)}; files visibly changed during read: {reader.changed}.',
-              '', '## Caveats', '',
-              '- V1 and V2 ran different requests. These differences are indicative, not controlled evidence. Use same-task replay comparisons for strong evidence.',
-              '- V1 job wall time is request to qualifying final reply; V2 is startedAt to finishedAt. V1 rework is a transcript tool-call proxy; V2 uses the recorded leadEditsAfterReports. The metrics are related, not identically observed.',
-              '- V1 rounds count batch IDs; V2 uses the recorded round count. Medians exclude unknowns and show their observed n. Rates show their actual numerator and denominator.',
-              '- Stalled uses the V1 proxy: a running head whose latest start/thread update is over one hour old. V2 uses a matching live head thread only when hydra.mode=v2 and hydra.jobID matches; without it, stall/failure for a running ledger head is unknown. Manual stops are not necessarily defects.',
-              '- V1 conflict denominators require landing metadata; V2 uses the non-optional per-head conflicts count. V2 merge outcomes merged and nothing count as success, failed as non-success, and missing as unknown; nothing means no merge was needed.',
-              '- A review counts as ran only when reviewEngine is present. No recorded outcome is not called a skip. Findings statistics use reviewed jobs with a findings count; acceptance uses only reviewed jobs with both findings and accepted counts, so missing accepted is not treated as zero.',
-              '- Head flags are unknown when neither notes nor a report-format result is recorded. Same-model comparison uses the job provider/model snapshots, not a reconstruction of every provider call.',
-              '- Dates are read as ISO strings or Swift numeric seconds since 2001-01-01. Negative or incomplete job durations are unknown.',
-              '- CSV blanks and Markdown NA mean unknown. Text is redacted with the baseline heuristic, including opaque values; this can hide benign identifiers such as commit hashes and cannot guarantee detection of every secret.',
-              '- JSON reads are sequential and not an atomic snapshot. No transcripts, settings, credentials, provider histories or Git state are read, and no replay or app operation is run.']
+              '- V1 uses surviving heads and temporal request windows, not durable job IDs; intervening messages can split a task. V2 follow-ups stay in an open job. Different requests and this attribution bias prevent causal or whole-policy claims.',
+              '- V1 final merge outcomes require a newly exported merge_final_outcome column; old aggregate success columns are ignored. V1 attribution remains a time-window proxy. V2 uses only the owning job ID record, never the latest lead merge; historical misattribution cannot be repaired by this reader.',
+              '- Remote merge success includes only merged/failed; nothing/settled are separate. Missing outcomes do not reveal whether auto-merge was disabled, deferred or unfinished. Attempt and setting snapshots are unavailable, so there is no first-attempt success claim.',
+              '- Medians exclude unknowns and show observed n; rates show denominators. Missing counts are not zeros. Terminal comparisons conservatively exclude legacy V2 jobs without completed ending or resolved review evidence.',
+              '- V1 rounds count batch IDs; V2 records dispatch rounds. Head failure/stall and conflict rows use completed cohorts; manual stops are not necessarily defects. Running V2 head activity requires a matching live hydra.mode=v2 and jobID, otherwise stall status is unknown.',
+              '- Only stored notes establish flags; a failed report parser does not establish no flags. Review engine alone proves neither successful completion nor delivery. No timestamps distinguish queued, running and not-yet-started reviews.',
+              '- Head execution_seconds excludes queue/landing time and is not V1 wall_seconds. Stage timestamps and matched edit windows are unavailable. Build/edit counts are observed tool-call proxies, not quality scores.',
+              '- Valid 40-hex base commit/tree IDs are preserved; free text uses heuristic redaction, which cannot detect every secret. A dirty base needs its tree/patch and environment restored before replay; a commit alone is insufficient.',
+              '- Dates accept ISO strings or Swift seconds since 2001-01-01. Negative/incomplete durations are unknown. JSON reads are sequential, not an atomic snapshot.',
+              '- compare reads library job ledgers and baseline CSV only, not transcripts, settings, credentials, provider histories or Git state. It writes only fresh external reports; no replay or app operation runs.']
     return '\n'.join(lines) + '\n'
 
 
@@ -772,7 +893,7 @@ def replay_candidates(args):
     lines = ['# Hydra 1 same-task replay candidates', '',
              'No replay or Git command was run. This list only selects candidates for operator approval.', '',
              'Selection is deterministic round-robin across task types. Within each type, jobs with a final reply and complete transcript rank first, followed by final-reply-only, transcript-only, then other jobs.', '',
-             'V1 records have no base commit. For every replay, the operator must choose the repository commit from git history by the original request date; do not use current HEAD by default. The baseline CSV has no original timestamp, so use the job key and request ID to recover that date from the original source records first.', '']
+             'V1 records have no base commit. For every replay, the operator must choose the repository commit from git history by the original request date; do not use current HEAD by default. New baseline exports include request_at. If it is blank or absent, use the job key and request ID to recover the original date from source records first.', '']
     for index, job in enumerate(selected, 1):
         final = boolean(job.get('final_reply_observed'))
         complete = boolean(job.get('transcript_complete'))
@@ -780,11 +901,19 @@ def replay_candidates(args):
                   f"- Lead ID: {one_line(job.get('lead_id')) or '(missing)'}",
                   f"- Request ID: {one_line(job.get('request_id')) or '(missing)'}",
                   f"- Task type: {one_line(job.get('task_type')) or 'unknown'}",
+                  f"- Request date: {one_line(job.get('request_at')) or '(unknown; recover from source)'}",
                   f"- Final reply observed: {'unknown' if final is None else ('yes' if final else 'no')}; transcript complete: {'unknown' if complete is None else ('yes' if complete else 'no')}.",
                   f"- Request excerpt: {one_line(job.get('request_excerpt')) or '(missing)'}",
                   '- Replay base: operator must select the repository commit from git history by the original request date; V1 has no recorded base commit.', '']
     if not selected:
         lines.append('No candidates selected.')
+    lines += ['', '## Result template (fill only after an authorised replay)', '',
+              '- Matched request / base commit / restored dirty tree or patch / environment:',
+              '- quality_score / quality_notes / reviewer_blind:',
+              '- lead_tokens / head_tokens / review_tokens (unknown stays blank):',
+              '- provider_credit_or_cost / unit / coverage (tokens are not currency):',
+              '- lead response / review / merge / total duration, with stage boundaries:',
+              'Review quality first, observed cost second and time last. This command does not run a replay.']
     out.mkdir(parents=True, exist_ok=True)
     with (out / 'replay_candidates.md').open('x', encoding='utf-8') as handle:
         handle.write(redact('\n'.join(lines) + '\n'))

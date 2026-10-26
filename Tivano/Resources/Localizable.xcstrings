@@ -926,6 +926,17 @@
         }
       }
     },
+    "%@ reported open points" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 报告了待处理事项"
+          }
+        }
+      }
+    },
     "%@ sent nothing for 10 minutes, so Tivano stopped the turn." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1296,6 +1307,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%d 个子智能体已合入"
+          }
+        }
+      }
+    },
+    "%d heads reported open points" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 个 heads 报告了待处理事项"
           }
         }
       }
@@ -3269,6 +3291,17 @@
         }
       }
     },
+    "Ask %@ for anything; the lead decides what to do itself and what to delegate" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向 %@ 提出任何需求；主智能体决定哪些自己做，哪些交给 heads"
+          }
+        }
+      }
+    },
     "Ask %@ to build, fix or explain. @ for files, / for commands" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3291,6 +3324,17 @@
         }
       }
     },
+    "Ask as you always do. The lead keeps tightly coupled work and decides which independent pieces to brief to heads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "像平常一样提出需求。主智能体自己处理紧密关联的工作，并决定将哪些独立部分交给 heads。"
+          }
+        }
+      }
+    },
     "Ask the lead to review heads' changes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3298,6 +3342,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "要求主智能体审查子智能体的改动"
+          }
+        }
+      }
+    },
+    "Ask the lead to send this head back" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过主智能体让这个 head 返工"
           }
         }
       }
@@ -3562,17 +3617,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动归档成功完成的子智能体会话，需要继续时可恢复。仅影响 Codex 本地历史，不清理已有记录，也不删除会话。"
-          }
-        }
-      }
-    },
-    "Automatically publish and merge team changes" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自动发布并合并团队改动"
           }
         }
       }
@@ -5271,6 +5315,17 @@
         }
       }
     },
+    "Commit and merge automatically when done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成后自动提交并合并"
+          }
+        }
+      }
+    },
     "Commit changes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5322,17 +5377,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "提交、推送和创建拉取请求"
-          }
-        }
-      }
-    },
-    "Commits and pushes the team's changes, opens a pull/merge request, and attempts to merge it. Requires a configured remote and access." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "提交并推送团队改动，创建拉取／合并请求并尝试合并；需要已配置远端及相应权限。"
           }
         }
       }
@@ -7130,6 +7174,17 @@
         }
       }
     },
+    "Deviations: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "偏离要求：%@"
+          }
+        }
+      }
+    },
     "Devices & Technology" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7922,6 +7977,17 @@
         }
       }
     },
+    "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model may review the changes before the job settles and any automatic merge. Turning it off returns new requests to the current Hydra." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 聊天中的每个新请求都会采用新的团队设计：主智能体负责判断并亲自完成紧密关联的工作；heads 会收到你的请求和团队的文件分工，报告偏差与待解决问题，也可以被派回去返工。在任务结束及任何自动合并之前，另一家厂商的 model 可能会审查改动。关闭后，新请求将回到现行 Hydra。"
+          }
+        }
+      }
+    },
     "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model reviews the changes before they merge. Turning it off returns new requests to the current Hydra." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8204,6 +8270,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此处功能尚处早期阶段，可能不稳定。关闭 Alpha 会结束当前语音通话并停用本地控制；各功能的选择会保留。"
+          }
+        }
+      }
+    },
+    "Features here are early versions and may be unstable. Turning Alpha off ends the current voice call, disables local control and remote MCP, and returns new Hydra requests to the current Hydra. Individual feature choices are kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这里的功能尚处于早期阶段，可能不稳定。关闭 Alpha 会结束当前语音通话，停用本地控制和远程 MCP，并让新的 Hydra 请求回到现行 Hydra。各功能的选择会保留。"
           }
         }
       }
@@ -9550,6 +9627,17 @@
         }
       }
     },
+    "Hydra is on. This chat leads the work, delegating independent pieces to a team of heads instead of doing everything itself." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 已开启。当前聊天负责统筹，将独立部分交给一组 heads 分工完成。"
+          }
+        }
+      }
+    },
     "Hydra: %@ did not start because its checkout could not be read." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9689,6 +9777,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "增大字号"
+          }
+        }
+      }
+    },
+    "Independent review by %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由 %@ 独立审查"
+          }
+        }
+      }
+    },
+    "Independent review by %@…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 正在独立审查…"
           }
         }
       }
@@ -11673,6 +11783,17 @@
         }
       }
     },
+    "No heads are out yet. Send a request and the lead will decide what to do itself and what to delegate. Each head gets a panel of its own." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有派出 heads。提出需求后，主智能体会决定哪些自己做、哪些交出去。每个 head 都有自己的面板。"
+          }
+        }
+      }
+    },
     "No heads out yet" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12190,6 +12311,17 @@
         }
       }
     },
+    "Off: the team's changes stay in your working copy for you to handle. On: Tivano commits them, pushes to the remote, opens a pull or merge request and tries to merge it; needs a configured remote and access." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭时，团队的改动留在你的工作区，由你处理。开启时，Tivano 会提交改动、推送到远端、创建拉取 / 合并请求并尝试合并；需要已配置远端和相应权限。"
+          }
+        }
+      }
+    },
     "Older parts of this chat couldn't be read. Tivano kept the files in %@." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12234,6 +12366,17 @@
         }
       }
     },
+    "One chat leads a team of heads and decides what to delegate." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个聊天由主智能体带领一组 heads，并决定委派哪些工作。"
+          }
+        }
+      }
+    },
     "One chat leads a team of heads on big jobs." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12241,6 +12384,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "遇到大任务时，由一个对话带领一组子智能体协作完成。"
+          }
+        }
+      }
+    },
+    "One chat leads a team of heads, keeping judgement and delegating independent work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个聊天统筹一组 heads，由主智能体负责判断，将独立工作交给 heads。"
           }
         }
       }
@@ -13246,6 +13400,39 @@
         }
       }
     },
+    "Preparing a delegation. No heads go out until the whole block is ready." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备分工。整段分工内容准备好后才会派出 heads。"
+          }
+        }
+      }
+    },
+    "Preparing the delegation · Show or hide the Hydra panel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备分工 · 显示或隐藏 Hydra 面板"
+          }
+        }
+      }
+    },
+    "Preparing the delegation…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备分工…"
+          }
+        }
+      }
+    },
     "Preparing voice…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -14210,6 +14397,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "报告"
+          }
+        }
+      }
+    },
+    "Report format not followed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报告未遵循规定格式。"
           }
         }
       }
@@ -15200,6 +15398,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "发送中"
+          }
+        }
+      }
+    },
+    "Sending %@ back to work" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在让 %@ 返工"
+          }
+        }
+      }
+    },
+    "Sending %@ back: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在让 %@ 返工：%@"
+          }
+        }
+      }
+    },
+    "Sending %d continuations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在发送 %d 项返工任务"
+          }
+        }
+      }
+    },
+    "Sending %d new heads and %d continuations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在派出 %d 个新 heads，并发送 %d 项返工任务"
           }
         }
       }
@@ -17767,6 +18009,17 @@
         }
       }
     },
+    "The lead prefers to hand heads work that fits a self-contained brief, including single bounded edits, and splits larger work to run in parallel. It keeps judgement, cross-file design, integration, and trivial or delicate pieces." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主智能体倾向于把能用独立任务说明交代清楚的工作交给 heads，包括范围明确的单项修改，并拆分较大的工作以便并行执行。主智能体保留判断、跨文件设计、整合，以及细小或需要谨慎处理的部分。"
+          }
+        }
+      }
+    },
     "The lead's effort · heads keep their own" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -19703,6 +19956,17 @@
         }
       }
     },
+    "Uncertain: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不确定：%@"
+          }
+        }
+      }
+    },
     "Under MCP client access, tick Allow connection to GitLab and save" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -19721,6 +19985,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "撤销此对话所做的文件改动"
+          }
+        }
+      }
+    },
+    "Unfinished: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未完成：%@"
           }
         }
       }

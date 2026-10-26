@@ -30,13 +30,15 @@ private enum HydraProjectMerge {
 
 @MainActor
 private enum HydraMergeActivity {
-    enum Phase { case resuming, queued, running }
+    enum Phase { case resuming, queued, running, retry }
     struct Entry {
         let leadID: UUID?
+        var jobID: UUID? = nil
         var phase: Phase
     }
     // Runtime eviction must not hide an async merge that still holds repository locks.
     static var owners: [ObjectIdentifier: [UUID: Entry]] = [:]
+    static var retryCounts: [ObjectIdentifier: [UUID: Int]] = [:]
 }
 
 extension AppModel {
@@ -47,6 +49,12 @@ extension AppModel {
     /// Whether any chat's team work is on its way to the remote right now.
     var isAnyHydraMergeRunning: Bool {
         !(HydraMergeActivity.owners[ObjectIdentifier(self)] ?? [:]).isEmpty
+    }
+
+    func hasHydraMergePending(of leadID: UUID, jobID: UUID) -> Bool {
+        HydraMergeActivity.owners[ObjectIdentifier(self)]?.values.contains {
+            $0.leadID == leadID && $0.jobID == jobID
+        } ?? false
     }
 
     private var hasActiveHydraMerge: Bool {
@@ -89,6 +97,8 @@ extension AppModel {
             guard settings.hydraAutoMerge, !Task.isCancelled else { return }
         }
         for lead in leads {
+            guard openHydraJob(of: lead.id) == nil else { continue }
+            if let last = lead.hydraJobs.last, let ending = last.ending, ending != .completed { continue }
             guard let runtime = existingRuntime(for: lead.id),
                   runtime.isReadyForHydraMerge, !runtime.isHydraMerging else { continue }
             // The job is finished, whatever its turns read: a lead whose report-review turn
@@ -108,7 +118,16 @@ extension AppModel {
 
     /// Lands a lead's finished work, when the setting says so. Runs once per finished job;
     /// what happened lands in the lead's timeline as a note from Hydra.
-    func autoMergeHydraWork(of leadID: UUID, recovering: Bool = false) async {
+    func autoMergeHydraWork(of leadID: UUID, recovering: Bool = false, jobID: UUID? = nil) async {
+        if let jobID {
+            guard let job = openHydraJob(of: leadID), job.id == jobID, job.ending == nil else { return }
+        }
+        defer {
+            if let jobID, let job = openHydraJob(of: leadID), job.id == jobID,
+               job.ending == nil, job.merge == nil {
+                scheduleHydraMergeRetry(of: leadID, jobID: jobID)
+            }
+        }
         guard persistenceEnabled, settings.hydraAutoMerge, let waiting = thread(leadID), hydraIsOn(waiting),
               let queued = existingRuntime(for: leadID), !queued.isHydraMerging, !queued.isHydraMergeQueued,
               queued.isReadyForHydraMerge else { return }
@@ -119,7 +138,7 @@ extension AppModel {
         let owner = ObjectIdentifier(self)
         guard HydraMergeActivity.owners[owner]?.values.contains(where: { $0.leadID == leadID }) != true else { return }
         let activityID = UUID()
-        HydraMergeActivity.owners[owner, default: [:]][activityID] = .init(leadID: leadID, phase: .queued)
+        HydraMergeActivity.owners[owner, default: [:]][activityID] = .init(leadID: leadID, jobID: jobID, phase: .queued)
         queued.isHydraMergeQueued = true
         defer {
             queued.isHydraMergeQueued = false
@@ -218,7 +237,7 @@ extension AppModel {
             if recovering, stray.isEmpty { return }
             guard !stray.isEmpty else {
                 guard project != nil else {
-                    recordHydraJobMerge(.nothing, of: leadID)
+                    recordHydraJobMerge(.nothing, of: leadID, jobID: jobID)
                     return
                 }
                 // Nothing to send and nothing outside a project: whatever the turns
@@ -230,21 +249,21 @@ extension AppModel {
                 if runtime.hydraMerges.last?.outcome == .held {
                     recordHydraSettlement(leadID: leadID, runtime: runtime)
                 }
-                recordHydraJobMerge(.nothing, of: leadID)
+                recordHydraJobMerge(.nothing, of: leadID, jobID: jobID)
                 return
             }
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
             note(leadID, "Hydra did not merge: the team's files are outside every project.", strayBody(stray), status: .failed)
-            recordHydraJobMerge(.failed, of: leadID)
+            recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
             return
         }
         let several = groups.count > 1
         var outcomes: [HydraProjectMerge] = []
         for group in groups {
-            outcomes.append(await mergeHydraProject(of: leadID, lead: lead, project: group.project, checkout: group.checkout, work: group.work, runtime: runtime, several: several, syncsProjectCheckout: group.syncsProjectCheckout))
+            outcomes.append(await mergeHydraProject(of: leadID, lead: lead, project: group.project, checkout: group.checkout, work: group.work, runtime: runtime, several: several, syncsProjectCheckout: group.syncsProjectCheckout, jobID: jobID))
         }
         if outcomes.contains(.failed) {
-            recordHydraJobMerge(.failed, of: leadID)
+            recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
             return
         }
         guard !outcomes.contains(.deferred) else { return }
@@ -265,7 +284,7 @@ extension AppModel {
             recordHydraSettlement(leadID: leadID, runtime: runtime)
         }
         let outcome: HydraJobRecord.MergeOutcome = !stray.isEmpty ? .failed : outcomes.allSatisfy({ $0 == .alreadyOnMain }) ? .nothing : .merged
-        recordHydraJobMerge(outcome, of: leadID)
+        recordHydraJobMerge(outcome, of: leadID, jobID: jobID)
     }
 
     /// A path no sidebar project could ever hold: a head's copy of a checkout under the
@@ -300,14 +319,14 @@ extension AppModel {
     /// real conflict with the remote). Everything that clears by itself - a checkout mid-
     /// rebase, a commit landing while the work was prepared, a forge still checking the
     /// request - is retried quietly instead of posted.
-    private func mergeHydraProject(of leadID: UUID, lead: ChatThread, project: Project, checkout: String, work: HydraWork, runtime: ThreadRuntime, several: Bool, syncsProjectCheckout: Bool) async -> HydraProjectMerge {
+    private func mergeHydraProject(of leadID: UUID, lead: ChatThread, project: Project, checkout: String, work: HydraWork, runtime: ThreadRuntime, several: Bool, syncsProjectCheckout: Bool, jobID: UUID?) async -> HydraProjectMerge {
         func stage(_ name: String) -> String { several ? "\(project.name): \(name)" : name }
         func title(_ name: String) -> String { several ? "\(project.name): \(name)" : name }
         // The words carry the project's name with several projects, the step is the dot on the pill's track.
         func advance(_ step: HydraMergeStage) { runtime.hydraMergeStage = stage(step.words); runtime.hydraMergeStep = step }
         func fail(_ headline: String, _ body: String, label: String? = nil, url: URL? = nil, retryable: Bool = false) -> HydraProjectMerge {
             let detail = title(headline) + ": " + body
-            if retryable { scheduleHydraMergeRetry(of: leadID) }
+            if retryable { scheduleHydraMergeRetry(of: leadID, jobID: jobID) }
             // The same failure again (the sweep retries every job it can) is not news.
             if let last = runtime.hydraMerges.last, last.outcome == .failed, last.detail == detail { return .failed }
             // A failure that clears by itself is said once it has kept failing, never on
@@ -324,7 +343,7 @@ extension AppModel {
         // using the common git directory, not a per-process queue or checkout path.
         guard let common = try? await git.output(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
               let repoLease = try? SharedLibraryLease(at: SharedResourceLock.url(resource: URL(fileURLWithPath: common.trimmed).resolvingSymlinksInPath().path)) else {
-            scheduleHydraMergeRetry(of: leadID)
+            scheduleHydraMergeRetry(of: leadID, jobID: jobID)
             return .deferred
         }
         defer { withExtendedLifetime(repoLease) {} }
@@ -334,7 +353,7 @@ extension AppModel {
         // Someone is rebasing or merging in this checkout: the work waits for them, quietly,
         // and looks again in a minute.
         guard !(await git.hasOperationInProgress()) else {
-            scheduleHydraMergeRetry(of: leadID)
+            scheduleHydraMergeRetry(of: leadID, jobID: jobID)
             return .deferred
         }
 
@@ -546,14 +565,36 @@ extension AppModel {
     /// A retry a minute after a failure that clears by itself, rather than at the sweep
     /// five minutes on: the forge finishing its checks, a remote that moved, a push that
     /// timed out. One is pending per chat at a time.
-    private func scheduleHydraMergeRetry(of leadID: UUID) {
+    private func scheduleHydraMergeRetry(of leadID: UUID, jobID: UUID? = nil) {
+        let owner = ObjectIdentifier(self)
+        if let jobID {
+            guard let job = openHydraJob(of: leadID), job.id == jobID, job.ending == nil else { return }
+            guard HydraMergeActivity.owners[owner]?.values.contains(where: {
+                $0.leadID == leadID && $0.jobID == jobID && $0.phase == .retry
+            }) != true else { return }
+            let attempts = HydraMergeActivity.retryCounts[owner]?[jobID] ?? 0
+            guard attempts < 3 else {
+                recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
+                return
+            }
+            HydraMergeActivity.retryCounts[owner, default: [:]][jobID] = attempts + 1
+        }
         guard let runtime = existingRuntime(for: leadID), !runtime.hasHydraMergeRetryPending else { return }
         runtime.hasHydraMergeRetryPending = true
+        let retryID = UUID()
+        if jobID != nil {
+            HydraMergeActivity.owners[owner, default: [:]][retryID] = .init(leadID: leadID, jobID: jobID, phase: .retry)
+        }
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(60))
             guard let self else { return }
+            self.unregisterHydraMergeActivity(retryID)
             self.existingRuntime(for: leadID)?.hasHydraMergeRetryPending = false
-            await self.autoMergeHydraWork(of: leadID)
+            guard !Task.isCancelled else { return }
+            await self.autoMergeHydraWork(of: leadID, jobID: jobID)
+            if let jobID, self.openHydraJob(of: leadID)?.id == jobID {
+                await self.settleHydraJob(of: leadID)
+            }
         }
     }
 
@@ -1145,9 +1186,15 @@ extension AppModel {
         note(leadID, "Already on main: nothing to merge.", "Every change from this chat is on main already, taken along by an earlier merge request (this chat's or another's) or committed by hand. Nothing was sent and no new merge request was opened.")
     }
 
-    private func recordHydraJobMerge(_ outcome: HydraJobRecord.MergeOutcome, of leadID: UUID) {
-        guard let job = thread(leadID)?.hydraJobs.last, job.mode == .v2 else { return }
-        updateHydraJob(job.id, of: leadID) { $0.merge = outcome }
+    private func recordHydraJobMerge(_ outcome: HydraJobRecord.MergeOutcome, of leadID: UUID, jobID: UUID?) {
+        guard let jobID, let job = thread(leadID)?.hydraJobs.first(where: { $0.id == jobID }),
+              job.mode == .v2, job.isOpen, job.ending == nil else { return }
+        if outcome == .failed,
+           HydraMergeActivity.owners[ObjectIdentifier(self)]?.values.contains(where: {
+               $0.leadID == leadID && $0.jobID == jobID && $0.phase == .retry
+           }) == true { return }
+        updateHydraJob(jobID, of: leadID) { $0.merge = outcome }
+        HydraMergeActivity.retryCounts[ObjectIdentifier(self)]?[jobID] = nil
     }
 
     private static func filesLine(_ files: [DiffFile]) -> String {

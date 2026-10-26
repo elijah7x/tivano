@@ -8,6 +8,46 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.1.15] - 2026-10-27
+
+### English
+
+### Refinements
+
+- With Hydra 2.0 on, Settings › Hydra no longer shows Ask the lead to review heads' changes: the lead always checks the heads' work and another vendor's model may review it. The automatic merge switch is now Commit and merge automatically when done, and says what happens with it off and on.
+
+- Hydra 2.0 holds together across a whole job. A message you send while heads are out joins the same job, heads that wait for a free slot stay with the job that sent them, and a job that ends in a failed or stopped turn, a relaunch or Hydra switched off is closed and its copies released, keeping any work that did not land. Voice calls run Hydra 2.0 too.
+- Hydra 2.0's review now covers what the job itself changed in every checkout it worked in, including heads that worked in the shared checkout, and leaves out edits that were there before. While it runs, the timeline shows Independent review by …, and its findings appear on their own.
+- Head reports show their deviations, unfinished work and uncertainties, and say when a head reported open points or did not follow the report format. A head of a job still under way is sent back through the lead rather than from its own composer.
+- Hydra 2.0's instructions to the lead are about half as long: merge, review and report rules come with the turns that need them, other projects are listed by name, sessions that already get the whole policy with each message no longer get a second reminder, and heads lose pacing rules written for slower models.
+- Hydra's descriptions in Settings match Hydra 2.0 when it is on, and Hydra no longer routes heads by a pair's head profiles, which had no editor: saved profiles stay in the pair but no longer change a head's model.
+
+### Bug fixes
+
+- Remote MCP no longer fetches a client's metadata from a host name that resolves into this Mac's private network: every address the name resolves to must be public.
+- With Hydra 2.0, two heads can no longer be given the same file under different path spellings, a mistyped head name in a rework request no longer uses up a round of heads, reworked heads count against the heads-at-once limit and return to the panel, and clearing finished heads no longer deletes copies a rework still needs.
+
+### 简体中文
+
+### 优化改进
+
+- 开启 Hydra 2.0 后，设置 › Hydra 不再显示“要求主智能体审查子智能体的改动”：主智能体总会检查 heads 的工作，另一家服务商的模型也可能审查。自动合并开关改名为“完成后自动提交并合并”，并说明关闭和开启时分别会发生什么。
+
+- Hydra 2.0 在整个任务中保持一致：heads 工作期间你发的消息会并入同一任务；等待名额的 head 仍归属派出它的任务；任务因回合失败或被停止、应用重启、关闭 Hydra 而结束时会被收尾并释放副本，未落地的工作会保留。语音通话也使用 Hydra 2.0。
+- Hydra 2.0 的审查现在覆盖本任务在每个工作区中的实际改动，包括在共享工作区工作的 heads，并排除任务开始前已有的改动。审查进行时，时间线会显示“Independent review by …”，审查结果单独显示。
+- head 的回报会显示偏差、未完成的工作和不确定项，并标出报告了待处理问题或未按格式回报的 head。仍在进行中的任务里的 head，需通过主智能体让它返工，而不是在它自己的输入框里发消息。
+- Hydra 2.0 给主智能体的指令缩短了约一半：合并、审查和回报的规则只在需要的回合出现，其他项目只列名称；每条消息都已附带完整规则的会话不再重复提醒；heads 也去掉了为较慢模型写的节奏规则。
+- 开启 Hydra 2.0 时，设置中 Hydra 的说明文字随之更新；Hydra 不再按组合中没有编辑入口的 head profiles 分派 heads：已保存的配置仍保留在组合中，但不再改变 head 使用的模型。
+
+### 问题修复
+
+- 远程 MCP 不再从解析到本机私有网络的主机名获取客户端元数据：该名称解析出的每个地址都必须是公网地址。
+- 在 Hydra 2.0 中，同一文件换一种路径写法也不会再分给两个 head；返工请求写错 head 名称不再消耗派发轮数；返工的 head 计入同时运行上限并回到面板；清除已完成的 heads 不再删除返工仍需要的副本。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.1.8] - 2026-10-26
 
 ### English

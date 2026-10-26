@@ -18,7 +18,7 @@ struct HydraIntroPopover: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Meet Hydra")
                         .font(.ui(.title2, weight: .semibold))
-                    Text("Hydra is on. Big jobs go out to a team of heads, so this chat leads instead of doing everything itself.")
+                    Text(verbatim: Chrome.localized(model.settings.isHydra2Enabled ? "Hydra is on. This chat leads the work, delegating independent pieces to a team of heads instead of doing everything itself." : "Hydra is on. Big jobs go out to a team of heads, so this chat leads instead of doing everything itself."))
                         .font(.ui(.body))
                         .foregroundStyle(Chrome.secondaryText)
                 }
@@ -27,7 +27,7 @@ struct HydraIntroPopover: View {
                 hydraIntroStep(
                     glyph: AnyView(HydraMarkImage().foregroundStyle(Chrome.primaryText).frame(width: 18, height: 18)),
                     title: "You ask, the chat leads",
-                    line: "Ask as you always do. Small things it does itself; anything bigger it splits into briefs."
+                    line: model.settings.isHydra2Enabled ? "Ask as you always do. The lead keeps tightly coupled work and decides which independent pieces to brief to heads." : "Ask as you always do. Small things it does itself; anything bigger it splits into briefs."
                 )
                 hydraIntroStep(
                     glyph: AnyView(HStack(spacing: -8) {
@@ -89,6 +89,7 @@ struct HydraIntroPopover: View {
 }
 
 struct HydraInfoPopover: View {
+    @Environment(AppModel.self) private var model
     enum Topic { case hydra, heads, history }
     let topic: Topic
 
@@ -102,7 +103,7 @@ struct HydraInfoPopover: View {
 
     private var subtitle: String {
         switch topic {
-        case .hydra: "One chat leads a team of heads on big jobs."
+        case .hydra: model.settings.isHydra2Enabled ? "One chat leads a team of heads, keeping judgement and delegating independent work." : "One chat leads a team of heads on big jobs."
         case .heads: "The helpers a chat sends out, one brief each."
         case .history: "Archive completed heads and keep the option to continue."
         }
@@ -130,7 +131,7 @@ struct HydraInfoPopover: View {
                     hydraIntroStep(
                         glyph: AnyView(HydraMarkImage().foregroundStyle(Chrome.primaryText).frame(width: 18, height: 18)),
                         title: "You ask, the chat leads",
-                        line: "Ask as you always do. Small things it does itself; anything bigger it splits into briefs."
+                        line: model.settings.isHydra2Enabled ? "Ask as you always do. The lead keeps tightly coupled work and decides which independent pieces to brief to heads." : "Ask as you always do. Small things it does itself; anything bigger it splits into briefs."
                     )
                     hydraIntroStep(
                         glyph: AnyView(HStack(spacing: -8) {

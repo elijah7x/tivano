@@ -312,6 +312,11 @@ actor RemoteMCPAuthority {
         guard let components = URLComponents(string: id), components.scheme?.lowercased() == "https",
               let host = components.host, !components.path.isEmpty, components.fragment == nil,
               components.user == nil, components.password == nil, Self.publicMetadataHost(host), let url = components.url else { return nil }
+        // The host text alone says nothing about where a name resolves: every address it
+        // resolves to must be public too, so a name pointing into the private network is
+        // refused before any request goes out. A rebinding between this lookup and the
+        // connection is not covered.
+        guard await Self.resolvesOnlyToPublicAddresses(host) else { return nil }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 5
         configuration.timeoutIntervalForResource = 5
@@ -360,6 +365,29 @@ actor RemoteMCPAuthority {
             return bytes[0] & 0xe0 == 0x20
         }
         return !host.contains(":") && !host.contains("%")
+    }
+
+    /// Resolves a host name off the caller's thread; false when it does not resolve or
+    /// any of its addresses fails `publicMetadataHost`.
+    private static func resolvesOnlyToPublicAddresses(_ host: String) async -> Bool {
+        await Task.detached(priority: .utility) {
+            var hints = addrinfo()
+            hints.ai_socktype = SOCK_STREAM
+            var list: UnsafeMutablePointer<addrinfo>?
+            guard getaddrinfo(host, "443", &hints, &list) == 0, let first = list else { return false }
+            defer { freeaddrinfo(first) }
+            var any = false
+            var cursor: UnsafeMutablePointer<addrinfo>? = first
+            while let info = cursor {
+                var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                guard getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 else { return false }
+                let address = String(cString: buffer)
+                guard publicMetadataHost(address) else { return false }
+                any = true
+                cursor = info.pointee.ai_next
+            }
+            return any
+        }.value
     }
 
     private static func validRedirect(_ text: String) -> Bool {

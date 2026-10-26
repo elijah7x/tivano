@@ -38,7 +38,9 @@ struct HydraSettingsPage: View {
                                 .foregroundStyle(Chrome.primaryText)
                             InfoHoverButton(help: "How Hydra works") { HydraInfoPopover(topic: .hydra) }
                         }
-                        Text("One chat leads a team of heads on big jobs.")
+                        Text(verbatim: Chrome.localized(settings.isHydra2Enabled
+                            ? "One chat leads a team of heads and decides what to delegate."
+                            : "One chat leads a team of heads on big jobs."))
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .lineLimit(1)
@@ -189,7 +191,7 @@ struct HydraSettingsPage: View {
                         ChromeRow(
                             title: "How much heads take on",
                             detail: settings.hydraTilt == .active
-                                ? "The lead prefers to hand heads what it can brief on its own, single edits included, and splits larger work to run in parallel. It keeps judgement, design, integration and small or delicate pieces."
+                                ? "The lead prefers to hand heads work that fits a self-contained brief, including single bounded edits, and splits larger work to run in parallel. It keeps judgement, cross-file design, integration, and trivial or delicate pieces."
                                 : "Heads take parallel pieces, heavy reading and larger self-contained pieces as the job calls for them; the lead keeps small edits and coupled work."
                         ) {
                             GlassPickerButton(
@@ -211,9 +213,13 @@ struct HydraSettingsPage: View {
             }
             ChromeSection(title: "When the team is done") {
                 ChromeCard {
-                    toggleRow("Ask the lead to review heads' changes", detail: "Adds a review step before the lead finishes. This uses additional time and tokens.", isOn: $settings.hydraReviewHeads)
-                    ChromeRowDivider()
-                    toggleRow("Automatically publish and merge team changes", detail: "Commits and pushes the team's changes, opens a pull/merge request, and attempts to merge it. Requires a configured remote and access.", isOn: $settings.hydraAutoMerge)
+                    // Hydra 2.0 always has the lead check the heads' work and another vendor
+                    // review it, so v1's review switch would change nothing there.
+                    if !settings.isHydra2Enabled {
+                        toggleRow("Ask the lead to review heads' changes", detail: "Adds a review step before the lead finishes. This uses additional time and tokens.", isOn: $settings.hydraReviewHeads)
+                        ChromeRowDivider()
+                    }
+                    toggleRow("Commit and merge automatically when done", detail: "Off: the team's changes stay in your working copy for you to handle. On: Tivano commits them, pushes to the remote, opens a pull or merge request and tries to merge it; needs a configured remote and access.", isOn: $settings.hydraAutoMerge)
                 }
             }
         }

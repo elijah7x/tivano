@@ -28,7 +28,9 @@ struct AlphaSettingsPage: View {
                         Text("Alpha")
                             .font(.ui(.title3, weight: .semibold))
                             .foregroundStyle(Chrome.primaryText)
-                        Text("Features here are early versions and may be unstable. Turning Alpha off ends the current voice call and disables local control and remote MCP. Individual feature choices are kept.")
+                        Text(verbatim: Chrome.localized(settings.isHydra2Enabled
+                            ? "Features here are early versions and may be unstable. Turning Alpha off ends the current voice call, disables local control and remote MCP, and returns new Hydra requests to the current Hydra. Individual feature choices are kept."
+                            : "Features here are early versions and may be unstable. Turning Alpha off ends the current voice call and disables local control and remote MCP. Individual feature choices are kept."))
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -67,7 +69,9 @@ struct AlphaSettingsPage: View {
         }
         ChromeSection(title: "Hydra") {
             ChromeCard {
-                ChromeRow(title: "Hydra 2.0", detail: "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model reviews the changes before they merge. Turning it off returns new requests to the current Hydra.") {
+                ChromeRow(title: "Hydra 2.0", detail: settings.isHydra2Enabled
+                    ? "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model may review the changes before the job settles and any automatic merge. Turning it off returns new requests to the current Hydra."
+                    : "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model reviews the changes before they merge. Turning it off returns new requests to the current Hydra.") {
                     SettingsSwitch(isOn: $settings.alphaHydra2Enabled)
                         .accessibilityLabel(Text("Hydra 2.0"))
                 }

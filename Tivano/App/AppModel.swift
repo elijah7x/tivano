@@ -199,6 +199,23 @@ final class AppModel {
         settings.onSleepPreventionChanged = { [weak self] in
             self?.updateTaskSleepPrevention()
         }
+        observeHydraEnabled()
+    }
+
+    private func observeHydraEnabled() {
+        withObservationTracking {
+            _ = settings.hydraEnabled
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !self.settings.hydraEnabled {
+                    for lead in self.threads where self.openHydraJob(of: lead.id) != nil {
+                        self.endHydraJobsForHydraOff(of: lead.id)
+                    }
+                }
+                self.observeHydraEnabled()
+            }
+        }
     }
 
     func updateTaskSleepPrevention() {
@@ -420,7 +437,20 @@ final class AppModel {
         // After the login environment, so git runs with the user's PATH.
         if !libraryWritesBlocked { sweepHydraCopies() }
         // A merge the last run did not finish (the app was quit under it) goes out now.
-        if !libraryWritesBlocked { await resumeHydraMerges() }
+        if !libraryWritesBlocked {
+            for lead in threads {
+                guard let job = openHydraJob(of: lead.id) else { continue }
+                let stopped = Set(hydraTeam(of: lead.id).filter { $0.hydra?.status == .stopped }.map(\.id))
+                updateHydraJob(job.id, of: lead.id) { record in
+                    for index in record.heads.indices where stopped.contains(record.heads[index].headID) {
+                        record.heads[index].status = .stopped
+                    }
+                }
+                await runtime(for: lead.id).ensureLoaded()
+                await settleHydraJob(of: lead.id, ending: .recovered)
+            }
+            await resumeHydraMerges()
+        }
         // The launch sweep alone is not enough: a merge can also be missed while the app
         // stays up, and then nothing asks again until the next launch. This task asks every
         // five minutes for as long as the app runs; the sweep itself skips chats with a turn

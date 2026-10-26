@@ -214,6 +214,9 @@ enum HydraBudget {
 
     static let pacingNote = "[Tivano] You have run \(pacingTools) tools without changing a file. If the task is research, reply with your findings now. Otherwise act on what you know: make the change, or reply with what blocks you."
     static let wrapUpNote = "[Tivano] Your budget is nearly spent. Finish now: complete the smallest correct version of the task, then reply with your report."
+    /// What a v2 head's report must end with, appended to every budget note a v2 head
+    /// gets, so a head cut short still reports in the format the lead reads.
+    static let v2ReportTrailer = "End your report with exactly these three lines, each `none` when empty:\nDeviations: ...\nUnfinished: ...\nUncertain: ..."
     static let finalNote = "[Tivano] Your budget is spent and your tools are gone. Reply now with your report: what you changed, how far it got, and what is left."
 }
 

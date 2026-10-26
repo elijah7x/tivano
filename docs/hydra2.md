@@ -1,94 +1,99 @@
 # Hydra 2.0（实验室）设计
 
-状态：草案（2026-10-26）；owner 已定：一个开关，打开即完整 v2。依据：Anthropic《Building agents: when to fold subagents into your main agent loop》、`docs/research/hydra2-code-map-2026-10-26.md`（代码锚点）、Hydra 1 基线（`scripts/hydra_eval.py baseline`，输出在仓库外 `private-artifacts/hydra-eval/2026-10-26-hydra1-baseline/`）。
+状态：Labs 已实现（2026-10-26）。本文描述当前设计；依据包括 `docs/research/hydra2-code-map-2026-10-26.md`、`docs/research/hydra2-audit/docs-data.md` 和 Hydra 1 基线（`scripts/hydra_eval.py baseline`，输出在仓库外 `private-artifacts/hydra-eval/2026-10-26-hydra1-baseline/`）。
 
 ## 目标与边界
 
-- 取舍顺序：质量 > 成本 > 时间（owner 定，2026-10-26）。先保证结果更好，再尽量保住组合带来的成本优势；为这两者多花的时间可以接受。
-- Hydra 2 只替换决策层：lead 的派发策略与提示词、交给 head 的信息、head 的回报、返工方式、可选的异家检查、评分记录。副本、落地、合并、watchdog 原样共用。
-- 实验室里只有一个开关，默认关闭。打开后，所有开着 Hydra 的对话的每条新请求都完整走 v2（下文第 1–7 节全部生效，没有子开关），这样前后对比的是两个完整版本。关闭时所有代码路径、提示词文本、会话签名与今天完全一致；旧记录缺少的新字段一律按 v1 解释。
+- 取舍顺序：质量 > 成本 > 时间。先保证结果更好，再尽量保住组合带来的成本优势；为这两者多花的时间可以接受。
+- Hydra 2 替换派发决策、交接、回报、返工和审查流程，并改变完成 head 的副本保留时机；副本创建、增量落地、合并和 watchdog 的底层算法继续复用。
+- Labs 的 Hydra 2.0 开关默认关闭，受 Labs 总开关约束；没有各环节独立开关。Settings › Hydra 提供 `Delegation tilt`（`Restrained` / `Proactive`）；v1 的两个消息路由开关与 lead-review 开关在 v2 下隐藏且不生效，合并开关为 `Commit and merge automatically when done`（完成后自动提交并合并）。head profile 编辑入口保留在 Settings，规则可见、可编辑。
+- 缺少 `mode` 的旧 head 按 v1 解读；早期 v2 记录缺少的新字段表示未知，不把未知改写为 v1、零或 false。
 
 ## 基线说明了什么
 
-Release 库 232 个派发 job、525 个 head（Dev 库无 Hydra 记录）：
+Release 库的历史基线包含 232 个派发 job、525 个 head（当时 Dev 库无 Hydra 记录）：
 
-- 机械层健康：head 失败或停止 2.9%，落地冲突 0.4%。Hydra 2 不需要动这层。
-- 99 个 job（43%）只派了 1 个 head。单个 head 没有并行收益，只剩交接损失和启动开销，这正是文章说该收回主循环的情形，除非那个 head 用的模型确实更适合这份活。
-- 135 个 job 由 Claude 领队，heads 以 Codex 为主：Tivano 的常态就是跨厂商，交接损失比文章的同厂商场景更重。
-- head 收到的 brief 中位数约 4400 字符（含固定规则），回报中位数约 420 字符：信息往下给得多、往回收得少。
-- 记录缺口：合并结果、原始 base commit、模式、组合快照都没有逐 job 留存，旧数据只能做代理指标比较。Hydra 2 从第一天补上（见“评分账本”）。
+- head 失败或停止 2.9%，落地冲突 0.4%，描述的是机械层健康，不是任务质量。
+- 99 个 job（43%）只派了 1 个 head。单 head 没有并行收益，但可能有上下文隔离、模型适配与成本收益；不能只凭数量判定应收回 lead。
+- 135 个 job 由 Claude 领队，heads 以 Codex 为主，跨厂商交接是常见路径。
+- brief 中位数约 4400 字符（含固定规则），回报中位数约 420 字符；交接需保留足够信息，回报需暴露偏差与未完成项。
+- v1 缺少逐 job 的原始 base、模式、组合快照及可靠合并归属，且仅保留有存活 head 的请求。它可作运营代理指标基线，不能代表整个策略的效果。
 
 ## 1. 模式按 job 盖章
 
-- 用户发出一条真实请求、开启新一轮时（`ThreadRuntime.startTurn`，`hydraHeads == nil` 的用户回合），读取一次 `alphaEnabled && alphaHydra2Enabled`，把模式记为 `.v1` 或 `.v2`。
-- 模式随 `HydraLaunch` 传到会话、brief、回报与合并；中途切换开关只影响下一条请求，不会在一个 job 里混用。
-- 模式进入 `SessionSignature`，切换后会话按新策略重建。
-- 用户在 lead 忙时直接排给 heads 的任务（`dispatchHead`）沿用该 lead 当前 job 的模式。
+- 开着 Hydra 的新 job 读取一次 `alphaEnabled && alphaHydra2Enabled`，盖章 `.v1` / `.v2`，同时快照 tilt。模式随 launch、会话签名、brief、回报与合并传递；中途改 Labs 或 tilt 只影响下一 job，不混用路由与策略。
+- v2 下所有用户消息先进入 lead。job 尚未结束时发来的消息属于同一 job，追加到交给 heads 的用户请求中；只有 settle 之后的新消息才开启新 job。忙时的追加仍由 lead 统筹，不直接送给某个 head。
+- 语音通话与文字请求采用同一套 v2 job、派发、交接、预算及收尾规则。
+- v1 queued/direct-head 路径只用于盖章为 v1 的 job。模式变化后的会话按新签名重建。
 
-## 2. 派发策略：默认自己做
+## 2. 派发策略：按上下文与 tilt 分工
 
-v2 的 lead 策略（新的 `HydraPrompts` v2 文本，v1 文本不动）：
+lead 先计划，保留需要边读边判断的工作、跨文件设计、集成与最终检查；能写成自足 brief 的工作按以下倾向分配，计划可随回报修改：
 
-- 按上下文切分，而不是按“够不够大”：紧密耦合、需要边看边判断的工作 lead 自己做；能写成自足 brief、结果能用三栏回报说清的工作才交出去。
-- heads 与 lead 同模型（无组合，或组合不换模型）：只为并行（两份以上互不依赖的工作）或隔离上下文（大量阅读）而派发，单个 head 不派。
-- 搭档组合（heads 换了模型）：在上面之外，边界清楚的机械改动和大量阅读即使只有一份也交给 heads，保住组合的成本优势；组合说明写明 heads 擅长的活优先交给 heads。lead 留下判断、跨文件设计和集成。
-- 判断和集成留给 lead：先写计划再派发，头回来后按计划收口，计划可以中途修改。
-- 组合类型：heads 与 lead 同一 provider 与模型时视为“同模型”，策略写明“派发只为并行或隔离上下文”；否则为“搭档模型”，策略写明 heads 跑的是哪个模型。
-- 组合说明：`HydraPair` 新增可选的 `headsNote`（例如“擅长前端”“快，适合机械改动”），Settings 的组合编辑里可填，Cookbook 配方可带默认值。非空时写入 lead 策略，lead 按它分配活。
-- 渐进披露：合并问答规则只在存在合并状态时随 `[Hydra]` 回合说明给出；其他项目只列名称与路径，路由细则只在 lead 的派发块真正带 `project` 时随拒绝或确认信息补充。
-- 轮数上限仍为 3；返工（见第 5 节）计入同一预算。
+- **Restrained（存储值 `restrained`）：** 为并行、大量阅读和较大的独立单项工作派发；单项可包括跨文件机械修改。小编辑和需要边读边判断的工作留给 lead。
+- **Proactive（存储值 `active`）：** 更优先使用 heads，独立单项、边界清楚的编辑和阅读都可派发；大工作拆成独立并行部分。琐碎或质量敏感、由 lead 做更好的工作仍留给 lead，不为增加派发而拆散耦合工作。
+- 两种倾向都适用于同模型和搭档组合。共享 heads 的 provider + model 与 lead 相同时称为同模型，effort 单独记录；profile 可覆盖单个 head 的实际配置，评估另看实际 heads。
+- `HydraPair.headsNote` 可由组合编辑器或 Cookbook 配方提供；非空时写入 lead 策略，同模型与搭档组合都生效。
+- 自动合并开启时始终给出自动合并规则，有合并状态时再附 `[Hydra]` 状态说明；多项目时直接给出完整路由与逐 checkout 合并规则。
+- 每个 job 最多 3 轮派发，整批计一次；`continue` 返工与新派发共用预算，追加用户消息不重置预算。
 
 ## 3. 交接包
 
 每个 head 的 brief 后由 Tivano 附加（不经 `withoutVerificationSteps` 处理）：
 
-- 用户原话：job 开始时快照的完整请求文本（超过 6000 字符时截断并注明），以及用户附带的图片附件路径。
-- 团队清单：本批每个 head 的名字、任务标题和负责文件。
-- v2 派发条目新增 `files` 字段（该 head 负责的路径）。同一路径出现在两个条目里时，Tivano 在派发前把冲突告诉 lead 并拒绝该块，让 lead 重拆。
-- 为了让清单完整，v2 在派发块闭合后才统一派出 heads（v1 仍边流式边派）。代价是第一个 head 晚出发几十秒，换来每个 head 都知道全队分工。
+- 用户请求：job 的初始原话及尚未结束时的追加，最多 6000 字符，截断时注明；同时附图片和其他附件路径。
+- 团队清单：本批各 head 的名字、任务标题和负责文件。
+- 派发条目的 `files` 表示负责路径；同一路径分给两个条目时，派发前拒绝该块并向 lead 说明，让 lead 重拆。
+- v2 等 lead 整个回复回合结束后统一派出 heads，使同批 brief 带有完整团队分工。v1 仍流式派发；v2 首个 head 的等待时间取决于完整回合，不预设秒数。
 
 ## 4. 结构化回报
 
-- head 的回报规则改为：先一两句结果，然后固定三行 `Deviations:`、`Unfinished:`、`Uncertain:`，没有就写 `none`。改了哪些文件 Tivano 自己有，不要求 head 列。
-- 解析宽松：读不到三行时整段作为正文，并在账本记一次“格式未遵守”。解析结果存入 `HydraHeadInfo` 的新可选字段 `reportNotes`，`summary` 保持原样。
-- 给 lead 的回报消息：每个 head 先列三栏，再列落地文件，再列正文。复查规则改为“先读偏差和不确定涉及的文件，再抽查其余”，lead 仍亲自完成集成和构建。
+- head 先写一两句结果，最后固定三行 `Deviations:`、`Unfinished:`、`Uncertain:`，空项写 `none`。文件改动由 Tivano 记录，不要求重复列出。
+- 解析宽松：缺少格式时保留原文，并记录未遵守格式。解析结果进入 `reportNotes`，`summary` 保持原样；解析失败不能视为“没有问题”。
+- 给 lead 的回报先列 `Flags`（只列非空项，全空写 `none`，缺格式则注明），再列落地信息及原始正文。提示词要求先读偏差和不确定涉及的文件、抽查其余，亲自集成并运行最窄的必要构建。这是模型指令，不是程序化验收保证。
+- 上述要求始终随 v2 回报提供，不受隐藏的 v1 lead-review 开关控制；heads 不构建、不检查，由 lead 验证。
 
 ## 5. 返工续用原 head
 
-- v2 派发条目可写 `"continue": "<head 名>"`，指向本 lead 当前 job 中已完成的 Tivano head；Tivano 在该 head 原有线程里发送这条追加指令，不新起 head。
-- v2 的 head 完成后副本保留到 job 结束（lead 的最终回复落定或合并开始），返工在同一副本、同一会话里继续，落地沿用现有的增量 `baseTree`。会话恢复失败时照常新开会话并在回报里注明。
-- 目标不存在、仍在运行或不属于本 lead 时拒绝并说明，不悄悄新建 head。
+- 派发条目可写 `"continue": "<head 名>"`，指向当前 lead、当前 job 中已结束（完成、失败或停止）的 head；使用原线程和仍保留的副本，不新起 head。目标不存在、仍运行、不属本 job 或副本已释放时明确拒绝。
+- head 属于未结束的 v2 job 时，只能通过 lead 的 `continue` 指挥。它自己的输入框提示 `Ask the lead to send this head back`（通过主智能体让它返工）；job 结束后恢复直接发消息的原有行为。
+- 完成 head 的副本保留到 job settle；自动合并开启时等合并调用返回后再定稿、释放，关闭时等最终回复与审查处理结束。落地继续使用增量 `baseTree`；会话恢复失败时走通用新会话路径并给出警告。
 
 ## 6. 异家只读检查
 
-- v2 的固定环节，没有单独开关。检查引擎自动选择与 lead 不同厂商的 CLI（lead 是 Claude 时用 Codex，否则优先 Claude），用该 CLI 的默认强模型与高推理强度，一次性无工具运行，天然只读；都不可用时跳过并在账本记录原因。
-- 触发：v2 job 有落地改动、lead 最终回复结束后、自动合并前。
-- 输入只有用户原话、本 job 的最终 diff 和 heads 的结构化回报；只读运行，不落地、不进团队面板批次。
-- 降噪：检查只报会导致错误行为的问题，每条须给出文件位置和具体的失败情形，不报风格偏好；lead 对每条明确“采纳并修改”或“驳回并说明理由”，账本记录条数与采纳数。
-- 意见作为一条 `[Hydra] Review` 消息交给 lead，lead 有一轮处理（可改可不改，须说明取舍），之后照常合并。检查失败或超时不阻塞合并，只在账本记录。
+- v2 的固定环节，没有单独开关。Claude lead 用 Codex，Codex lead 用 Claude，其他 lead 优先 Claude、再试 Codex。Codex 使用默认模型、高推理和 read-only sandbox；Claude 单次禁用工具，未显式固定模型或推理强度。不可用、失败或 15 分钟超时记录原因，继续后续收尾。
+- lead 工作回合结束后，对 job 的改动尝试审查，自动合并开启时先审后合；关闭自动合并也审查。无改动记录为不适用，不算审查失败。
+- job 为每个 checkout 保存 `baseTrees`，按各 checkout 自己的 base tree、只对本 job 触及的路径生成 diff。范围包含 lead、共享 checkout 的 heads 以及其他 checkout 的 heads；不能用 lead 的根目录与 base 代替全部项目，也不能把无关路径带入审查。
+- 输入为用户请求、非空三栏和带 checkout 标识的 diff，总 diff 预算 80,000 字符，截断须注明；审查不落地、不进入团队面板批次。base 缺失或 diff 收集失败须说明覆盖限制，不宣称审过完整代码。
+- 只报告会导致错误行为的问题，每条包含文件位置和失败情形；lead 须明确采纳修改或驳回说明。账本记录 findings 与匹配到的 accepted 数，不把无法匹配的文本算作明确驳回，也不以零 findings 保证正确。
+- 审查作为 `[Hydra] Review` 交给 lead 处理。lead 忙时把完整消息留在 `pendingReview`，待空闲后交付；job 在交付并处理之前不关闭。等待期间的新用户消息仍属于这个 job。审查调用失败可以收尾，已产生但尚未交付的意见不能当作失败或跳过而丢弃。
 
 ## 7. 评分账本
 
-lead 线程新增 `hydraJobs: [HydraJobRecord]`，只追加，job 结束时定稿：
+lead 线程追加 `hydraJobs: [HydraJobRecord]`，运行中持续更新；延后合并的结果按所属 job ID 回写，不能默认写入最后一个 job：
 
-- 模式、请求 ID、开始与结束时间；
-- lead 的 provider、模型、effort；组合 ID 与快照（heads 的 provider、模型、effort、`headsNote`）；
-- job 开始时 lead checkout 的 HEAD 与是否有未提交改动；
-- 每个 head：名字、模型、brief 长度、负责文件、状态、用时、落地文件数与冲突、三栏回报、是否遵守格式、返工次数；
-- heads 回来后 lead 的编辑次数与是否构建；
-- 检查意见条数与 lead 采纳条数；
-- 合并结果（成功、失败、无需合并）。
+- 独立 job ID、mode、原始请求、lead `turnID`（不是用户消息 ID）、开始与结束时间；`ending` 为 `completed` / `interrupted` / `hydraOff` / `recovered`，区分正常完成、中断、关闭 Hydra 和恢复收尾。
+- lead provider / model / effort，pair ID，共享 heads provider / model / effort / `headsNote`，job 的 tilt 快照。
+- lead checkout 的 base commit、dirty 标记及按 checkout 保存的 `baseTrees`。tree 是审查基线，不等于完整可重放环境。
+- 每个 head 的 ID、名字、实际 provider / model / effort、brief 字符数、负责路径、状态、执行秒数（不含排队和落地）、落地文件与冲突数、三栏、格式遵守和 continuation 次数。
+- `leadBuilt` 记录任一 lead turn 观察到的构建命令；`leadEditsAfterReports` 累计 report / review turns 的完成编辑调用。两者均为启发式，不能证明所有构建或修改。
+- 审查 engine、findings、accepted、skip reason 和待交付 `pendingReview`。缺字段是未知，不能以 engine 存在证明意见已交付处理。
+- 所属 job 的最终 merge 结果；`merged` / `failed` 是远端合并结果，`nothing` 是本次无需新合并。缺结果可能是未开启、未执行、延后或尚未完成，不算成功。
 
-`scripts/hydra_eval.py` 增加 `compare` 子命令：读账本与 v1 基线，按任务类型对比；并支持从历史 job 选题，在记录的 base commit 上重跑做同题对比（重跑会消耗模型额度，执行前由 owner 确认清单）。
+`scripts/hydra_eval.py compare` 只读账本与 baseline CSV，生成运营指标：主表比较 v1 有头任务和 v2 至少派发一个 head 的任务，按任务类型分层；终态指标排除进行中及待交付审查。v2 无头任务另表展示，并报告委派率，不编造 v1 无头对照。实际 heads 的同模型分组与共享 pair 快照分开，effort、pair、tilt 均保留。审查分已交付、待交付、跳过、失败及未知；不把不同边界的时长和编辑数作为同一指标比较。
 
-## 落地顺序
+`replay-candidates` 只生成待 owner 审批的 v1 候选清单，不执行 Git 或重跑。v1 需人工恢复原始日期与 base；v2 clean base commit 可作起点，dirty / 未知基线仍须保存并恢复相应 tree / patch 及环境，不能默认当前 HEAD。自动同题 replay 尚未实现。
 
-第 1–7 节作为一个完整的 v2 一起交付，开关在全部完成后才出现在实验室页。实现顺序：模式盖章与账本、派发策略与交接包、结构化回报、返工续用、异家检查。
+评估按质量 > 成本 > 时间：同题、同 base 的人工盲评质量先行；provider 实测 token / 额度 / 成本须带单位和覆盖率，未知不估价；时间最后，分清 lead 答复、审查与合并阶段。现有失败率、冲突、编辑数和耗时只表示运营健康，不能替代质量与成本结果。
 
-因为 v2 一次改了多处，账本逐 job 记下各环节是否实际发生（是否派发、是否只派一个、是否返工、检查提了几条、采纳几条），评分时可以按环节拆开看，而不只看总分。
+## 当前状态与评估边界
+
+v2 已在 Labs 作为完整流程提供。无头、单头由 heads 数组派生，轮数与返工由 rounds / continuations 汇总；审查与采纳直接读取账本。缺字段的旧记录保留未知，不能用零补齐后得出改善结论。
+
+v1 基线存在存活 head、时间归属及不同请求的偏差。要比较整个策略，需补齐两版全部真实请求（包括无头），或采用同题、同 base 重跑；主表仅回答派发之后的运营差异。pending / open 数量另报，终态尚未形成时不提前下结论。
 
 ## 不做的事
 
-- 不改副本、落地、合并、watchdog 的行为。
-- 不让 heads 互相验证，也不让检查结果自动阻塞合并。
-- 不自动迁移或改写 v1 的历史记录。
+- 不重写副本创建、增量落地、合并和 watchdog 的底层算法；v2 的保留与释放时机遵循 job 生命周期。
+- 不让 heads 互相验证，不用审查意见自动否决合并；lead 负责判断和处理，待交付意见必须等待。
+- 不自动迁移或改写 v1 历史，不把运营代理指标称为质量或成本证明。

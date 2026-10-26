@@ -253,9 +253,8 @@ extension AppModel {
             workerEffort = nil
         }
         let workerModel = keepsModel ? pair?.workerModel : nil
-        let headsMatchLead = pair == nil || (headsProvider == thread.provider
+        let headsMatchLead = headsProvider == thread.provider
             && (workerModel ?? thread.model) == thread.model
-            && (workerEffort ?? thread.effort) == thread.effort)
         return HydraLaunch(
             headsProvider: headsProvider,
             headsLabel: label,
@@ -264,12 +263,13 @@ extension AppModel {
             workerDshMode: keepsModel && headsProvider == .dsh ? pair?.workerDshMode : nil,
             // The lower of the pair's cap and the Hydra page's; with neither, the heads run uncapped.
             maxHeads: [pair?.maxHeads, settings.hydraMaxHeads].compactMap { $0 }.min(),
-            headProfiles: pair?.headProfiles ?? [],
+            // Head profiles are withdrawn: saved ones stay in the pair but route nothing.
+            headProfiles: [],
             isolatesHeads: settings.hydraIsolateHeads,
             autoMerges: settings.hydraAutoMerge,
             reviewsHeads: settings.hydraReviewHeads,
             projects: ownRefs,
-            headsNote: pair?.headsNote?.trimmed.nilIfEmpty,
+            headsNote: keepsModel ? pair?.headsNote?.trimmed.nilIfEmpty : nil,
             headsMatchLead: headsMatchLead,
             tilt: settings.hydraTilt
         )
@@ -283,6 +283,9 @@ extension AppModel {
         guard on else {
             updateThread(id) { $0.hydraEnabled = false }
             settings.hydraDefaultEnabled = false
+            if openHydraJob(of: id)?.mode == .v2 {
+                Task { await endHydraJobsForHydraOff(of: id) }
+            }
             return
         }
         let pair = settings.hydraPair(for: thread.provider, model: thread.model)
@@ -311,12 +314,12 @@ extension AppModel {
 
     /// How many of a lead's Tivano-run heads are still at work.
     func runningTivanoHeads(of parentID: UUID) -> Int {
-        hydraHeads(of: parentID).count { $0.hydra?.kind == .tivano && $0.hydra?.status == .running }
+        hydraTeam(of: parentID).count { $0.hydra?.kind == .tivano && $0.hydra?.status == .running }
     }
 
     /// How many of a lead's heads are still at work, whatever their kind.
     func runningHydraHeads(of parentID: UUID) -> Int {
-        hydraHeads(of: parentID).count { $0.hydra?.status == .running }
+        hydraTeam(of: parentID).count { $0.hydra?.status == .running }
     }
 
     /// How many distinct files a merge could still send for this lead: the lead's
@@ -524,9 +527,10 @@ extension AppModel {
         preferredIndex: Int? = nil,
         project: String? = nil,
         profile: String? = nil,
+        job: HydraJobStamp? = nil,
         brief: @escaping @Sendable (HydraPersona, HydraPrompts.Workplace) -> String
     ) -> ChatThread? {
-        guard let head = insertHydraHead(from: parentID, task: task, origin: origin, batchID: batchID, preferredIndex: preferredIndex, project: project, profile: profile) else { return nil }
+        guard let head = insertHydraHead(from: parentID, task: task, origin: origin, batchID: batchID, preferredIndex: preferredIndex, project: project, profile: profile, job: job) else { return nil }
         let route = hydraRouteReference(project)
         Task { await startTivanoHead(head.id, route: route, attachments: attachments, brief: brief) }
         return head
@@ -539,7 +543,8 @@ extension AppModel {
         batchID: UUID?,
         preferredIndex: Int? = nil,
         project: String? = nil,
-        profile: String? = nil
+        profile: String? = nil,
+        job: HydraJobStamp? = nil
     ) -> ChatThread? {
         guard let parent = thread(parentID), beginThreadTurn(parentID) else { return nil }
         // A lead with no heads left starts the roster over. The count would otherwise
@@ -625,14 +630,17 @@ extension AppModel {
         info.batchID = batchID
         info.pendingProjectReference = needsRoute ? project : nil
         info.canStop = true
-        if let job = openHydraJob(of: parentID), job.mode == .v2,
+        if let job {
+            info.mode = job.mode
+            info.jobID = job.jobID
+        } else if let job = openHydraJob(of: parentID), job.mode == .v2,
            existingRuntime(for: parentID)?.hydraJobMode == .v2 {
             info.mode = .v2
             info.jobID = job.id
         }
         head.hydra = info
         insertThread(head)
-        if let jobID = info.jobID {
+        if info.mode == .v2, let jobID = info.jobID {
             updateHydraJob(jobID, of: parentID) { job in
                 job.heads.append(HydraJobHeadRecord(
                     headID: head.id,
@@ -676,6 +684,15 @@ extension AppModel {
             return
         }
         updateHydraHead(id) { $0.targetCheckout = checkout }
+        // A v2 head working in a checkout the job has no base for yet records that base
+        // before any work goes in, so the review diffs only what the job did there.
+        if info.mode == .v2, let jobID = info.jobID, let leadID = head.parentThreadID,
+           thread(leadID)?.hydraJobs.first(where: { $0.id == jobID })?.baseTrees?[checkout] == nil,
+           let tree = try? await Git(checkout).currentTree() {
+            updateHydraJob(jobID, of: leadID) { job in
+                if job.baseTrees?[checkout] == nil { job.baseTrees = (job.baseTrees ?? [:]).merging([checkout: tree]) { old, _ in old } }
+            }
+        }
         // A head on another provider than its lead, with no model chosen for it, runs that
         // provider's default: the catalogue it comes from may not have loaded yet.
         if head.provider != lead.provider, head.model == nil {
@@ -824,10 +841,13 @@ extension AppModel {
         leadRuntime.hydraHeadFinished(head.id, info: finished, status: outcome, summary: summary, landing: landing, copyPath: copyPath,
                                        provider: head.provider.displayName, startupFailure: outcome == .failed && startupFailure)
         // A completed v1 copy goes back once the lead has the report; a v2 copy stays for
-        // continuations until its job settles. A stopped or failed head keeps its copy too:
-        // its report points there when its half-done work never landed. Those copies go when
-        // the heads are cleared by hand, or when the head is steered on for another turn.
-        if outcome == .completed, finished.mode != .v2 {
+        // continuations until its job settles. Late heads of a closed job release now,
+        // since no settlement remains to release them. Other stopped or failed heads keep
+        // their copies until cleared by hand or steered on for another turn.
+        let jobAlreadyClosed = finished.mode == .v2 && finished.jobID.map { jobID in
+            thread(parentID)?.hydraJobs.contains { $0.id == jobID && $0.finishedAt != nil } == true
+        } == true
+        if (outcome == .completed && finished.mode != .v2) || (finished.isFinished && jobAlreadyClosed) {
             releaseHydraCopy(of: id)
         }
     }
@@ -1173,7 +1193,7 @@ extension AppModel {
 
     /// Stops every head of a lead's still at work.
     func stopAllHydraHeads(of parentID: UUID) {
-        for head in hydraHeads(of: parentID) where head.hydra?.status == .running {
+        for head in hydraTeam(of: parentID) where head.hydra?.status == .running {
             stopHydraHead(head.id)
         }
     }
@@ -1195,7 +1215,9 @@ extension AppModel {
     func clearFinishedHydraHeads(of parentID: UUID) {
         for head in hydraHeads(of: parentID) where head.hydra?.isFinished == true {
             updateThread(head.id) { $0.isInPanel = false }
-            releaseHydraCopy(of: head.id)
+            if !hydraHeadIsInOpenJob(head) {
+                releaseHydraCopy(of: head.id)
+            }
         }
     }
 
