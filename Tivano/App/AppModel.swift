@@ -466,8 +466,9 @@ final class AppModel {
         await providers.refreshAll()
         // Load the live catalogs behind the launch seeds, overlapped. Claude's brings its
         // slash commands too, so the picker and the composer are complete before any turn.
+        // ZCode's is a read of the app's bundled config, cheap enough to load up front.
         await withTaskGroup(of: Void.self) { group in
-            for provider in [ProviderKind.claude, .codex, .deepseek, .meta, .dsh] where providers.status(provider).isInstalled && (provider != .dsh || settings.isEnabled(provider)) {
+            for provider in [ProviderKind.claude, .codex, .deepseek, .meta, .dsh, .zcode] where providers.status(provider).isInstalled && (provider != .dsh || settings.isEnabled(provider)) {
                 group.addTask { await self.providers.loadCatalog(provider) }
             }
         }

@@ -19,6 +19,9 @@ enum MergeStageText {
 enum TimelineMetrics {
     /// The gap between any two consecutive rows in the timeline.
     static let rowSpacing: CGFloat = 20
+    /// The gap between a reply's paragraphs (`MarkdownView`'s block spacing), also kept
+    /// between the replies of a folded turn: with its steps folded away they read as one answer.
+    static let paragraphSpacing = TypeScale.proseParagraphSpacing
     /// The room a message keeps for its hover line (copy, revert). Reserved inside
     /// the row so showing the controls never moves text, then subtracted from the
     /// row's own height so they fill the gap below instead of adding to it.
@@ -2650,6 +2653,12 @@ struct TurnFinishedBlock: View {
         }
     }
 
+    /// Two replies in a row are one answer with its steps folded away, a paragraph apart;
+    /// a plan or a notice keeps the row gap.
+    private static func conversationGap(after previous: TimelineEntry, before entry: TimelineEntry) -> CGFloat {
+        previous.kind == .assistant && entry.kind == .assistant ? TimelineMetrics.paragraphSpacing : TimelineMetrics.rowSpacing
+    }
+
     var body: some View {
         let key = DerivedKey(
             ids: content.map(ObjectIdentifier.init),
@@ -2756,20 +2765,24 @@ struct TurnFinishedBlock: View {
                 .padding(.bottom, TimelineMetrics.rowSpacing)
             }
             if derived.hasResponse {
-                VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
-                    ForEach(derived.conversation) { entry in
-                        switch entry.item.content {
-                        case .assistant(let message):
-                            // A reply of a finished turn: the same menu as a reply row.
-                            FoldedAnswerView(text: message.text, runtime: runtime)
-                        case .plan:
-                            PlanCard(entry: entry, runtime: runtime)
-                        default:
-                            NoticeRow(entry: entry)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(derived.conversation.enumerated()), id: \.element.id) { index, entry in
+                        Group {
+                            switch entry.item.content {
+                            case .assistant(let message):
+                                // A reply of a finished turn: the same menu as a reply row.
+                                FoldedAnswerView(text: message.text, runtime: runtime)
+                            case .plan:
+                                PlanCard(entry: entry, runtime: runtime)
+                            default:
+                                NoticeRow(entry: entry)
+                            }
                         }
+                        .padding(.top, index == 0 ? 0 : Self.conversationGap(after: derived.conversation[index - 1], before: entry))
                     }
                 }
-                .padding(.bottom, TimelineMetrics.rowSpacing)
+                // Only above what follows in the block: the timeline's own row gap comes after it.
+                .padding(.bottom, showsHeads || hasFiles ? TimelineMetrics.rowSpacing : 0)
             }
 
             // The heads the turn sent out stay in view under the response, folded or not.

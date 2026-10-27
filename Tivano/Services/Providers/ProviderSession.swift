@@ -194,6 +194,8 @@ enum ProviderError: LocalizedError {
         case .notInstalled(let provider):
             if provider == .minimaxCode {
                 AppText.localized("MiniMax Code is not installed. Install the official mcode CLI, then refresh Providers. Authentication is configured separately in MiniMax Code.")
+            } else if provider == .zcode {
+                AppText.localized("ZCode is not installed. Install the ZCode app, then refresh Providers.")
             } else if provider.isAPIKeyBased {
                 "\(provider.displayName) needs an API key. Add one in Settings → Providers → \(provider.displayName)."
             } else {

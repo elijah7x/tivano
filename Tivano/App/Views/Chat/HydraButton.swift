@@ -34,7 +34,8 @@ struct HydraButton: View {
         // lead's own timeline, so the badge pulses as soon as delegation starts.
         let isDelegating = isOn && running == 0 && runtime.isRunning && Self.isLeadDelegating(runtime.entries)
         Button {
-            if isDelegating && heads.isEmpty { isExplaining = true } else if !model.settings.hasSeenHydraIntro { isIntroShown = true } else if heads.isEmpty { isExplaining = true } else { togglePanel() }
+            // Off for this chat, the mark opens its switch: the idle note describes a team that is on.
+            if isDelegating && heads.isEmpty { isExplaining = true } else if !model.settings.hasSeenHydraIntro { isIntroShown = true } else if heads.isEmpty, !isOn { isHydraSwitchShown = true } else if heads.isEmpty { isExplaining = true } else { togglePanel() }
         } label: {
             ZStack {
                 if isOn {

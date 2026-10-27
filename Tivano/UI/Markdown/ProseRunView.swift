@@ -121,7 +121,7 @@ struct ProseRunRepresentable: NSViewRepresentable {
     static func attributed(blocks: [MarkdownBlock], pointSize: CGFloat, dimmed: Bool, mentions: [HydraPersona], targets: [String: HydraMentionTarget] = [:]) -> NSAttributedString {
         let out = NSMutableAttributedString()
         for block in blocks {
-            append(block, depth: 0, indent: 0, dimmed: dimmed, spacing: 12, pointSize: pointSize, mentions: mentions, targets: targets, to: out)
+            append(block, depth: 0, indent: 0, dimmed: dimmed, spacing: TypeScale.proseParagraphSpacing, pointSize: pointSize, mentions: mentions, targets: targets, to: out)
         }
         return out
     }
@@ -130,6 +130,9 @@ struct ProseRunRepresentable: NSViewRepresentable {
     private static func append(_ block: MarkdownBlock, depth: Int, indent: CGFloat, dimmed: Bool, spacing: CGFloat, pointSize: CGFloat, mentions: [HydraPersona], targets: [String: HydraMentionTarget], to out: NSMutableAttributedString) {
         let base = NSFont.systemFont(ofSize: pointSize)
         let color = dimmed ? NSColor.labelColor.withAlphaComponent(0.7) : NSColor.labelColor
+        // One text view holds the whole run, so the line spacing also falls between its
+        // paragraphs; each gap gives it back to stay the SwiftUI blocks' own spacing.
+        let lineSpacing = TypeScale.proseLineSpacing(pointSize)
         switch block {
         case .paragraph(let text):
             separate(to: out, font: base, color: color)
@@ -137,7 +140,8 @@ struct ProseRunRepresentable: NSViewRepresentable {
             let style = NSMutableParagraphStyle()
             style.firstLineHeadIndent = indent
             style.headIndent = indent
-            style.paragraphSpacing = spacing
+            style.paragraphSpacing = max(0, spacing - lineSpacing)
+            style.lineSpacing = lineSpacing
             line.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: line.length))
             out.append(line)
         case .heading(let level, let text):
@@ -164,7 +168,8 @@ struct ProseRunRepresentable: NSViewRepresentable {
             style.firstLineHeadIndent = indent
             style.headIndent = indent
             style.paragraphSpacingBefore = level <= 2 ? 6 : 2
-            style.paragraphSpacing = 12
+            style.paragraphSpacing = TypeScale.proseParagraphSpacing - lineSpacing
+            style.lineSpacing = lineSpacing
             line.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: line.length))
             out.append(line)
         case .list(let ordered, let start, let items):
@@ -190,7 +195,8 @@ struct ProseRunRepresentable: NSViewRepresentable {
                 style.headIndent = indent + 18
                 style.tabStops = [NSTextTab(textAlignment: .left, location: indent + 18)]
                 style.defaultTabInterval = 18
-                style.paragraphSpacing = (depth == 0 && index == items.count - 1) ? 12 : 6
+                style.paragraphSpacing = ((depth == 0 && index == items.count - 1) ? TypeScale.proseParagraphSpacing : 6) - lineSpacing
+                style.lineSpacing = lineSpacing
                 line.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: line.length))
                 out.append(line)
                 for child in item.children {

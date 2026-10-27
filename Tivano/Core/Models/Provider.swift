@@ -34,6 +34,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case omp
     case dsh
     case minimaxCode
+    case zcode
 
     /// A raw value read from storage; the retired `opencodeGo` means `opencode`.
     init?(storedValue raw: String) {
@@ -73,6 +74,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .kimi: "Kimi Code"
         case .dsh: "DeepSeek Harness"
         case .minimaxCode: "MiniMax Code"
+        case .zcode: "ZCode"
         }
     }
 
@@ -96,6 +98,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .kimi: "Kimi Code CLI"
         case .dsh: "dsh CLI"
         case .minimaxCode: "MiniMax Code CLI"
+        case .zcode: "ZCode CLI"
         }
     }
 
@@ -103,7 +106,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var group: ProviderGroup {
         switch self {
         case .deepseek, .meta, .zai: .tivanoCode
-        case .codex, .claude, .cursor, .opencode, .grok, .devin, .antigravity, .copilot, .commandcode, .pi, .kimi, .omp, .dsh, .minimaxCode: .agentCLI
+        case .codex, .claude, .cursor, .opencode, .grok, .devin, .antigravity, .copilot, .commandcode, .pi, .kimi, .omp, .dsh, .minimaxCode, .zcode: .agentCLI
         }
     }
 
@@ -127,6 +130,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .kimi: "Kimi membership or API key"
         case .dsh: "API key"
         case .minimaxCode: "Token Plan or API key"
+        case .zcode: "GLM Coding Plan"
         }
     }
 
@@ -152,6 +156,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .kimi: "kimi"
         case .dsh: "dsh"
         case .minimaxCode: "mcode"
+        case .zcode: "zcode"
         }
     }
 
@@ -176,6 +181,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .kimi: "kimi login"
         case .dsh: ""
         case .minimaxCode: "mcode login"
+        case .zcode: ""
         }
     }
 
@@ -198,6 +204,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .kimi: URL(string: "https://www.kimi.com/code/docs/en/kimi-code-cli/")!
         case .dsh: URL(string: "https://www.deepseek.com/en/harness/")!
         case .minimaxCode: URL(string: "https://agent.minimax.io/docs/cli/quick-start")!
+        case .zcode: URL(string: "https://zcode.z.ai")!
         }
     }
 
@@ -259,7 +266,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     /// Headless stream-json only carries text: the TUI pastes images, but a
     /// streaming session rejects non-text blocks, so image attachments stay off.
-    var supportsImages: Bool { self != .grok && self != .antigravity && self != .dsh && self != .minimaxCode }
+    var supportsImages: Bool { self != .grok && self != .antigravity && self != .dsh && self != .minimaxCode && self != .zcode }
 
     func supports(_ mode: RuntimeMode) -> Bool {
         switch self {

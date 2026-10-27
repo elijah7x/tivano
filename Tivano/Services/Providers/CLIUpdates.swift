@@ -249,7 +249,7 @@ enum CLIUpdates {
         environment: [String: String],
         probe: CLIProbe = .live
     ) async throws -> CLIInstallChannel? {
-        if provider.isAPIKeyBased || provider == .omp || provider == .minimaxCode { return nil }
+        if provider.isAPIKeyBased || provider == .omp || provider == .minimaxCode || provider == .zcode { return nil }
         let original = probe.standardize(executable.path)
         let resolved = probe.standardize(probe.resolve(executable).path)
         guard !isProtected(resolved) else { return nil }
@@ -289,6 +289,8 @@ enum CLIUpdates {
             }
         }
         switch provider {
+        case .zcode:
+            return AppText.localized("ZCode updates with the ZCode app. Update it there.")
         case .minimaxCode:
             return AppText.localized("Update MiniMax Code with its official installer or the documented npm command.")
         case .omp:
@@ -805,7 +807,7 @@ enum CLIUpdates {
         case .cursor: return try await cursorVersion(probe: probe)
         case .antigravity: return try await githubReleaseVersion("google-antigravity/antigravity-cli", probe: probe)
         case .pi: return try await registryVersion("@earendil-works/pi-coding-agent", tag: "latest", probe: probe)
-        case .omp: return nil
+        case .omp, .zcode: return nil
         case .minimaxCode: return try await registryVersion("@minimax-ai/code", tag: "latest", probe: probe)
         case .kimi: return try await registryVersion("@moonshot-ai/kimi-code", tag: "latest", probe: probe)
         case .dsh: return try await registryVersion(DshCLI.packageName, tag: "latest", probe: probe)

@@ -8,6 +8,44 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.1.20] - 2026-10-28
+
+### English
+
+### New features
+
+- ZCode joins the agent CLIs. Tivano drives the CLI bundled inside the ZCode app, with your ZCode plugins, skills and hooks, and signs it in with the GLM Coding Plan key from Settings › Providers › Z.ai. Its GLM models and Low / High / Max reasoning, streamed replies and reasoning, tool rows with file diffs, subagents as agent rows, approvals and questions, interrupt, resume and usage all work in Tivano; a subagent's own tool calls stay with it instead of landing as untitled rows between the reply's paragraphs. Images are not supported yet.
+
+### Bug fixes
+
+- Clicking the Hydra mark in a chat with Hydra switched off opens its switch, instead of a note saying Hydra is on.
+
+### Refinements
+
+- Hydra 2.0 has a third delegation choice, Aggressive, and each choice now says what it trades. With all three the lead decides at the start of every message, follow-ups included, which parts go to heads, and audits and reviews you ask for can go to heads that only read and report.
+- Chat text has more room to breathe: lines and paragraphs are spaced more generously and the same way everywhere, whether a reply is streaming or finished. A head named in a reply no longer makes its line taller, the replies of a finished turn sit a paragraph apart, and a finished turn no longer leaves an extra gap above what follows it.
+- Provider icons share one optical size everywhere they appear: each mark is centred and sized by its outline and ink weight, so small marks such as omp, Z.ai and MiniMax no longer look shrunken and solid ones such as ZCode, Command Code and OpenCode no longer look oversized.
+
+### 简体中文
+
+### 新功能
+
+- 新增 ZCode。Tivano 直接驱动 ZCode 应用内置的 CLI，沿用你在 ZCode 中的插件、skills 和 hooks，并使用 设置 › Providers › Z.ai 中的 GLM Coding Plan key 登录。支持 GLM 模型与 Low / High / Max 思考档位、流式回复和思考过程、带文件 diff 的工具记录、子智能体（各占一行显示）、审批与提问、中断、恢复会话和用量统计；子智能体自己的工具调用归在它名下，不再以无标题的行插在回复段落之间。暂不支持图片。
+
+### 问题修复
+
+- 在关闭了 Hydra 的对话中点击 Hydra 标记，会直接打开开关，不再弹出“Hydra 已开启”的说明。
+
+### 优化改进
+
+- Hydra 2.0 新增第三档委派倾向“激进”，每一档都会说明各自的取舍。三档下，主智能体都会在每条消息（包括“继续”这类追问）开始时决定哪些部分交给 heads；你要求的审计和审查也可以交给只读不改的 heads。
+- 对话正文更舒展：行距和段距加大，并且无论回复正在输出还是已完成都保持一致。回复中提到的 head 不再把所在行撑高，已完成轮次的多条回复之间按段距排列，已完成轮次下方也不再多出一段空白。
+- 服务商图标在所有出现的位置统一了视觉大小：每个图标按轮廓和笔画分量居中、定尺寸，omp、Z.ai、MiniMax 等小图标不再显得过小，ZCode、Command Code、OpenCode 等实心图标也不再显得过大。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.1.15] - 2026-10-27
 
 ### English

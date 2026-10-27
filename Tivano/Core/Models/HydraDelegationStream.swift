@@ -119,7 +119,7 @@ extension HydraPrompts {
         // Hydra 2 only; a v1 lead never writes them and v1 never reads them.
         let files = (entry["files"]?.array ?? []).compactMap { $0.string?.trimmed }.filter { !$0.isEmpty }
         let continueHead = entry["continue"]?.string?.trimmed
-        return HydraDelegation(task: task.isEmpty ? TextCleanup.singleLine(prompt, limit: 60) : task, prompt: prompt, name: announced, project: (project?.isEmpty == false) ? project : nil, profile: (profile?.isEmpty == false) ? profile : nil, files: files, continueHead: (continueHead?.isEmpty == false) ? continueHead : nil)
+        return HydraDelegation(task: task.isEmpty ? TextCleanup.singleLine(prompt, limit: 60) : task, prompt: prompt, name: announced, project: (project?.isEmpty == false) ? project : nil, profile: (profile?.isEmpty == false) ? profile : nil, files: files, filesGiven: entry["files"]?.array != nil, continueHead: (continueHead?.isEmpty == false) ? continueHead : nil)
     }
 
     fileprivate static func isJSONWhitespace(_ byte: UInt8) -> Bool {

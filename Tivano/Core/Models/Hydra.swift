@@ -558,6 +558,9 @@ struct HydraDelegation: Hashable, Sendable {
     /// Hydra 2: the paths this head owns (`"files"`). Two entries of one block may not
     /// share a path.
     var files: [String] = []
+    /// Whether the entry carried `"files"` at all: an empty list is a read-only head,
+    /// a missing one is a mistake the lead is told about.
+    var filesGiven = false
     /// Hydra 2: the name of a finished head of this lead's job to send back to its part
     /// in its own session (`"continue"`), instead of a new head.
     var continueHead: String?

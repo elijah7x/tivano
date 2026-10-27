@@ -2752,6 +2752,17 @@
         }
       }
     },
+    "Aggressive" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "激进"
+          }
+        }
+      }
+    },
     "All changes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9154,13 +9165,13 @@
         }
       }
     },
-    "Heads take parallel pieces, heavy reading and larger self-contained pieces as the job calls for them; the lead keeps small edits and coupled work." : {
+    "Heads take nearly every part the lead can brief; the lead plans, integrates and checks. The least work for the lead model; with weaker head models, quality can drop slightly." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "heads 按需承担可并行的部分、大量阅读和较大的独立部分；小改动和相互耦合的工作由主智能体自己处理。"
+            "value" : "能写清楚的部分几乎都交给 heads，主智能体负责规划、集成和检查。主模型的工作量最少；heads 使用较弱的模型时，质量可能略有下降。"
           }
         }
       }
@@ -10965,6 +10976,127 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "缺少麦克风权限配置。请重新构建或安装 Tivano，再重新启动。"
+          }
+        }
+      }
+    },
+    "ZCode" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode"
+          }
+        }
+      }
+    },
+    "ZCode CLI" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode CLI"
+          }
+        }
+      }
+    },
+    "ZCode is not installed. Install the ZCode app, then refresh Providers." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未安装 ZCode。请安装 ZCode 应用，然后刷新 Providers。"
+          }
+        }
+      }
+    },
+    "ZCode signs in with your GLM Coding Plan key. Add it in Settings → Providers → Z.ai." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 使用你的 GLM Coding Plan key 登录。请在 设置 → Providers → Z.ai 中添加。"
+          }
+        }
+      }
+    },
+    "ZCode updates with the ZCode app. Update it there." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 随 ZCode 应用一起更新，请在应用内更新。"
+          }
+        }
+      }
+    },
+    "ZCode's bundled provider configuration could not be read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 ZCode 内置的 provider 配置。"
+          }
+        }
+      }
+    },
+    "ZCode did not accept the account configuration." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 未接受账户配置。"
+          }
+        }
+      }
+    },
+    "ZCode did not return the requested session." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 未返回请求的会话。"
+          }
+        }
+      }
+    },
+    "ZCode did not accept the message." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 未接受这条消息。"
+          }
+        }
+      }
+    },
+    "ZCode reported an error." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 报告了一个错误。"
+          }
+        }
+      }
+    },
+    "ZCode needs your GLM Coding Plan key. Add it in Settings → Providers → Z.ai." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 需要你的 GLM Coding Plan key。请在 设置 → Providers → Z.ai 中添加。"
           }
         }
       }
@@ -17987,6 +18119,28 @@
         }
       }
     },
+    "The lead does most of the work and sends heads only the parts too big for one context: audits, broad research, several parallel pieces. Steadiest quality; the lead model does the most work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主智能体自己完成大部分工作，只把一个上下文装不下的部分交给 heads：审计、大范围调研、可并行的多个部分。质量最稳，主模型承担的工作最多。"
+          }
+        }
+      }
+    },
+    "The lead hands heads any self-contained part that takes more than a few steps and keeps short or judgement-heavy work. A balance between quality and how much the lead model does." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主智能体把需要几步以上、能单独写清的部分交给 heads，简短或需要判断的工作自己做。在质量和主模型的工作量之间取平衡。"
+          }
+        }
+      }
+    },
     "The lead only hears the reports." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -17994,28 +18148,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "主导模型只接收汇报。"
-          }
-        }
-      }
-    },
-    "The lead prefers to hand heads what it can brief on its own, single edits included, and splits larger work to run in parallel. It keeps judgement, design, integration and small or delicate pieces." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "主智能体会优先把能单独写清任务的部分交给 heads，单项修改也包括在内，较大的工作则拆开并行。判断、设计、集成以及细小或要求精细的部分由它自己负责。"
-          }
-        }
-      }
-    },
-    "The lead prefers to hand heads work that fits a self-contained brief, including single bounded edits, and splits larger work to run in parallel. It keeps judgement, cross-file design, integration, and trivial or delicate pieces." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "主智能体倾向于把能用独立任务说明交代清楚的工作交给 heads，包括范围明确的单项修改，并拆分较大的工作以便并行执行。主智能体保留判断、跨文件设计、整合，以及细小或需要谨慎处理的部分。"
           }
         }
       }

@@ -450,6 +450,11 @@ final class ProviderRegistry {
         }
         guard !provider.isAPIKeyBased else { return nil }
         let custom = settings.binaryPath(for: provider)
+        if provider == .zcode {
+            if custom.isEmpty { return Self.fallbackExecutables(for: provider).first }
+            let entry = URL(fileURLWithPath: custom)
+            return FileManager.default.fileExists(atPath: entry.path) ? entry : nil
+        }
         guard !custom.isEmpty || !provider.executableName.isEmpty else { return nil }
         if provider == .dsh, custom.isEmpty {
             // The npm package lacks the desktop host that marketplace profiles need.
@@ -490,6 +495,7 @@ final class ProviderRegistry {
         case .omp:
             let home = LoginEnvironment.homeDirectory
             return ["\(home)/.bun/bin/omp", "\(home)/.npm-global/bin/omp", "/opt/homebrew/bin/omp", "/usr/local/bin/omp", "\(home)/.local/bin/omp", "\(home)/.volta/bin/omp"].map { URL(fileURLWithPath: $0) }
+        case .zcode: return [ZCodeCLI.defaultEntry()].compactMap { $0 }
         case .minimaxCode:
             let home = LoginEnvironment.homeDirectory
             // Official standalone installer first, then documented npm/user-prefix locations.
@@ -665,6 +671,15 @@ final class ProviderRegistry {
             return
         }
         let environment = environment(for: provider)
+        if provider == .zcode {
+            let auth: ProviderStatus.Auth = settings.apiKey(for: .zai).isEmpty
+                ? .signedOut : .signedIn(AppText.localized("GLM Coding Plan key"))
+            let authMessage = auth == .signedOut
+                ? AppText.localized("ZCode signs in with your GLM Coding Plan key. Add it in Settings → Providers → Z.ai.") : nil
+            setStatus(ProviderStatus(executable: executable, version: ZCodeCLI.version(entry: executable), auth: auth,
+                                     authMessage: authMessage, catalogError: statuses[provider]?.catalogError), for: provider)
+            return
+        }
         // Both probes spawn the CLI. One after the other rather than together: the pair
         // was two processes per provider at the same moment, on top of every other
         // provider being checked alongside.
@@ -685,6 +700,7 @@ final class ProviderRegistry {
 
     /// API-key providers have no binary: presence (and validity) of the key is the install state.
     private func refreshAPIProvider(_ provider: ProviderKind) async {
+        if provider == .zai { await refresh(.zcode) }
         let apiKey = settings.apiKey(for: provider)
         guard !apiKey.isEmpty else {
             setStatus(ProviderStatus(auth: .signedOut), for: provider)
@@ -839,7 +855,7 @@ final class ProviderRegistry {
         // list follows its version. An OpenCode list cached before the probe walked the
         // models for their reasoning levels holds a scale for one model at most, so it is
         // probed again.
-        let seeded = provider == .claude || provider == .codex
+        let seeded = provider == .claude || provider == .codex || provider == .zcode
             || (provider == .copilot && models(for: provider) == [Self.copilotAuto])
             || (provider == .commandcode && models(for: provider) == Self.commandcodeSeed)
             || (provider == .pi && models(for: provider) == Self.piSeed)
@@ -860,6 +876,7 @@ final class ProviderRegistry {
         case .commandcode: try? await CommandCodeAPI.listModels(executable: executable, environment: environment)
         case .pi: try? await PiCLI.listModels(executable: executable, environment: environment)
         case .omp: try? await OmpCLI.listModels(executable: executable, environment: environment)
+        case .zcode: ZCodeCLI.models(entry: executable, region: ZaiRegion.current)
         case .minimaxCode:
             await loadMiniMaxCodeCatalog(executable: executable, environment: environment)
         case .cursor, .grok, .devin, .kimi, .dsh: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
@@ -1298,7 +1315,7 @@ final class ProviderRegistry {
                 return .signedIn(name)
             }
             return .signedIn(nil)
-        case .deepseek, .meta, .zai, .minimaxCode:
+        case .deepseek, .meta, .zai, .minimaxCode, .zcode:
             return .unknown
         }
     }

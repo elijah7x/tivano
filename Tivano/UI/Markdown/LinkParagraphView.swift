@@ -168,6 +168,9 @@ struct LinkParagraphView: NSViewRepresentable {
                 appendProse(string, font: font, color: textColor, base: base, bold: bold, mentions: mentions, targets: targets, into: out)
             }
         }
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = TypeScale.proseLineSpacing(pointSize)
+        out.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: out.length))
         return out
     }
 
@@ -200,7 +203,9 @@ struct LinkParagraphView: NSViewRepresentable {
             ]))
             return
         }
-        let glyphSize = (base.pointSize * 1.25).rounded()
+        // As tall as the font's own line, from its descender up: any taller and the
+        // attachment would lift the line it sits on above its neighbours.
+        let glyphSize = (base.ascender - base.descender).rounded(.down)
         var runStart = string.startIndex
         func flush(from: String.Index, to: String.Index) {
             if from < to {
@@ -215,7 +220,7 @@ struct LinkParagraphView: NSViewRepresentable {
             flush(from: runStart, to: match.range.lowerBound)
             let attachment = NSTextAttachment()
             attachment.image = dragonImage(persona, size: glyphSize)
-            attachment.bounds = NSRect(x: 0, y: base.descender + 1, width: glyphSize, height: glyphSize)
+            attachment.bounds = NSRect(x: 0, y: base.descender, width: glyphSize, height: glyphSize)
             if let target = targets[persona.name] {
                 // Custom attribute, not .link: linkTextAttributes would recolour the name in the accent.
                 // No pointing hand either: a head chip keeps the normal arrow cursor. Its hover

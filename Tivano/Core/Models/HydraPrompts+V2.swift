@@ -3,17 +3,25 @@ import Foundation
 // Hydra 2.0 (Labs) prompt text. v1's text in Hydra.swift is untouched; a job stamped
 // `.v2` reads only these. See docs/hydra2.md.
 extension HydraPrompts {
+    /// What each tilt asks of the lead, in the policy. Field data (both Macs, Oct 2026)
+    /// showed leads delegating about one agentic task in ten whatever the tilt, so each
+    /// rule names the kinds of work that go out, not only the principle.
+    static func v2TiltRule(_ tilt: HydraTilt) -> String {
+        switch tilt {
+        case .restrained:
+            "Delegate the parts that would crowd your context or take long: an audit or sweep across many files, research across many sources, or several independent pieces that can run at once. Do the rest yourself."
+        case .active:
+            "Default to heads for any part you can brief on its own that would take you more than a few tool calls: research, an audit, a mechanical change, a clearly specified feature or fix, or several variants or modules built in parallel. Do a part yourself when it is short, or when you must judge it while reading."
+        case .aggressive:
+            "Heads are your default for nearly all work: brief every part you can describe on its own, investigations included, where heads gather and report while you decide. Do something yourself only when it is a quick answer or a one-step edit, or when it cannot be briefed without doing the reading yourself."
+        }
+    }
+
     /// The standing policy for a v2 lead (system prompt, or per-message preamble). Kept
     /// short on purpose: rules that only matter in some turns (merge status, refusals,
     /// reports) arrive with those turns instead of standing here.
     static func v2Policy(_ launch: HydraLaunch) -> String {
         let team = launch.maxHeads.map { "up to \($0) helper agents" } ?? "helper agents"
-        let tilt = switch launch.tilt {
-        case .restrained:
-            "Delegate parallel pieces, heavy reading (audits, research across many files) and substantial self-contained pieces such as a mechanical change across several files; do small edits yourself."
-        case .active:
-            "Prefer delegating whatever fits a self-contained brief, single bounded edits and reading included, and split larger work into parallel pieces; do a trivial or quality-sensitive piece yourself when that serves the result better."
-        }
         var heads = ""
         if !launch.headsMatchLead, let label = launch.headsLabel ?? launch.workerModel { heads += " Heads run on \(label)." }
         if let note = launch.headsNote?.trimmed, !note.isEmpty { heads += " They are good at: \(note)." }
@@ -21,25 +29,29 @@ extension HydraPrompts {
         let projects = others.isEmpty ? "" : " A head can work in another sidebar project with `\"project\"` (its name or an absolute path): \(others.joined(separator: ", ")); its work lands and merges there."
         let merge = launch.autoMerges ? " Tivano commits and merges the team's work after you finish: never run or delegate commits, branches or merge requests, and claim a merge only when a [Hydra] note confirms it." : ""
         return """
-        [Hydra 2] You lead \(team) ("heads"). Plan first, keep judgement, cross-file design, integration and the final check, and revise the plan as reports arrive. Split by context: keep work that must be judged while reading. \(tilt)\(heads)
+        [Hydra 2] You lead \(team) ("heads"). Before your first tool call on every user message, follow-ups such as "continue" included, decide which parts of the work go to heads. \(v2TiltRule(launch.tilt))\(heads) You keep judgement, cross-file design and integration, and revise the plan as reports arrive. An audit, review or sweep the user asks for is reading work heads can do: they read and report, you judge what they found.
 
         To delegate, end your reply with one block and stop:
 
         ```hydra
-        [{"task": "short title", "prompt": "numbered steps naming files, symbols and exact changes", "files": ["paths/this/head/owns"]}]
+        [{"task": "short title", "prompt": "numbered steps naming files, symbols and exact changes", "files": ["paths/this/head/changes"]}]
         ```
 
-        Every new-head entry needs `"files"`; no path may appear in two entries. Optional: `"name"`, `"project"`. Use only this block to delegate, never your own sub-agent tool, and never put three backticks inside a prompt. Tivano gives every head the user's request and the team's file split; resolve design choices in the brief and ask the head no questions. To send a finished head back to its part, use an entry `{"continue": "<head name>", "prompt": "..."}`. A user message while heads are out belongs to the same job.
+        Every new-head entry needs `"files"`: the paths that head changes, or `[]` for a head that only reads and reports. No path may appear in two entries. Optional: `"name"`, `"project"`. Use only this block to delegate, never your own sub-agent tool, and never put three backticks inside a prompt. Tivano gives every head the user's request and the team's file split; resolve design choices in the brief and ask the head no questions. To send a finished head back to its part, use an entry `{"continue": "<head name>", "prompt": "..."}`. A user message while heads are out belongs to the same job.
 
-        Heads never build, test or verify; you run the narrowest required check yourself after they report. Read the files their reports flag first.\(projects)\(merge)
+        Heads never build, run tests or verify; you run the narrowest required build or test yourself after they report. Read the files their reports flag first.\(projects)\(merge)
         """
     }
 
-    /// The reminder in front of a user's request. Sessions that get the full policy with
-    /// every message need none (see `ThreadRuntime.startTurn`); the others get one line.
+    /// In front of every user message of a v2 job, follow-ups included: the delegation
+    /// decision, short enough to sit on every turn.
     static func v2DelegationRequest(_ launch: HydraLaunch) -> String {
-        let tilt = launch.tilt == .restrained ? "restrained" : "proactive"
-        return "[Hydra 2: \(tilt) delegation; every new-head entry needs \"files\".]\n\n---\n\n"
+        let (name, rule) = switch launch.tilt {
+        case .restrained: ("restrained", "send heads only the parts that would crowd your context: audits, broad research, several parallel pieces")
+        case .active: ("proactive", "send heads any part you can brief that would take more than a few tool calls; keep short work and work you must judge while reading")
+        case .aggressive: ("aggressive", "send heads nearly everything you can brief; keep only quick answers, one-step edits and work you cannot brief")
+        }
+        return "[Hydra 2, \(name)] Before you start, decide which parts go to heads: \(rule). Every new-head entry needs \"files\" ([] for read-only).\n\n---\n\n"
     }
 
     /// In front of a v2 report message (the counterpart of `fallbackReportNote`).
@@ -66,7 +78,7 @@ extension HydraPrompts {
         let truncation = packet.request.count > limit ? "\n\n[The user's request was truncated to the first \(limit) characters.]" : ""
         let attachments = packet.attachments.isEmpty ? "" : "\n\nAttachment paths:\n" + packet.attachments.map { "- \($0)" }.joined(separator: "\n")
         let team = packet.team.map { member in
-            "- \(member.name)\(member.name == persona.name ? " (you)" : ""): \(member.task) (owns: \(member.files.joined(separator: ", ")))"
+            "- \(member.name)\(member.name == persona.name ? " (you)" : ""): \(member.task) (\(member.files.isEmpty ? "reads only" : "owns: " + member.files.joined(separator: ", ")))"
         }.joined(separator: "\n")
         return """
         You are \(persona.name), a Hydra head in Tivano: one of several helpers working in parallel for a lead agent. The lead delegated this task to you.
@@ -87,7 +99,7 @@ extension HydraPrompts {
         Team:
         \(team)
 
-        Only change files you own unless unavoidable, and say so in Deviations.
+        \(delegation.files.isEmpty ? "You change no files: read, investigate and report what you found." : "Only change files you own unless unavoidable, and say so in Deviations.")
 
         ## Your report
         Tivano already knows which files you changed; do not list them. Report the result in one or two sentences, then end with exactly these three lines, each `none` when empty:
@@ -236,7 +248,7 @@ extension HydraPrompts {
 
     /// Why a v2 block was refused: an entry missing `files`, or naming no task.
     static func v2MissingFilesRefusal(tasks: [String]) -> String {
-        "[Hydra] No heads went out: these entries have no \"files\" array: \(list(tasks)). Resend the whole block with a \"files\" array on every new-head entry, listing the paths that head owns."
+        "[Hydra] No heads went out: these entries have no \"files\" array: \(list(tasks)). Resend the whole block with a \"files\" array on every new-head entry, listing the paths that head changes, or [] for a head that only reads and reports."
     }
 
     /// Why a `"continue"` entry did not go out.

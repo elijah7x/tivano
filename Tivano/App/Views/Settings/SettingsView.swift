@@ -77,7 +77,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
-        case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
+        case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "zcode", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
         case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting"]
         case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
         case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "实验室", "实验", "语音", "麦克风", "通话"]
@@ -1314,7 +1314,9 @@ private struct ProviderSettingsSection: View {
                         if !status.isInstalled {
                             ChromeRowDivider()
                             let missing = String(format: Chrome.localized("%@ was not found on your PATH."), provider.displayName)
-                            let detail = LoginEnvironment.diagnostic.map { missing + " " + $0 } ?? missing
+                            let detail = provider == .zcode
+                                ? Chrome.localized("ZCode is not installed. Install the ZCode app, then refresh Providers.")
+                                : LoginEnvironment.diagnostic.map { missing + " " + $0 } ?? missing
                             ChromeRow(title: "Install", detail: detail) {
                                 Link(destination: provider.installURL) {
                                     Text(verbatim: String(format: Chrome.localized("Get %@"), provider.displayName))

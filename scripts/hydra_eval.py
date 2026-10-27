@@ -3,6 +3,9 @@
 
 baseline writes jobs.csv, heads.csv, summary.md and samples.md. compare reads a baseline
 and V2 job ledgers, then writes v2_jobs.csv, v2_heads.csv and comparison.md.
+V2 jobs include agentic/conversation classification and lead tool/edit/command/web
+counts from indexed lead turn revisions. Comparison reports delegation rates by
+tilt against agentic targets and up to 20 large agentic jobs without heads.
 replay-candidates reads baseline jobs.csv and writes replay_candidates.md without running
 replays or Git commands.
 
@@ -393,6 +396,7 @@ def baseline(args):
 
 V2_JOB_FIELDS = [
     'job_key', 'edition', 'lead_id', 'job_id', 'turn_id', 'task_type', 'request_excerpt',
+    'job_class', 'lead_tool_calls', 'lead_edit_calls', 'lead_command_calls', 'lead_web_calls',
     'lead_provider', 'lead_model', 'lead_effort', 'heads_provider', 'heads_model',
     'heads_effort', 'heads_note', 'pair_id', 'pair_same_model',
     'base_commit', 'base_dirty', 'base_trees', 'ending', 'is_open',
@@ -566,6 +570,34 @@ def one_line(value):
     return re.sub(r'\s+', ' ', str(value or '')).strip()
 
 
+def lead_job_activity(items, turns, records, complete, reader):
+    ordered = sorted(turns, key=lambda turn: (number(turn.get('index')) or 0,
+                                             timestamp(turn.get('startedAt')) or 0))
+    positions = {turn['id']: index for index, turn in enumerate(ordered) if turn.get('id')}
+    starts = {record.get('turnID') for record in records if isinstance(record, dict)}
+    if not complete or not starts.issubset(positions):
+        reader.issues['incomplete_lead_job_windows'] += 1
+        return {}
+    boundaries = sorted(positions[turn_id] for turn_id in starts)
+    calls = collections.defaultdict(list)
+    for item in items:
+        kind, value = payload(item)
+        if kind == 'tool' and item.get('turnID') in positions:
+            calls[positions[item['turnID']]].append(value)
+    activity = {}
+    for index, start in enumerate(boundaries):
+        end = boundaries[index + 1] if index + 1 < len(boundaries) else len(ordered)
+        tools = [tool for position in range(start, end) for tool in calls[position]]
+        edits = sum(bool(tool.get('edits')) or tool.get('kind') == 'edit' for tool in tools)
+        commands = sum(tool.get('kind') == 'command' for tool in tools)
+        activity[ordered[start]['id']] = dict(
+            job_class='agentic' if edits or commands else 'conversation',
+            lead_tool_calls=len(tools), lead_edit_calls=edits,
+            lead_command_calls=commands,
+            lead_web_calls=sum(tool.get('kind') == 'web' for tool in tools))
+    return activity
+
+
 def extract_v2(libraries, now):
     reader = Reader()
     jobs, heads, inventory = [], [], []
@@ -587,6 +619,10 @@ def extract_v2(libraries, now):
             records = lead.get('hydraJobs') or []
             if not isinstance(records, list):
                 continue
+            if not any(isinstance(record, dict) and record.get('mode') == 'v2' for record in records):
+                continue
+            items, turns, _, complete = reader.transcript(library.parent, lead_id)
+            job_activity = lead_job_activity(items, turns, records, complete, reader)
             for job_index, record in enumerate(records):
                 if not isinstance(record, dict) or record.get('mode') != 'v2':
                     continue
@@ -711,6 +747,9 @@ def extract_v2(libraries, now):
                     review_skipped_reason=record.get('reviewSkipped'),
                     merge_outcome=merge, merge_success=merge_success, same_model=same_model,
                     tilt=record.get('tilt') or '')
+                job.update(job_activity.get(record.get('turnID'), dict(
+                    job_class=None, lead_tool_calls=None, lead_edit_calls=None,
+                    lead_command_calls=None, lead_web_calls=None)))
                 jobs.append(job)
         inventory.append(f'{edition}: {len(threads)} threads, {len(jobs) - before_jobs} v2 jobs, '
                          f'{len(heads)} cumulative v2 heads ({library})')
@@ -818,12 +857,43 @@ def comparison_markdown(now, v1_jobs, v1_heads, v2_jobs, v2_heads, inventory, re
             values = dict(metric_values(subset, v2_heads, True))
             lines.append('| ' + label + ' | ' + ' | '.join(values[name] for name in labels) + ' |')
     lines += ['', 'Actual same-model requires every head provider/model to match the lead; any missing model makes it unknown. Shared pair settings may differ from profiles. Effort is exported separately.', '',
+              '## Delegation rate by tilt', '',
+              'Jobs where the user explicitly asked for sub-agents count like any other.', '',
+              'Rates use jobs with known head counts; job totals include unknown head counts. Unknown tilt includes missing and unrecognised values. Jobs with unavailable lead windows are excluded from both classes.', '',
+              '| Tilt | Agentic jobs | Agentic jobs that sent heads | Conversation jobs | Conversation jobs that sent heads | Owner target for agentic |',
+              '|---|---:|---:|---:|---:|---:|']
+    for label, value, target in [('Restrained', 'restrained', '30%'), ('Proactive', 'active', '55%'),
+                                 ('Aggressive', 'aggressive', '75%'), ('Unknown', None, '')]:
+        subset = [j for j in v2_jobs if (j.get('tilt') == value if value is not None
+                                       else j.get('tilt') not in ('restrained', 'active', 'aggressive'))]
+        agentic = [j for j in subset if j.get('job_class') == 'agentic']
+        conversation = [j for j in subset if j.get('job_class') == 'conversation']
+        agentic_known = [j for j in agentic if j.get('heads') is not None]
+        conversation_known = [j for j in conversation if j.get('heads') is not None]
+        agentic_rate = rate(sum(j['heads'] > 0 for j in agentic_known), len(agentic_known))
+        conversation_rate = rate(sum(j['heads'] > 0 for j in conversation_known), len(conversation_known))
+        lines.append(f'| {label} | {len(agentic)} | {agentic_rate} | {len(conversation)} | {conversation_rate} | {target} |')
+    lines += ['', f"Unclassified jobs with unavailable lead windows: {sum(j.get('job_class') is None for j in v2_jobs)}.", '',
+              '## Large agentic jobs without heads', '',
+              'Up to 20 jobs, ranked by lead tool calls for qualitative review of missed delegation.', '']
+    large_jobs = sorted([j for j in no_heads if j.get('job_class') == 'agentic'],
+                        key=lambda j: (-j['lead_tool_calls'], j['job_key']))[:20]
+    for job in large_jobs:
+        excerpt = one_line(redact(job.get('request_excerpt')))[:60]
+        tilt = {'restrained': 'Restrained', 'active': 'Proactive', 'aggressive': 'Aggressive'}.get(
+            job.get('tilt'), 'Unknown')
+        lines.append(f"- {one_line(redact(job['job_key']))} ({tilt}): lead tools={job['lead_tool_calls']}, "
+                     f"edits={job['lead_edit_calls']}, commands={job['lead_command_calls']}, "
+                     f"web={job['lead_web_calls']}. {excerpt}")
+    if not large_jobs:
+        lines.append('- None observed.')
+    lines += ['',
               '## V2 by delegation tilt (delegated work)', '',
-              'Restrained allows parallel work, heavy reading and substantial self-contained single pieces. Proactive prefers self-contained pieces including single bounded edits. Missing tilt is unknown; unrecognised values remain separate.', '',
+              'Restrained delegates only parts that would crowd one context (audits, broad research, parallel pieces). Proactive delegates any briefable part taking more than a few tool calls. Aggressive delegates nearly everything briefable. Missing tilt is unknown; unrecognised values remain separate.', '',
               '| Tilt | ' + ' | '.join(labels) + ' |', '|---|' + '|'.join(['---:'] * len(labels)) + '|']
-    for label, value in [('Restrained', 'restrained'), ('Proactive', 'active'), ('Unknown', ''), ('Unrecognised', None)]:
+    for label, value in [('Restrained', 'restrained'), ('Proactive', 'active'), ('Aggressive', 'aggressive'), ('Unknown', ''), ('Unrecognised', None)]:
         subset = [j for j in delegated_v2 if ((j.get('tilt') or '') == value if value is not None
-                                            else j.get('tilt') not in (None, '', 'restrained', 'active'))]
+                                            else j.get('tilt') not in (None, '', 'restrained', 'active', 'aggressive'))]
         values = dict(metric_values(subset, v2_heads, True))
         lines.append('| ' + label + ' | ' + ' | '.join(values[name] for name in labels) + ' |')
 
@@ -850,7 +920,9 @@ def comparison_markdown(now, v1_jobs, v1_heads, v2_jobs, v2_heads, inventory, re
               '- Head execution_seconds excludes queue/landing time and is not V1 wall_seconds. Stage timestamps and matched edit windows are unavailable. Build/edit counts are observed tool-call proxies, not quality scores.',
               '- Valid 40-hex base commit/tree IDs are preserved; free text uses heuristic redaction, which cannot detect every secret. A dirty base needs its tree/patch and environment restored before replay; a commit alone is insufficient.',
               '- Dates accept ISO strings or Swift seconds since 2001-01-01. Negative/incomplete durations are unknown. JSON reads are sequential, not an atomic snapshot.',
-              '- compare reads library job ledgers and baseline CSV only, not transcripts, settings, credentials, provider histories or Git state. It writes only fresh external reports; no replay or app operation runs.']
+              '- Agentic means at least one lead tool call with kind=edit or non-empty edits, or kind=command; otherwise conversation. Web counts use kind=web. All recorded call statuses count. These are observed activity proxies, not intent or task-quality labels.',
+              '- Lead windows use turn order from each job turnID up to (excluding) the next job turn in the same lead thread, or the end of the transcript. Only indexed revisions and inline legacy data are read. Missing transcript revisions or job boundaries leave that lead thread’s classifications/counts unknown rather than zero; read issues report these omissions.',
+              '- compare reads library job ledgers, lead transcripts and baseline CSV, not settings, credentials, provider histories or Git state. It writes only fresh external reports; no replay or app operation runs.']
     return '\n'.join(lines) + '\n'
 
 

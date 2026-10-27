@@ -1239,7 +1239,7 @@ enum EffortBrand: Hashable {
         case .deepseek, .dsh: .deepseek
         case .meta: .meta
         case .antigravity: .antigravity
-        case .codex, .cursor, .grok, .opencode, .devin, .copilot, .commandcode, .pi, .omp, .zai, .kimi, .minimaxCode: .silver
+        case .codex, .cursor, .grok, .opencode, .devin, .copilot, .commandcode, .pi, .omp, .zai, .zcode, .kimi, .minimaxCode: .silver
         case nil: .purple
         }
     }

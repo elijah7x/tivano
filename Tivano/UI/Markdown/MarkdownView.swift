@@ -121,7 +121,7 @@ struct MarkdownView: View, Equatable {
         let stable = parse.stable
         let last = blocks.count - 1
         if !isStreaming && !sawStreaming && proseRuns {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: TypeScale.proseParagraphSpacing) {
                 ForEach(Array(Self.segments(blocks).enumerated()), id: \.offset) { _, segment in
                     switch segment {
                     case .prose(let run):
@@ -136,7 +136,7 @@ struct MarkdownView: View, Equatable {
             .environment(\.markdownVeiled, isStreaming)
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: TypeScale.proseParagraphSpacing) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                     MarkdownBlockView(block: block, settled: index < stable)
                         .equatable()
@@ -373,6 +373,7 @@ struct MarkdownBlockView: View, Equatable {
                     InlineText(text, hasLinks: true)
                 } else if listDepth == 0, let segments = mentionSegments(in: text) {
                     VeiledText(segments: segments)
+                        .lineSpacing(TypeScale.proseLineSpacing(pointSize == 0 ? TypeScale.shared.content(13) : pointSize))
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -443,8 +444,13 @@ struct MarkdownBlockView: View, Equatable {
         }
     }
 
-    /// Lifts the 16pt glyph off the baseline onto the surrounding text's x-height.
-    private static func mentionGlyphOffset(size: CGFloat) -> CGFloat { -(size * 0.2) }
+    /// The glyph's size and drop: the font's own line, from its descender up, the same
+    /// box the AppKit paragraph gives it (`LinkParagraphView.appendProse`), so the line
+    /// it sits on is no taller than the others and nothing moves when streaming ends.
+    private static func mentionGlyphMetrics(pointSize: CGFloat) -> (size: CGFloat, offset: CGFloat) {
+        let font = NSFont.systemFont(ofSize: pointSize)
+        return ((font.ascender - font.descender).rounded(.down), font.descender)
+    }
 
     /// The head's dragon as a template image small enough to sit in a Text run.
     /// Redrawn once per (asset, size), then kept; tinted like the name.
@@ -507,10 +513,10 @@ struct MarkdownBlockView: View, Equatable {
     }
 
     private func mentionText(_ persona: HydraPersona) -> Text {
-        let size: CGFloat = 16
-        let glyph = Text(Self.mentionGlyph(persona, size: size))
+        let metrics = Self.mentionGlyphMetrics(pointSize: pointSize == 0 ? TypeScale.shared.content(13) : pointSize)
+        let glyph = Text(Self.mentionGlyph(persona, size: metrics.size))
             .foregroundColor(persona.color)
-            .baselineOffset(Self.mentionGlyphOffset(size: size))
+            .baselineOffset(metrics.offset)
         // A link in a Text keeps the colour the attribute sets and opens through the environment.
         if let target = hydraMentionTargets[persona.name] {
             var name = AttributedString(persona.name)
@@ -1236,6 +1242,7 @@ struct InlineText: View {
             // code come through as inline presentation intents. Streamed characters fade
             // in through the veil.
             VeiledText(Self.scaledInlineCode(RichLink.prettyAttributed(source, streaming: streaming), pointSize: TypeScale.shared.code(max(9, scaled - CGFloat(TypeScale.shared.content - TypeScale.stockContent) - 1))))
+                .lineSpacing(TypeScale.proseLineSpacing(scaled))
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: hugsContent ? nil : .infinity, alignment: .leading)
         }

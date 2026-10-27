@@ -190,12 +190,10 @@ struct HydraSettingsPage: View {
                     ChromeCard {
                         ChromeRow(
                             title: "How much heads take on",
-                            detail: settings.hydraTilt == .active
-                                ? "The lead prefers to hand heads work that fits a self-contained brief, including single bounded edits, and splits larger work to run in parallel. It keeps judgement, cross-file design, integration, and trivial or delicate pieces."
-                                : "Heads take parallel pieces, heavy reading and larger self-contained pieces as the job calls for them; the lead keeps small edits and coupled work."
+                            detail: Self.tiltDetail(settings.hydraTilt)
                         ) {
                             GlassPickerButton(
-                                options: [(HydraTilt.restrained, "Restrained"), (HydraTilt.active, "Proactive")],
+                                options: [(HydraTilt.restrained, "Restrained"), (HydraTilt.active, "Proactive"), (HydraTilt.aggressive, "Aggressive")],
                                 selection: $settings.hydraTilt
                             )
                             .accessibilityLabel(Text("How much heads take on"))
@@ -288,6 +286,18 @@ struct HydraSettingsPage: View {
 
     /// A toggle row. A reason it is blocked stands in for its detail, and the row is dimmed
     /// and inert while there is one.
+    /// What a tilt does and what it trades, so the choice can be weighed.
+    private static func tiltDetail(_ tilt: HydraTilt) -> String {
+        switch tilt {
+        case .restrained:
+            "The lead does most of the work and sends heads only the parts too big for one context: audits, broad research, several parallel pieces. Steadiest quality; the lead model does the most work."
+        case .active:
+            "The lead hands heads any self-contained part that takes more than a few steps and keeps short or judgement-heavy work. A balance between quality and how much the lead model does."
+        case .aggressive:
+            "Heads take nearly every part the lead can brief; the lead plans, integrates and checks. The least work for the lead model; with weaker head models, quality can drop slightly."
+        }
+    }
+
     private func toggleRow(_ title: String, detail: String, isOn: Binding<Bool>, blockedBy reason: String? = nil) -> some View {
         ChromeRow(title: title, detail: reason ?? detail) {
             SettingsSwitch(isOn: isOn)

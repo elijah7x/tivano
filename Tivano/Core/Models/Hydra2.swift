@@ -34,6 +34,9 @@ enum HydraJobEnding: String, Codable, Sendable {
 enum HydraTilt: String, Codable, CaseIterable, Hashable, Sendable {
     case restrained
     case active
+    /// Heads take nearly every part the lead can brief; the lead plans, integrates and
+    /// checks.
+    case aggressive
 }
 
 /// The three lines every v2 head ends its report with. Nil fields mean the head wrote

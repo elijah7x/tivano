@@ -50,6 +50,15 @@ final class TypeScale {
     func ui(_ stock: CGFloat) -> CGFloat { stock + CGFloat(ui - Self.stockUI) }
     func content(_ stock: CGFloat) -> CGFloat { stock + CGFloat(content - Self.stockContent) }
     func code(_ stock: CGFloat) -> CGFloat { stock + CGFloat(code - Self.stockCode) }
+
+    /// The extra room between the lines of chat prose: three tenths of its size, to the
+    /// half point. The SwiftUI and AppKit paragraphs both add it between lines only, so a
+    /// paragraph reads the same whichever of them draws it.
+    nonisolated static func proseLineSpacing(_ pointSize: CGFloat) -> CGFloat { (pointSize * 0.6).rounded() / 2 }
+
+    /// The gap between the blocks of chat prose (paragraphs, headings, lists, code), in
+    /// both the SwiftUI blocks and the AppKit prose runs.
+    nonisolated static let proseParagraphSpacing: CGFloat = 16
 }
 
 extension Font {

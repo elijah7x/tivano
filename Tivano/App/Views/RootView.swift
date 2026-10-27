@@ -568,7 +568,8 @@ private struct ProviderStatusRow: View {
                         .buttonStyle(.glass)
                 }
             } else if status.auth == .signedOut {
-                if provider.isAPIKeyBased {
+                // ZCode signs in with the Z.ai key typed in Settings; it has no login command.
+                if provider.isAPIKeyBased || provider == .zcode {
                     OpenProvidersSettingsButton()
                 } else {
                     Button("Login") { Workspace.openTerminal(running: provider.loginCommand) }

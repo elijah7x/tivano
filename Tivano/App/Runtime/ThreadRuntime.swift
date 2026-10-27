@@ -1884,8 +1884,9 @@ final class ThreadRuntime {
                 if hydraHeads == nil {
                     if hydraJobMode != .v2 {
                         prompt = HydraPrompts.delegationRequest(launch) + prompt
-                    } else if Self.keepsHydraPolicyInSystemPrompt(thread.provider) {
-                        // The other v2 sessions just had the whole policy put in front.
+                    } else {
+                        // Every v2 request, follow-ups included, opens on the decision:
+                        // the standing policy alone was too far from the work to act on.
                         prompt = HydraPrompts.v2DelegationRequest(launch) + prompt
                     }
                 }
@@ -2194,6 +2195,7 @@ final class ThreadRuntime {
                 fastMode: thread.fastMode,
                 runtimeMode: thread.runtimeMode,
                 interactionMode: thread.interactionMode,
+                apiKey: thread.provider == .zcode ? app.settings.apiKey(for: .zai) : nil,
                 hydra: hydra,
                 isHydraHead: (thread.provider == .codex || thread.provider == .dsh) && thread.hydra?.kind == .tivano,
                 managesCodexHeadHistory: thread.provider == .codex && thread.hydra?.tracksProviderHistory == true
@@ -2214,6 +2216,7 @@ final class ThreadRuntime {
             case .commandcode: CommandCodeSession(configuration: configuration)
             case .pi: PiSession(configuration: configuration)
             case .omp: OmpSession(configuration: configuration)
+            case .zcode: ZCodeSession(configuration: configuration)
             case .cursor, .opencode, .grok, .devin, .kimi, .dsh, .minimaxCode: ACPSession(configuration: configuration)
             case .deepseek: DeepSeekSession(configuration: configuration)
             case .meta: MetaSession(configuration: configuration)
@@ -4008,7 +4011,7 @@ final class ThreadRuntime {
             scheduleSave()
             return refuseBlock(refusal, dropped: "Its delegation block was refused, and it had been told so already.")
         }
-        let missing = planned.filter { $0.continueHead == nil && $0.files.isEmpty }
+        let missing = planned.filter { $0.continueHead == nil && !$0.filesGiven }
         guard missing.isEmpty else {
             return refuse(HydraPrompts.v2MissingFilesRefusal(tasks: missing.map(\.task)))
         }

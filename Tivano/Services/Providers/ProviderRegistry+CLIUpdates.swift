@@ -127,7 +127,7 @@ extension ProviderRegistry {
     func updateCLI(_ provider: ProviderKind, recovery: Bool = false) async -> Bool {
         // MiniMax Code needs its official installer/npm flags for native optional dependencies.
         // Until that update transaction is integrated, offer read-only version checks only.
-        guard !recovery, !CaptureRun.isEnabled, !provider.isAPIKeyBased, provider != .minimaxCode else { return false }
+        guard !recovery, !CaptureRun.isEnabled, !provider.isAPIKeyBased, provider != .minimaxCode, provider != .zcode else { return false }
         guard let executable = executable(for: provider) else { return false }
         guard settings.isEnabled(provider), monitorsCLIUpdates(provider), settings.binaryPath(for: provider).isEmpty else { return false }
         let lock = cliInstallLock(for: executable)
@@ -221,7 +221,11 @@ extension ProviderRegistry {
         )
         if !force, cliCheckIsFresh(provider, key: key, freshness: freshness) { return }
         beginCLIChecking(provider)
-        let raw = await cliCommandRunner.readVersion(executable, environment)
+        let raw = if provider == .zcode {
+            ZCodeCLI.version(entry: executable)
+        } else {
+            await cliCommandRunner.readVersion(executable, environment)
+        }
         guard cliCheckStillCurrent(provider, generation: generation, epoch: epoch) else { return }
         if Task.isCancelled {
             abandonCLICheck(provider, generation: generation, snapshot: snapshot)
