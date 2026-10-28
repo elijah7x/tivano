@@ -38,9 +38,7 @@ struct QuestionSheet: View {
     /// no height collapses, so the popover's measuring pass needs it given outright.
     private let pageHeight: CGFloat
 
-    @State private var selections: [String: [String]]
-    @State private var written: [String: String] = [:]
-    @State private var page = 0
+    @Bindable private var draft: QuestionDraft
     @State private var pendingAdvance: Task<Void, Never>?
     /// The popover's own close (see `BadgePopoverCoordinator`): the sheet closes it before
     /// it answers, so the popover leaves on its own animation from the badge, rather than
@@ -50,12 +48,7 @@ struct QuestionSheet: View {
     init(request: QuestionRequest, runtime: ThreadRuntime) {
         self.request = request
         self.runtime = runtime
-        var initial: [String: [String]] = [:]
-        for question in request.questions {
-            let labels = Self.recommended(question)
-            if !labels.isEmpty { initial[question.id] = labels }
-        }
-        _selections = State(initialValue: initial)
+        self.draft = runtime.questionDraft(for: request)
         var largest: CGFloat = 0
         for question in request.questions {
             let probe = QuestionPage(question: question, selections: .constant([:]), written: .constant([:]), onSubmit: {}, onPick: {})
@@ -66,17 +59,9 @@ struct QuestionSheet: View {
         pageHeight = min(max(largest, 120), Self.maxHeight)
     }
 
-    /// Labels mentioning recommended, in order; a single-choice question offers only the first.
-    private static func recommended(_ question: QuestionRequest.Question) -> [String] {
-        let matches = question.choices.map(\.label).filter { $0.localizedCaseInsensitiveContains("recommended") }
-        if matches.isEmpty { return [] }
-        if question.allowsMultiple { return matches }
-        return [matches[0]]
-    }
-
     var body: some View {
         let count = request.questions.count
-        let answers = QuestionAnswers.collect(request, selections: selections, written: written)
+        let answers = QuestionAnswers.collect(request, selections: draft.selections, written: draft.written)
         let unanswered = QuestionAnswers.unansweredCount(request, answers: answers)
         let isComplete = unanswered == 0
         VStack(alignment: .leading, spacing: 0) {
@@ -85,20 +70,21 @@ struct QuestionSheet: View {
                     ForEach(Array(request.questions.enumerated()), id: \.element.id) { index, question in
                         let answered = !(answers[question.id] ?? []).isEmpty
                         Button {
-                            withAnimation(Chrome.panelSlide) { page = index }
+                            guard draft.isActive else { return }
+                            withAnimation(Chrome.panelSlide) { draft.page = index }
                         } label: {
-                            Capsule().fill(index == page ? Chrome.accent : answered ? Chrome.accent.opacity(0.35) : Chrome.overlay(0.18))
-                                .frame(width: index == page ? 18 : 6, height: 6)
+                            Capsule().fill(index == draft.page ? Chrome.accent : answered ? Chrome.accent.opacity(0.35) : Chrome.overlay(0.18))
+                                .frame(width: index == draft.page ? 18 : 6, height: 6)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("Question %lld of %lld"), index + 1, count)))
                     }
                     Spacer()
-                    Text(verbatim: String(format: Chrome.localized("%d of %d"), page + 1, count))
+                    Text(verbatim: String(format: Chrome.localized("%d of %d"), draft.page + 1, count))
                         .font(.ui(.subheadline)).monospacedDigit()
                         .foregroundStyle(Chrome.secondaryText)
                 }
-                .animation(Chrome.panelSlide, value: page)
+                .animation(Chrome.panelSlide, value: draft.page)
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 6)
@@ -107,28 +93,29 @@ struct QuestionSheet: View {
             HStack(spacing: 0) {
                 ForEach(Array(request.questions.enumerated()), id: \.element.id) { index, question in
                     ScrollView(.vertical) {
-                        QuestionPage(question: question, selections: $selections, written: $written, onSubmit: { advance() }, onPick: { if !question.allowsMultiple, index < count - 1 { advance(after: 0.18) } })
+                        QuestionPage(question: question, selections: selections, written: written, onSubmit: { advance() }, onPick: { if !question.allowsMultiple, index < count - 1 { advance(after: 0.18) } })
                     }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(width: Self.width, height: pageHeight)
                 }
             }
-            .offset(x: -CGFloat(page) * Self.width)
+            .offset(x: -CGFloat(draft.page) * Self.width)
             .frame(width: Self.width, height: pageHeight, alignment: .leading)
             .clipped()
-            .animation(Chrome.panelSlide, value: page)
+            .animation(Chrome.panelSlide, value: draft.page)
 
             Divider()
 
             HStack(spacing: 8) {
                 if count > 1 {
                     Button {
-                        withAnimation(Chrome.panelSlide) { page = max(0, page - 1) }
+                        guard draft.isActive else { return }
+                        withAnimation(Chrome.panelSlide) { draft.page = max(0, draft.page - 1) }
                     } label: {
                         Image(systemName: "chevron.left")
                     }
                     .buttonStyle(.bordered)
-                    .disabled(page == 0)
+                    .disabled(draft.page == 0)
                     .help("Previous question")
                     .accessibilityLabel(Text(verbatim: Chrome.localized("Previous question")))
                 }
@@ -145,13 +132,13 @@ struct QuestionSheet: View {
                 // Return moves on while an answer is still missing; once every question has
                 // one (the recommended picks come preselected) Return sends from any page,
                 // and Next stays beside it for reading the rest first.
-                if page < count - 1, !isComplete {
+                if draft.page < count - 1, !isComplete {
                     Button("Next") { advance() }
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                         .help("Goes to the next question")
                 } else {
-                    if page < count - 1 {
+                    if draft.page < count - 1 {
                         Button("Next") { advance() }
                             .buttonStyle(.bordered)
                             .help("Goes to the next question")
@@ -170,33 +157,49 @@ struct QuestionSheet: View {
             .padding(.vertical, 10)
         }
         .frame(width: Self.width)
+        .disabled(!draft.isActive)
+        .onDisappear { pendingAdvance?.cancel(); pendingAdvance = nil }
+        .onChange(of: draft.isActive) { _, active in
+            if !active { pendingAdvance?.cancel(); closePopover?() }
+        }
+    }
+
+    private var selections: Binding<[String: [String]]> {
+        Binding(get: { draft.selections }, set: { if draft.isActive { draft.selections = $0 } })
+    }
+
+    private var written: Binding<[String: String]> {
+        Binding(get: { draft.written }, set: { if draft.isActive { draft.written = $0 } })
     }
 
     private func advance(after delay: Double = 0) {
         pendingAdvance?.cancel()
         pendingAdvance = nil
+        guard draft.isActive else { return }
         let count = request.questions.count
-        guard page < count - 1 else {
-            let answers = QuestionAnswers.collect(request, selections: selections, written: written)
+        guard draft.page < count - 1 else {
+            let answers = QuestionAnswers.collect(request, selections: draft.selections, written: draft.written)
             if QuestionAnswers.unansweredCount(request, answers: answers) == 0 { send(answers) }
             return
         }
         if delay > 0 {
+            let fromPage = draft.page
             pendingAdvance = Task { @MainActor in
                 try? await Task.sleep(for: .seconds(delay))
-                guard !Task.isCancelled, page < request.questions.count - 1 else { return }
-                withAnimation(Chrome.panelSlide) { page += 1 }
+                guard !Task.isCancelled, draft.isActive, draft.page == fromPage, draft.page < request.questions.count - 1 else { return }
+                withAnimation(Chrome.panelSlide) { draft.page += 1 }
             }
         } else {
-            withAnimation(Chrome.panelSlide) { page += 1 }
+            withAnimation(Chrome.panelSlide) { draft.page += 1 }
         }
     }
 
     /// The popover goes first, on its own animation; the answer follows, and the badge
     /// leaves with it.
     private func send(_ answers: [String: [String]]) {
+        pendingAdvance?.cancel()
         closePopover?()
-        runtime.answer(request, answers: answers)
+        runtime.answer(request, answers: answers, draft: draft)
     }
 }
 

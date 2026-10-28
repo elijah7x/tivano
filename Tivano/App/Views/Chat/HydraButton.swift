@@ -82,7 +82,7 @@ struct HydraButton: View {
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
         .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
-            HydraIdlePopover(thread: thread, isPreparing: isDelegating && heads.isEmpty && runtime.hydraJobMode == .v2)
+            HydraIdlePopover(thread: thread, isPreparing: isDelegating && heads.isEmpty)
         }
         .popover(isPresented: $isHydraSwitchShown, arrowEdge: .bottom) {
             HydraSwitchPopover(thread: thread, isOn: isOn, isHydraSwitchShown: $isHydraSwitchShown)
@@ -328,9 +328,7 @@ private struct HydraIdlePopover: View {
             PopoverDivider()
             PopoverNote(isPreparing
                 ? "Preparing a delegation. No heads go out until the whole block is ready."
-                : model.settings.isHydra2Enabled
-                    ? "No heads are out yet. Send a request and the lead will decide what to do itself and what to delegate. Each head gets a panel of its own."
-                    : "No heads are out yet. Ask for something big enough to split up and this chat sends them out, each with a panel of its own.")
+                : "No heads are out yet. Send a request and the lead will decide what to do itself and what to delegate. Each head gets a panel of its own.")
             PopoverDivider()
             PopoverNote("Right-click the mark to switch Hydra off for this chat.")
         }

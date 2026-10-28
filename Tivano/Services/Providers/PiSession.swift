@@ -33,6 +33,7 @@ final class PiSession: ProviderSession {
     private var effort: String?
 
     private var turnActive = false
+    private var preparationID: UUID?
     private var interruptRequested = false
     /// Namespaces ids per launch, so a resumed thread never streams into an old entry.
     private let launchID: String
@@ -159,7 +160,14 @@ final class PiSession: ProviderSession {
 
     func send(_ input: TurnInput) async throws {
         guard isRunning, let process else { throw ProviderError.notRunning }
-        guard !turnActive else { throw ProviderError.failed("Pi is still on the last turn.") }
+        guard !turnActive, preparationID == nil else { throw ProviderError.failed("Pi is still on the last turn.") }
+        let preparation = UUID()
+        preparationID = preparation
+        interruptRequested = false
+        defer {
+            if preparationID == preparation { preparationID = nil }
+        }
+        guard continuePreparation(preparation) else { return }
         runtimeMode = input.runtimeMode
         interactionMode = input.interactionMode
         try writeGate(finalReport: input.isFinalReport)
@@ -169,6 +177,7 @@ final class PiSession: ProviderSession {
             // The context window was read with the model Pi started on; the usage panel's
             // fraction wants the one it runs on now.
             let state = await request(["type": .string("get_state")])
+            guard continuePreparation(preparation) else { return }
             if let window = (state["data"] ?? state)["model"]?["contextWindow"]?.int {
                 contextWindow = window
             }
@@ -177,18 +186,11 @@ final class PiSession: ProviderSession {
             process.send(["type": .string("set_thinking_level"), "level": .string(wanted)])
             effort = wanted
         }
-        turnActive = true
-        interruptRequested = false
-        turnError = nil
-        turnCounter += 1
-        lastReplyText = ""
-        toolNames.removeAll()
-        toolInputs.removeAll()
-        editSnapshots.removeAll()
         var prompt: JSONValue = ["type": .string("prompt"), "message": .string(input.text)]
-        let images: [JSONValue] = input.images.compactMap { image in
-            guard image.isImage, let data = try? Data(contentsOf: image.url) else { return nil }
-            return ["type": "image", "data": .string(data.base64EncodedString()), "mimeType": .string(image.mimeType)]
+        let encodedImages = await Attachment.base64Images(input.images)
+        guard continuePreparation(preparation) else { return }
+        let images: [JSONValue] = encodedImages.map { image, base64 in
+            ["type": "image", "data": .string(base64), "mimeType": .string(image.mimeType)]
         }
         if !images.isEmpty {
             if case .object(var fields) = prompt {
@@ -196,12 +198,45 @@ final class PiSession: ProviderSession {
                 prompt = .object(fields)
             }
         }
-        process.send(prompt)
+        let payload = await Self.encodePrompt(prompt)
+        guard continuePreparation(preparation) else { return }
+        guard payload.count <= 32 * 1024 * 1024 else {
+            throw ProviderError.failed(AppText.localized("The agent input queue exceeded 32 MB or the connection closed."))
+        }
+        preparationID = nil
+        turnActive = true
+        turnError = nil
+        turnCounter += 1
+        lastReplyText = ""
+        toolNames.removeAll()
+        toolInputs.removeAll()
+        editSnapshots.removeAll()
+        process.write(payload)
         onEvent?(.turnStarted(providerTurnID: nil))
+    }
+
+    @concurrent
+    private static func encodePrompt(_ prompt: JSONValue) async -> Data {
+        prompt.data() + Data([0x0A])
+    }
+
+    private func continuePreparation(_ id: UUID) -> Bool {
+        guard preparationID == id, !stopped else { return false }
+        if Task.isCancelled || interruptRequested {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return false
+        }
+        return isRunning
     }
 
     func interrupt() async {
         interruptRequested = true
+        if preparationID != nil {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return
+        }
         process?.send(["type": .string("abort")])
     }
 
@@ -212,6 +247,8 @@ final class PiSession: ProviderSession {
 
     func stop() {
         stopped = true
+        preparationID = nil
+        pendingResponses.resolveAll(.null)
         process?.terminate()
         process = nil
         readTask?.cancel()

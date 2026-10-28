@@ -58,7 +58,7 @@ enum DshNativeIntegrationProbe {
             defaults.removePersistentDomain(forName: CaptureRun.suiteName)
             defaults.set("dsh", forKey: "defaultProvider")
             defaults.set(ProviderKind.allCases.filter { $0 != .dsh }.map(\.rawValue), forKey: "disabledProviders")
-            for key in ["hydraEnabled", "hydraQueueHeads", "hydraAlwaysHeads", "notifyWhenFinished", "chimeWhenFinished"] {
+            for key in ["hydraEnabled", "notifyWhenFinished", "chimeWhenFinished"] {
                 defaults.set(false, forKey: key)
             }
             defaults.set(projectID.uuidString, forKey: "lastProjectID")
@@ -135,7 +135,7 @@ enum DshNativeIntegrationProbe {
                 guard model.isLibraryLoaded else { throw Failure(message: "Library not loaded") }
                 await model.providers.refresh(.dsh)
                 // Native ACP consumes the same MCPStore export; the Hub independently discovers it.
-                let tools = await MCPHub.shared.tools()
+                let tools = try await MCPHub.shared.tools()
                 guard tools.contains(where: { $0.callName == "mcp__custom-native-fixture__touch" }) else {
                     throw Failure(message: "Normal MCPStore/Hub discovery missing fixture")
                 }

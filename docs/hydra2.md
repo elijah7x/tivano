@@ -1,13 +1,14 @@
-# Hydra 2.0（实验室）设计
+# Hydra 2.0 设计
 
-状态：Labs 已实现（2026-10-26）。本文描述当前设计；依据包括 `docs/research/hydra2-code-map-2026-10-26.md`、`docs/research/hydra2-audit/docs-data.md` 和 Hydra 1 基线（`scripts/hydra_eval.py baseline`，输出在仓库外 `private-artifacts/hydra-eval/2026-10-26-hydra1-baseline/`）。
+状态：2.2.0 起正式提供，是唯一的 Hydra 流程。v1 已在 2.2.0 移除，代码保留在 Git 历史中。本文描述当前设计；依据包括 `docs/research/hydra2-code-map-2026-10-26.md`、`docs/research/hydra2-audit/docs-data.md` 和 Hydra 1 基线（`scripts/hydra_eval.py baseline`，输出在仓库外 `private-artifacts/hydra-eval/2026-10-26-hydra1-baseline/`）。
 
 ## 目标与边界
 
 - 取舍顺序：质量 > 成本 > 时间。先保证结果更好，再尽量保住组合带来的成本优势；为这两者多花的时间可以接受。
 - Hydra 2 替换派发决策、交接、回报、返工和审查流程，并改变完成 head 的副本保留时机；副本创建、增量落地、合并和 watchdog 的底层算法继续复用。
-- Labs 的 Hydra 2.0 开关默认关闭，受 Labs 总开关约束；没有各环节独立开关。Settings › Hydra 提供 `Delegation tilt`（`Restrained` / `Proactive` / `Aggressive`）；v1 的两个消息路由开关与 lead-review 开关在 v2 下隐藏且不生效，合并开关为 `Commit and merge automatically when done`（完成后自动提交并合并）。head profile 编辑入口保留在 Settings，规则可见、可编辑。
-- 缺少 `mode` 的旧 head 按 v1 解读；早期 v2 记录缺少的新字段表示未知，不把未知改写为 v1、零或 false。
+- Hydra 不受 Alpha 总开关约束，没有版本切换或各环节独立开关。Settings › Hydra 的标题旁显示低调的 `2.0` 标签，侧栏仍称 Hydra；页面提供 `Delegation tilt`（`Restrained` / `Proactive` / `Aggressive`），合并开关为 `Commit and merge automatically when done`（完成后自动提交并合并）。head profile 编辑入口保留在 Settings，规则可见、可编辑。
+- job 账本不再写入 `mode`；评估时缺少该字段按 v2 解读，v1 从未写入 job 账本。早期 v2 记录缺少的其他字段表示未知，不把未知改写为零或 false。
+- 决策模型的影子点位（Alpha，TypeSafe Jev）在 Hydra job 上运行，仍需 Alpha 总开关与自身开关同时开启，见 [hydra-decisions.md](hydra-decisions.md)。
 
 ## 基线说明了什么
 
@@ -19,12 +20,11 @@ Release 库的历史基线包含 232 个派发 job、525 个 head（当时 Dev �
 - brief 中位数约 4400 字符（含固定规则），回报中位数约 420 字符；交接需保留足够信息，回报需暴露偏差与未完成项。
 - v1 缺少逐 job 的原始 base、模式、组合快照及可靠合并归属，且仅保留有存活 head 的请求。它可作运营代理指标基线，不能代表整个策略的效果。
 
-## 1. 模式按 job 盖章
+## 1. job 生命周期与消息路由
 
-- 开着 Hydra 的新 job 读取一次 `alphaEnabled && alphaHydra2Enabled`，盖章 `.v1` / `.v2`，同时快照 tilt。模式随 launch、会话签名、brief、回报与合并传递；中途改 Labs 或 tilt 只影响下一 job，不混用路由与策略。
-- v2 下所有用户消息先进入 lead。job 尚未结束时发来的消息属于同一 job，追加到交给 heads 的用户请求中；只有 settle 之后的新消息才开启新 job。忙时的追加仍由 lead 统筹，不直接送给某个 head。
+- 开着 Hydra 的新 job 统一采用 2.0 流程，并快照 tilt；中途改 tilt 只影响下一 job，保持本 job 的策略一致。
+- 所有用户消息先进入 lead。job 尚未结束时发来的消息属于同一 job，追加到交给 heads 的用户请求中；只有 settle 之后的新消息才开启新 job。忙时的追加仍由 lead 统筹，不直接送给某个 head。
 - 语音通话与文字请求采用同一套 v2 job、派发、交接、预算及收尾规则。
-- v1 queued/direct-head 路径只用于盖章为 v1 的 job。模式变化后的会话按新签名重建。
 
 ## 2. 派发策略：按上下文与 tilt 分工
 
@@ -47,14 +47,14 @@ lead 在每条用户消息开始、首次工具调用之前明确决定哪些部
 - 用户请求：job 的初始原话及尚未结束时的追加，最多 6000 字符，截断时注明；同时附图片和其他附件路径。
 - 团队清单：本批各 head 的名字、任务标题和负责文件。
 - 新 head 派发条目的 `files` 表示负责修改的路径；`"files": []` 明确表示只读 head，只阅读、调查并回报，不修改文件。就该字段是否提供而言，仅缺少 `files` 键时拒绝，空列表有效；同一路径分给两个条目时，仍在派发前拒绝该块并向 lead 说明，让 lead 重拆。
-- v2 等 lead 整个回复回合结束后统一派出 heads，使同批 brief 带有完整团队分工。v1 仍流式派发；v2 首个 head 的等待时间取决于完整回合，不预设秒数。
+- 等 lead 整个回复回合结束后统一派出 heads，使同批 brief 带有完整团队分工。首个 head 的等待时间取决于完整回合，不预设秒数。
 
 ## 4. 结构化回报
 
 - head 先写一两句结果，最后固定三行 `Deviations:`、`Unfinished:`、`Uncertain:`，空项写 `none`。文件改动由 Tivano 记录，不要求重复列出。
 - 解析宽松：缺少格式时保留原文，并记录未遵守格式。解析结果进入 `reportNotes`，`summary` 保持原样；解析失败不能视为“没有问题”。
 - 给 lead 的回报先列 `Flags`（只列非空项，全空写 `none`，缺格式则注明），再列落地信息及原始正文。提示词要求先读偏差和不确定涉及的文件、抽查其余，亲自集成并运行最窄的必要构建。这是模型指令，不是程序化验收保证。
-- 上述要求始终随 v2 回报提供，不受隐藏的 v1 lead-review 开关控制；heads 不构建、不检查，由 lead 验证。
+- 上述要求始终随回报提供；heads 不构建、不检查，由 lead 验证。
 
 ## 5. 返工续用原 head
 
@@ -75,7 +75,7 @@ lead 在每条用户消息开始、首次工具调用之前明确决定哪些部
 
 lead 线程追加 `hydraJobs: [HydraJobRecord]`，运行中持续更新；延后合并的结果按所属 job ID 回写，不能默认写入最后一个 job：
 
-- 独立 job ID、mode、原始请求、lead `turnID`（不是用户消息 ID）、开始与结束时间；`ending` 为 `completed` / `interrupted` / `hydraOff` / `recovered`，区分正常完成、中断、关闭 Hydra 和恢复收尾。
+- 独立 job ID、原始请求、lead `turnID`（不是用户消息 ID）、开始与结束时间；`ending` 为 `completed` / `interrupted` / `hydraOff` / `recovered`，区分正常完成、中断、关闭 Hydra 和恢复收尾。
 - lead provider / model / effort，pair ID，共享 heads provider / model / effort / `headsNote`，job 的 tilt 快照。
 - lead checkout 的 base commit、dirty 标记及按 checkout 保存的 `baseTrees`。tree 是审查基线，不等于完整可重放环境。
 - 每个 head 的 ID、名字、实际 provider / model / effort、brief 字符数、负责路径、状态、执行秒数（不含排队和落地）、落地文件与冲突数、三栏、格式遵守和 continuation 次数。
@@ -91,7 +91,7 @@ lead 线程追加 `hydraJobs: [HydraJobRecord]`，运行中持续更新；延后
 
 ## 当前状态与评估边界
 
-v2 已在 Labs 作为完整流程提供。无头、单头由 heads 数组派生，轮数与返工由 rounds / continuations 汇总；审查与采纳直接读取账本。缺字段的旧记录保留未知，不能用零补齐后得出改善结论。
+Hydra 2.0 已作为唯一的正式流程提供。无头、单头由 heads 数组派生，轮数与返工由 rounds / continuations 汇总；审查与采纳直接读取账本。缺字段的旧记录保留未知，不能用零补齐后得出改善结论。
 
 v1 基线存在存活 head、时间归属及不同请求的偏差。要比较整个策略，需补齐两版全部真实请求（包括无头），或采用同题、同 base 重跑；主表仅回答派发之后的运营差异。pending / open 数量另报，终态尚未形成时不提前下结论。
 

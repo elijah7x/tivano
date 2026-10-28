@@ -21,6 +21,7 @@ struct HydraMergeHead {
 /// What merging one project's share of a Hydra job came to.
 private enum HydraProjectMerge {
     case merged
+    case syncFailed
     case alreadyOnMain
     case failed
     /// Not now, and nothing to tell: the checkout is mid-rebase or mid-merge, or the lead
@@ -195,25 +196,32 @@ extension AppModel {
         // fast-forward the project folder on the way past.
         let explicitGroups = hydraExplicitCheckouts(of: leadID, besides: ownCheckout)
         let explicitCheckouts = explicitGroups.map(\.checkout)
-        let own = await hydraWork(of: leadID, runtime: runtime, checkout: ownCheckout, git: Git(ownCheckout), projectID: project?.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: true, otherCheckouts: explicitCheckouts)
+        let own: HydraWork
         var groups: [(project: Project, checkout: String, work: HydraWork, syncsProjectCheckout: Bool)] = []
-        if let project { groups.append((project, ownCheckout, own, true)) }
-        for extra in explicitGroups {
-            let work = await hydraWork(of: leadID, runtime: runtime, checkout: extra.checkout, git: Git(extra.checkout), projectID: extra.project.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
-            groups.append((extra.project, extra.checkout, work, false))
-        }
-        // An outside path belongs to the sidebar project with the longest path that
-        // holds it, so nested checkouts resolve to the inner one. A path already covered
-        // by an explicit checkout stays with that checkout's group.
-        var owners: [String: Project] = [:]
-        for path in own.outside where !explicitCheckouts.contains(where: { TouchedPaths.relative(path, root: $0) != nil }) {
-            if let holder = projects.filter({ $0.id != project?.id && TouchedPaths.relative(path, root: $0.path) != nil }).max(by: { $0.path.count < $1.path.count }) {
-                owners[path] = holder
+        do {
+            own = try await hydraWork(of: leadID, runtime: runtime, checkout: ownCheckout, git: Git(ownCheckout), projectID: project?.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: true, otherCheckouts: explicitCheckouts)
+            if let project { groups.append((project, ownCheckout, own, true)) }
+            for extra in explicitGroups {
+                let work = try await hydraWork(of: leadID, runtime: runtime, checkout: extra.checkout, git: Git(extra.checkout), projectID: extra.project.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
+                groups.append((extra.project, extra.checkout, work, false))
             }
-        }
-        for other in projects where other.id != project?.id && owners.values.contains(where: { $0.id == other.id }) {
-            let work = await hydraWork(of: leadID, runtime: runtime, checkout: other.path, git: Git(other.path), projectID: other.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
-            groups.append((other, other.path, work, true))
+            // An outside path belongs to the sidebar project with the longest path that
+            // holds it, so nested checkouts resolve to the inner one. A path already covered
+            // by an explicit checkout stays with that checkout's group.
+            var owners: [String: Project] = [:]
+            for path in own.outside where !explicitCheckouts.contains(where: { TouchedPaths.relative(path, root: $0) != nil }) {
+                if let holder = projects.filter({ $0.id != project?.id && TouchedPaths.relative(path, root: $0.path) != nil }).max(by: { $0.path.count < $1.path.count }) {
+                    owners[path] = holder
+                }
+            }
+            for other in projects where other.id != project?.id && owners.values.contains(where: { $0.id == other.id }) {
+                let work = try await hydraWork(of: leadID, runtime: runtime, checkout: other.path, git: Git(other.path), projectID: other.id, leadCheckout: ownCheckout, leadProjectID: lead.projectID, sweepsCheckout: false, otherCheckouts: explicitCheckouts)
+                groups.append((other, other.path, work, true))
+            }
+        } catch {
+            note(leadID, AppText.localized("Hydra could not inspect the team's work."), error.localizedDescription, status: .failed)
+            recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
+            return
         }
         // A head's scratch (a throwaway script in /tmp, a stray write into its own copy)
         // is nobody's project and not worth a word; only a real folder outside the
@@ -276,6 +284,12 @@ extension AppModel {
         runtime.markHydraMerged(groups.flatMap { $0.work.turnIDs })
         let mergedAt = Date.now
         for headID in everyHeadID { updateHydraHead(headID) { $0.mergedAt = mergedAt } }
+        if outcomes.contains(.syncFailed) {
+            // The remote owns these turns now. Retain the local failure without
+            // submitting the same work again on every recovery sweep.
+            recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
+            return
+        }
         // The projects' shares went out; only what no project holds stayed behind.
         if !stray.isEmpty {
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
@@ -341,8 +355,7 @@ extension AppModel {
         guard await git.isRepository(), await git.hasCommits() else { return .failed }
         // Linked worktrees share refs. Serialize automatic merges across editions
         // using the common git directory, not a per-process queue or checkout path.
-        guard let common = try? await git.output(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
-              let repoLease = try? SharedLibraryLease(at: SharedResourceLock.url(resource: URL(fileURLWithPath: common.trimmed).resolvingSymlinksInPath().path)) else {
+        guard let repoLease = try? await git.repositoryWriteLease() else {
             scheduleHydraMergeRetry(of: leadID, jobID: jobID)
             return .deferred
         }
@@ -369,9 +382,9 @@ extension AppModel {
         }
 
         do {
-            let status = await git.status()
+            guard let status = await git.status() else { throw ShellError(AppText.localized("The checkout's Git status could not be read.")) }
             let target = await git.defaultBranch()
-            let current = status?.branch
+            let current = status.branch
             // A spent branch is treated like the default branch: the job gets its own
             // branch on the remote, never on history the remote squashed away.
             let spent: Bool
@@ -386,7 +399,7 @@ extension AppModel {
 
             // A commit landing while the work is prepared (the user's, in a terminal) moves
             // HEAD under it. That is no reason to stop: the work is prepared again on top.
-            var prepared: (head: String, commit: String, message: String, files: [DiffFile], merged: [String: Data])?
+            var prepared: (head: String, commit: String, message: String, files: [DiffFile], sourceTree: String)?
             // The text engine writes the message from the patch; a retry with the same
             // patch reuses it rather than asking again.
             var described: (patch: String, message: String)?
@@ -397,7 +410,7 @@ extension AppModel {
                 // checkout that fell behind never sends a request that conflicts on the forge.
                 var parent = head
                 var tree: String?
-                var merged: [String: Data] = [:]
+                var sourceTree: String?
                 if ownBranch, (try? await git.fetch()) != nil,
                    let remote = try? await git.commitHash(of: "origin/\(target)"), remote != head,
                    (spent ? true : await git.isAncestor(head, of: remote)) {
@@ -407,7 +420,7 @@ extension AppModel {
                     }
                     parent = remote
                     tree = rebased.tree
-                    merged = rebased.merged
+                    sourceTree = rebased.sourceTree
                 }
                 let captured: String
                 if let tree {
@@ -430,15 +443,15 @@ extension AppModel {
                        (try? await git.commitHash(of: "refs/tivano/sent/\(branch)")) == head,
                        (try? await git.commitHash(of: "refs/tivano/merged/\(branch)")) != head {
                         let base = await git.mergeBase(head, "origin/\(target)") ?? parent
-                        let patch = (try? await git.diff(from: base, to: head)) ?? ""
+                        let patch = try await git.diff(from: base, to: head)
                         let files = await Task.detached(priority: .utility) { DiffParser.parse(patch) }.value
-                        prepared = (head, head, try await git.message(of: head), files, [:])
+                        prepared = (head, head, try await git.message(of: head), files, try await git.treeHash(of: head))
                         break
                     }
                     return .alreadyOnMain
                 }
 
-                let patch = (try? await git.diff(from: parent, to: captured)) ?? ""
+                let patch = try await git.diff(from: parent, to: captured)
                 // A whole job's patch is big and parsing it counts every line: off the main
                 // actor, so the chat stays live while the work goes out.
                 let files = await Task.detached(priority: .utility) { DiffParser.parse(patch) }.value
@@ -457,7 +470,7 @@ extension AppModel {
                 // Writing the branch to a commit prepared from `head` drops anything committed
                 // since: HEAD is read again, and a checkout that moved is prepared again.
                 guard try await git.commitHash() == head else { continue }
-                prepared = (head, commit, message, files, merged)
+                prepared = (head, commit, message, files, sourceTree ?? captured)
                 break
             }
             guard let prepared else {
@@ -475,11 +488,8 @@ extension AppModel {
                 // the request it opened instead of opening another.
                 try await git.updateRef("refs/heads/\(branch)", to: prepared.commit)
             } else if prepared.commit != head {
-                // The checkout's own branch must still be where it was read.
-                try await git.updateRef("refs/heads/\(branch)", to: prepared.commit, expecting: head)
-                // The branch moved under the checkout: the index catches up, the working
-                // tree already has the content.
-                try await git.resetIndex(paths: sorted)
+                try await git.synchronizeCheckout(from: head, sourceTree: prepared.sourceTree,
+                                                  to: prepared.commit, branch: "refs/heads/\(branch)")
                 try await git.updateRef("refs/tivano/sent/\(branch)", to: prepared.commit)
             }
             advance(.pushing)
@@ -533,24 +543,37 @@ extension AppModel {
             // ignored or missing paths, a sibling chat's files) is not said: none of it
             // was this merge's to take, and every line about it read as if something
             // had gone wrong.
-            if ownBranch {
+            if ownBranch || (syncsProjectCheckout && lead.worktreePath == nil) {
                 advance(.syncing)
-                let synced = await syncDefaultBranch(git, from: head, target: target, ownPaths: sorted, merged: prepared.merged, headIsMerged: spent)
-                lines.append(synced ? "The checkout is up to date." : "The checkout was left as it was: `\(target)` moved on in other ways meanwhile, or the team's files changed again; `git pull` when it suits you.")
-            } else if syncsProjectCheckout, lead.worktreePath == nil {
-                // The forge squashed the checkout's own branch: it follows the remote, or the
-                // next job would be built on history the remote no longer has and conflict.
-                // An explicit checkout keeps its own branch; this follow is for the lead's folder.
-                advance(.syncing)
-                let synced = await syncDefaultBranch(git, from: prepared.commit, target: target, ownPaths: [], merged: [:], headIsMerged: true)
-                lines.append(synced ? "The checkout is up to date." : "The checkout was left as it was: `\(target)` moved on in other ways meanwhile, or the team's files changed again; `git pull` when it suits you.")
+                do {
+                    guard let current else { throw ShellError(AppText.localized("The checkout is detached; synchronize it manually.")) }
+                    try await syncDefaultBranch(git, from: ownBranch ? head : prepared.commit,
+                                                target: target, branch: "refs/heads/\(current)",
+                                                sourceTree: prepared.sourceTree,
+                                                headIsMerged: spent || !ownBranch)
+                    lines.append("The checkout is up to date.")
+                } catch {
+                    // The forge succeeded. Do not describe this as an unpushed job or
+                    // automatically retry a patch that may already be partly applied.
+                    _ = fail(AppText.localized("Hydra merged the work, but could not synchronize the checkout."),
+                             "\(url.absoluteString)\n\n\(error.localizedDescription)", label: link.label, url: url)
+                    return .syncFailed
+                }
             } else if syncsProjectCheckout {
                 // The lead worked in a worktree: the project's own checkout follows when it can.
                 // An explicit checkout of the same repository does not fast-forward that folder.
                 advance(.syncing)
                 let main = Git(project.path)
-                if await main.status()?.branch == target, await main.dirtyPaths().isEmpty, !(await main.hasOperationInProgress()) {
-                    if (try? await main.pullFastForward()) != nil { lines.append("The project checkout is up to date.") }
+                do {
+                    guard let status = await main.status() else { throw ShellError(AppText.localized("The project checkout's Git status could not be read.")) }
+                    if status.branch == target, try await main.dirtyPaths().isEmpty, !(await main.hasOperationInProgress()) {
+                        try await main.pullFastForward()
+                        lines.append("The project checkout is up to date.")
+                    }
+                } catch {
+                    _ = fail(AppText.localized("Hydra merged the work, but could not synchronize the checkout."),
+                             "\(url.absoluteString)\n\n\(error.localizedDescription)", label: link.label, url: url)
+                    return .syncFailed
                 }
             }
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .merged, project: project.name, label: link.label, url: url, files: files.count, detail: nil))
@@ -746,7 +769,7 @@ extension AppModel {
     /// Paths outside the checkout are dropped rather than passed on: a lead writes to its
     /// own memory files, and `git add -A -- <path>` on one of those fails outright and
     /// takes the whole merge with it.
-    private func hydraWork(of leadID: UUID, runtime: ThreadRuntime, checkout: String, git: Git, projectID: UUID?, leadCheckout: String, leadProjectID: UUID?, sweepsCheckout: Bool, otherCheckouts: [String] = []) async -> HydraWork {
+    private func hydraWork(of leadID: UUID, runtime: ThreadRuntime, checkout: String, git: Git, projectID: UUID?, leadCheckout: String, leadProjectID: UUID?, sweepsCheckout: Bool, otherCheckouts: [String] = []) async throws -> HydraWork {
         let turns = runtime.hydraUnmergedTurns
         // Turn paths are stored relative to the lead's checkout. Anchored there, they
         // match this pass only when this pass is that checkout, not a sibling worktree
@@ -822,7 +845,10 @@ extension AppModel {
                 items = live.entries.map(\.item)
             } else {
                 let headID = head.id
-                items = await Task.detached(priority: .utility) { Storage.decodeDocument(headID)?.items ?? [] }.value
+                guard let document = await Task.detached(priority: .utility, operation: { Storage.decodeDocument(headID) }).value else {
+                    throw ShellError(String(format: AppText.localized("A head's history could not be read; its work was not settled: %@."), headID.uuidString))
+                }
+                items = document.items
             }
             for item in items {
                 guard case .tool(let call) = item.content else { continue }
@@ -855,7 +881,7 @@ extension AppModel {
 
         var paths = Set<String>()
         var outside = Set<String>()
-        for path in reported where !path.isEmpty && !TouchedPaths.isBuildOutput(path) {
+        for path in reported where !path.isEmpty {
             let inOtherCheckout = otherCheckouts.contains { other in
                 !HydraPaths.same(other, checkout)
                     && HydraPaths.canonical(other).count > HydraPaths.canonical(checkout).count
@@ -878,14 +904,17 @@ extension AppModel {
         // this job: a file only a finished, idle sibling job ranks behind this one owns is
         // settled by the ordering instead, and this job's own record of it may go out (see
         // `siblingOwnedPaths`).
+        let needsGit = await git.isRepository()
+        if !needsGit, FileManager.default.fileExists(atPath: git.directory.appendingPathComponent(".git").path) {
+            throw ShellError(AppText.localized("The checkout's Git status could not be read."))
+        }
         let siblingFiles = siblingOwnedPaths(in: checkout, projectID: projectID, excluding: leadID)
         let siblingClaims = Set(siblingFiles.reserved.keys)
         let blockingClaims = siblingFiles.blocking
-        if sweepsCheckout,
-           let base = turns.first?.baseCheckpoint,
-           let alreadyDirty = try? await git.changedPaths(from: "HEAD", to: base),
-           let now = try? await git.captureTree(),
-           let changedSince = try? await git.changedPaths(from: base, to: now) {
+        if sweepsCheckout, needsGit, await git.hasCommits(), let base = turns.first?.baseCheckpoint {
+            let alreadyDirty = try await git.changedPaths(from: "HEAD", to: base)
+            let now = try await git.captureTree()
+            let changedSince = try await git.changedPaths(from: base, to: now)
             let theirs = Set(alreadyDirty)
             let fresh = changedSince.filter { !theirs.contains($0) }
             paths.formUnion(fresh.filter { relative in
@@ -905,11 +934,13 @@ extension AppModel {
         let ownEdits = Set(edited.compactMap { TouchedPaths.relative($0, root: checkout) })
         paths.subtract(Set(blockingClaims.keys).subtracting(ownEdits))
         // Old rows can carry a sibling's write; a head's own copy remains its own evidence.
+        CheckoutClaims.retainOwners(Set(threads.filter { !$0.isArchived }.map(\.id)), root: checkout)
         paths.subtract(CheckoutClaims.foreign(paths.subtracting(copyPaths), root: checkout, owner: leadID, since: .distantPast))
-        paths = paths.filter { !TouchedPaths.isBuildOutput($0) }
-        let isRepository = await git.isRepository()
-        if isRepository { paths.subtract(await git.ignoredPaths(among: paths.sorted())) }
-        let tracked = isRepository ? await git.trackedPaths(among: paths.sorted()) : Set<String>()
+        let tracked: Set<String>
+        if needsGit { tracked = try await git.trackedPaths(among: paths.sorted()) }
+        else { tracked = [] }
+        paths = paths.filter { tracked.contains($0) || !TouchedPaths.isBuildOutput($0) }
+        if needsGit { paths.subtract(try await git.ignoredPaths(among: paths.subtracting(tracked).sorted())) }
         let fileManager = FileManager.default
         let checkoutURL = URL(fileURLWithPath: checkout)
         let missing = Set(paths.filter { path in
@@ -1043,52 +1074,17 @@ extension AppModel {
         }
     }
 
-    /// Brings the checkout's current branch, default or not, up to the merge without touching the working
-    /// tree: the branch moves to what origin has, the index takes the merged version of the
-    /// team's files (the working tree already holds it), and any other file the remote
-    /// changed meanwhile is checked out only where it is clean locally. Returns false, and
-    /// changes nothing, where that cannot be done safely. `headIsMerged` is for a branch
-    /// the forge squashed, whose tip is no ancestor of the remote.
-    private func syncDefaultBranch(_ git: Git, from head: String, target: String, ownPaths: [String], merged: [String: Data] = [:], headIsMerged: Bool = false) async -> Bool {
-        let remote = "origin/\(target)"
-        guard (try? await git.fetch()) != nil, (headIsMerged ? true : await git.isAncestor(head, of: remote)) else { return false }
-        // A file merged three ways went out holding the remote's changes as well: the
-        // checkout takes that result, but only while the file still holds what was merged
-        // from. A file edited again since is left alone, and so is the whole checkout.
-        let root = git.directory
-        var mergedFrom: [String: Data] = [:]
-        for (path, _) in merged {
-            guard let working = try? Data(contentsOf: root.appendingPathComponent(path)) else { return false }
-            mergedFrom[path] = working
-        }
-        guard let changed = try? await git.changedPaths(from: head, to: remote) else { return false }
-        let own = Set(ownPaths)
-        let others = changed.filter { !own.contains($0) }
-        let dirty = Set(await git.dirtyPaths())
-        guard others.allSatisfy({ !dirty.contains($0) }) else { return false }
-        // One git process answers for every path at once; a process per path took a
-        // remote that had moved on by thousands of files minutes to sort.
-        let present = await git.presentPaths(among: others, in: remote)
-        let kept = others.filter { present.contains($0) }
-        let gone = others.filter { !present.contains($0) }
-        // `reset --soft` moves the branch with no expected old value, so a commit made in
-        // a terminal while the merge ran would be left with nothing pointing at it. The
-        // checkout is left alone instead, and `git pull` is the user's to run.
-        guard (try? await git.commitHash()) == head else { return false }
-        do {
-            try await git.resetSoft(to: remote)
-            try await git.resetIndex(paths: ownPaths)
-            try await git.checkoutPaths(from: remote, kept)
-            try await git.removePaths(gone)
-            for (path, content) in merged {
-                let url = root.appendingPathComponent(path)
-                guard (try? Data(contentsOf: url)) == mergedFrom[path] else { continue }
-                try content.write(to: url, options: .atomic)
+    /// The caller already owns the repository lease. Preserve edits made since the
+    /// source capture by applying its delta to the current checkout through Git.
+    private func syncDefaultBranch(_ git: Git, from head: String, target: String, branch: String, sourceTree: String, headIsMerged: Bool = false) async throws {
+        try await git.fetch()
+        let remote = try await git.commitHash(of: "origin/\(target)")
+        if !headIsMerged {
+            guard await git.isAncestor(head, of: remote) else {
+                throw ShellError(AppText.localized("The default branch diverged; the checkout was kept for manual synchronization."))
             }
-            return true
-        } catch {
-            return false
         }
+        try await git.synchronizeCheckout(from: head, sourceTree: sourceTree, to: remote, branch: branch)
     }
 
     /// The commit message: written by the text engine from the patch, like the commit
@@ -1188,7 +1184,7 @@ extension AppModel {
 
     private func recordHydraJobMerge(_ outcome: HydraJobRecord.MergeOutcome, of leadID: UUID, jobID: UUID?) {
         guard let jobID, let job = thread(leadID)?.hydraJobs.first(where: { $0.id == jobID }),
-              job.mode == .v2, job.isOpen, job.ending == nil else { return }
+              job.isOpen, job.ending == nil else { return }
         if outcome == .failed,
            HydraMergeActivity.owners[ObjectIdentifier(self)]?.values.contains(where: {
                $0.leadID == leadID && $0.jobID == jobID && $0.phase == .retry

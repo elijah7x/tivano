@@ -337,14 +337,20 @@ enum Storage {
         let id = UUID()
         let ext = source.pathExtension.isEmpty ? "bin" : source.pathExtension.lowercased()
         let destination = attachmentsDirectory.appendingPathComponent("\(id.uuidString).\(ext)")
-        try FileManager.default.copyItem(at: source, to: destination)
+        try DiskWriter.shared.withFileMutation {
+            try FileManager.default.copyItem(at: source, to: destination)
+            // An old source's timestamp must not make a just-imported draft an orphan.
+            try FileManager.default.setAttributes([.modificationDate: Date.now], ofItemAtPath: destination.path)
+        }
         return Attachment(id: id, name: source.lastPathComponent, path: destination.path, mimeType: MimeType.of(ext))
     }
 
     static func importAttachment(data: Data, name: String, fileExtension: String) throws -> Attachment {
         let id = UUID()
         let destination = attachmentsDirectory.appendingPathComponent("\(id.uuidString).\(fileExtension)")
-        try data.write(to: destination, options: .atomic)
+        try DiskWriter.shared.withFileMutation {
+            try data.write(to: destination, options: .atomic)
+        }
         return Attachment(id: id, name: name, path: destination.path, mimeType: MimeType.of(fileExtension))
     }
 
@@ -352,17 +358,46 @@ enum Storage {
     /// thread, a draft's that was never sent, a follow-up's that was dropped. A file is
     /// only an orphan once it is a day old, so a draft still open when the app relaunches
     /// keeps its files, and only files named the way `importAttachment` names them go.
-    /// Runs off the main actor; the thread files are scanned as text, never decoded.
+    /// Scan off the writer queue; deletion checks that no mutation was admitted since
+    /// the scan began. Synchronous saves and imports never wait for the census.
     nonisolated static func sweepOrphanedAttachments() async {
         let attachments = attachmentsDirectory
         let threads = threadsDirectory
-        await Task.detached(priority: .utility) {
+        await DiskWriter.shared.performMaintenance { deleteIfUnchanged in
             let fileManager = FileManager.default
+            let incomplete = Mutex(false)
             guard let names = try? fileManager.contentsOfDirectory(atPath: attachments.path), !names.isEmpty,
-                  let documents = fileManager.enumerator(at: threads, includingPropertiesForKeys: nil)?.allObjects as? [URL] else { return }
+                  let enumerator = fileManager.enumerator(at: threads, includingPropertiesForKeys: nil, errorHandler: { _, error in
+                      incomplete.withLock { $0 = true }
+                      NSLog("Attachment cleanup skipped: %@", error.localizedDescription)
+                      return false
+                  }), let documents = enumerator.allObjects as? [URL], !incomplete.withLock({ $0 }) else { return }
+            let quarantined = threads.appendingPathComponent("Unreadable").path + "/"
+            guard !documents.contains(where: { $0.path.hasPrefix(quarantined) }) else { return }
             var referenced = Set<String>()
+            var requiredTurns = Set<String>()
+            var availableTurns = Set<String>()
+            // Quarantine can contain undecodable references; an incomplete census
+            // cannot authorize deletion, even when a text search finds no paths.
             for document in documents where document.pathExtension == "json" {
-                guard let data = try? Data(contentsOf: document) else { continue }
+                guard let data = try? Data(contentsOf: document),
+                      (try? JSONSerialization.jsonObject(with: data)) != nil else {
+                    NSLog("Attachment cleanup skipped: unreadable history %@", document.lastPathComponent)
+                    return
+                }
+                if document.deletingLastPathComponent() == threads,
+                   let id = UUID(uuidString: document.deletingPathExtension().lastPathComponent) {
+                    guard let history = try? JSONDecoder.storage.decode(ThreadDocument.self, from: data) else { return }
+                    for reference in history.turnIndex ?? [] {
+                        requiredTurns.insert(turnURL(id, reference.id).path + "#\(reference.revision)")
+                    }
+                } else if document.deletingLastPathComponent().lastPathComponent.hasSuffix(".turns") {
+                    guard let file = try? JSONDecoder.storage.decode(StoredTurnFile.self, from: data) else { return }
+                    for (revision, stored) in file.revisions {
+                        guard stored.turn.id == UUID(uuidString: document.deletingPathExtension().lastPathComponent) else { return }
+                        availableTurns.insert(document.path + "#" + revision)
+                    }
+                }
                 let text = String(decoding: data, as: UTF8.self)
                 // The encoder writes the path's slashes as `\/`.
                 for match in text.matches(of: #/attachments\\?\/([0-9A-Fa-f-]{36}\.[A-Za-z0-9]+)/#) {
@@ -377,15 +412,16 @@ enum Storage {
                     }
                 }
             }
+            guard requiredTurns.isSubset(of: availableTurns) else { return }
             let cutoff = Date.now.addingTimeInterval(-24 * 60 * 60)
             for name in names where !referenced.contains(name) {
                 guard name.wholeMatch(of: #/[0-9A-Fa-f-]{36}\.[A-Za-z0-9]+/#) != nil else { continue }
                 let url = attachments.appendingPathComponent(name)
                 guard let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
                       modified < cutoff else { continue }
-                try? fileManager.removeItem(at: url)
+                guard deleteIfUnchanged({ try? FileManager.default.removeItem(at: url) }) else { return }
             }
-        }.value
+        }
     }
 
     /// How many files a message carries.
@@ -576,6 +612,19 @@ final class DocumentPrefetch: Sendable {
 final class DiskWriter: Sendable {
     static let shared = DiskWriter()
     private let queue = DispatchQueue(label: "tivano.storage.write", qos: .utility)
+    private struct MutationState {
+        var version: UInt64 = 0
+        var admissions = 0
+    }
+    private let mutations = Mutex(MutationState())
+
+    private func beginMutation() {
+        mutations.withLock { $0.version &+= 1; $0.admissions += 1 }
+    }
+
+    private func endMutation() {
+        mutations.withLock { $0.admissions -= 1 }
+    }
     /// The newest snapshot waiting per file. A save queued behind a slow write is replaced
     /// by the next one for the same file, so a backlog never encodes and writes documents
     /// that are already stale when their turn comes.
@@ -606,6 +655,8 @@ final class DiskWriter: Sendable {
     }
 
     func encodeAndWrite<Value: Encodable & Sendable>(_ value: Value, to url: URL, completion: @escaping @Sendable (Bool) -> Void) {
+        beginMutation()
+        defer { endMutation() }
         let queued = pending.withLock { pending in
             let previous = pending[url]
             pending[url] = PendingWrite(value: value, completions: (previous?.completions ?? []) + [completion])
@@ -621,6 +672,8 @@ final class DiskWriter: Sendable {
     }
 
     func writeThread(_ snapshot: ThreadSave, completion: @escaping @Sendable (Bool) -> Void) {
+        beginMutation()
+        defer { endMutation() }
         let url = Storage.threadURL(snapshot.head.threadID)
         DocumentPrefetch.shared.forget(snapshot.head.threadID)
         let queued = pendingThreads.withLock { pending in
@@ -640,6 +693,8 @@ final class DiskWriter: Sendable {
 
     @discardableResult
     func writeThreadSynchronously(_ snapshot: ThreadSave) -> Bool {
+        beginMutation()
+        defer { endMutation() }
         let url = Storage.threadURL(snapshot.head.threadID)
         let pending = pendingThreads.withLock { $0.removeValue(forKey: url) }
         var newest = snapshot
@@ -659,12 +714,16 @@ final class DiskWriter: Sendable {
             let directory = Storage.turnsURL(head.threadID)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let index = head.turnIndex ?? []
+            // One directory read replaces a stat for every unchanged historical turn.
+            // Reuse this census for pruning only after the new head has been published.
+            let existing = Set(try FileManager.default.contentsOfDirectory(atPath: directory.path))
             var needsPruning = Set<UUID>()
             for reference in index {
-                let turnURL = Storage.turnURL(head.threadID, reference.id)
+                let name = reference.id.uuidString + ".json"
                 if let turn = snapshot.dirtyTurns[reference.id] {
+                    let turnURL = Storage.turnURL(head.threadID, reference.id)
                     var file = StoredTurnFile()
-                    if FileManager.default.fileExists(atPath: turnURL.path) {
+                    if existing.contains(name) {
                         do {
                             file = try JSONDecoder.storage.decode(StoredTurnFile.self, from: Data(contentsOf: turnURL))
                         } catch {
@@ -680,7 +739,7 @@ final class DiskWriter: Sendable {
                     file.revisions[String(reference.revision)] = turn
                     if file.revisions.count > 1 { needsPruning.insert(reference.id) }
                     try JSONEncoder.storage.encode(file).write(to: turnURL, options: .atomic)
-                } else if !FileManager.default.fileExists(atPath: turnURL.path) {
+                } else if !existing.contains(name) {
                     throw CocoaError(.fileNoSuchFile)
                 }
             }
@@ -689,8 +748,8 @@ final class DiskWriter: Sendable {
             sizes.withLock { $0[url] = data.count }
             errors.withLock { $0[url] = nil }
             let live = Set(index.map { "\($0.id.uuidString).json" })
-            for file in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] where !live.contains(file.lastPathComponent) {
-                try? FileManager.default.removeItem(at: file)
+            for name in existing.subtracting(live) {
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
             }
             // Cleanup is optional: failure leaves extra recovery revisions, never a broken head.
             for reference in index where needsPruning.contains(reference.id) {
@@ -709,6 +768,8 @@ final class DiskWriter: Sendable {
 
     @discardableResult
     func writeSynchronously<Value: Encodable & Sendable>(_ value: Value, to url: URL) -> Bool {
+        beginMutation()
+        defer { endMutation() }
         let completions = pending.withLock { $0.removeValue(forKey: url)?.completions ?? [] }
         return queue.sync {
             let size = write(value, to: url)
@@ -722,6 +783,8 @@ final class DiskWriter: Sendable {
     /// Awaited rather than run with `queue.sync`: the caller is the main actor, and a
     /// whole-library write queued behind other documents would hold the app still.
     func writeOrThrow<Value: Encodable & Sendable>(_ value: Value, to url: URL) async throws {
+        beginMutation()
+        defer { endMutation() }
         let completions = pending.withLock { $0.removeValue(forKey: url)?.completions ?? [] }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
@@ -747,6 +810,8 @@ final class DiskWriter: Sendable {
     }
 
     func removeSynchronously(_ urls: [URL]) {
+        beginMutation()
+        defer { endMutation() }
         let threadCompletions = pendingThreads.withLock { pending in
             urls.flatMap { pending.removeValue(forKey: $0)?.completions ?? [] }
         }
@@ -762,6 +827,36 @@ final class DiskWriter: Sendable {
 
     func readSynchronously<Value>(_ read: () throws -> Value) rethrows -> Value {
         try queue.sync(execute: read)
+    }
+
+    /// For imports outside the writer queue; never call recursively from a write or maintenance operation.
+    func withFileMutation<Value>(_ operation: () throws -> Value) rethrows -> Value {
+        beginMutation()
+        defer { endMutation() }
+        return try queue.sync(execute: operation)
+    }
+
+    /// A save submitted during the scan may refer to an old orphan before its queued
+    /// write runs. Abort deletion on that submission, not just on published writes.
+    /// Admission and each unlink share this short lock; the scan never holds it.
+    func performMaintenance(_ operation: @escaping @Sendable (@Sendable (@Sendable () -> Void) -> Bool) -> Void) async {
+        let version: UInt64? = await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                continuation.resume(returning: mutations.withLock { $0.admissions == 0 ? $0.version : nil })
+            }
+        }
+        guard let version else { return }
+        await Task.detached(priority: .utility) { [self] in
+            operation { deletion in
+                queue.sync {
+                    mutations.withLock { current in
+                        guard current.version == version, current.admissions == 0 else { return false }
+                        deletion()
+                        return true
+                    }
+                }
+            }
+        }.value
     }
 
     /// Returns once every write queued so far has landed, so a read that follows sees them.

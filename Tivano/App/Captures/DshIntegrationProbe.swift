@@ -24,7 +24,7 @@ enum DshIntegrationProbe {
             defaults.removePersistentDomain(forName: CaptureRun.suiteName)
             defaults.set("dsh", forKey: "defaultProvider")
             defaults.set("supervised", forKey: "defaultRuntimeMode")
-            for key in ["hydraEnabled", "hydraQueueHeads", "hydraAlwaysHeads", "notifyWhenFinished", "chimeWhenFinished"] {
+            for key in ["hydraEnabled", "notifyWhenFinished", "chimeWhenFinished"] {
                 defaults.set(false, forKey: key)
             }
             defaults.set(projectID.uuidString, forKey: "lastProjectID")

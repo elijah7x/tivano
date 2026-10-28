@@ -27,7 +27,7 @@ Add cases to `agentName`, `accountLabel` and `group`; all three are exhaustive s
 
 ## Providers
 
-Verified against vendor documentation on 2026-10-16.
+Verified against vendor documentation on 2026-10-16 (ZCode row: 2026-10-28).
 
 | Provider | Agent | Account label | Credentials accepted and billing | Source |
 | --- | --- | --- | --- | --- |
@@ -46,3 +46,4 @@ Verified against vendor documentation on 2026-10-16.
 | Pi | Pi CLI | Set up in Pi | Configured inside Pi (OAuth logins, API keys, custom endpoints); models arrive as `provider/model` | https://pi.dev/docs/latest/providers |
 | Kimi Code | Kimi Code CLI | Kimi membership or API key | Kimi Code OAuth membership, Console keys, or Platform pay-as-you-go keys | https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html |
 | omp | omp CLI | Set up in omp | Configured inside omp (subscription logins, API keys, custom providers); models are `provider/model-id` | https://omp.sh/docs/providers |
+| ZCode | ZCode CLI | GLM Coding Plan | Uses the GLM Coding Plan key configured for the Z.ai provider (no separate `zcode login`); the CLI is bundled inside the ZCode desktop app (`ZCode.app/Contents/Resources/glm/zcode.cjs`) and models come from the Coding Plan endpoint by region | https://zcode.z.ai |

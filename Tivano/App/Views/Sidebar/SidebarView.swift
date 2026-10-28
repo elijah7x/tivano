@@ -471,12 +471,19 @@ struct SidebarView: View {
                 .foregroundStyle(Chrome.secondaryText)
                 .padding(.horizontal, Chrome.rowHorizontalPadding)
                 .padding(.vertical, 4)
+        case .shelf(let count, let hasUnread):
+            shelfRow(count: count, hasUnread: hasUnread)
         case .project(let project, let count):
             let isDragged = projectDrag.id == project.id
-            ProjectRow(snapshot: project, count: count, isDragged: isDragged)
+            ProjectRow(snapshot: project, count: count, isDragged: isDragged, isShelved: project.isShelved)
+                .padding(.leading, item.isNested ? ThreadRowMetrics.folderIndent : 0)
                 .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.listSpace)) }) { frame in
                     rowHeights.note(item.id, frame.height)
-                    projectFrames.note(project.id, frame)
+                    if project.isShelved {
+                        projectFrames.forget(project.id)
+                    } else {
+                        projectFrames.note(project.id, frame)
+                    }
                 }
                 .onDisappear { projectFrames.forget(project.id) }
                 .offset(y: isDragged ? projectDrag.visualOffset : 0)
@@ -485,6 +492,7 @@ struct SidebarView: View {
             ActivityHeader(title: title)
         case .thread(let thread, let projectName, let projectIcon, let peers, let hasHelpers):
             reorderableRow(thread, projectName: projectName, projectIcon: projectIcon, peers: peers, hasHelpers: hasHelpers, isNested: item.isNested)
+                .padding(.leading, item.shelfIndent ? 2 * ThreadRowMetrics.folderIndent : 0)
                 .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.listSpace)) }) { frame in
                     rowHeights.note(item.id, frame.height)
                     rowFrames.note(thread.id, frame)
@@ -511,17 +519,17 @@ struct SidebarView: View {
                     }
                 }
             ).equatable())))
-            .padding(.leading, item.isNested ? ThreadRowMetrics.folderIndent : 0)
+            .padding(.leading, (item.isNested ? ThreadRowMetrics.folderIndent : 0) + (item.shelfIndent ? ThreadRowMetrics.folderIndent : 0))
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { rowHeights.note(item.id, $0) }
             .modifier(RidesWithDraggedParent(parentID: thread.parentThreadID, drag: drag))
         case .headCards(let parent, let heads):
             headCards(parent: parent, heads: heads)
-                .padding(.leading, item.isNested ? ThreadRowMetrics.folderIndent : 0)
+                .padding(.leading, (item.isNested ? ThreadRowMetrics.folderIndent : 0) + (item.shelfIndent ? ThreadRowMetrics.folderIndent : 0))
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { rowHeights.note(item.id, $0) }
                 .modifier(RidesWithDraggedParent(parentID: parent.id, drag: drag))
         case .helperStub(let parent, let helpers):
             HelperStubRow(parentSnapshot: parent, helperSnapshots: helpers) { fold(parent.id) }
-                .padding(.leading, item.isNested ? ThreadRowMetrics.folderIndent : 0)
+                .padding(.leading, (item.isNested ? ThreadRowMetrics.folderIndent : 0) + (item.shelfIndent ? ThreadRowMetrics.folderIndent : 0))
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { rowHeights.note(item.id, $0) }
                 .modifier(RidesWithDraggedParent(parentID: parent.id, drag: drag))
         }
@@ -635,6 +643,7 @@ struct SidebarView: View {
             todayTick: todayFocus ? MinuteClock.shared.now : nil,
             projectsCollapsed: model.settings.sidebarProjectsCollapsed,
             tasksCollapsed: model.settings.sidebarTasksCollapsed,
+            sidebarShelfExpanded: model.settings.sidebarShelfExpanded,
             attention: attention,
             parentsShowingHeads: parentsShowingHeads
         )
@@ -745,29 +754,50 @@ struct SidebarView: View {
 
     private func projectItems(helpers: [UUID: [ChatThread]]) -> [SidebarItem] {
         var items: [SidebarItem] = []
-        for (index, project) in model.projects.enumerated() {
-            if index > 0 {
-                items.append(SidebarItem(id: "gap-\(project.id)", kind: .gap(Chrome.groupGap)))
+        let active = model.projects.filter { !$0.isShelved }
+        let shelved = model.projects.filter(\.isShelved)
+        func appendProjects(_ projects: [Project], isShelved: Bool) {
+            for (index, project) in projects.enumerated() {
+                if index > 0 {
+                    items.append(SidebarItem(id: "gap-\(project.id)", kind: .gap(Chrome.groupGap)))
+                }
+                let projectThreads = model.threads(in: project)
+                items.append(SidebarItem(id: "project-\(project.id)", kind: .project(project, count: projectThreads.count), isNested: isShelved))
+                guard project.isExpanded, projectDrag.id == nil else { continue }
+                let orderedThreads = projectThreads.filter(\.isPinned) + projectThreads.filter { !$0.isPinned }
+                for thread in orderedThreads {
+                    let own = helpers[thread.id] ?? []
+                    items.append(SidebarItem(
+                        id: SidebarItem.id(for: thread),
+                        kind: .thread(thread, projectName: nil, projectIcon: nil, peers: nil, hasHelpers: !own.isEmpty),
+                        isNested: true,
+                        shelfIndent: isShelved
+                    ))
+                    items.append(contentsOf: helperItems(under: thread, helpers: own, isNested: true).map {
+                        var item = $0
+                        item.shelfIndent = isShelved
+                        return item
+                    })
+                }
             }
-            let projectThreads = model.threads(in: project)
-            // The count a folded project shows: the chats it lists expanded, meaning its
-            // top-level threads — the helpers and heads nested under them are not chats.
-            let count = projectThreads.count
-            items.append(SidebarItem(id: "project-\(project.id)", kind: .project(project, count: count)))
-            guard project.isExpanded, projectDrag.id == nil else { continue }
-            // Pinned threads lead each project's list.
-            let orderedThreads = projectThreads.filter(\.isPinned) + projectThreads.filter { !$0.isPinned }
-            for thread in orderedThreads {
-                let own = helpers[thread.id] ?? []
-                items.append(SidebarItem(
-                    id: SidebarItem.id(for: thread),
-                    kind: .thread(thread, projectName: nil, projectIcon: nil, peers: nil, hasHelpers: !own.isEmpty),
-                    isNested: true
-                ))
-                items.append(contentsOf: helperItems(under: thread, helpers: own, isNested: true))
+        }
+        appendProjects(active, isShelved: false)
+        if !shelved.isEmpty {
+            let shelvedIDs = Set(shelved.map(\.id))
+            let hasUnread = model.threads.contains { thread in
+                !thread.isArchived && thread.hasUnread && thread.projectID.map { shelvedIDs.contains($0) } == true
+            }
+            items.append(SidebarItem(id: "gap-shelf", kind: .gap(Chrome.groupGap)))
+            items.append(SidebarItem(id: "shelf", kind: .shelf(count: shelved.count, hasUnread: hasUnread)))
+            if model.settings.sidebarShelfExpanded {
+                appendProjects(shelved, isShelved: true)
             }
         }
         return items
+    }
+
+    private func shelfRow(count: Int, hasUnread: Bool) -> some View {
+        ShelfRow(count: count, hasUnread: hasUnread)
     }
 
     // MARK: Activity layout
@@ -1004,17 +1034,20 @@ struct SidebarView: View {
     }
 
     private func projectDragChanged(_ id: UUID, translation: CGFloat) {
+        // Runs on every pointer move: an O(1) check here, the active list only at the grab.
+        guard model.project(id)?.isShelved == false else { return }
         if projectDrag.id != id {
+            let active = model.projects.filter { !$0.isShelved }
             guard let expandedTop = projectFrames.frame(of: id)?.minY,
-                  let index = model.projects.firstIndex(where: { $0.id == id }) else { return }
-            let collapsedTop = Self.listTopInset + (rowHeights.values["section-projects"] ?? Chrome.rowHeight) + 1 + model.projects.prefix(index).reduce(CGFloat.zero) {
+                  let index = active.firstIndex(where: { $0.id == id }) else { return }
+            let collapsedTop = Self.listTopInset + (rowHeights.values["section-projects"] ?? Chrome.rowHeight) + 1 + active.prefix(index).reduce(CGFloat.zero) {
                 $0 + (rowHeights.values["project-\($1.id)"] ?? Chrome.rowHeight) + 1
             } + CGFloat(index) * (Chrome.groupGap + 1)
             var grab = RowDrag<UUID>(id: id)
             // Compensate for the rows above disappearing without moving the grip.
             grab.settled = collapsedTop - expandedTop
             withAnimation(Chrome.panelSlide) { projectDrag = grab }
-            projectDragPeers = DragPeers((model.projects.map(\.id), nil), heights: projectSlotHeights)
+            projectDragPeers = DragPeers((active.map(\.id), nil), heights: projectSlotHeights)
         }
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -1023,11 +1056,13 @@ struct SidebarView: View {
         guard let snapshot = projectDragPeers else { return }
         let moved = projectDrag.settle(order: snapshot.order, heights: snapshot.heights, fallbackHeight: Chrome.rowHeight + Chrome.groupGap + 2) { neighbour, placeAfter in
             withAnimation(Self.slide) {
-                model.moveProject(id, to: neighbour, placeAfter: placeAfter)
+                guard model.project(id)?.isShelved == false,
+                      model.project(neighbour)?.isShelved == false else { return false }
+                return model.moveProject(id, to: neighbour, placeAfter: placeAfter)
             }
         }
         if moved {
-            projectDragPeers = DragPeers((model.projects.map(\.id), nil), heights: projectSlotHeights)
+            projectDragPeers = DragPeers((model.projects.filter { !$0.isShelved }.map(\.id), nil), heights: projectSlotHeights)
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         }
     }
@@ -1328,6 +1363,7 @@ private struct SidebarItem: Identifiable {
         case empty(String)
         /// A project, with what a folded one shows: its threads and their helpers.
         case project(Project, count: Int)
+        case shelf(count: Int, hasUnread: Bool)
         case header(String, isFirst: Bool)
         /// A thread, with its project's name in the activity layout, the threads it can be
         /// reordered among, and whether it has helpers to fold away.
@@ -1343,6 +1379,7 @@ private struct SidebarItem: Identifiable {
     let id: String
     let kind: Kind
     var isNested: Bool = false
+    var shelfIndent: Bool = false
 
     static func id(for thread: ChatThread) -> String {
         thread.id.uuidString
@@ -1360,6 +1397,85 @@ private extension AnyTransition {
     }
 }
 
+private struct ShelfRow: View {
+    @Environment(AppModel.self) private var model
+    let count: Int
+    let hasUnread: Bool
+
+    @State private var iconEditor = ProjectIconEditorRequest()
+    @AppStorage("sidebarShelfIcon", store: CaptureRun.defaults ?? .standard) private var iconData: Data?
+
+    private var iconBinding: Binding<ProjectIcon?> {
+        Binding(
+            get: {
+                guard let iconData else { return nil }
+                return try? JSONDecoder().decode(ProjectIcon.self, from: iconData)
+            },
+            set: { icon in
+                guard let icon else {
+                    iconData = nil
+                    return
+                }
+                guard let data = try? JSONEncoder().encode(icon) else { return }
+                iconData = data
+            }
+        )
+    }
+
+    var body: some View {
+        @Bindable var iconEditor = iconEditor
+        let expanded = model.settings.sidebarShelfExpanded
+        SidebarRow(
+            title: "Shelved",
+            isMuted: true,
+            accessoryWidth: 60,
+            action: {
+                withAnimation(Chrome.panelSlide) { model.settings.sidebarShelfExpanded.toggle() }
+            },
+            icon: {
+                SidebarIconBadge {
+                    if let icon = iconBinding.wrappedValue {
+                        ProjectIconMark(icon: icon, size: 12)
+                    } else {
+                        SidebarSymbol("asset:sidebar-shelf")
+                    }
+                }
+            },
+            accessory: { _ in
+                HStack(spacing: 5) {
+                    if hasUnread {
+                        Circle().fill(Chrome.accent).frame(width: 5, height: 5)
+                    }
+                    Text(verbatim: "\(count)")
+                        .font(.ui(.subheadline).monospacedDigit())
+                        .foregroundStyle(Chrome.secondaryText)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                }
+                .padding(.trailing, Chrome.rowHorizontalPadding - 6)
+            }
+        )
+        .popover(isPresented: $iconEditor.isPresented, arrowEdge: .bottom) {
+            ProjectIconPicker(icon: iconBinding)
+        }
+        .contextMenu { [weak iconEditor] in
+            RowActionMenuButtons(actions: [
+                RowAction(title: "Change icon…", symbol: "face.smiling") { [weak iconEditor] in
+                    // Let the menu dismiss without retaining the row's state storage.
+                    Task { @MainActor [weak iconEditor] in
+                        iconEditor?.isPresented = true
+                    }
+                },
+            ])
+        }
+        .accessibilityLabel(Text(verbatim: Chrome.localized("Shelved")))
+        .accessibilityValue(Text(verbatim: Chrome.localized(expanded ? "Expanded" : "Collapsed")))
+    }
+}
+
 private struct ProjectRow: View {
     @Environment(AppModel.self) private var model
     /// The project as the list last built it; `project` below is the live record.
@@ -1373,6 +1489,7 @@ private struct ProjectRow: View {
     let count: Int
     var togglesExpansion = true
     var isDragged = false
+    var isShelved = false
 
     @State private var isMenuPresented = false
     @State private var iconEditor = ProjectIconEditorRequest()
@@ -1383,7 +1500,8 @@ private struct ProjectRow: View {
         let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
         SidebarRow(
             title: project.name,
-            accessoryWidth: 40,
+            isMuted: isShelved,
+            accessoryWidth: isShelved ? 60 : 40,
             action: {
                 guard togglesExpansion else { return }
                 withAnimation(Chrome.panelSlide) {
@@ -1402,6 +1520,17 @@ private struct ProjectRow: View {
             accessory: { hovering in
                 if (hovering || isMenuPresented) && !isDragged {
                     HStack(spacing: 0) {
+                        // Only unshelving gets a one-click button: a shelve button beside
+                        // the ellipsis is too easy to hit by mistake, so shelving stays in the menus.
+                        if project.isShelved {
+                            Button {
+                                withAnimation(Chrome.panelSlide) { model.setProjectShelved(project.id, false) }
+                            } label: {
+                                RowAccessoryIcon("tray.and.arrow.up")
+                            }
+                            .buttonStyle(.plain)
+                            .help(Text(verbatim: Chrome.localized("Unshelve project")))
+                        }
                         RowActionsButton(actions: actions(), isPresented: $isMenuPresented)
                         Button {
                             model.newThread(in: project)
@@ -1477,6 +1606,7 @@ private struct ProjectRow: View {
                 Workspace.revealInFinder(path)
             },
             changeIconAction(projectID: project.id, model: model, iconEditor: iconEditor),
+            shelfAction(project: project, model: model),
             RowAction(title: "Remove project", symbol: "trash", isDestructive: true, startsGroup: true) { [weak model, project] in
                 guard let model else { return }
                 model.requestProjectDeletion(project)
@@ -1492,10 +1622,21 @@ private struct ProjectRow: View {
             },
             RowAction(title: "Reveal in Finder", symbol: "folder", startsGroup: true) { Workspace.revealInFinder(project.path) },
             Self.changeIconAction(projectID: project.id, model: model, iconEditor: iconEditor),
+            Self.shelfAction(project: project, model: model),
             RowAction(title: "Remove project", symbol: "trash", isDestructive: true, startsGroup: true) {
                 model.requestProjectDeletion(project)
             },
         ]
+    }
+
+    private static func shelfAction(project: Project, model: AppModel) -> RowAction {
+        RowAction(
+            title: project.isShelved ? "Unshelve project" : "Shelve project",
+            symbol: project.isShelved ? "tray.and.arrow.up" : "tray.and.arrow.down"
+        ) { [weak model, projectID = project.id, shelved = !project.isShelved] in
+            guard let model else { return }
+            withAnimation(Chrome.panelSlide) { model.setProjectShelved(projectID, shelved) }
+        }
     }
 
     private static func iconBinding(for projectID: UUID, model: AppModel) -> Binding<ProjectIcon?> {
@@ -2633,6 +2774,7 @@ private final class SidebarItemCache {
         var todayTick: Date?
         var projectsCollapsed: Bool
         var tasksCollapsed: Bool
+        var sidebarShelfExpanded: Bool
         /// The tasks heading their section under "Needs attention".
         var attention: Set<UUID>
         /// Parents whose cards or folded summaries include heads.

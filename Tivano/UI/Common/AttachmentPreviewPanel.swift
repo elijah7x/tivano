@@ -24,6 +24,8 @@ final class AttachmentPreviewCoordinator: NSObject, NSPopoverDelegate {
     /// (see `WindowRectAnchor`).
     private var anchorRect: CGRect?
     private var currentID: Attachment.ID?
+    private var presentationGeneration = 0
+    private var loadTask: Task<Void, Never>?
     private enum Monitor {
         case event(Any)
         case observer(NSObjectProtocol)
@@ -62,7 +64,7 @@ final class AttachmentPreviewCoordinator: NSObject, NSPopoverDelegate {
     /// `edge` is where the panel opens: above the anchor for a photo in a message, below
     /// a tool row whose chevron points down (`.minY` is below in these flipped views).
     func toggle(_ attachment: Attachment, over view: NSView? = nil, edge: NSRectEdge = .maxY) {
-        if currentID == attachment.id, popover.isShown {
+        if currentID == attachment.id {
             close()
         } else {
             show(attachment, over: view, edge: edge)
@@ -70,23 +72,48 @@ final class AttachmentPreviewCoordinator: NSObject, NSPopoverDelegate {
     }
 
     func close() {
+        presentationGeneration &+= 1
+        loadTask?.cancel()
+        loadTask = nil
         stopMonitors()
         currentID = nil
         if popover.isShown { popover.performClose(nil) }
     }
 
     private func show(_ attachment: Attachment, over view: NSView?, edge: NSRectEdge) {
-        let imageSize: CGSize? = if attachment.isImage {
-            AttachmentLargePreview.imageDisplaySize(for: attachment)
-        } else if attachment.isVideo {
-            AttachmentLargePreview.videoDisplaySize(for: attachment)
-        } else {
-            nil
-        }
-        let content = AttachmentLargePreview(attachment: attachment, imageSize: imageSize)
-        let size = Self.contentSize(for: attachment, imageSize: imageSize)
-        currentID = attachment.id
         guard let (anchor, rect) = anchorTarget(thumbnailView: view, edge: edge) else { return }
+        presentationGeneration &+= 1
+        let generation = presentationGeneration
+        loadTask?.cancel()
+        currentID = attachment.id
+        startMonitors()
+        loadTask = Task { [weak self, weak anchor] in
+            let version = await AttachmentFileVersion.read(attachment.path)
+            var imageSize: CGSize?
+            if attachment.isImage || attachment.isVideo {
+                imageSize = AttachmentLargePreview.imageBounds
+                if let version {
+                    if attachment.isImage {
+                        imageSize = await AttachmentLargePreview.imageDisplaySize(for: version)
+                    } else {
+                        imageSize = await AttachmentLargePreview.videoDisplaySize(for: version)
+                    }
+                }
+            }
+            let current = await AttachmentFileVersion.read(attachment.path)
+            if current != version, imageSize != nil { imageSize = AttachmentLargePreview.imageBounds }
+            let size = await Self.contentSize(version: current, imageSize: imageSize)
+            guard !Task.isCancelled, let self, generation == self.presentationGeneration,
+                  let anchor, anchor.window != nil else { return }
+            let content = AttachmentLargePreview(attachment: attachment, imageSize: imageSize,
+                                                snapshot: AttachmentFileSnapshot(path: attachment.path, version: current))
+            self.currentID = attachment.id
+            self.present(content, size: size, anchor: anchor, rect: rect, edge: edge)
+            self.loadTask = nil
+        }
+    }
+
+    private func present(_ content: AttachmentLargePreview, size: NSSize, anchor: NSView, rect: NSRect, edge: NSRectEdge) {
         // The panel is sized here, once, and the hosting controller never
         // publishes a size of its own (see setFixedContent): the only size
         // AppKit ever positions against is this one, so the arrow stays on the
@@ -152,8 +179,11 @@ final class AttachmentPreviewCoordinator: NSObject, NSPopoverDelegate {
         MainActor.assumeIsolated { [weak self] in
             guard let self else { return }
             if self.popover.isShown { return }
-            self.stopMonitors()
-            self.currentID = nil
+            if self.loadTask == nil {
+                self.stopMonitors()
+                self.currentID = nil
+            }
+            self.popover.contentViewController = nil
         }
     }
 
@@ -220,12 +250,12 @@ final class AttachmentPreviewCoordinator: NSObject, NSPopoverDelegate {
     /// asynchronously, so the panel cannot size itself to content after it
     /// appears; sizing up front from the same numbers the content lays out
     /// with keeps it from ever resizing once shown.
-    private static func contentSize(for attachment: Attachment, imageSize: CGSize?) -> NSSize {
+    private static func contentSize(version: AttachmentFileVersion?, imageSize: CGSize?) async -> NSSize {
         let chrome: CGFloat = 60 // outer padding + name/footer row + spacing
         if let imageSize {
             return NSSize(width: AttachmentLargePreview.imageBounds.width + 24, height: ceil(imageSize.height) + chrome)
         }
-        if let text = textSample(for: attachment) {
+        if let version, let text = await textSample(for: version) {
             // Measured overhead: outer padding (24) + spacing (10) + footer (~18).
             return NSSize(width: 464, height: min(320, max(120, CGFloat(text.count / 4))) + 60)
         }
@@ -234,11 +264,12 @@ final class AttachmentPreviewCoordinator: NSObject, NSPopoverDelegate {
         return NSSize(width: 344, height: 100)
     }
 
-    private static func textSample(for attachment: Attachment) -> String? {
-        let url = attachment.url
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 500_000 else { return nil }
+    @concurrent
+    nonisolated private static func textSample(for version: AttachmentFileVersion) async -> String? {
+        let url = URL(fileURLWithPath: version.resolvedPath)
+        guard version.size < 500_000 else { return nil }
         guard let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else { return nil }
-        return text
+        return String(text.prefix(8_000))
     }
 }
 

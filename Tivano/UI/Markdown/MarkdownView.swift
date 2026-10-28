@@ -16,10 +16,15 @@ private final class StreamingParseCoordinator {
     @ObservationIgnored private var requested: String?
     @ObservationIgnored private var pending: String?
     @ObservationIgnored private var running = false
+    @ObservationIgnored private var generation = 0
 
-    func parse(_ text: String) -> (blocks: [MarkdownBlock], stable: Int) {
+    func parse(_ text: String) -> (blocks: [MarkdownBlock], stable: Int, generation: Int) {
         _ = landed
         if requested != text {
+            if let requested, !text.utf8.starts(with: requested.utf8) {
+                generation &+= 1
+                result = nil
+            }
             requested = text
             let tailSize = text.utf8.count - (result?.parse.restart ?? 0)
             if tailSize <= 4096 {
@@ -32,21 +37,27 @@ private final class StreamingParseCoordinator {
                 startNext()
             }
         }
-        return (result?.parse.blocks ?? [], result?.parse.stable ?? 0)
+        return (result?.parse.blocks ?? [], result?.parse.stable ?? 0, generation)
     }
 
     private func startNext() {
         guard !running, let text = pending else { return }
         pending = nil
+        guard text != result?.text else { return }
         running = true
         let previous = result
+        let generation = generation
         Task { [weak self] in
             let parsed = await Task.detached(priority: .userInitiated) {
                 MarkdownParser.parse(text, extending: previous)
             }.value
             guard let self else { return }
             self.running = false
-            if self.requested == text {
+            // Append-only streams may outpace parsing indefinitely. Publish a completed
+            // prefix, but never overwrite a newer synchronous parse or another text generation.
+            if self.generation == generation,
+               let requested = self.requested, requested.utf8.starts(with: text.utf8),
+               self.result == nil || text.utf8.count > (self.result?.text.utf8.count ?? 0) {
                 self.result = (text, parsed)
                 MarkdownView.rememberStreamingParse(text, parsed)
                 self.landed &+= 1
@@ -116,7 +127,7 @@ struct MarkdownView: View, Equatable {
         // While the text streams, the parse also says how many of its leading blocks are
         // final; those are the ones a flush cannot change, and the views for them are
         // compared by that fact alone (see `MarkdownBlockView.settled`).
-        let parse = isStreaming ? streamingCoordinator.parse(text) : (blocks: Self.blocks(for: text), stable: 0)
+        let parse = isStreaming ? streamingCoordinator.parse(text) : (blocks: Self.blocks(for: text), stable: 0, generation: 0)
         let blocks = parse.blocks
         let stable = parse.stable
         let last = blocks.count - 1
@@ -138,7 +149,7 @@ struct MarkdownView: View, Equatable {
         } else {
             VStack(alignment: .leading, spacing: TypeScale.proseParagraphSpacing) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                    MarkdownBlockView(block: block, settled: index < stable)
+                    MarkdownBlockView(block: block, settled: index < stable, generation: parse.generation)
                         .equatable()
                         // Only the block still being written is streaming; the ones above it are
                         // settled and cache like any finished text.
@@ -338,6 +349,7 @@ struct MarkdownBlockView: View, Equatable {
     /// are therefore the same block, and comparing their content -- every byte of every
     /// earlier block of the reply, on every flush -- is work the flush does not need.
     var settled = false
+    var generation = 0
     @Environment(\.markdownPointSize) private var pointSize
     @Environment(\.markdownDimmed) private var dimmed
     @Environment(\.markdownListDepth) private var listDepth
@@ -350,7 +362,7 @@ struct MarkdownBlockView: View, Equatable {
     /// enough (see `settled`). Anything not settled -- the block still being written, and
     /// every block of a finished message -- compares as it always has.
     nonisolated static func == (lhs: MarkdownBlockView, rhs: MarkdownBlockView) -> Bool {
-        if lhs.settled, rhs.settled { return true }
+        if lhs.settled, rhs.settled, lhs.generation == rhs.generation { return true }
         return lhs.block == rhs.block
     }
 

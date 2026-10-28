@@ -34,6 +34,13 @@ enum APIKeychain {
         return SecCopyErrorMessageString(status, nil) as String? ?? String(status)
     }
 
+    /// Returns the system error description, or nil when the key was stored.
+    static func store(_ key: String, account: String) -> String? {
+        let status = setStatus(key, account: account)
+        guard status != errSecSuccess else { return nil }
+        return SecCopyErrorMessageString(status, nil) as String? ?? String(status)
+    }
+
     /// The accounts older builds stored keys under; changing one loses that key.
     private static func account(for provider: ProviderKind) -> String? {
         switch provider {

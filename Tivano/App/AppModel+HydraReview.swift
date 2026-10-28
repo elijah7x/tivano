@@ -1,6 +1,6 @@
 import Foundation
 
-// Hydra 2.0 (Labs): the cross-vendor, read-only review of a job's diff before it is
+// Hydra 2.0: the cross-vendor, read-only review of a job's diff before it is
 // merged. See docs/hydra2.md §6.
 extension AppModel {
     enum HydraReviewOutcome { case started, pending, skipped }
@@ -21,6 +21,19 @@ extension AppModel {
         let runtime = runtime(for: leadID)
         await runtime.ensureLoaded()
         guard runtime.phase == .idle, !runtime.isReverting else { return .pending }
+        guard runtime.hydraReviewRunning == nil else { return .pending }
+        let leadProvider = job.leadProvider.flatMap { ProviderKind(storedValue: $0) } ?? lead.provider
+        guard let selected = hydraReviewEngine(for: leadProvider) else {
+            return skip("no other-vendor CLI available")
+        }
+        runtime.hydraReviewRunning = selected.reviewer
+        runtime.hydraReviewProvider = selected.provider
+        updateTaskSleepPrevention()
+        defer {
+            runtime.hydraReviewRunning = nil
+            runtime.hydraReviewProvider = nil
+            updateTaskSleepPrevention()
+        }
 
         let jobHeads = hydraTeam(of: leadID).filter { $0.hydra?.jobID == jobID }
         var paths: [String: Set<String>] = [:]
@@ -79,10 +92,7 @@ extension AppModel {
             if !checkoutPatch.trimmed.isEmpty { patch += "# checkout: \(root)\n\(checkoutPatch)\n" }
         }
         guard !patch.trimmed.isEmpty else { return skip("no changes") }
-        let leadProvider = job.leadProvider.flatMap { ProviderKind(storedValue: $0) } ?? lead.provider
-        guard let selected = hydraReviewEngine(for: leadProvider) else {
-            return skip("no other-vendor CLI available")
-        }
+        let fileStats = DiffStats.files(inPatch: patch)
         if patch.count > 80_000 {
             let notice = "\n\n[Patch truncated to 80,000 characters.]"
             patch = String(patch.prefix(80_000 - notice.count)) + notice
@@ -98,9 +108,26 @@ extension AppModel {
             if let uncertain = notes.uncertain { fields.append("Uncertain \(uncertain)") }
             if !fields.isEmpty { noteLines.append("\(info.persona.name): \(fields.joined(separator: " / "))") }
         }
+        if hydraJobRunsDecisions(jobID, of: leadID) {
+            let leadReply = runtime.entries.last(where: {
+                if case .assistant = $0.item.content { return true }
+                return false
+            }).flatMap { entry -> String? in
+                guard case .assistant(let message) = entry.item.content else { return nil }
+                return message.text
+            } ?? ""
+            let request = HydraDecisionRequests.preReview(
+                request: job.request,
+                leadReply: leadReply,
+                headFlags: noteLines,
+                heads: jobHeads.count,
+                leadBuilt: job.leadBuilt,
+                leadEditsAfterReports: job.leadEditsAfterReports,
+                files: fileStats
+            )
+            runHydraDecision(request, leadID: leadID, jobID: jobID)
+        }
         let prompt = HydraPrompts.v2ReviewPrompt(request: job.request, notes: noteLines.joined(separator: "\n"), patch: patch)
-        runtime.hydraReviewRunning = selected.reviewer
-        defer { runtime.hydraReviewRunning = nil }
         guard let findings = await TextGeneration.review(prompt, engine: selected.engine, directory: checkout) else {
             return skip("review failed")
         }
@@ -111,6 +138,13 @@ extension AppModel {
         updateHydraJob(jobID, of: leadID) {
             $0.reviewEngine = selected.reviewer
             $0.reviewFindings = findingCount
+        }
+        if hydraJobRunsDecisions(jobID, of: leadID) {
+            recordHydraDecisionOutcome(
+                leadID: leadID, jobID: jobID, reviewer: selected.reviewer,
+                findings: findingCount,
+                findingPaths: findingCount == 0 ? [] : DiffStats.mentionedPaths(fileStats, in: findings)
+            )
         }
         guard findingCount > 0 else { return .skipped }
         let text = HydraPrompts.v2ReviewMessage(reviewer: selected.reviewer, findings: findings)
@@ -124,16 +158,16 @@ extension AppModel {
         return .started
     }
 
-    private func hydraReviewEngine(for provider: ProviderKind) -> (engine: TextGeneration.Engine, reviewer: String)? {
-        func claude() -> (engine: TextGeneration.Engine, reviewer: String)? {
+    private func hydraReviewEngine(for provider: ProviderKind) -> (engine: TextGeneration.Engine, reviewer: String, provider: ProviderKind)? {
+        func claude() -> (engine: TextGeneration.Engine, reviewer: String, provider: ProviderKind)? {
             guard providers.status(.claude).auth != .signedOut, let executable = providers.executable(for: .claude) else { return nil }
-            return (.claude(executable: executable, environment: providers.environment(for: .claude)), "Claude")
+            return (.claude(executable: executable, environment: providers.environment(for: .claude)), "Claude", .claude)
         }
-        func codex() -> (engine: TextGeneration.Engine, reviewer: String)? {
+        func codex() -> (engine: TextGeneration.Engine, reviewer: String, provider: ProviderKind)? {
             guard providers.status(.codex).auth != .signedOut,
                   let executable = providers.executable(for: .codex),
                   let model = providers.defaultModel(for: .codex)?.id else { return nil }
-            return (.codex(executable: executable, environment: providers.environment(for: .codex), model: model), "Codex \(model)")
+            return (.codex(executable: executable, environment: providers.environment(for: .codex), model: model), "Codex \(model)", .codex)
         }
         switch provider {
         case .claude: return codex()

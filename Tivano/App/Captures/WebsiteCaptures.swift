@@ -112,10 +112,6 @@ enum WebsiteCaptures {
 
         if CaptureRun.isEnabled {
             defaults.set(true, forKey: "hydraEnabled")
-            // With Hydra on, a queued follow-up would go out as a real head (see
-            // `ThreadRuntime.enqueueFollowUp`): the queue scene must queue, nothing more.
-            defaults.set(false, forKey: "hydraQueueHeads")
-            defaults.set(false, forKey: "hydraAlwaysHeads")
         }
         let repos = output.appendingPathComponent("repos", isDirectory: true)
         var library = Library()

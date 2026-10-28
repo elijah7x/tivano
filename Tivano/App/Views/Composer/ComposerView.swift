@@ -217,8 +217,6 @@ struct ComposerView: View {
                     thread: thread,
                     compact: compactModelChip,
                     recentDownloadsPicker: model.settings.recentDownloadsPicker,
-                    goesToHead: goesToHead(thread),
-                    queueGoesToHead: queueGoesToHead(thread),
                     headsProvider: headsProvider(thread),
                     showingRecents: $showingRecents,
                     onAttach: { attach($0.map(AttachmentSource.file)) },
@@ -273,6 +271,8 @@ struct ComposerView: View {
             suggestions = SuggestionState()
             fileIndex.reset()
             if let workingDirectory { await fileIndex.prepare(workingDirectory) }
+            guard !Task.isCancelled else { return }
+            if controller.hasFocus { cursorMoved(to: controller.cursorLocation) }
         }
         // The notice says its piece and goes; a second drop restarts the wait.
         .task(id: attachmentNotice) {
@@ -340,26 +340,9 @@ struct ComposerView: View {
         if headNeedsLead { return Chrome.localized("Ask the lead to send this head back") }
         if thread.interactionMode == .plan { return Chrome.localized("Describe what you want to plan") }
         if model.hydraIsOn(thread) {
-            // With every message sent to a head, the lead never works the message itself:
-            // it goes straight out and comes back as a report, which is worth saying here
-            // because nothing else in the box shows it.
-            if goesToHead(thread) {
-                return String(format: Chrome.localized("Goes to a head; %@ leads and reports back"), thread.provider.displayName)
-            }
-            return String(format: Chrome.localized(model.settings.isHydra2Enabled ? "Ask %@ for anything; the lead decides what to do itself and what to delegate" : "Ask %@ for anything; big jobs go out to a team of heads"), thread.provider.displayName)
+            return String(format: Chrome.localized("Ask %@ for anything; the lead decides what to do itself and what to delegate"), thread.provider.displayName)
         }
         return String(format: Chrome.localized("Ask %@ to build, fix or explain. @ for files, / for commands"), thread.provider.displayName)
-    }
-
-    /// Whether the next message is handed to a head rather than worked by the lead.
-    private func goesToHead(_ thread: ChatThread) -> Bool {
-        model.existingRuntime(for: thread.id)?.hydraJobMode != .v2 && model.settings.hydraSendsToHeads && model.hydraIsOn(thread)
-    }
-
-    /// Whether a message queued behind the running turn is handed to a head of its own
-    /// rather than waiting for the lead.
-    private func queueGoesToHead(_ thread: ChatThread) -> Bool {
-        model.existingRuntime(for: thread.id)?.hydraJobMode != .v2 && model.settings.hydraQueuesToHeads && model.hydraIsOn(thread)
     }
 
     /// The pair's heads provider when it differs from the lead's, so the usage popover
@@ -678,8 +661,6 @@ private struct ComposerControls: View {
     let thread: ChatThread
     let compact: Bool
     let recentDownloadsPicker: Bool
-    let goesToHead: Bool
-    let queueGoesToHead: Bool
     let headsProvider: ProviderKind?
     @Binding var showingRecents: Bool
     let onAttach: ([URL]) -> Void
@@ -724,7 +705,7 @@ private struct ComposerControls: View {
                 ContextMeter(runtime: runtime, provider: thread.provider, headsProvider: headsProvider)
             }
             VoiceComposerButton(thread: thread)
-            SendButton(runtime: runtime, goesToHead: goesToHead, queueGoesToHead: queueGoesToHead, send: onSend)
+            SendButton(runtime: runtime, send: onSend)
         }
         .frame(maxWidth: .infinity)
     }
@@ -862,16 +843,10 @@ private enum SendShortcutText {
 
 private struct SendButton: View {
     let runtime: ThreadRuntime
-    /// With every message going to a head, the send hands the message on rather than
-    /// starting the lead's own turn, so the help says where it lands.
-    let goesToHead: Bool
-    /// With heads at work, Return never stops the lead: the message goes to a head of its
-    /// own when queued messages do, else it waits for the lead, and the help says which.
-    let queueGoesToHead: Bool
     let send: () -> Void
 
     var body: some View {
-        SendRunState(runtime: runtime, goesToHead: goesToHead, queueGoesToHead: queueGoesToHead, send: send)
+        SendRunState(runtime: runtime, send: send)
     }
 }
 
@@ -879,8 +854,6 @@ private struct SendButton: View {
 /// stopping a turn repaint the button without ever looking at the draft text.
 private struct SendRunState: View {
     let runtime: ThreadRuntime
-    let goesToHead: Bool
-    let queueGoesToHead: Bool
     let send: () -> Void
 
     var body: some View {
@@ -888,7 +861,7 @@ private struct SendRunState: View {
         let headsWorking = isRunning && runtime.hasWorkingHeads
         // The queue tail of the idle help depends on heads working, which this reader
         // already watches; the empty state comes from the child below alone.
-        SendDraftState(runtime: runtime, isRunning: isRunning, headsWorking: headsWorking, goesToHead: goesToHead, queueGoesToHead: queueGoesToHead, send: send)
+        SendDraftState(runtime: runtime, isRunning: isRunning, headsWorking: headsWorking, send: send)
     }
 }
 
@@ -898,8 +871,6 @@ private struct SendDraftState: View {
     let runtime: ThreadRuntime
     let isRunning: Bool
     let headsWorking: Bool
-    let goesToHead: Bool
-    let queueGoesToHead: Bool
     let send: () -> Void
 
     var body: some View {
@@ -920,7 +891,7 @@ private struct SendDraftState: View {
         .disabled(!isEnabled || runtime.isReverting)
         .padding(.leading, 4)
         .help(Text(verbatim: helpText(isRunning: isRunning, headsWorking: headsWorking)))
-        .accessibilityLabel(Text(verbatim: isRunning ? Chrome.localized("Stop") : (goesToHead ? Chrome.localized("Send to a head") : Chrome.localized("Send"))))
+        .accessibilityLabel(Text(verbatim: isRunning ? Chrome.localized("Stop") : Chrome.localized("Send")))
     }
 
     /// The chords come from the one cached lookup above, so the help never promises
@@ -931,15 +902,13 @@ private struct SendDraftState: View {
             // Return does not steer while heads work, it queues: the help says where the
             // message lands rather than promising a stop that never comes.
             if headsWorking {
-                return queueGoesToHead
-                    ? Chrome.localized("Heads are at work: your message goes to a head")
-                    : Chrome.localized("Heads are at work: your message waits for the lead")
+                return Chrome.localized("Heads are at work: your message waits for the lead")
             }
             var parts = [String(format: Chrome.localized("Stop%@"), SendShortcutText.stop), Chrome.localized("Return steers")]
             if let queues { parts.append(String(format: Chrome.localized("%@ queues"), queues)) }
             return parts.joined(separator: " · ")
         }
-        var parts = [goesToHead ? Chrome.localized("Send to a head (Return) · the lead reports back") : Chrome.localized("Send (Return)")]
+        var parts = [Chrome.localized("Send (Return)")]
         if let queues { parts.append(String(format: Chrome.localized(headsWorking ? "%@ queues until the heads report" : "%@ queues while running"), queues)) }
         return parts.joined(separator: " · ")
     }
@@ -1197,6 +1166,8 @@ final class FileIndex {
 
     @ObservationIgnored private var entries: [Entry] = []
     @ObservationIgnored private var directory: String?
+    @ObservationIgnored private var builtAt: Date?
+    @ObservationIgnored private var generation = 0
 
     /// Built indexes per directory, shared by every composer, so switching threads in a project
     /// never lists and lowercases its files again. A stale index is served and rebuilt behind it.
@@ -1207,16 +1178,24 @@ final class FileIndex {
     private static let freshness: TimeInterval = 60
 
     func reset() {
+        generation &+= 1
         directory = nil
         entries = []
+        builtAt = nil
     }
 
     func prepare(_ directory: String) async {
         guard !Task.isCancelled else { return }
-        self.directory = directory
-        while !Task.isCancelled, self.directory == directory {
+        if self.directory != directory {
+            reset()
+            self.directory = directory
+        }
+        if let builtAt, Date.now.timeIntervalSince(builtAt) <= Self.freshness { return }
+        let generation = generation
+        while !Task.isCancelled, self.generation == generation, self.directory == directory {
             if let cached = Self.built.value(for: directory) {
                 entries = cached.entries
+                builtAt = cached.builtAt
                 guard Date.now.timeIntervalSince(cached.builtAt) > Self.freshness else { return }
             } else {
                 entries = []
@@ -1237,8 +1216,9 @@ final class FileIndex {
                 Self.building[directory] = task
             }
             let fresh = await task.value
-            guard !Task.isCancelled, self.directory == directory else { return }
+            guard !Task.isCancelled, self.generation == generation, self.directory == directory else { return }
             entries = fresh
+            builtAt = Self.built.value(for: directory)?.builtAt ?? .now
             return
         }
     }
@@ -1262,9 +1242,15 @@ final class FileIndex {
     /// main thread for as long as that took in a large project. The caller drops the answer
     /// when the caret has moved on (the task is cancelled), so the scan stops early too.
     func search(_ query: String, limit: Int = 8) async -> [String] {
+        guard let directory else { return [] }
+        let generation = generation
+        await prepare(directory)
+        guard !Task.isCancelled, self.generation == generation, self.directory == directory else { return [] }
         let needle = query.lowercased()
         guard !needle.isEmpty else { return entries.prefix(limit).map(\.path) }
-        return await Self.search(needle, in: entries, limit: limit)
+        let matches = await Self.search(needle, in: entries, limit: limit)
+        guard !Task.isCancelled, self.generation == generation, self.directory == directory else { return [] }
+        return matches
     }
 
     @concurrent
@@ -1349,7 +1335,7 @@ final class FileIndex {
     }
 
     private nonisolated static func enumerate(_ directory: String) -> [String] {
-        let root = URL(fileURLWithPath: directory)
+        let root = URL(fileURLWithPath: directory).resolvingSymlinksInPath()
         let skipped: Set<String> = ["node_modules", "build", "dist", ".build", "DerivedData", "Pods", "target"]
         guard let enumerator = FileManager.default.enumerator(
             at: root,
@@ -1365,7 +1351,8 @@ final class FileIndex {
                 continue
             }
             if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { continue }
-            results.append(ToolTitles.relativePath(url.path, to: directory))
+            // Foundation can spell /var as /private/var in enumerated URLs.
+            results.append(url.pathComponents.suffix(enumerator.level).joined(separator: "/"))
             if results.count >= 20_000 { break }
         }
         return results

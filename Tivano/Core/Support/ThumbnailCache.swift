@@ -2,6 +2,35 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
+nonisolated struct AttachmentFileVersion: Hashable, Sendable {
+    let path: String
+    let resolvedPath: String
+    let size: UInt64
+    let modified: Date
+    let created: Date?
+    let fileNumber: UInt64?
+    let systemNumber: UInt64?
+
+    @concurrent
+    static func read(_ path: String) async -> Self? {
+        guard !Task.isCancelled else { return nil }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: resolved),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber,
+              let modified = attributes[.modificationDate] as? Date else { return nil }
+        return Self(path: path, resolvedPath: resolved, size: size.uint64Value, modified: modified,
+                    created: attributes[.creationDate] as? Date,
+                    fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                    systemNumber: (attributes[.systemNumber] as? NSNumber)?.uint64Value)
+    }
+}
+
+nonisolated struct AttachmentFileSnapshot: Hashable, Sendable {
+    let path: String
+    let version: AttachmentFileVersion?
+}
+
 /// Downsampled image attachments, decoded off the main actor and kept for reuse, so scrolling past
 /// a message with images never reads or decodes a file while drawing. The decodes run outside
 /// the actor, so fifteen thumbnails for the downloads popover decode side by side instead of
@@ -11,35 +40,51 @@ actor ThumbnailCache {
 
     struct Thumbnail: @unchecked Sendable {
         let image: CGImage
+        let version: AttachmentFileVersion
     }
 
-    private var thumbnails = RecentCache<String, Thumbnail>(limit: 120, costLimit: 32 * 1_024 * 1_024)
-    /// Decodes under way, by key, for later callers to join.
-    private var inFlight: [String: Task<Thumbnail?, Never>] = [:]
+    private struct Key: Hashable {
+        let version: AttachmentFileVersion
+        let pixels: Int
+        let fillingSquare: Bool
+    }
 
-    func thumbnail(for path: String, pointSize: CGFloat, fillingSquare: Bool = false) async -> Thumbnail? {
-        guard !Task.isCancelled else { return nil }
+    private var thumbnails = RecentCache<Key, Thumbnail>(limit: 120, costLimit: 32 * 1_024 * 1_024)
+    private var inFlight: [Key: Task<Thumbnail?, Never>] = [:]
+
+    func thumbnail(for path: String, pointSize: CGFloat, fillingSquare: Bool = false,
+                   version expected: AttachmentFileVersion? = nil) async -> Thumbnail? {
         let pixels = max(1, Int((pointSize * 2).rounded(.up)))
-        let key = "\(path)#\(pixels)#\(fillingSquare)"
-        if let cached = thumbnails.value(for: key) { return cached }
-        let task: Task<Thumbnail?, Never>
-        if let pending = inFlight[key] {
-            task = pending
-        } else {
-            task = Task.detached(priority: .userInitiated) { Self.decode(path, pixels: pixels, fillingSquare: fillingSquare) }
-            inFlight[key] = task
+        // Metadata is read off the main actor, including cache hits. A file removed or
+        // replaced during decoding must never be published under its previous version.
+        for _ in 0..<2 {
+            guard !Task.isCancelled, let version = await AttachmentFileVersion.read(path),
+                  expected == nil || expected == version else { return nil }
+            let key = Key(version: version, pixels: pixels, fillingSquare: fillingSquare)
+            if let cached = thumbnails.value(for: key) { return cached }
+            let task: Task<Thumbnail?, Never>
+            if let pending = inFlight[key] {
+                task = pending
+            } else {
+                task = Task.detached(priority: .userInitiated) {
+                    Self.decode(version, pixels: pixels, fillingSquare: fillingSquare)
+                }
+                inFlight[key] = task
+            }
+            let thumbnail = await task.value
+            if inFlight[key] == task { inFlight[key] = nil }
+            guard !Task.isCancelled else { return nil }
+            guard await AttachmentFileVersion.read(path) == version else { continue }
+            if let thumbnail {
+                thumbnails.insert(thumbnail, for: key, cost: thumbnail.image.bytesPerRow * thumbnail.image.height)
+            }
+            return thumbnail
         }
-        // A caller giving up waits the decode out rather than cancelling it for the others.
-        let thumbnail = await task.value
-        if inFlight[key] == task {
-            inFlight[key] = nil
-            if let thumbnail { thumbnails.insert(thumbnail, for: key, cost: thumbnail.image.bytesPerRow * thumbnail.image.height) }
-        }
-        return Task.isCancelled ? nil : thumbnail
+        return nil
     }
 
-    private nonisolated static func decode(_ path: String, pixels: Int, fillingSquare: Bool) -> Thumbnail? {
-        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+    private nonisolated static func decode(_ version: AttachmentFileVersion, pixels: Int, fillingSquare: Bool) -> Thumbnail? {
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: version.resolvedPath) as CFURL, nil) else { return nil }
         var pixels = pixels
         if fillingSquare,
            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -55,28 +100,31 @@ actor ThumbnailCache {
             kCGImageSourceThumbnailMaxPixelSize: pixels,
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        return Thumbnail(image: image)
+        return Thumbnail(image: image, version: version)
     }
 }
 
-/// Thumbnails already decoded, readable on the main actor without a hop. A row scrolling
-/// back into view shows its photos in the pass that builds it, instead of a frame later
-/// with a fade, and never asks the cache actor for something it has shown before.
+/// Main-actor access after the view has asynchronously resolved the file version.
 @MainActor
 enum ThumbnailMemory {
-    private static var images = RecentCache<String, CGImage>(limit: 120, costLimit: 16 * 1_024 * 1_024)
-
-    private static func key(_ path: String, pointSize: CGFloat, height: CGFloat?) -> String {
-        let widthKey = "\(path)#\(Int((pointSize * 2).rounded(.up)))"
-        guard let height else { return widthKey }
-        return "\(widthKey)#height-\(Int((height * 2).rounded(.up)))"
+    private struct Key: Hashable {
+        let version: AttachmentFileVersion
+        let width: Int
+        let height: Int?
     }
 
-    static func image(for path: String, pointSize: CGFloat, height: CGFloat? = nil) -> CGImage? {
-        images.value(for: key(path, pointSize: pointSize, height: height))
+    private static var images = RecentCache<Key, CGImage>(limit: 120, costLimit: 16 * 1_024 * 1_024)
+
+    private static func key(_ version: AttachmentFileVersion, pointSize: CGFloat, height: CGFloat?) -> Key {
+        Key(version: version, width: Int((pointSize * 2).rounded(.up)),
+            height: height.map { Int(($0 * 2).rounded(.up)) })
     }
 
-    static func store(_ image: CGImage, for path: String, pointSize: CGFloat, height: CGFloat? = nil) {
-        images.insert(image, for: key(path, pointSize: pointSize, height: height), cost: image.bytesPerRow * image.height)
+    static func image(for version: AttachmentFileVersion, pointSize: CGFloat, height: CGFloat? = nil) -> CGImage? {
+        images.value(for: key(version, pointSize: pointSize, height: height))
+    }
+
+    static func store(_ image: CGImage, for version: AttachmentFileVersion, pointSize: CGFloat, height: CGFloat? = nil) {
+        images.insert(image, for: key(version, pointSize: pointSize, height: height), cost: image.bytesPerRow * image.height)
     }
 }

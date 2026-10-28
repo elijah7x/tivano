@@ -50,6 +50,8 @@ final class CopilotSession: ProviderSession {
     private var effort: String?
     private var pendingRequests: [String: PendingRequest] = [:]
     private var turnActive = false
+    private var sendID: UUID?
+    private var preparing = false
     private var turnError: String?
     private var interruptRequested = false
     private var isStopping = false
@@ -83,7 +85,7 @@ final class CopilotSession: ProviderSession {
 
     var isRunning: Bool {
         guard let connection else { return false }
-        return !connection.isClosed
+        return !isStopping && !connection.isClosed
     }
 
     private var workingDirectory: String { configuration.workingDirectory.path }
@@ -157,22 +159,40 @@ final class CopilotSession: ProviderSession {
     }
 
     func send(_ input: TurnInput) async throws {
-        guard let connection, !connection.isClosed else { throw ProviderError.notRunning }
-        try await applyModes(runtime: input.runtimeMode, interaction: input.interactionMode)
-        await applySelection(model: input.model, effort: input.effort)
-        beginTurn()
+        guard isRunning, !turnActive, !preparing else { throw ProviderError.notRunning }
+        let id = UUID()
+        sendID = id
+        preparing = true
+        interruptRequested = false
+        defer { if sendID == id { preparing = false; sendID = nil } }
         do {
-            // Slash commands are the terminal UI's, not the model's: the CLI runs them and
-            // answers with text to show or a prompt to send.
+            guard continuePreparation(id) else { return }
+            try await applyModes(runtime: input.runtimeMode, interaction: input.interactionMode)
+            guard continuePreparation(id) else { return }
+            await applySelection(model: input.model, effort: input.effort)
+            guard continuePreparation(id) else { return }
+            preparing = false
+            beginTurn()
             if let command = Self.slashCommand(in: input.text), commandNames.contains(command.name) {
                 try await invokeCommand(command.name, input: command.input)
             } else {
                 try await sendPrompt(input.text, images: input.images)
             }
         } catch {
+            guard sendID == id, !isStopping, !interruptRequested else { return }
             turnActive = false
             throw error
         }
+    }
+
+    private func continuePreparation(_ id: UUID) -> Bool {
+        guard sendID == id, !isStopping, !interruptRequested else { return false }
+        if Task.isCancelled {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return false
+        }
+        return isRunning
     }
 
     private func beginTurn() {
@@ -185,6 +205,7 @@ final class CopilotSession: ProviderSession {
     }
 
     private func sendPrompt(_ text: String, images: [Attachment]) async throws {
+        guard !isStopping, !interruptRequested, !Task.isCancelled else { throw CancellationError() }
         guard let connection, let sessionID else { throw ProviderError.notRunning }
         var params: [String: JSONValue] = [
             "sessionId": .string(sessionID),
@@ -200,12 +221,15 @@ final class CopilotSession: ProviderSession {
     }
 
     private func invokeCommand(_ name: String, input: String) async throws {
+        let id = sendID
         guard let connection, let sessionID else { throw ProviderError.notRunning }
         let result = try await Self.deadlineRequest(connection, "session.commands.invoke", [
             "sessionId": .string(sessionID),
             "name": .string(name),
             "input": .string(input),
         ])
+        guard sendID == id, turnActive, !isStopping else { return }
+        guard !interruptRequested, !Task.isCancelled else { finishTurn(aborted: true); return }
         if let mode = result["mode"]?.string {
             interactionMode = mode == "plan" ? .plan : .build
             onEvent?(.modeChanged(interactionMode))
@@ -236,14 +260,20 @@ final class CopilotSession: ProviderSession {
     }
 
     func interrupt() async {
+        if preparing {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return
+        }
         guard turnActive, let connection, let sessionID else { return }
         interruptRequested = true
+        let id = sendID
         cancelPendingRequests()
         do {
             _ = try await Self.deadlineRequest(connection, "session.abort", ["sessionId": .string(sessionID), "reason": "user_initiated"], seconds: 5)
         } catch {
             // A CLI that cannot answer abort is wedged: closing ends the turn and lets the next send restart it.
-            connection.close()
+            if sendID == id { connection.close() }
         }
     }
 
@@ -315,6 +345,8 @@ final class CopilotSession: ProviderSession {
     }
 
     func stop() {
+        sendID = nil
+        preparing = false
         isStopping = true
         guard let connection, !connection.isClosed else { return }
         // A shutdown lets the CLI flush the session's event log; the close after it is the backstop.

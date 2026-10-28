@@ -1,6 +1,402 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Version 2.0" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "版本 2.0"
+          }
+        }
+      }
+    },
+    "The lead is told this, so it sends this kind of work to the heads. For example: fast, for mechanical edits; or front-end." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主智能体会收到这段说明，从而把这类工作交给 heads。例如：速度快，适合机械性修改；或前端。"
+          }
+        }
+      }
+    },
+    "Decision model (Jev)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "决策模型（Jev）"
+          }
+        }
+      }
+    },
+    "Decisions ledger" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "决策账本"
+          }
+        }
+      }
+    },
+    "Every judgment and its outcome, kept on this Mac. Read it with scripts/hydra_eval.py decisions." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次判断及其结果都保存在这台 Mac 上。可用 scripts/hydra_eval.py decisions 读取。"
+          }
+        }
+      }
+    },
+    "Paste your key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴 key"
+          }
+        }
+      }
+    },
+    "Shadow test: asks TypeSafe Jev to judge head reports and each job before its review, and keeps the judgments on this Mac beside what happened next. Hydra itself does not change. Sends the request, head reports, the lead's replies, review findings and changed file paths with line counts; never diffs or file contents, though the text can quote code. Off stops calls at once; on applies from the next request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "影子测试：请 TypeSafe Jev 评判 head 的回报，并在每个任务进入审查前作出判断；判断和之后的实际结果都保存在这台 Mac 上。Hydra 本身的行为不变。会发送用户请求、head 回报、lead 的回复、审查意见，以及改动文件的路径和增删行数；不发送 diff 或文件内容，但文字中可能引用代码。关闭后立即停止调用；开启后从下一次请求起生效。"
+          }
+        }
+      }
+    },
+    "Stored in your Keychain for this edition. Get one at typesafe.ai." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存在当前版本的钥匙串中。可在 typesafe.ai 获取。"
+          }
+        }
+      }
+    },
+    "The Keychain did not take the key: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "钥匙串未能保存该 key：%@"
+          }
+        }
+      }
+    },
+    "TypeSafe API key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TypeSafe API key"
+          }
+        }
+      }
+    },
+    "Code and assets" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码与素材"
+          }
+        }
+      }
+    },
+    "MonoCode (usage reset flow)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MonoCode（额度重置交互参考）"
+          }
+        }
+      }
+    },
+    "References" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "参考"
+          }
+        }
+      }
+    },
+    "Git did not return its common directory." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 未返回共享目录。"
+          }
+        }
+      }
+    },
+    "Incomplete git cat-file response." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "git cat-file 的响应不完整。"
+          }
+        }
+      }
+    },
+    "Unexpected git cat-file response." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "git cat-file 返回了无法识别的响应。"
+          }
+        }
+      }
+    },
+    "Git did not return its index path." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 未返回索引路径。"
+          }
+        }
+      }
+    },
+    "The checkout changed while the merge was prepared." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "准备合并期间，checkout 已发生变化。"
+          }
+        }
+      }
+    },
+    "Checkout synchronization has conflicts: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步 checkout 时出现冲突：%@"
+          }
+        }
+      }
+    },
+    "Checkout synchronization failed. Recovery: %@\n%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步 checkout 失败。恢复资料：%@\n%@"
+          }
+        }
+      }
+    },
+    "Hydra could not inspect the team's work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 无法读取团队的工作成果。"
+          }
+        }
+      }
+    },
+    "The checkout's Git status could not be read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取此 checkout 的 Git 状态。"
+          }
+        }
+      }
+    },
+    "The checkout is detached; synchronize it manually." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 checkout 处于分离 HEAD 状态，请手动同步。"
+          }
+        }
+      }
+    },
+    "Hydra merged the work, but could not synchronize the checkout." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 已合并工作成果，但未能同步 checkout。"
+          }
+        }
+      }
+    },
+    "The project checkout's Git status could not be read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取项目 checkout 的 Git 状态。"
+          }
+        }
+      }
+    },
+    "A head's history could not be read; its work was not settled: %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取一个 head 的历史，尚未将其工作标记为完成：%@。"
+          }
+        }
+      }
+    },
+    "The default branch diverged; the checkout was kept for manual synchronization." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认分支已产生分歧，checkout 已保留，请手动同步。"
+          }
+        }
+      }
+    },
+    "The head changed while its landing was waiting; its patch was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待回写期间，head 已发生变化，其补丁已保留。"
+          }
+        }
+      }
+    },
+    "The head's recovery patch could not be saved; its copy was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保存 head 的恢复补丁，其副本已保留。"
+          }
+        }
+      }
+    },
+    "A rebase or merge is underway in the checkout, or its Git state could not be read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "checkout 正在进行 rebase 或 merge，或无法读取其 Git 状态。"
+          }
+        }
+      }
+    },
+    "%@'s unfinished work was kept as a recovery patch.\n%@\n\nThe copy is removed only if Git confirms it has no uncommitted changes. Review the patch against your checkout before applying it with `git apply --3way %@`." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 尚未完成的工作已保存为恢复补丁。\n%@\n\n仅当 Git 确认副本没有未提交的修改时，才会移除副本。请先对照 checkout 检查补丁，再使用 `git apply --3way %@` 应用。"
+          }
+        }
+      }
+    },
+    "Reviewing Hydra work" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在评审 Hydra 工作成果"
+          }
+        }
+      }
+    },
+    "Preview unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法预览"
+          }
+        }
+      }
+    },
+    "14 days" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "14 天"
+          }
+        }
+      }
+    },
+    "3 days" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3 天"
+          }
+        }
+      }
+    },
+    "7 days" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "7 天"
+          }
+        }
+      }
+    },
     "A branch with that name already exists." : {
       "localizations" : {
         "zh-Hans" : {
@@ -40,6 +436,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "还有 %lld 个"
+          }
+        }
+      }
+    },
+    "Auto-shelve projects" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动搁置项目"
           }
         }
       }
@@ -146,6 +553,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "以下 MCP 服务器的命令未在 PATH 中找到，本次会话已跳过：%@"
+          }
+        }
+      }
+    },
+    "Never" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从不"
           }
         }
       }
@@ -264,6 +682,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "设置 › 关于中列出了正在等待的任务。"
+          }
+        }
+      }
+    },
+    "Shelve a project after its latest thread has been idle this long. Projects with running, unread or open threads stay put." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近的对话闲置超过这段时间后自动搁置项目。有对话正在运行、未读或正打开的项目不会被搁置。"
           }
         }
       }
@@ -2664,17 +3093,6 @@
         }
       }
     },
-    "Adds a review step before the lead finishes. This uses additional time and tokens." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在主智能体结束前增加审查步骤，会消耗更多时间和 token。"
-          }
-        }
-      }
-    },
     "Adjust Tivano's base font size" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2873,6 +3291,17 @@
         }
       }
     },
+    "Also with thanks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "也感谢"
+          }
+        }
+      }
+    },
     "Always allow" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2946,6 +3375,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "有可用更新。安装渠道未知，请按当初的安装方式自行更新。"
+          }
+        }
+      }
+    },
+    "Animation engine · MIT" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "动画引擎 · MIT"
           }
         }
       }
@@ -3291,17 +3731,6 @@
         }
       }
     },
-    "Ask %@ for anything; big jobs go out to a team of heads" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向 %@ 提任何问题；大任务会分派给子智能体团队"
-          }
-        }
-      }
-    },
     "Ask %@ for anything; the lead decides what to do itself and what to delegate" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3324,17 +3753,6 @@
         }
       }
     },
-    "Ask as you always do. Small things it does itself; anything bigger it splits into briefs." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "照常提问即可。小事它自己完成；大任务会拆成多份简报。"
-          }
-        }
-      }
-    },
     "Ask as you always do. The lead keeps tightly coupled work and decides which independent pieces to brief to heads." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3342,17 +3760,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "像平常一样提出需求。主智能体自己处理紧密关联的工作，并决定将哪些独立部分交给 heads。"
-          }
-        }
-      }
-    },
-    "Ask the lead to review heads' changes" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "要求主智能体审查子智能体的改动"
           }
         }
       }
@@ -7592,17 +7999,6 @@
         }
       }
     },
-    "Each one goes to a head as soon as there is room, instead of waiting for the lead." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "每条都会在有名额时立即交给子智能体，不必等待主智能体。"
-          }
-        }
-      }
-    },
     "Each project's emoji or symbol before the thread's name, one line per thread" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7984,28 +8380,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "所有消息交给子智能体"
-          }
-        }
-      }
-    },
-    "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model may review the changes before the job settles and any automatic merge. Turning it off returns new requests to the current Hydra." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hydra 聊天中的每个新请求都会采用新的团队设计：主智能体负责判断并亲自完成紧密关联的工作；heads 会收到你的请求和团队的文件分工，报告偏差与待解决问题，也可以被派回去返工。在任务结束及任何自动合并之前，另一家厂商的 model 可能会审查改动。关闭后，新请求将回到现行 Hydra。"
-          }
-        }
-      }
-    },
-    "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model reviews the changes before they merge. Turning it off returns new requests to the current Hydra." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hydra 聊天中的每条新请求都使用新的团队设计：主智能体负责判断，亲自处理相互耦合的工作；heads 会收到你的请求和团队的文件分工，报告偏差和待决问题，也可以被要求重做各自负责的部分；另一家服务商的模型会在改动合入前进行审查。关闭后，新请求将恢复为当前的 Hydra 工作方式。"
           }
         }
       }
@@ -8879,17 +9253,6 @@
         }
       }
     },
-    "Goes to a head; %@ leads and reports back" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "交给一个子智能体；由 %@ 主导并汇报"
-          }
-        }
-      }
-    },
     "Goes to the next question" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9029,28 +9392,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "子智能体 %@ 强度"
-          }
-        }
-      }
-    },
-    "Heads are already preferred for messages." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已优先让子智能体处理消息。"
-          }
-        }
-      }
-    },
-    "Heads are at work: your message goes to a head" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "子智能体正在工作：你的消息会交给子智能体"
           }
         }
       }
@@ -9495,28 +9836,6 @@
         }
       }
     },
-    "Hydra 2.0" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hydra 2.0"
-          }
-        }
-      }
-    },
-    "Hydra 2.0 tells the lead, so it sends this kind of work to the heads. For example: fast, for mechanical edits; or front-end." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hydra 2.0 会把这段说明告诉主智能体，让它把这类工作交给 heads。例如：速度快，适合机械性修改；或前端。"
-          }
-        }
-      }
-    },
     "Hydra heads" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9623,17 +9942,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hydra 已开启，显示面板"
-          }
-        }
-      }
-    },
-    "Hydra is on. Big jobs go out to a team of heads, so this chat leads instead of doing everything itself." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hydra 已开启。大任务会交给子智能体团队，本对话负责主导，而不是事事亲力亲为。"
           }
         }
       }
@@ -10947,17 +11255,6 @@
         }
       }
     },
-    "Messages" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "消息"
-          }
-        }
-      }
-    },
     "Microphone muted" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11097,6 +11394,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ZCode 需要你的 GLM Coding Plan key。请在 设置 → Providers → Z.ai 中添加。"
+          }
+        }
+      }
+    },
+    "Miguel de Icaza · MIT" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Miguel de Icaza · MIT"
           }
         }
       }
@@ -11904,17 +12212,6 @@
         }
       }
     },
-    "No heads are out yet. Ask for something big enough to split up and this chat sends them out, each with a panel of its own." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "尚未派出子智能体。提出一个足够大、可以拆分的任务，本对话就会把它们派出去，每个子智能体各有一个面板。"
-          }
-        }
-      }
-    },
     "No heads are out yet. Send a request and the lead will decide what to do itself and what to delegate. Each head gets a panel of its own." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12505,17 +12802,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一个聊天由主智能体带领一组 heads，并决定委派哪些工作。"
-          }
-        }
-      }
-    },
-    "One chat leads a team of heads on big jobs." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "遇到大任务时，由一个对话带领一组子智能体协作完成。"
           }
         }
       }
@@ -13517,17 +13803,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "电源"
-          }
-        }
-      }
-    },
-    "Prefer heads for messages" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "优先让子智能体处理消息"
           }
         }
       }
@@ -15490,39 +15765,6 @@
         }
       }
     },
-    "Send queued follow-ups to heads" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "用子智能体处理排队的追加消息"
-          }
-        }
-      }
-    },
-    "Send to a head" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "发送给子智能体"
-          }
-        }
-      }
-    },
-    "Send to a head (Return) · the lead reports back" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "发送给子智能体（回车）· 主导模型会汇报"
-          }
-        }
-      }
-    },
     "Sending" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15893,6 +16135,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Shell 任务"
+          }
+        }
+      }
+    },
+    "Shelve project" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搁置项目"
+          }
+        }
+      }
+    },
+    "Shelved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已搁置"
           }
         }
       }
@@ -17272,6 +17536,17 @@
         }
       }
     },
+    "SwiftTerm" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SwiftTerm"
+          }
+        }
+      }
+    },
     "SwiftTerm by Miguel de Icaza, MIT License." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -17378,6 +17653,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "跟随系统"
+          }
+        }
+      }
+    },
+    "T3 Code (Droppy Code's origin) · mugen-markdown · OpenAI Codex · GitHub Octicons (Copilot mark) · oh-my-pi (omp mark) · anti-slop (writing policy) · Simple Icons and the Git Logo by Jason Long (service marks)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "T3 Code（Droppy Code 的起源）· mugen-markdown · OpenAI Codex · GitHub Octicons（Copilot 标志）· oh-my-pi（omp 标志）· anti-slop（写作规范）· Simple Icons 与 Jason Long 的 Git Logo（服务图标）"
           }
         }
       }
@@ -17851,6 +18137,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更新开始前可执行文件已变化，因此 Tivano 没有更新它。"
+          }
+        }
+      }
+    },
+    "The built-in terminal." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内置终端。"
           }
         }
       }
@@ -18944,6 +19241,17 @@
         }
       }
     },
+    "Thinking orbs" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking orbs"
+          }
+        }
+      }
+    },
     "Thinking…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -19578,6 +19886,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tivano 以只读方式继承此 DeepSeek Harness profile。请在 DeepSeek Harness 中修改已安装的插件、bundle 选择和版本豁免，然后重新启动此会话。"
+          }
+        }
+      }
+    },
+    "Tivano is a fork of Droppy Code, under AGPL-3.0 with attribution terms." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 是 Droppy Code 的分支，沿用 AGPL-3.0 及署名条款。"
           }
         }
       }
@@ -20231,6 +20550,17 @@
         }
       }
     },
+    "Unshelve project" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放回项目列表"
+          }
+        }
+      }
+    },
     "Unsupported Cordis entry: %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -20546,17 +20876,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用作壁纸"
-          }
-        }
-      }
-    },
-    "Use heads when there is room. Commands and messages that cannot be delegated stay with the lead." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "有可用名额时使用子智能体；命令及无法派发的消息仍由主智能体处理。"
           }
         }
       }
@@ -21100,6 +21419,17 @@
         }
       }
     },
+    "Where Tivano began" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 的起点"
+          }
+        }
+      }
+    },
     "Where a new thread makes its changes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -21184,6 +21514,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "窗口透明度"
+          }
+        }
+      }
+    },
+    "Wing · MIT" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wing · MIT"
           }
         }
       }
@@ -21283,6 +21624,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工作状态指示器"
+          }
+        }
+      }
+    },
+    "Working indicators, the voice system and its sounds, and the voice orb integration. The streaming text fade (from mugen-markdown) and the Codex voice protocol (from OpenAI Codex, Apache-2.0) also came through Zeron." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作指示器、语音系统及其音效，以及语音球集成。流式文字渐显（源自 mugen-markdown）和 Codex 语音协议（源自 OpenAI Codex，Apache-2.0）也经由 Zeron 引入。"
           }
         }
       }
@@ -21591,6 +21943,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Z.ai 拒绝了此 API 密钥。请在设置 → 提供商 → Z.ai 中检查 GLM Coding Plan 密钥。套餐可能已到期；此入口不支持 Standard API 密钥。"
+          }
+        }
+      }
+    },
+    "Zeron" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeron"
           }
         }
       }
@@ -23168,6 +23531,17 @@
         }
       }
     },
+    "The voice orb animations: Bezel → gpui-thinking-orbs → Jakub Antalik's thinking-orbs." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语音球动画：Bezel → gpui-thinking-orbs → Jakub Antalik 的 thinking-orbs。"
+          }
+        }
+      }
+    },
     "The whole folder is deleted. Its branch and commits stay in the repository." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -23454,13 +23828,13 @@
         }
       }
     },
-    "Features here are early versions and may be unstable. Turning Alpha off ends the current voice call and disables local control and remote MCP. Individual feature choices are kept." : {
+    "Features here are early versions and may be unstable. Turning Alpha off disables local control and remote MCP. Individual feature choices are kept." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这里的功能尚处早期，可能不稳定。关闭 Alpha 会结束当前语音通话，并停用本地控制和远程 MCP。各项功能的开关选择会保留。"
+            "value" : "这里的功能尚处早期，可能不稳定。关闭 Alpha 会停用本地控制和远程 MCP。各项功能的开关选择会保留。"
           }
         }
       }

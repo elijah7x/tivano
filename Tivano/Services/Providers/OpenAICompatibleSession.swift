@@ -503,11 +503,20 @@ class OpenAICompatibleSession: ProviderSession {
 
     // MARK: - Chat round
 
+    private func discoverMCPTools() async throws {
+        guard !didLoadMCPTools else { return }
+        let tools = try await MCPHub.shared.tools()
+        try Task.checkCancellation()
+        guard !interrupted, !isStopping else { throw CancellationError() }
+        mcpTools = tools
+        didLoadMCPTools = true
+    }
+
     private func streamOneRound(model: String, effort: String?, withTools: Bool = true) async throws -> StreamRound {
         // History trims slice blindly and interrupted turns leave calls
         // unanswered; either poisons every later request, so repair first.
         sanitizeHistory()
-        if withTools, !didLoadMCPTools { mcpTools = await MCPHub.shared.tools(); didLoadMCPTools = true }
+        if withTools { try await discoverMCPTools() }
         let payload = requestPayload(model: model, effort: effort, withTools: withTools)
         // A round is a request, and a dropped connection is answered by the same
         // request again, not by restarting the turn: the payload is built once, the
@@ -700,12 +709,6 @@ class OpenAICompatibleSession: ProviderSession {
             case .transportError(let error):
                 if let streamError, !streamError.isEmpty {
                     throw ProviderError.failed(friendlyError(streamError, statusCode: statusCode))
-                }
-                // V1 delegations can launch while text is streaming. Replaying that
-                // response could repeat work already dispatched by the runtime.
-                if configuration.hydra?.mode != .v2,
-                   HydraPrompts.streamedDelegations(in: content)?.delegations.isEmpty == false {
-                    throw ProviderError.failed("\(error.localizedDescription) This response was not retried because it had already streamed a head delegation.")
                 }
                 // The typed error (a URLError, normally) is carried up intact, with
                 // what this attempt had already shown, so the caller can tell a

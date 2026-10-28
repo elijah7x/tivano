@@ -83,7 +83,7 @@ struct NewThreadPrompt: View {
             }
             PopoverDivider()
             PopoverSectionHeader("Projects")
-            ForEach(model.projects) { project in
+            ForEach(model.projects.filter { !$0.isShelved } + model.projects.filter { $0.isShelved }) { project in
                 PopoverItem(project.name, leading: AnyView(ProjectIconMark(icon: project.icon, size: 12)), isChecked: current == .project(project.id), isEnabled: canMove) {
                     move(to: .project(project.id))
                 }

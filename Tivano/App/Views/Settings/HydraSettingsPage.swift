@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Switches Hydra on for the app and sets up its heads: how they work, which messages go
-/// to them, what happens when the team is done, and which model leads which, per provider.
+/// Switches Hydra on for the app and sets up its heads: how they work, what gets delegated,
+/// what happens when the team is done, and which model leads which, per provider.
 struct HydraSettingsPage: View {
     @Environment(AppModel.self) private var model
 
@@ -36,11 +36,11 @@ struct HydraSettingsPage: View {
                             Text("Hydra")
                                 .font(.ui(.title3, weight: .semibold))
                                 .foregroundStyle(Chrome.primaryText)
+                            HydraVersionTag()
+                                .padding(.leading, 2)
                             InfoHoverButton(help: "How Hydra works") { HydraInfoPopover(topic: .hydra) }
                         }
-                        Text(verbatim: Chrome.localized(settings.isHydra2Enabled
-                            ? "One chat leads a team of heads and decides what to delegate."
-                            : "One chat leads a team of heads on big jobs."))
+                        Text(verbatim: Chrome.localized("One chat leads a team of heads and decides what to delegate."))
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .lineLimit(1)
@@ -183,40 +183,22 @@ struct HydraSettingsPage: View {
                     toggleRow("Lower the default reasoning effort for heads", detail: "Effort set in a pair is unaffected. When no effort is specified and the head uses the same provider as the lead, the head stays at the standard effort (usually medium); if the lead uses a lower effort, the head inherits it.", isOn: $settings.hydraTempersHeadEffort)
                 }
             }
-            if settings.isHydra2Enabled {
-                // Hydra 2.0 replaces v1's message-routing switches with one tilt: every
-                // message goes to the lead, which decides what the heads take.
-                ChromeSection(title: "Delegation") {
-                    ChromeCard {
-                        ChromeRow(
-                            title: "How much heads take on",
-                            detail: Self.tiltDetail(settings.hydraTilt)
-                        ) {
-                            GlassPickerButton(
-                                options: [(HydraTilt.restrained, "Restrained"), (HydraTilt.active, "Proactive"), (HydraTilt.aggressive, "Aggressive")],
-                                selection: $settings.hydraTilt
-                            )
-                            .accessibilityLabel(Text("How much heads take on"))
-                        }
-                    }
-                }
-            } else {
-                ChromeSection(title: "Messages") {
-                    ChromeCard {
-                        toggleRow("Send queued follow-ups to heads", detail: "Each one goes to a head as soon as there is room, instead of waiting for the lead.", isOn: $settings.hydraQueueHeads, blockedBy: settings.hydraAlwaysHeads ? "Heads are already preferred for messages." : nil)
-                        ChromeRowDivider()
-                        toggleRow("Prefer heads for messages", detail: "Use heads when there is room. Commands and messages that cannot be delegated stay with the lead.", isOn: $settings.hydraAlwaysHeads)
+            ChromeSection(title: "Delegation") {
+                ChromeCard {
+                    ChromeRow(
+                        title: "How much heads take on",
+                        detail: Self.tiltDetail(settings.hydraTilt)
+                    ) {
+                        GlassPickerButton(
+                            options: [(HydraTilt.restrained, "Restrained"), (HydraTilt.active, "Proactive"), (HydraTilt.aggressive, "Aggressive")],
+                            selection: $settings.hydraTilt
+                        )
+                        .accessibilityLabel(Text("How much heads take on"))
                     }
                 }
             }
             ChromeSection(title: "When the team is done") {
                 ChromeCard {
-                    // Hydra 2.0 always has the lead check the heads' work and another vendor
-                    // review it, so v1's review switch would change nothing there.
-                    if !settings.isHydra2Enabled {
-                        toggleRow("Ask the lead to review heads' changes", detail: "Adds a review step before the lead finishes. This uses additional time and tokens.", isOn: $settings.hydraReviewHeads)
-                        ChromeRowDivider()
-                    }
                     toggleRow("Commit and merge automatically when done", detail: "Off: the team's changes stay in your working copy for you to handle. On: Tivano commits them, pushes to the remote, opens a pull or merge request and tries to merge it; needs a configured remote and access.", isOn: $settings.hydraAutoMerge)
                 }
             }
@@ -568,26 +550,24 @@ struct HydraPairEditor: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
             }
-            if model.settings.isHydra2Enabled {
-                VStack(alignment: .leading, spacing: 4) {
-                    TextField("", text: Binding(
-                        get: { pair.headsNote ?? "" },
-                        set: { text in update { $0.headsNote = text.isEmpty ? nil : text } }
-                    ), prompt: Text("What the heads are good at"))
-                    .textFieldStyle(.plain)
-                    .font(.ui(.title3, weight: .semibold))
-                    .foregroundStyle(Chrome.primaryText)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(Chrome.overlay(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    Text("Hydra 2.0 tells the lead, so it sends this kind of work to the heads. For example: fast, for mechanical edits; or front-end.")
-                        .font(.ui(.subheadline))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .padding(.horizontal, 2)
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("", text: Binding(
+                    get: { pair.headsNote ?? "" },
+                    set: { text in update { $0.headsNote = text.isEmpty ? nil : text } }
+                ), prompt: Text("What the heads are good at"))
+                .textFieldStyle(.plain)
+                .font(.ui(.title3, weight: .semibold))
+                .foregroundStyle(Chrome.primaryText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Chrome.overlay(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                Text("The lead is told this, so it sends this kind of work to the heads. For example: fast, for mechanical edits; or front-end.")
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .padding(.horizontal, 2)
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
             sectionLabel("Lead")
             editorRow("Provider") {
                 GlassPickerButton(
@@ -818,5 +798,18 @@ struct HydraPairEditor: View {
     /// and in that order, so the pickers and the loading notes cover both.
     private static func catalogProviders(_ pair: HydraPair) -> [ProviderKind] {
         pair.sendsHeadsElsewhere ? [pair.provider, pair.headsProvider] : [pair.provider]
+    }
+}
+
+private struct HydraVersionTag: View {
+    var body: some View {
+        Text(verbatim: "2.0")
+            .font(.ui(.caption2, weight: .semibold))
+            .monospacedDigit()
+            .foregroundStyle(Chrome.secondaryText)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Chrome.overlay(0.06), in: Capsule(style: .continuous))
+            .accessibilityLabel(Text("Version 2.0"))
     }
 }

@@ -60,6 +60,10 @@ struct Project: Codable, Identifiable, Hashable, Sendable {
     var path: String
     var addedAt: Date
     var isExpanded: Bool
+    /// Keeps the project in the shelved group until work resumes.
+    var isShelved: Bool
+    /// When last shelved or unshelved, so a manual unshelve restarts the idle clock.
+    var shelfChangedAt: Date?
     var scripts: [ProjectScript]
     /// The pair that each new chat in this project starts on. Nil means no rule: the chat
     /// starts on the pair the app remembers (see `AppModel.newThread`). The pair must be
@@ -75,6 +79,8 @@ struct Project: Codable, Identifiable, Hashable, Sendable {
         self.path = path
         addedAt = .now
         isExpanded = true
+        isShelved = false
+        shelfChangedAt = nil
         scripts = []
     }
 
@@ -85,6 +91,8 @@ struct Project: Codable, Identifiable, Hashable, Sendable {
         name = container.value(.name, default: URL(fileURLWithPath: path).lastPathComponent)
         addedAt = container.value(.addedAt, default: .now)
         isExpanded = container.value(.isExpanded, default: true)
+        isShelved = container.value(.isShelved, default: false)
+        shelfChangedAt = container.value(.shelfChangedAt, default: nil)
         scripts = container.value(.scripts, default: [])
         hydraPairID = container.value(.hydraPairID, default: nil)
         icon = container.value(.icon, default: nil)

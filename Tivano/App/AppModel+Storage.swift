@@ -38,6 +38,9 @@ extension AppModel {
                     return false
                 }
                 let common = try await git.output(["rev-parse", "--path-format=absolute", "--git-common-dir"]).trimmed
+                let lease = try await git.repositoryWriteLease()
+                defer { withExtendedLifetime(lease) {} }
+                guard canRemove(worktree) else { return false }
                 try await Git(common).removeWorktree(at: worktree.path)
             } else {
                 try FileManager.default.trashItem(at: url, resultingItemURL: nil)

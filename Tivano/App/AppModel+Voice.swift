@@ -42,13 +42,7 @@ extension AppModel {
 
     private func voiceCallContext(for threadID: UUID) -> VoiceOrchestratorContext? {
         guard let thread = thread(threadID), (try? executionDirectory(for: thread)) != nil else { return nil }
-        var hydra = hydraLaunch(for: thread)
-        if openHydraJob(of: threadID) != nil,
-           let mode = existingRuntime(for: threadID)?.hydraJobMode, mode == .v2 {
-            hydra?.mode = mode
-        } else {
-            hydra?.mode = settings.isHydra2Enabled ? .v2 : .v1
-        }
+        let hydra = hydraLaunch(for: thread)
         return VoiceOrchestratorContext(
             hydra: hydra != nil,
             projectName: project(thread.projectID)?.name ?? Chrome.localized("Task"),

@@ -103,10 +103,21 @@ extension Storage {
     nonisolated static func removeBuildFiles(of worktree: WorktreeUsage) async throws {
         let root = URL(fileURLWithPath: worktree.path).standardizedFileURL.path + "/"
         let git = Git(worktree.path)
+        let lease = try await git.repositoryWriteLease()
+        defer { withExtendedLifetime(lease) {} }
         for path in worktree.buildFiles {
             let url = URL(fileURLWithPath: path).standardizedFileURL
             guard url.path.hasPrefix(root), buildFolderNames.contains(url.lastPathComponent),
-                  let check = try? await git.run(["check-ignore", "-q", url.path]), check.succeeded else { continue }
+                  url.resolvingSymlinksInPath().path.hasPrefix(URL(fileURLWithPath: root).resolvingSymlinksInPath().path + "/") else { continue }
+            let check = try await git.run(["check-ignore", "-q", url.path])
+            if check.status == 1 { continue }
+            try Git.check(check)
+            // An ignored directory can still contain force-added tracked files.
+            // Query the index immediately before deletion; failure cannot mean empty.
+            let tracked = try await git.output(["--literal-pathspecs", "ls-files", "--cached", "-z", "--", url.path])
+            guard tracked.isEmpty else { continue }
+            let relative = String(url.path.dropFirst(root.count))
+            guard try await git.presentPaths(among: [relative], in: "HEAD").isEmpty else { continue }
             try await Task.detached(priority: .utility) { try FileManager.default.removeItem(at: url) }.value
         }
     }

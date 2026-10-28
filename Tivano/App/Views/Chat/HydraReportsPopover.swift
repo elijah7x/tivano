@@ -703,7 +703,7 @@ struct HydraReportFlagsRows: View {
 
     init(head: HydraHeadInfo) {
         notes = head.reportNotes
-        formatMissing = head.mode == .v2 && head.isFinished && head.reportNotes == nil
+        formatMissing = head.jobID != nil && head.isFinished && head.reportNotes == nil
     }
 
     var body: some View {

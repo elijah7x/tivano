@@ -173,6 +173,9 @@ final class AppModel {
     /// its files forever, with the merge note still promising they go out. The sweep asks
     /// again every few minutes; it skips anything still running, so a busy chat is left alone.
     @ObservationIgnored private var hydraMergeSweepTask: Task<Void, Never>?
+    @ObservationIgnored private var autoShelveTimer: Timer?
+    @ObservationIgnored private var autoShelveActivationObserver: NSObjectProtocol?
+    @ObservationIgnored private var lastActivationAutoShelve: Date?
     private(set) var isLibraryLoaded = false
     @ObservationIgnored private var libraryLoad: Task<LibraryLoad, Never>?
     @ObservationIgnored private var restoreSelectionAfterLoad = false
@@ -202,6 +205,32 @@ final class AppModel {
         observeHydraEnabled()
     }
 
+    isolated deinit {
+        autoShelveTimer?.invalidate()
+        if let autoShelveActivationObserver {
+            NotificationCenter.default.removeObserver(autoShelveActivationObserver)
+        }
+    }
+
+    private func startAutoShelveSchedule() {
+        guard autoShelveTimer == nil, !CaptureRun.isEnabled else { return }
+        autoShelveActivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                // Switching apps back and forth needs no rescan each time; the timer covers the rest.
+                guard let self, (self.lastActivationAutoShelve.map { Date.now.timeIntervalSince($0) >= 300 } ?? true) else { return }
+                self.lastActivationAutoShelve = .now
+                self.autoShelveIdleProjects()
+            }
+        }
+        autoShelveTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.autoShelveIdleProjects()
+            }
+        }
+    }
+
     private func observeHydraEnabled() {
         withObservationTracking {
             _ = settings.hydraEnabled
@@ -219,11 +248,14 @@ final class AppModel {
     }
 
     func updateTaskSleepPrevention() {
-        let busy = runtimes.values.contains(where: Self.hasActiveTasks)
+        let voiceBusy = voice?.hasPendingWork == true
+        let busy = voiceBusy || runtimes.values.contains(where: Self.hasActiveTasks)
         let active = busy || localControl.hasPendingMutations
         if active != hasActiveTurns { hasActiveTurns = active }
-        let limitWaitOnly = active && !localControl.hasPendingMutations
-            && !runtimes.values.contains { Self.hasActiveTasks($0) && !$0.isWaitingForLimit }
+        let limitWaitOnly = active && !voiceBusy && !localControl.hasPendingMutations
+            && !runtimes.values.contains {
+                Self.hasActiveTasks($0) && (!$0.isWaitingForLimit || $0.hydraReviewRunning != nil)
+            }
         if limitWaitOnly != activeWorkIsLimitWait { activeWorkIsLimitWait = limitWaitOnly }
         taskSleepPrevention.update(
             mode: CaptureRun.isEnabled ? .off : settings.taskSleepMode,
@@ -241,11 +273,15 @@ final class AppModel {
                 else if runtime.isCLIStarting { "Starting its session" }
                 else if runtime.isVoiceOrchestrator { "Voice is live" }
                 else if runtime.isHydraMerging { "Landing Hydra work" }
+                else if runtime.hydraReviewRunning != nil { "Reviewing Hydra work" }
                 else if !runtime.backgroundTasks.isEmpty { "Running background tasks" }
                 else if runtime.isWaitingForLimit { "Waiting for its usage limit to reset" }
                 else { "Its helpers or heads are still working" }
             let title = thread(runtime.threadID)?.title ?? ""
             out.append((runtime.threadID, title.isEmpty ? Chrome.localized("New thread") : title, reason))
+        }
+        if let voice, voice.hasPendingWork, !out.contains(where: { $0.threadID == voice.threadID }) {
+            out.append((voice.threadID, Chrome.localized("Voice"), voice.isLive ? voice.statusText : "Ending voice…"))
         }
         out.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         if localControl.hasPendingMutations {
@@ -256,6 +292,7 @@ final class AppModel {
 
     private static func hasActiveTasks(_ runtime: ThreadRuntime) -> Bool {
         runtime.isRunning || runtime.isVoiceOrchestrator || runtime.isHydraMerging || runtime.isCLIStarting
+            || runtime.hydraReviewRunning != nil
             || !runtime.backgroundTasks.isEmpty || runtime.isWaitingForLimit || runtime.hasWorkingHelpers
     }
 
@@ -426,6 +463,8 @@ final class AppModel {
         // Capture seeds retain their staged statuses and never start account or merge services.
         if CaptureRun.isEnabled { return }
         if restoreSelectionAfterLoad { openThreadOnLaunch() }
+        autoShelveIdleProjects()
+        startAutoShelveSchedule()
         // The threads most likely to be opened first decode in the background from the start,
         // so the first click into a conversation never parses its history on the main thread.
         let recent = threads.filter { !$0.isArchived && !$0.isInPanel }.sorted { $0.updatedAt > $1.updatedAt }.prefix(12).map(\.id)
@@ -479,8 +518,11 @@ final class AppModel {
         // updates when that reply arrives; nothing in this loop installs on a timer.
         providers.isProviderBusy = { [weak self] provider in
             guard let self else { return false }
-            for runtime in self.runtimes.values where Self.hasActiveTasks(runtime) && runtime.thread?.provider == provider {
-                return true
+            if provider == .codex, self.voice?.hasPendingWork == true { return true }
+            for runtime in self.runtimes.values {
+                // A Hydra review runs on another vendor's CLI than the thread's own provider.
+                if runtime.hydraReviewProvider == provider { return true }
+                if Self.hasActiveTasks(runtime) && runtime.thread?.provider == provider { return true }
             }
             return false
         }
@@ -863,7 +905,10 @@ final class AppModel {
     @discardableResult
     func addProject(at url: URL) -> Project {
         let path = url.standardizedFileURL.path
-        if let existing = projects.first(where: { $0.path == path }) { return existing }
+        if let existing = projects.first(where: { $0.path == path }) {
+            unshelveForWork(existing.id)
+            return project(existing.id) ?? existing
+        }
         var project = Project(name: url.lastPathComponent, path: path)
         project.scripts = ProjectFile.scripts(at: url)
         projects.append(project)
@@ -901,6 +946,61 @@ final class AppModel {
         guard project != projects[index] else { return }
         projects[index] = project
         scheduleSave()
+    }
+
+    func setProjectShelved(_ id: UUID, _ shelved: Bool) {
+        updateProject(id) {
+            if $0.isShelved != shelved { $0.shelfChangedAt = .now }
+            $0.isShelved = shelved
+            if shelved { $0.isExpanded = false }
+        }
+    }
+
+    func autoShelveIdleProjects(now: Date = .now) {
+        // A held mouse button may be a sidebar drag; moving a row out from under it would break the drag.
+        guard settings.autoShelveDays > 0, !CaptureRun.isEnabled, NSEvent.pressedMouseButtons == 0 else { return }
+        let selectedProjectID = selectedThread?.projectID
+        var candidates: [UUID] = []
+        for project in projects where !project.isShelved {
+            let projectThreads = (threadIndex.projects[project.id] ?? []).map { threadStorage[$0] }
+            let input = ProjectShelfPolicy.Input(
+                isShelved: project.isShelved,
+                addedAt: project.addedAt,
+                lastActivity: projectThreads.map(\.updatedAt).max(),
+                shelfChangedAt: project.shelfChangedAt,
+                isBusy: projectThreads.contains { thread in
+                    guard let runtime = existingRuntime(for: thread.id) else { return false }
+                    return runtime.isRunning || runtime.isHydraMerging
+                        || !runtime.approvals.isEmpty || !runtime.questions.isEmpty
+                        || !runtime.backgroundTasks.isEmpty || runtime.isWaitingForLimit
+                },
+                holdsSelection: selectedProjectID == project.id,
+                hasUnread: projectThreads.contains { !$0.isArchived && $0.hasUnread }
+            )
+            if ProjectShelfPolicy.shouldAutoShelve(input, days: settings.autoShelveDays, now: now) {
+                candidates.append(project.id)
+            }
+        }
+        guard !candidates.isEmpty else { return }
+        // One write to `projects` for the whole batch, so the list rebuilds once.
+        let shelving = Set(candidates)
+        var updated = projects
+        for index in updated.indices where shelving.contains(updated[index].id) {
+            updated[index].isShelved = true
+            updated[index].isExpanded = false
+            updated[index].shelfChangedAt = now
+        }
+        withAnimation(Chrome.panelSlide) { projects = updated }
+        scheduleSave()
+    }
+
+    func unshelveForWork(_ projectID: UUID?) {
+        guard let projectID, project(projectID)?.isShelved == true else { return }
+        updateProject(projectID) {
+            $0.isShelved = false
+            $0.isExpanded = true
+            $0.shelfChangedAt = .now
+        }
     }
 
     var projectDeletionRequest: UUID?
@@ -959,6 +1059,7 @@ final class AppModel {
 
     func insertVoiceHomeThread(_ thread: ChatThread) {
         threads.append(thread)
+        unshelveForWork(thread.projectID)
         if let projectID = thread.projectID { updateProject(projectID) { $0.isExpanded = true } }
         scheduleSave()
     }
@@ -997,6 +1098,7 @@ final class AppModel {
             thread.controlWorkspace = ControlWorkspace(mode: .worktree, phase: .preparing, enforcesExecutionReadiness: false)
         }
         threads.append(thread)
+        unshelveForWork(project?.id)
         if let project { updateProject(project.id) { $0.isExpanded = true } }
         rememberAffiliation(affiliation)
         selectedThreadID = thread.id
@@ -1215,6 +1317,7 @@ final class AppModel {
                 thread.temporaryHydraPair = nil
             }
         }
+        unshelveForWork(affiliation.projectID)
         if let projectID = affiliation.projectID { updateProject(projectID) { $0.isExpanded = true } }
         rememberAffiliation(affiliation)
         sidebarRevealThreadID = id
@@ -1272,14 +1375,17 @@ final class AppModel {
             $0.isArchived = true
             $0.isPinned = false
         }
+        CheckoutClaims.deactivate(owner: id)
         // An archived thread is out of the list, so its unread mark leaves the dock with it.
         updateDockBadge()
     }
 
     func unarchive(_ id: UUID) {
         updateThread(id) { $0.isArchived = false }
+        CheckoutClaims.activate(owner: id)
         for helper in threads where helper.parentThreadID == id && helper.isArchived {
             updateThread(helper.id) { $0.isArchived = false }
+            CheckoutClaims.activate(owner: helper.id)
         }
         // Back in the list, an unread thread counts again.
         updateDockBadge()
@@ -1394,6 +1500,7 @@ final class AppModel {
 
     private func completeThreadDeletion(_ removed: [ChatThread], cleanup: [ThreadDeletionCleanup]) {
         let ids = Set(removed.map(\.id))
+        for id in ids { CheckoutClaims.deactivate(owner: id) }
         if let voiceThreadID = voice.threadID, ids.contains(voiceThreadID) { voice.end() }
         for thread in removed where thread.isHydraHead && thread.hydra?.isFinished == false {
             finishHydraHead(thread.id, status: .interrupted, summary: nil)
@@ -1411,7 +1518,7 @@ final class AppModel {
                 guard let copy = item.copy else { continue }
                 do {
                     if let base = item.patchBase {
-                        // The work survives in the patch, so the copy goes even with changes.
+                        // Preserve a recovery patch; Git still refuses to remove a dirty copy.
                         guard await keepHydraCopyAsPatch(item.id, name: item.headName ?? "head", copy: copy, base: base) else {
                             alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
                             continue

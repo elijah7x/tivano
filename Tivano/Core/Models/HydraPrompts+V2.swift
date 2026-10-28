@@ -1,7 +1,6 @@
 import Foundation
 
-// Hydra 2.0 (Labs) prompt text. v1's text in Hydra.swift is untouched; a job stamped
-// `.v2` reads only these. See docs/hydra2.md.
+// Hydra 2.0 prompt text for leads, heads and reviewers. See docs/hydra2.md.
 extension HydraPrompts {
     /// What each tilt asks of the lead, in the policy. Field data (both Macs, Oct 2026)
     /// showed leads delegating about one agentic task in ten whatever the tilt, so each
@@ -54,7 +53,7 @@ extension HydraPrompts {
         return "[Hydra 2, \(name)] Before you start, decide which parts go to heads: \(rule). Every new-head entry needs \"files\" ([] for read-only).\n\n---\n\n"
     }
 
-    /// In front of a v2 report message (the counterpart of `fallbackReportNote`).
+    /// In front of a report message: team state and whether another round is available.
     static func v2ReportNote(team: String?, merge: String? = nil, canDelegate: Bool) -> String {
         let more = canDelegate
             ? "If the reports open up the next stage of the work, or a head failed, or a piece of the user's request is still undone, send heads out again for exactly that, with the same ```hydra block at the end of your reply; to rework a finished head's own part, prefer an entry with \"continue\": \"<head name>\" and the instruction in \"prompt\", which continues in its own session and copy."
@@ -126,7 +125,7 @@ extension HydraPrompts {
         """
     }
 
-    /// The v2 report message to the lead (the counterpart of `reportMessage`).
+    /// The report message to the lead: head results, flags and integration guidance.
     static func v2ReportMessage(_ reports: [HydraReport], stillWorking: [String] = []) -> String {
         let names = reports.map { HydraRoster.persona(at: $0.headIndex).name }
         var opening = "Hydra reports: \(list(names)) finished."

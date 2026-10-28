@@ -73,14 +73,14 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var keywords: [String] {
         switch self {
-        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "usage", "limits", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies"]
+        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "usage", "limits", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "语音", "麦克风", "通话"]
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
         case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "zcode", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
         case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting"]
         case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
-        case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "实验室", "实验", "语音", "麦克风", "通话"]
+        case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "实验室", "实验", "jev", "typesafe", "decision", "决策"]
         case .shortcuts: ["keyboard", "keys"]
         case .archive: ["storage", "space", "disk", "worktree", "worktrees", "build", "cache", "clean", "archive", "archived", "restore", "存储", "空间", "归档", "清理", "缓存"]
         case .keepsakes: ["keepsake", "early supporter", "信物"]
@@ -516,6 +516,12 @@ private struct GeneralSettingsPage: View {
         (.recent, "Follow the latest chat"),
         (.standalone, "Tasks (no project)"),
     ]
+    private static let autoShelveOptions: [(Int, String)] = [
+        (0, "Never"),
+        (3, "3 days"),
+        (7, "7 days"),
+        (14, "14 days"),
+    ]
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -578,7 +584,27 @@ private struct GeneralSettingsPage: View {
                 ChromeRow(title: "Confirm before deleting threads") {
                     SettingsSwitch(isOn: $settings.confirmBeforeDeleting)
                 }
+                ChromeRowDivider()
+                ChromeRow(title: "Auto-shelve projects", detail: "Shelve a project after its latest thread has been idle this long. Projects with running, unread or open threads stay put.") {
+                    GlassPickerButton(options: Self.autoShelveOptions, selection: $settings.autoShelveDays, maxWidth: 190)
+                }
+                .onChange(of: settings.autoShelveDays) { model.autoShelveIdleProjects() }
             }
+        }
+        ChromeSection(title: "Realtime voice") {
+            ChromeCard {
+                ChromeRow(title: "Codex realtime voice", detail: "Talk with Codex out loud. Start a call from Start voice in the sidebar, or from the waveform button in any Codex chat to continue that chat by voice. Codex listens, answers and does the work in the chat. Needs Codex 0.159 or later, signed in with ChatGPT. Turning this off ends the current call.") {
+                    SettingsSwitch(isOn: $settings.voiceEnabled)
+                        .accessibilityLabel(Text("Codex realtime voice"))
+                }
+                if settings.voiceEnabled {
+                    ChromeRowDivider()
+                    VoiceStyleRow()
+                }
+            }
+        }
+        .onChange(of: settings.isVoiceEnabled) { _, enabled in
+            if !enabled { model.voice.end() }
         }
         ChromeSection(title: "Text generation") {
             ChromeCard {
@@ -1574,6 +1600,7 @@ private struct AboutSettingsPage: View {
     private static let upstreamURL = URL(string: "https://getdroppycode.app")!
     private static let zeronURL = URL(string: "https://github.com/zeronsh/zeron")!
     private static let swiftTermURL = URL(string: "https://github.com/migueldeicaza/SwiftTerm")!
+    private static let thinkingOrbsURL = URL(string: "https://github.com/Jakubantalik/thinking-orbs")!
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1594,13 +1621,33 @@ private struct AboutSettingsPage: View {
             ChromeCard {
                 UpstreamAttributionRow(url: Self.upstreamURL)
                 ChromeRowDivider()
-                ChromeRow(title: "Working indicators", detail: "Ported from Zeron by Wing, MIT License.") {
-                    CreditLink(title: "zeronsh/zeron", url: Self.zeronURL)
-                }
+                CreditDetailRow(
+                    symbol: "waveform", title: "Zeron", meta: "Wing · MIT",
+                    detail: "Working indicators, the voice system and its sounds, and the voice orb integration. The streaming text fade (from mugen-markdown) and the Codex voice protocol (from OpenAI Codex, Apache-2.0) also came through Zeron.",
+                    linkTitle: "zeronsh/zeron", url: Self.zeronURL
+                )
                 ChromeRowDivider()
-                ChromeRow(title: "Terminal", detail: "SwiftTerm by Miguel de Icaza, MIT License.") {
-                    CreditLink(title: "SwiftTerm", url: Self.swiftTermURL)
+                CreditDetailRow(
+                    symbol: "apple.terminal", title: "SwiftTerm", meta: "Miguel de Icaza · MIT",
+                    detail: "The built-in terminal.",
+                    linkTitle: "SwiftTerm", url: Self.swiftTermURL
+                )
+                ChromeRowDivider()
+                CreditDetailRow(
+                    symbol: "circle.hexagongrid", title: "Thinking orbs", meta: "Animation engine · MIT",
+                    detail: "The voice orb animations: Bezel → gpui-thinking-orbs → Jakub Antalik's thinking-orbs.",
+                    linkTitle: "thinking-orbs", url: Self.thinkingOrbsURL
+                )
+                VStack(alignment: .leading, spacing: 12) {
+                    CreditGroup(
+                        title: "Code and assets",
+                        items: "T3 Code (Droppy Code's origin) · mugen-markdown · OpenAI Codex · GitHub Octicons (Copilot mark) · oh-my-pi (omp mark) · anti-slop (writing policy) · Simple Icons and the Git Logo by Jason Long (service marks)"
+                    )
+                    CreditGroup(title: "References", items: "MonoCode (usage reset flow)")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Chrome.contentHorizontalPadding)
+                .padding(.vertical, 11)
                 ChromeRowDivider()
                 LicensesRow()
             }
@@ -1673,8 +1720,37 @@ private struct LicensesRow: View {
     private static let texts: [String: String] = Dictionary(uniqueKeysWithValues: files.map { file in
         let url = Bundle.main.url(forResource: file.resource, withExtension: file.resource == "LICENSE" ? nil : "md")
         let text = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? String(format: Chrome.localized("The %@ file is missing from this copy of the app."), file.resource)
-        return (file.resource, text)
+        return (file.resource, unwrapped(text))
     })
+
+    /// The files are hard-wrapped at 70–120 columns and the markdown view breaks at every
+    /// newline, so each source line became its own paragraph. Lines of one paragraph are
+    /// joined; blank lines, headings, list items, rules and indented lines keep their breaks.
+    private static func unwrapped(_ text: String) -> String {
+        func standsAlone(_ line: Substring) -> Bool {
+            let trimmed = line.drop(while: { $0 == " " })
+            if trimmed.isEmpty || line.hasPrefix("  ") || line.hasPrefix("\t") { return true }
+            if trimmed.hasPrefix("#") || trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("|") || trimmed.hasPrefix("```") || trimmed.hasPrefix("Copyright") { return true }
+            if trimmed.allSatisfy({ $0 == "-" || $0 == "=" || $0 == "_" }) { return true }
+            if let dot = trimmed.firstIndex(of: "."), dot > trimmed.startIndex, trimmed[..<dot].allSatisfy(\.isNumber) { return true }
+            return false
+        }
+        func closes(_ line: Substring) -> Bool {
+            let trimmed = line.drop(while: { $0 == " " })
+            return trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("|") || trimmed.hasPrefix("```")
+                || trimmed.allSatisfy({ $0 == "-" || $0 == "=" || $0 == "_" })
+        }
+        var out: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            // An indented or list line opens a paragraph; the lines wrapped under it still join it.
+            if let last = out.last, !standsAlone(line), !closes(Substring(last)) {
+                out[out.count - 1] = last + " " + line
+            } else {
+                out.append(String(line))
+            }
+        }
+        return out.joined(separator: "\n")
+    }
 
     private static func text(of resource: String) -> String {
         texts[resource] ?? String(format: Chrome.localized("The %@ file is missing from this copy of the app."), resource)
@@ -1685,59 +1761,105 @@ private struct LicensesRow: View {
 /// with its author, so the fork's About page carries it.
 private struct UpstreamAttributionRow: View {
     let url: URL
-    @State private var isHovering = false
 
     var body: some View {
-        Link(destination: url) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Based on Droppy Code")
-                        .font(.ui(.body, weight: .semibold))
-                        .foregroundStyle(Chrome.primaryText)
-                    Text("Droppy Code by Jordy Spruit (Droppy)")
-                        .font(.ui(.subheadline))
-                        .foregroundStyle(Chrome.secondaryText)
-                }
-                Spacer(minLength: 12)
-                HStack(spacing: 4) {
-                    Text(verbatim: "getdroppycode.app")
-                    Image(systemName: "arrow.up.right")
-                        .font(.ui(.footnote, weight: .semibold))
-                }
-                .font(.ui(.callout, weight: .medium))
-                .foregroundStyle(Chrome.accent)
-                .opacity(isHovering ? 1 : 0.9)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Where Tivano began")
+                .font(.ui(.caption))
+                .foregroundStyle(Chrome.secondaryText)
+            Text(verbatim: "Droppy Code")
+                .font(.ui(.title2, weight: .semibold))
+                .foregroundStyle(Chrome.primaryText)
+            Text(verbatim: "Droppy Code by Jordy Spruit (Droppy), https://getdroppycode.app")
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+            Text("Tivano is a fork of Droppy Code, under AGPL-3.0 with attribution terms.")
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+            CreditLink(title: "getdroppycode.app", url: url)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Chrome.contentHorizontalPadding)
+        .padding(.vertical, 14)
+    }
+}
+
+/// A captioned run of smaller credits under the major rows.
+private struct CreditGroup: View {
+    let title: String
+    let items: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: Chrome.localized(title))
+                .font(.ui(.caption))
+            Text(verbatim: Chrome.localized(items))
+                .font(.ui(.subheadline))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(Chrome.secondaryText)
+    }
+}
+
+private struct CreditDetailRow: View {
+    let symbol: String
+    let title: String
+    let meta: String
+    let detail: String
+    let linkTitle: String
+    let url: URL
+
+    var body: some View {
+        // The glyph sits on the title's baseline: top alignment rode it above the text.
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.ui(.body))
+                .foregroundStyle(Chrome.secondaryText)
+                .frame(width: 24)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                (Text(verbatim: Chrome.localized(title))
+                    .font(.ui(.body, weight: .semibold))
+                    .foregroundColor(Chrome.primaryText)
+                 + Text(verbatim: "  " + Chrome.localized(meta))
+                    .font(.ui(.subheadline))
+                    .foregroundColor(Chrome.secondaryText))
+                Text(verbatim: Chrome.localized(detail))
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                CreditLink(title: linkTitle, url: url)
             }
-            .padding(.leading, 16)
-            .padding(.trailing, Chrome.rowControlTrailingPadding + 4)
-            .padding(.vertical, 12)
-            .contentShape(.rect)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
-        .help(Text(verbatim: Chrome.localized("Open getdroppycode.app")))
-        .accessibilityLabel(Text("Based on Droppy Code by Jordy Spruit. Open getdroppycode.app"))
+        .padding(.horizontal, Chrome.contentHorizontalPadding)
+        .padding(.vertical, 11)
     }
 }
 
 private struct CreditLink: View {
     let title: String
     let url: URL
+    @State private var isHovering = false
 
     var body: some View {
         Link(destination: url) {
             HStack(spacing: 4) {
                 Text(verbatim: title)
+                    .underline(isHovering)
                 Image(systemName: "arrow.up.right")
-                    .font(.ui(.footnote, weight: .semibold))
+                    .font(.ui(size: 9, weight: .semibold))
             }
-            .font(.ui(.callout, weight: .medium))
-            .foregroundStyle(Chrome.accent)
+            .font(.ui(.subheadline))
+            .foregroundStyle(isHovering ? Chrome.accent : Chrome.secondaryText)
         }
         .buttonStyle(.plain)
-        .help(url.absoluteString)
+        .onHover { hovering in
+            withAnimation(Chrome.hover) { isHovering = hovering }
+        }
+        .help(Text(verbatim: url.absoluteString))
+        .accessibilityLabel(Text(verbatim: title + ", " + url.absoluteString))
     }
 }
 
@@ -1793,6 +1915,23 @@ private struct ThemePickerButton: View {
     private func item(_ theme: AppTheme) -> some View {
         PopoverItem(theme.displayName, leading: AnyView(theme.swatch), isChecked: theme == selection, localizesTitle: false) {
             selection = theme
+        }
+    }
+}
+
+private struct VoiceStyleRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var settings = model.settings
+        var options = model.voice.voices
+        if let saved = settings.codexVoice, !options.contains(saved) { options.append(saved) }
+        return ChromeRow(title: "Codex voice style", detail: "Applies to your next voice session") {
+            GlassPickerButton(
+                options: [(String?.none, "Codex default")] + options.map { (String?.some($0), VoiceCatalog.label($0)) },
+                selection: $settings.codexVoice
+            )
+            .accessibilityLabel(Text("Codex voice style"))
         }
     }
 }

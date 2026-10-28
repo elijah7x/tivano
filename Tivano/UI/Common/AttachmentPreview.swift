@@ -88,7 +88,12 @@ enum PreviewImages {
     /// asks this on every render, and the answer ends in `FileManager.fileExists`: a disk
     /// hit, per row, per frame the row is rebuilt. A row's question never changes once its
     /// call has finished, so it is answered once and remembered.
-    @MainActor private static var resolvedPaths = RecentCache<String, String?>(limit: 600)
+    private struct ResolvedPath {
+        let path: String?
+        let timestamp: TimeInterval
+    }
+
+    @MainActor private static var resolvedPaths = RecentCache<String, ResolvedPath>(limit: 600)
 
     /// Finds an image file a tool looked at or made. A read's title (and detail) is the
     /// path itself, spaces included; any other tool's title and detail are searched for a
@@ -102,9 +107,10 @@ enum PreviewImages {
         // The status is part of the question: a command that makes a file has not made it
         // yet while it runs, so the answer it gets then must not outlive it.
         let key = "\(call.kind.rawValue)\u{1}\(call.status.rawValue)\u{1}\(call.title)\u{1}\(call.detail ?? "")\u{1}\(workingDirectory ?? "")"
-        if let hit = resolvedPaths.value(for: key) { return hit }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let hit = resolvedPaths.value(for: key), hit.path != nil || now - hit.timestamp < 2 { return hit.path }
         let resolved = search(for: call, workingDirectory: workingDirectory)
-        resolvedPaths.insert(resolved, for: key)
+        resolvedPaths.insert(ResolvedPath(path: resolved, timestamp: now), for: key)
         return resolved
     }
 
@@ -216,18 +222,27 @@ enum PreviewVideos {
     }
 
     /// One video frame off the main actor, so opening a movie never stalls drawing.
-    static func thumbnail(for path: String, pointSize: CGFloat) async -> CGImage? {
-        await Task.detached(priority: .userInitiated) {
+    static func thumbnail(for path: String, pointSize: CGFloat, version expected: AttachmentFileVersion? = nil) async -> CGImage? {
+        guard let version = await AttachmentFileVersion.read(path),
+              !Task.isCancelled, expected == nil || expected == version else { return nil }
+        let task = Task.detached(priority: .userInitiated) {
             let pixels = Int((pointSize * 2).rounded(.up))
-            let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+            let asset = AVURLAsset(url: URL(fileURLWithPath: version.resolvedPath))
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: pixels, height: pixels)
-            // A beat in, so a black first frame does not become the thumbnail.
             let time = CMTime(seconds: 0.5, preferredTimescale: 600)
             return try? await generator.image(at: time).image
-        }.value
+        }
+        let image = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        guard !Task.isCancelled, await AttachmentFileVersion.read(path) == version else { return nil }
+        return image
     }
+
 }
 
 extension Attachment {
@@ -264,6 +279,7 @@ struct AttachmentVideoThumbnail: View {
     var size: CGFloat = 56
 
     @State private var image: CGImage?
+    @State private var fileSnapshot: AttachmentFileSnapshot?
 
     var body: some View {
         ZStack {
@@ -279,10 +295,13 @@ struct AttachmentVideoThumbnail: View {
         }
         .frame(width: size, height: size)
         .clipShape(.rect(cornerRadius: 12, style: .continuous))
-        .task(id: attachment.path) {
-            await AttachmentLargePreview.prefetchVideoSize(for: attachment)
-            guard image == nil else { return }
-            guard let frame = await PreviewVideos.thumbnail(for: attachment.path, pointSize: size) else { return }
+        .modifier(AttachmentFileTracker(path: attachment.path, snapshot: $fileSnapshot))
+        .task(id: AttachmentMediaLoad(path: attachment.path, snapshot: fileSnapshot, width: size)) {
+            guard !Task.isCancelled else { return }
+            image = nil
+            guard let version = fileSnapshot?.version, version.path == attachment.path else { return }
+            guard let frame = await PreviewVideos.thumbnail(for: attachment.path, pointSize: size, version: version),
+                  !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.15)) { image = frame }
         }
     }
@@ -301,16 +320,26 @@ struct AttachmentLargePreview: View {
     @State private var image: CGImage?
     @State private var videoFrame: CGImage?
     @State private var textPreview: String?
+    @State private var fileSnapshot: AttachmentFileSnapshot?
+    @State private var loadFailed = false
+    @State private var retry = 0
+
+    init(attachment: Attachment, imageSize: CGSize? = nil, snapshot: AttachmentFileSnapshot? = nil) {
+        self.attachment = attachment
+        self.imageSize = imageSize
+        _fileSnapshot = State(initialValue: snapshot)
+    }
 
     /// The largest a photo is shown at inside the panel.
-    static let imageBounds = CGSize(width: 480, height: 360)
+    nonisolated static let imageBounds = CGSize(width: 480, height: 360)
 
     /// The photo aspect-fitted into `imageBounds`, from the file's pixel size
     /// (orientation applied). Only the aspect matters, so this reads the
     /// header through ImageIO rather than decoding the image.
-    static func imageDisplaySize(for attachment: Attachment) -> CGSize {
+    @concurrent
+    nonisolated static func imageDisplaySize(for version: AttachmentFileVersion) async -> CGSize {
         var pixels = CGSize(width: 4, height: 3)
-        if let source = CGImageSourceCreateWithURL(attachment.url as CFURL, nil),
+        if let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: version.resolvedPath) as CFURL, nil),
            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
            let width = properties[kCGImagePropertyPixelWidth] as? CGFloat,
            let height = properties[kCGImagePropertyPixelHeight] as? CGFloat,
@@ -322,31 +351,22 @@ struct AttachmentLargePreview: View {
         return CGSize(width: floor(pixels.width * scale), height: floor(pixels.height * scale))
     }
 
-    /// The movie aspect-fitted into `imageBounds`, from the video track's natural size
-    /// (preferred transform applied), by path. The track is loaded with the modern async
-    /// API by the thumbnail's own task (see `prefetchVideoSize`); the panel sizes itself
-    /// before the player exists, so an unloaded track falls back to `imageBounds`.
-    @MainActor private static var videoSizes: [String: CGSize] = [:]
+    @MainActor private static var videoSizes = RecentCache<AttachmentFileVersion, CGSize>(limit: 120)
 
-    /// Loads a movie's display size off the tap path, once per path. Called when the
-    /// video thumbnail appears; the panel's `videoDisplaySize` then reads the cache.
-    static func prefetchVideoSize(for attachment: Attachment) async {
-        guard attachment.isVideo, videoSizes[attachment.path] == nil else { return }
-        let asset = AVURLAsset(url: attachment.url)
+    static func videoDisplaySize(for version: AttachmentFileVersion) async -> CGSize {
+        if let size = videoSizes.value(for: version) { return size }
+        let asset = AVURLAsset(url: URL(fileURLWithPath: version.resolvedPath))
         guard let tracks = try? await asset.loadTracks(withMediaType: .video),
               let track = tracks.first,
-              let (natural, transform) = try? await track.load(.naturalSize, .preferredTransform) else { return }
+              let (natural, transform) = try? await track.load(.naturalSize, .preferredTransform),
+              !Task.isCancelled, await AttachmentFileVersion.read(version.path) == version else { return imageBounds }
         var size = natural.applying(transform)
         size = CGSize(width: abs(size.width), height: abs(size.height))
-        guard size.width > 0, size.height > 0 else { return }
+        guard size.width > 0, size.height > 0 else { return imageBounds }
         let scale = min(imageBounds.width / size.width, imageBounds.height / size.height)
-        videoSizes[attachment.path] = CGSize(width: floor(size.width * scale), height: floor(size.height * scale))
-    }
-
-    /// The coordinator can pass this as `imageSize` so the panel is sized up front exactly
-    /// like a photo; the body uses it as the fallback too.
-    static func videoDisplaySize(for attachment: Attachment) -> CGSize {
-        videoSizes[attachment.path] ?? imageBounds
+        let fitted = CGSize(width: floor(size.width * scale), height: floor(size.height * scale))
+        videoSizes.insert(fitted, for: version)
+        return fitted
     }
 
     var body: some View {
@@ -360,6 +380,8 @@ struct AttachmentLargePreview: View {
                             .aspectRatio(contentMode: .fit)
                             .clipShape(.rect(cornerRadius: 12, style: .continuous))
                             .transition(.opacity)
+                    } else if loadFailed {
+                        AttachmentPreviewFailure { retry += 1 }
                     } else {
                         ProgressView()
                     }
@@ -380,6 +402,8 @@ struct AttachmentLargePreview: View {
                             .clipShape(.rect(cornerRadius: 12, style: .continuous))
                             .transition(.opacity)
                             .overlay { AttachmentPlayBadge() }
+                    } else if loadFailed {
+                        AttachmentPreviewFailure { retry += 1 }
                     } else {
                         ProgressView()
                     }
@@ -416,8 +440,8 @@ struct AttachmentLargePreview: View {
                     .foregroundStyle(Chrome.secondaryText)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let size = PreviewImages.fileSize(attachment.path) {
-                    Text(size)
+                if let version = fileSnapshot?.version {
+                    Text(Int64(clamping: version.size).formatted(.byteCount(style: .file)))
                         .font(.ui(.caption))
                         .foregroundStyle(Chrome.secondaryText)
                 }
@@ -436,26 +460,42 @@ struct AttachmentLargePreview: View {
         }
         .padding(12)
         .frame(maxWidth: 504)
-        .task(id: attachment.path) {
+        .modifier(AttachmentFileTracker(path: attachment.path, snapshot: $fileSnapshot, continuously: true))
+        .task(id: AttachmentMediaLoad(path: attachment.path, snapshot: fileSnapshot, retry: retry)) {
+            guard !Task.isCancelled else { return }
+            image = nil
+            videoFrame = nil
+            textPreview = nil
+            loadFailed = false
+            guard let version = await AttachmentFileVersion.read(attachment.path) else {
+                if !Task.isCancelled { loadFailed = true }
+                return
+            }
+            guard !Task.isCancelled else { return }
             if attachment.isImage {
-                let loaded = await ThumbnailCache.shared.thumbnail(for: attachment.path, pointSize: Self.imageBounds.width)?.image
+                let loaded = await ThumbnailCache.shared.thumbnail(for: attachment.path, pointSize: Self.imageBounds.width, version: version)?.image
+                guard !Task.isCancelled else { return }
+                loadFailed = loaded == nil
                 withAnimation(.easeOut(duration: 0.15)) { image = loaded }
             } else if attachment.isVideo {
-                guard let frame = await PreviewVideos.thumbnail(for: attachment.path, pointSize: Self.imageBounds.width) else {
-                    textPreview = Self.textPreview(for: attachment)
-                    return
-                }
+                let frame = await PreviewVideos.thumbnail(for: attachment.path, pointSize: Self.imageBounds.width, version: version)
+                guard !Task.isCancelled else { return }
+                loadFailed = frame == nil
                 withAnimation(.easeOut(duration: 0.15)) { videoFrame = frame }
             } else {
-                textPreview = Self.textPreview(for: attachment)
+                let text = await Self.textPreview(for: version)
+                guard !Task.isCancelled, await AttachmentFileVersion.read(attachment.path) == version else { return }
+                textPreview = text
             }
         }
     }
 
-    private static func textPreview(for attachment: Attachment) -> String? {
-        let url = attachment.url
-        guard let size = AttachmentFileMetadata.textFileSize(url), size < 500_000 else { return nil }
-        guard let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else { return nil }
+
+    @concurrent
+    nonisolated private static func textPreview(for version: AttachmentFileVersion) async -> String? {
+        guard version.size < 500_000,
+              let text = try? String(contentsOf: URL(fileURLWithPath: version.resolvedPath), encoding: .utf8),
+              !text.isEmpty else { return nil }
         return String(text.prefix(8_000))
     }
 }
@@ -466,6 +506,9 @@ struct ToolImagePreview: View {
     let path: String
 
     @State private var image: CGImage?
+    @State private var fileSnapshot: AttachmentFileSnapshot?
+    @State private var loadFailed = false
+    @State private var retry = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -477,6 +520,8 @@ struct ToolImagePreview: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .transition(.opacity)
+                } else if loadFailed {
+                    AttachmentPreviewFailure { retry += 1 }
                 } else {
                     ProgressView()
                         .controlSize(.small)
@@ -498,8 +543,29 @@ struct ToolImagePreview: View {
                 .font(.ui(.caption))
             }
         }
-        .task(id: path) {
-            image = await ThumbnailCache.shared.thumbnail(for: path, pointSize: 900)?.image
+        .modifier(AttachmentFileTracker(path: path, snapshot: $fileSnapshot))
+        .task(id: AttachmentMediaLoad(path: path, snapshot: fileSnapshot, retry: retry)) {
+            guard !Task.isCancelled else { return }
+            image = nil
+            loadFailed = false
+            let loaded = await ThumbnailCache.shared.thumbnail(for: path, pointSize: 900)?.image
+            guard !Task.isCancelled else { return }
+            image = loaded
+            loadFailed = loaded == nil
         }
+    }
+}
+
+private struct AttachmentPreviewFailure: View {
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Label("Preview unavailable", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(Chrome.secondaryText)
+            Button("Retry", action: retry)
+                .buttonStyle(.link)
+        }
+        .font(.ui(.caption))
     }
 }

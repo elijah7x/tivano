@@ -1,24 +1,10 @@
 import Foundation
 
-// Hydra 2.0 (Labs): the shared vocabulary of the v2 decision layer. See docs/hydra2.md.
-// Worktrees, landing, merge and the watchdog are v1's and unchanged; everything here is
-// read only for a job stamped `.v2`, and a record without these fields reads as v1.
+// Hydra 2.0: the shared vocabulary of Hydra jobs. See docs/hydra2.md.
 
-/// Which decision layer a job runs on. Stamped once when the user's request starts a
-/// lead turn, so flipping the Labs switch mid-job never mixes the two.
-enum HydraMode: String, Codable, Hashable, Sendable {
-    case v1
-    case v2
-}
-
-/// How readily a v2 lead hands work to heads. Restrained delegates only for parallel
-/// pieces or heavy reading; active also sends bounded mechanical work out, even one
-/// piece. Replaces v1's message-routing switches while Hydra 2.0 is on.
-/// The job a head belongs to and the decision layer it runs under, fixed when its
-/// delegation block was dispatched. A delayed head takes its batch's stamp, never the
-/// lead's current job.
+/// The job a head belongs to, fixed when its delegation block was dispatched.
+/// A delayed head takes its batch's stamp, never the lead's current job.
 struct HydraJobStamp: Hashable, Sendable {
-    var mode: HydraMode
     var jobID: UUID?
 }
 
@@ -31,6 +17,9 @@ enum HydraJobEnding: String, Codable, Sendable {
     case recovered
 }
 
+/// How readily the lead hands work to heads. Restrained delegates only for parallel
+/// pieces or heavy reading; active also sends bounded mechanical work out, even one
+/// piece.
 enum HydraTilt: String, Codable, CaseIterable, Hashable, Sendable {
     case restrained
     case active
@@ -110,7 +99,6 @@ struct HydraJobRecord: Codable, Hashable, Identifiable, Sendable {
     }
 
     var id = UUID()
-    var mode: HydraMode = .v2
     /// The lead turn the user's request started.
     var turnID: UUID?
     var startedAt = Date.now
@@ -151,6 +139,8 @@ struct HydraJobRecord: Codable, Hashable, Identifiable, Sendable {
     /// How the job ended; nil while open, and on records from before this existed.
     var ending: HydraJobEnding?
     var merge: MergeOutcome?
+    /// Whether the job ran the Labs decision points (docs/hydra-decisions.md); nil on records from before.
+    var decisions: Bool?
 
     var isOpen: Bool { finishedAt == nil }
 }
@@ -198,7 +188,6 @@ extension HydraJobRecord {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = container.value(.id, default: UUID())
-        mode = container.value(.mode, default: .v2)
         turnID = container.value(.turnID, default: nil)
         startedAt = container.value(.startedAt, default: Date.now)
         finishedAt = container.value(.finishedAt, default: nil)
@@ -226,5 +215,6 @@ extension HydraJobRecord {
         baseTrees = container.value(.baseTrees, default: nil)
         ending = container.value(.ending, default: nil)
         merge = container.value(.merge, default: nil)
+        decisions = container.value(.decisions, default: nil)
     }
 }

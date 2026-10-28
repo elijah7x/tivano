@@ -1,6 +1,44 @@
 import AppKit
 import SwiftUI
 
+/// Thumbnails refresh on mount, path changes and hidden-column restoration. They
+/// intentionally keep that snapshot while mounted; only an open preview polls.
+struct AttachmentFileTracker: ViewModifier {
+    let path: String
+    @Binding var snapshot: AttachmentFileSnapshot?
+    var continuously = false
+    @Environment(\.veilRenderScope) private var scope
+
+    private struct Watch: Hashable {
+        let path: String
+        let visible: Bool
+        let continuously: Bool
+    }
+
+    func body(content: Content) -> some View {
+        let watch = Watch(path: path, visible: scope?.isVisible ?? true, continuously: continuously)
+        content.task(id: watch) {
+            guard watch.visible, !watch.path.isEmpty else { return }
+            while !Task.isCancelled {
+                let version = await AttachmentFileVersion.read(watch.path)
+                guard !Task.isCancelled else { return }
+                let next = AttachmentFileSnapshot(path: watch.path, version: version)
+                if snapshot != next { snapshot = next }
+                guard watch.continuously else { return }
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
+    }
+}
+
+struct AttachmentMediaLoad: Hashable {
+    let path: String
+    let snapshot: AttachmentFileSnapshot?
+    var width: CGFloat = 0
+    var height: CGFloat? = nil
+    var retry = 0
+}
+
 /// The photos of a message, the composer's draft and an agent's reply: one strip per place,
 /// each photo opening in the shared large preview.
 struct AttachmentStrip: View {
@@ -47,6 +85,7 @@ struct AttachmentThumbnail: View {
     private let panel: AttachmentPreviewCoordinator?
 
     @State private var image: CGImage?
+    @State private var fileSnapshot: AttachmentFileSnapshot?
     /// The thumbnail's own NSView, handed to the panel on tap so the arrow
     /// lands on the tapped photo rather than the strip's middle. Mounted once the
     /// pointer has been on the photo: a tap always follows a hover, and a strip
@@ -73,8 +112,6 @@ struct AttachmentThumbnail: View {
         self.slot = slot
         self.panel = panel
         self.anchorless = anchorless
-        // A photo shown before starts out drawn, so scrolling back to it never fades it in again.
-        _image = State(initialValue: attachment.isImage ? ThumbnailMemory.image(for: attachment.path, pointSize: size, height: height) : nil)
     }
 
     /// Opens (or closes) the panel for this photo, making one only now if the caller
@@ -143,17 +180,22 @@ struct AttachmentThumbnail: View {
                 AttachmentAnchorCapture { [weak anchorBox] in anchorBox?.value = $0 }
             }
         }
-        .task(id: "\(attachment.path)#\(size)#\(height ?? size)#\(height != nil)") {
-            guard attachment.isImage else { return }
-            if let known = ThumbnailMemory.image(for: attachment.path, pointSize: size, height: height) {
+        .modifier(AttachmentFileTracker(path: attachment.isImage ? attachment.path : "", snapshot: $fileSnapshot))
+        .task(id: AttachmentMediaLoad(path: attachment.path, snapshot: fileSnapshot, width: size, height: height)) {
+            guard !Task.isCancelled else { return }
+            image = nil
+            guard attachment.isImage, let version = fileSnapshot?.version, version.path == attachment.path else { return }
+            guard await AttachmentFileVersion.read(attachment.path) == version, !Task.isCancelled else { return }
+            if let known = ThumbnailMemory.image(for: version, pointSize: size, height: height) {
                 if image !== known { image = known }
                 return
             }
             // A rectangular tile keeps the photo's aspect, so its long side must run past the
             // tile for the .fill crop to land on enough pixels.
             let requested = height == nil ? size : max(size, height ?? size) * 1.5
-            guard let thumbnail = await ThumbnailCache.shared.thumbnail(for: attachment.path, pointSize: requested, fillingSquare: height == nil) else { return }
-            ThumbnailMemory.store(thumbnail.image, for: attachment.path, pointSize: size, height: height)
+            guard let thumbnail = await ThumbnailCache.shared.thumbnail(for: attachment.path, pointSize: requested, fillingSquare: height == nil, version: version),
+                  !Task.isCancelled else { return }
+            ThumbnailMemory.store(thumbnail.image, for: version, pointSize: size, height: height)
             withAnimation(.easeOut(duration: 0.15)) { image = thumbnail.image }
         }
     }

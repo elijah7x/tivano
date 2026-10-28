@@ -44,6 +44,7 @@ final class ClaudeSession: ProviderSession {
     private var tasksByAgent: [String: String] = [:]
     private var backgroundTasks: [(id: String, description: String)] = []
     private var turnActive = false
+    private var preparationID: UUID?
     private var contextRevision = 0
     private var interruptRequested = false
     private var isStopping = false
@@ -63,7 +64,7 @@ final class ClaudeSession: ProviderSession {
         model = configuration.model
     }
 
-    var isRunning: Bool { process?.isRunning ?? false }
+    var isRunning: Bool { !isStopping && (process?.isRunning ?? false) }
 
     private var workingDirectory: String { configuration.workingDirectory.path }
 
@@ -200,33 +201,57 @@ final class ClaudeSession: ProviderSession {
     }
 
     func send(_ input: TurnInput) async throws {
-        guard let process, process.isRunning else { throw ProviderError.notRunning }
-        let mode = Self.modeName(input.runtimeMode, input.interactionMode)
-        if mode != permissionMode || !permissionModeIsConfirmed {
-            // A lost reply can hide a successful change, so the old mode also needs reconfirmation.
-            permissionModeIsConfirmed = false
-            _ = try await control(["subtype": "set_permission_mode", "mode": .string(mode)])
-            permissionMode = mode
-            permissionModeIsConfirmed = true
+        guard isRunning, !turnActive, preparationID == nil else { throw ProviderError.notRunning }
+        let preparation = UUID()
+        preparationID = preparation
+        defer { if preparationID == preparation { preparationID = nil } }
+        do {
+            guard continuePreparation(preparation) else { return }
+            let mode = Self.modeName(input.runtimeMode, input.interactionMode)
+            if mode != permissionMode || !permissionModeIsConfirmed {
+                permissionModeIsConfirmed = false
+                _ = try await control(["subtype": "set_permission_mode", "mode": .string(mode)])
+                guard continuePreparation(preparation) else { return }
+                permissionMode = mode
+                permissionModeIsConfirmed = true
+            }
+            runtimeMode = input.runtimeMode
+            if input.model != model {
+                let wire = input.model == "default" ? nil : input.model
+                _ = try? await control(["subtype": "set_model", "model": .optional(wire)])
+                guard continuePreparation(preparation) else { return }
+                model = input.model
+            }
+            let images = await Attachment.base64Images(input.images)
+            guard continuePreparation(preparation) else { return }
+            var content: [JSONValue] = images.map { image, base64 in
+                ["type": "image", "source": ["type": "base64", "media_type": .string(image.mimeType), "data": .string(base64)]]
+            }
+            content.append(["type": "text", "text": .string(input.text)])
+            preparationID = nil
+            writeUserMessage(.array(content))
+        } catch {
+            guard continuePreparation(preparation) else { return }
+            throw error
         }
-        runtimeMode = input.runtimeMode
-        if input.model != model {
-            let wire = input.model == "default" ? nil : input.model
-            _ = try? await control(["subtype": "set_model", "model": .optional(wire)])
-            model = input.model
+    }
+
+    private func continuePreparation(_ id: UUID) -> Bool {
+        guard preparationID == id, !isStopping else { return false }
+        if Task.isCancelled {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return false
         }
-        var content: [JSONValue] = []
-        for (image, base64) in await Attachment.base64Images(input.images) {
-            content.append([
-                "type": "image",
-                "source": ["type": "base64", "media_type": .string(image.mimeType), "data": .string(base64)],
-            ])
-        }
-        content.append(["type": "text", "text": .string(input.text)])
-        writeUserMessage(.array(content))
+        return isRunning
     }
 
     func interrupt() async {
+        if preparationID != nil {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return
+        }
         guard turnActive else { return }
         interruptRequested = true
         for requestID in pendingTools.keys {
@@ -317,6 +342,7 @@ final class ClaudeSession: ProviderSession {
     }
 
     func stop() {
+        preparationID = nil
         isStopping = true
         clearBackgroundTasks()
         process?.terminate()
@@ -360,6 +386,7 @@ final class ClaudeSession: ProviderSession {
     }
 
     private func writeUserMessage(_ content: JSONValue) {
+        guard isRunning else { return }
         invalidateContextUsage()
         turnActive = true
         interruptRequested = false

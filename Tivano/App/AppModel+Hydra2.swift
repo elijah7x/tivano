@@ -1,6 +1,6 @@
 import Foundation
 
-// Hydra 2.0 (Labs): the v2 job ledger, continuing finished heads and settling a job.
+// Hydra 2.0: the v2 job ledger, continuing finished heads and settling a job.
 // See docs/hydra2.md.
 extension AppModel {
     /// The lead's open v2 job, if any.
@@ -11,7 +11,7 @@ extension AppModel {
     /// Whether a head belongs to its lead's open v2 job: such a head is steered only
     /// through the lead (`continue`), never from its own composer.
     func hydraHeadIsInOpenJob(_ head: ChatThread) -> Bool {
-        guard let info = head.hydra, info.mode == .v2, let jobID = info.jobID,
+        guard let info = head.hydra, let jobID = info.jobID,
               let lead = head.parentThreadID, let job = openHydraJob(of: lead) else { return false }
         return job.id == jobID
     }
@@ -43,7 +43,6 @@ extension AppModel {
             }
         }
         let job = HydraJobRecord(
-            mode: .v2,
             turnID: turnID,
             finishedAt: nil,
             request: request,
@@ -63,7 +62,8 @@ extension AppModel {
             reviewAccepted: nil,
             reviewSkipped: nil,
             baseTrees: baseTrees,
-            merge: nil
+            merge: nil,
+            decisions: settings.isDecisionsEnabled
         )
         updateThread(leadID) { $0.hydraJobs.append(job) }
         return job.id
@@ -155,7 +155,7 @@ extension AppModel {
     /// Sends a finished head of the lead's open job back to its part in its own session.
     /// Returns nil when it went, else the reason it did not, for the lead.
     func continueHydraHead(named name: String, of leadID: UUID, delegation: HydraDelegation, packet: HydraHandoffPacket) -> String? {
-        guard let job = openHydraJob(of: leadID), job.mode == .v2,
+        guard let job = openHydraJob(of: leadID),
               let head = hydraTeam(of: leadID).first(where: { head in
                   guard let info = head.hydra else { return false }
                   return info.kind == .tivano && info.jobID == job.id

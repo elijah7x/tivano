@@ -61,13 +61,16 @@ actor MCPHub {
     private var generation = UUID()
     private var shuttingDown = false
 
-    func tools() async -> [Tool] {
-        guard !shuttingDown else { return [] }
+    func tools() async throws -> [Tool] {
+        try Task.checkCancellation()
+        guard !shuttingDown else { throw CancellationError() }
         if specs == nil { specs = Self.readSpecs() }
         guard let current = specs else { return [] }
         let generation = self.generation
         var all: [Tool] = []
         for id in current.keys.sorted() {
+            try Task.checkCancellation()
+            guard !shuttingDown, generation == self.generation else { throw CancellationError() }
             if let cached = toolCache[id] {
                 all += cached
                 continue
@@ -77,17 +80,21 @@ actor MCPHub {
             let client = self.client(for: id, spec: spec)
             do {
                 let listed = try await client.listTools()
-                guard generation == self.generation else { return [] }
+                try Task.checkCancellation()
+                guard !shuttingDown, generation == self.generation else { throw CancellationError() }
                 toolCache[id] = listed
                 all += listed
             } catch is CancellationError {
-                return all
+                throw CancellationError()
             } catch {
-                guard generation == self.generation else { return [] }
+                try Task.checkCancellation()
+                guard !shuttingDown, generation == self.generation else { throw CancellationError() }
                 print("MCPHub: \(id): \(error.localizedDescription)")
                 failed.insert(id)
             }
         }
+        try Task.checkCancellation()
+        guard !shuttingDown, generation == self.generation else { throw CancellationError() }
         return all.sorted {
             if $0.server != $1.server { return $0.server < $1.server }
             return $0.name < $1.name

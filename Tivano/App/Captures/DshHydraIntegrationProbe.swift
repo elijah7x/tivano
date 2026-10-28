@@ -59,7 +59,7 @@ enum DshHydraIntegrationProbe {
             defaults.set(true, forKey: "hydraEnabled")
             defaults.set(true, forKey: "hydraIsolateHeads")
             defaults.set(1, forKey: "hydraMaxHeads")
-            for key in ["hydraQueueHeads", "hydraAlwaysHeads", "hydraAutoMerge", "hydraReviewHeads", "notifyWhenFinished", "chimeWhenFinished"] {
+            for key in ["hydraAutoMerge", "notifyWhenFinished", "chimeWhenFinished"] {
                 defaults.set(false, forKey: key)
             }
             defaults.set(projectID.uuidString, forKey: "lastProjectID")

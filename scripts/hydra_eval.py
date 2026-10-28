@@ -8,6 +8,10 @@ counts from indexed lead turn revisions. Comparison reports delegation rates by
 tilt against agentic targets and up to 20 large agentic jobs without heads.
 replay-candidates reads baseline jobs.csv and writes replay_candidates.md without running
 replays or Git commands.
+decisions reads decision ledgers and library job labels, then writes decisions.csv and decisions.md.
+verdict --out DIR --library PATH [--library PATH ...] reads snapshot libraries and
+sibling threads, writing verdict.csv, verdict.md and verdict_sample.md. It compares
+next-user-message keyword verdicts for agentic V1/V2 requests within size/task buckets.
 
 Run with python3 -I scripts/hydra_eval.py SUBCOMMAND --out EXTERNAL_DIRECTORY.
 Source libraries and baseline exports are only read; no app, database, lock or Git operations.
@@ -619,12 +623,12 @@ def extract_v2(libraries, now):
             records = lead.get('hydraJobs') or []
             if not isinstance(records, list):
                 continue
-            if not any(isinstance(record, dict) and record.get('mode') == 'v2' for record in records):
+            if not any(isinstance(record, dict) and record.get('mode', 'v2') == 'v2' for record in records):
                 continue
             items, turns, _, complete = reader.transcript(library.parent, lead_id)
             job_activity = lead_job_activity(items, turns, records, complete, reader)
             for job_index, record in enumerate(records):
-                if not isinstance(record, dict) or record.get('mode') != 'v2':
+                if not isinstance(record, dict) or record.get('mode', 'v2') != 'v2':
                     continue
                 job_id = str(record.get('id') or f'missing-{job_index}')
                 key = f'{edition}:{lead_id}:{job_id}'
@@ -992,6 +996,449 @@ def replay_candidates(args):
     print(redact(f'Output: {out}; replay candidates: {len(selected)}'))
 
 
+
+DECISION_FIELDS = [
+    'at', 'point', 'status', 'error', 'latencyMs', 'inputTokens', 'outputTokens',
+    'responseModel', 'jobID', 'headID', 'decisions', 'reviewFindings', 'reviewAccepted',
+    'headStatus', 'continuations', 'continued', 'notes_flagged', 'format_missing',
+    'findings', 'accepted_any', 'churn', 'filesTotal', 'headFlags', 'leadBuilt',
+    'not_leadBuilt', 'accepted',
+]
+
+
+def decision_answers(record):
+    questions = record.get('questions') or {}
+    answers = record.get('answers') or {}
+    flat = {}
+    for key, question in questions.items():
+        if not re.fullmatch(r'gapUnreported|reworkLikely|completion|defectLikely|finding_[1-8]', key):
+            continue
+        if not isinstance(question, dict):
+            continue
+        answer = answers.get(key)
+        if question.get('type') == 'noul':
+            value = answer
+            if isinstance(answer, dict):
+                value = answer.get('noul', answer.get('probability'))
+            flat[key + '_p'] = number(value)
+        elif question.get('type') == 'choice':
+            choice = answer if isinstance(answer, str) else None
+            if isinstance(answer, dict):
+                choice = answer.get('choice', answer.get('value', answer.get('answer')))
+            criteria = question.get('criteria')
+            options = list(criteria) if isinstance(criteria, (dict, list)) else []
+            # Export option keys only, never criteria descriptions or response prose.
+            if not isinstance(choice, str) or choice not in options or not re.fullmatch(r'[A-Za-z0-9_]+', choice):
+                choice = None
+            flat[key + '_choice'] = choice
+            probabilities = answer.get('probabilities') if isinstance(answer, dict) else None
+            probability = None
+            if choice is not None:
+                if isinstance(probabilities, dict):
+                    probability = number(probabilities.get(choice))
+                elif isinstance(probabilities, list) and len(probabilities) == len(options):
+                    probability = number(probabilities[options.index(choice)])
+            flat[key + '_p'] = probability
+    return flat
+
+
+def decision_auc(rows, score, label):
+    pairs = [(number(row.get(score)), row.get(label)) for row in rows]
+    pairs = sorted((value, int(target)) for value, target in pairs
+                   if value is not None and target in (0, 1))
+    positives = sum(target for _, target in pairs)
+    negatives = len(pairs) - positives
+    counts = f'positive={positives}, negative={negatives}, missing={len(rows) - len(pairs)}'
+    if positives < 10 or negatives < 10:
+        return counts + '; insufficient data'
+    rank_sum, start = 0, 0
+    while start < len(pairs):
+        end = start + 1
+        while end < len(pairs) and pairs[end][0] == pairs[start][0]:
+            end += 1
+        rank_sum += ((start + 1 + end) / 2) * sum(target for _, target in pairs[start:end])
+        start = end
+    auc = (rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
+    return f'{auc:.4f} ({counts})'
+
+
+def decision_percentile(rows, fraction):
+    values = sorted(value for row in rows if (value := number(row.get('latencyMs'))) is not None)
+    if not values:
+        return 'NA (0 observed)'
+    position = (len(values) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(values) - 1)
+    value = values[lower] + (values[upper] - values[lower]) * (position - lower)
+    return f'{value:.2f} (n={len(values)})'
+
+
+def decisions(args):
+    libraries = list(dict.fromkeys(Path(p).expanduser().resolve() for p in (args.library or DEFAULTS)))
+    defaults = [library.parent / 'decisions' / name for library in DEFAULTS
+                for name in ('ledger.1.jsonl', 'ledger.jsonl')]
+    ledgers = list(dict.fromkeys(Path(p).expanduser().resolve() for p in
+                                (args.ledger if args.ledger is not None else [p for p in defaults if p.exists()])))
+    out = prepare_output(args.out, ('decisions.csv', 'decisions.md'), libraries + ledgers)
+    reader = Reader()
+    jobs = collections.defaultdict(list)
+    for library in libraries:
+        data = reader.read(library)
+        threads = data.get('threads', []) if isinstance(data, dict) else []
+        if isinstance(threads, dict):
+            threads = list(threads.values())
+        for thread in threads if isinstance(threads, list) else []:
+            records = thread.get('hydraJobs') if isinstance(thread, dict) else None
+            for job in records if isinstance(records, list) else []:
+                if isinstance(job, dict) and isinstance(job.get('id'), str):
+                    jobs[job['id']].append((library.parent, job))
+    records, outcomes, seen_jobs = [], {}, set()
+    for ledger in ledgers:
+        try:
+            with ledger.open('rb') as handle:
+                for raw in handle:
+                    try:
+                        record = json.loads(raw)
+                        if (not isinstance(record, dict) or record.get('kind') not in ('decision', 'outcome')
+                                or not isinstance(record.get('jobID'), str)):
+                            raise ValueError('invalid record')
+                        if record['kind'] == 'decision':
+                            if (record.get('point') not in ('headReport', 'preReview', 'reviewDisposition')
+                                    or record.get('status') not in ('ok', 'failed', 'skipped')
+                                    or any(record.get(k) is not None and not isinstance(record[k], dict)
+                                           for k in ('state', 'questions', 'answers'))):
+                                raise ValueError('invalid decision')
+                    except (ValueError, UnicodeError):
+                        reader.issues['malformed_ledger_lines'] += 1
+                        continue
+                    root = ledger.parent.parent
+                    key = (root, record['jobID'])
+                    seen_jobs.add(key)
+                    if record['kind'] == 'decision':
+                        records.append((root, record))
+                    elif record.get('point') == 'preReview':
+                        previous = outcomes.get(key)
+                        if previous is None or (timestamp(record.get('at')) or 0) >= (timestamp(previous.get('at')) or 0):
+                            outcomes[key] = record
+        except OSError:
+            reader.issues['missing_or_unreadable_ledger'] += 1
+
+    rows, row_keys = [], []
+    for root, record in records:
+        job_id = record['jobID']
+        candidates = jobs.get(job_id, [])
+        local = [job for folder, job in candidates if folder == root]
+        job = local[0] if len(local) == 1 else (candidates[0][1] if len(candidates) == 1 else {})
+        row = {field: None for field in DECISION_FIELDS}
+        for field in ('at', 'point', 'status', 'error', 'responseModel', 'jobID', 'headID'):
+            value = record.get(field)
+            row[field] = value if isinstance(value, str) else None
+        for field in ('latencyMs', 'inputTokens', 'outputTokens'):
+            row[field] = number(record.get(field))
+        row.update(decision_answers(record))
+        row['decisions'] = boolean(job.get('decisions'))
+        row['reviewFindings'] = number(job.get('reviewFindings'))
+        row['reviewAccepted'] = number(job.get('reviewAccepted'))
+        state = record.get('state') or {}
+        key = (root, job_id)
+        if record['point'] == 'headReport':
+            heads = job.get('heads')
+            head = next((h for h in heads if isinstance(h, dict) and h.get('headID') == record.get('headID')), {}) if isinstance(heads, list) else {}
+            row['headStatus'] = head.get('status') if isinstance(head.get('status'), str) else None
+            row['continuations'] = number(head.get('continuations'))
+            row['continued'] = int(row['continuations'] > 0) if row['continuations'] is not None else None
+            notes = state.get('notes')
+            row['notes_flagged'] = int(any(notes.get(k) is not None for k in ('deviations', 'unfinished', 'uncertain'))) if isinstance(notes, dict) else None
+            followed = boolean(state.get('followedReportFormat'))
+            row['format_missing'] = int(not followed) if followed is not None else None
+        elif record['point'] == 'preReview':
+            outcome = outcomes.get(key, {})
+            row['findings'] = number(outcome.get('findings'))
+            row['accepted_any'] = int(row['reviewAccepted'] > 0) if row['reviewAccepted'] is not None else None
+            added, deleted = number(state.get('linesAdded')), number(state.get('linesDeleted'))
+            row['churn'] = added + deleted if added is not None and deleted is not None else None
+            row['filesTotal'] = number(state.get('filesTotal'))
+            row['headFlags'] = len(state['headFlags']) if isinstance(state.get('headFlags'), list) else None
+            row['leadBuilt'] = boolean(state.get('leadBuilt'))
+            row['not_leadBuilt'] = int(not row['leadBuilt']) if row['leadBuilt'] is not None else None
+        elif record['point'] == 'reviewDisposition':
+            choices = [value for field, value in row.items() if re.fullmatch(r'finding_[1-8]_choice', field)]
+            row['accepted'] = sum(value == 'accepted' for value in choices) if choices and all(value is not None for value in choices) else None
+        rows.append(row)
+        row_keys.append(key)
+
+    lines = ['# Hydra decision evaluation', '',
+             'Sources opened read-only. CSV contains metadata, numeric answers, option keys and labels; no state text.',
+             'Unknown labels stay blank. Only ok decisions enter quality metrics. Repeated decisions remain separate AUROC observations.',
+             'AUROC uses Mann–Whitney ranks with half credit for ties; latency percentiles use linear interpolation.', '',
+             f'- Decisions: {len(rows)}; outcome jobs: {len(outcomes)}.',
+             f'- Read issues: {dict(reader.issues)}; libraries visibly changed during read: {reader.changed}.']
+    for point in ('headReport', 'preReview', 'reviewDisposition'):
+        subset = [row for row in rows if row['point'] == point]
+        counts = collections.Counter(row['status'] for row in subset)
+        errors = collections.Counter((row['status'], row['error'] or 'none') for row in subset)
+        models = collections.Counter(row['responseModel'] or 'unknown' for row in subset)
+        lines += ['', f'## {point} coverage', '',
+                  '- ' + '; '.join(f'{status}={counts[status]}' for status in ('ok', 'failed', 'skipped')),
+                  f'- Errors by status: {dict(errors)}',
+                  f'- Latency ms: p50={decision_percentile(subset, 0.5)}; p95={decision_percentile(subset, 0.95)}',
+                  f'- responseModel versions: {dict(models)}']
+        for field in ('inputTokens', 'outputTokens'):
+            values = [row[field] for row in subset if row[field] is not None]
+            lines.append(f'- {field}: {sum(values)} (observed={len(values)}/{len(subset)})')
+    missing = [(root, job_id) for job_id, candidates in jobs.items() for root, job in candidates
+               if boolean(job.get('decisions')) is True and (root, job_id) not in seen_jobs
+               and not (len(candidates) == 1 and any(key[1] == job_id for key in seen_jobs))]
+    lines += ['', f'## Stamped jobs with no ledger rows ({len(missing)})', '']
+    lines += [f'- {root.name}: {job_id}' for root, job_id in missing] or ['- None.']
+    ok = [row for row in rows if row['status'] == 'ok']
+    head_rows = [row for row in ok if row['point'] == 'headReport']
+    lines += ['', '## headReport AUROC against continued', '']
+    for score in ('gapUnreported_p', 'reworkLikely_p', 'notes_flagged', 'format_missing'):
+        lines.append(f'- {score}: {decision_auc(head_rows, score, "continued")}')
+    lines += ['', '### Completion × continued', '', '| Completion | No | Yes | Unknown |', '|---|---:|---:|---:|']
+    for choice in ('complete', 'partial', 'blocked', 'unknown'):
+        subset = [row for row in head_rows if (row.get('completion_choice') or 'unknown') == choice]
+        lines.append(f'| {choice} | {sum(r["continued"] == 0 for r in subset)} | {sum(r["continued"] == 1 for r in subset)} | {sum(r["continued"] is None for r in subset)} |')
+    review_rows = [dict(row, findings_any=int(row['findings'] > 0) if row['findings'] is not None else None)
+                   for row in ok if row['point'] == 'preReview']
+    lines += ['', '## preReview AUROC', '']
+    for label in ('findings_any', 'accepted_any'):
+        for score in ('defectLikely_p', 'churn', 'filesTotal', 'headFlags', 'not_leadBuilt'):
+            lines.append(f'- {score} against {label}: {decision_auc(review_rows, score, label)}')
+    latest = {}
+    for key, row in zip(row_keys, rows):
+        if row['status'] != 'ok':
+            continue
+        group = (key, row['point'])
+        if group not in latest or (timestamp(row['at']) or 0) >= (timestamp(latest[group]['at']) or 0):
+            latest[group] = row
+    disposition = [row for row in ok if row['point'] == 'reviewDisposition']
+    distribution = collections.Counter(value for row in disposition for field, value in row.items()
+                                       if re.fullmatch(r'finding_[1-8]_choice', field) and value is not None)
+    agreement = [row for (_, point), row in latest.items() if point == 'reviewDisposition'
+                 and row['accepted'] is not None and row['reviewAccepted'] is not None]
+    lines += ['', '## reviewDisposition', '', f'- Choice distribution (ok decisions): {dict(distribution)}',
+              '- Per-job agreement (latest ok decision): ' + rate(sum(row['accepted'] == row['reviewAccepted'] for row in agreement), len(agreement)),
+              'Only jobs with complete choice answers and a known regex reviewAccepted count enter agreement. Questions are capped at eight; counts are compared as recorded.', '']
+    out.mkdir(parents=True, exist_ok=True)
+    fields = DECISION_FIELDS + sorted({field for row in rows for field in row} - set(DECISION_FIELDS))
+    write_rows(out / 'decisions.csv', fields, rows)
+    with (out / 'decisions.md').open('x', encoding='utf-8') as handle:
+        handle.write(redact('\n'.join(lines) + '\n'))
+    print(redact(f'Output: {out}; decisions: {len(rows)}; malformed lines: {reader.issues["malformed_ledger_lines"]}'))
+VERDICT_FIELDS = [
+    'host', 'era', 'since_2_1_20', 'thread_id', 'request_id', 'started',
+    'task_type', 'size', 'agentic', 'delegated', 'verdict', 'rule',
+    'turns_to_accept', 'request_excerpt', 'next_message_excerpt'
+]
+VERDICT_KEYWORDS = (
+    ('correction', ('不对', '不是', '错了', '还是', '又', '没有', '没改', '怎么还',
+                    '问题还在', '挤牙膏', '漏了', '重新', '再改', '不行', '失败',
+                    'wrong', 'still', "doesn't", "didn't", 'broken', 'not what')),
+    ('accept', ('可以', '好', '行', '合入', '合并', '发版', '打包', '继续', '下一个',
+                '没问题', '不错', 'OK', 'merge', 'ship', 'looks good', 'LGTM')),
+)
+
+
+def user_verdict(text):
+    if text is None:
+        return 'none', 'no_next_message'
+    text = text.replace('’', "'")
+    for verdict_name, keywords in VERDICT_KEYWORDS:
+        for keyword in keywords:
+            pattern = re.escape(keyword)
+            if keyword.isascii():
+                pattern = r'\b' + pattern + r'\b'
+            if re.search(pattern, text, re.I):
+                return verdict_name, verdict_name + ':' + keyword
+    return 'neutral', 'no_keyword'
+
+
+def verdict_paths(values):
+    paths = set()
+    for value in values if isinstance(values, list) else []:
+        if isinstance(value, str) and value:
+            paths.add(value)
+        elif isinstance(value, dict):
+            for field in ('path', 'filePath', 'relativePath', 'oldPath', 'newPath'):
+                if isinstance(value.get(field), str) and value[field]:
+                    paths.add(value[field])
+    return paths
+
+
+def verdict_host(library):
+    for parent in library.parents:
+        if parent.parent.name == 'hosts':
+            return parent.name
+    return {'Tivano': 'release', 'Tivano Dev': 'dev'}.get(library.parent.name, library.parent.name)
+
+
+def verdict_table(lines, title, cohorts, field, values):
+    lines += ['', '## ' + title, '',
+              '| Era | Bucket | Count | First-pass accept / decisive | Correction / next observed | Median turns to accept |',
+              '|---|---|---:|---|---|---|']
+    for era, rows in cohorts:
+        for value in values:
+            subset = [row for row in rows if row[field] == value]
+            accepted = sum(row['verdict'] == 'accept' for row in subset)
+            corrected = sum(row['verdict'] == 'correction' for row in subset)
+            observed = sum(row['verdict'] != 'none' for row in subset)
+            label = ('delegated' if value else 'not delegated') if field == 'delegated' else value
+            lines.append('| ' + ' | '.join((era, str(label), str(len(subset)),
+                         rate(accepted, accepted + corrected), rate(corrected, observed),
+                         med_observed(subset, 'turns_to_accept'))) + ' |')
+
+
+def verdict(args):
+    libraries = sorted(set(Path(p).expanduser().resolve() for p in args.library))
+    out = prepare_output(args.out, ('verdict.csv', 'verdict.md', 'verdict_sample.md'), libraries)
+    reader = Reader()
+    rows = []
+    cutoff = timestamp('2026-10-26T06:19:41Z')
+    recent = timestamp('2026-10-27T23:34:00Z')
+    for library in libraries:
+        data = reader.read(library)
+        threads = data.get('threads', [])
+        if isinstance(threads, dict):
+            threads = list(threads.values())
+        by_id = {thread['id']: thread for thread in threads if thread.get('id')}
+        groups = collections.defaultdict(list)
+        for thread in threads:
+            if isinstance(thread.get('hydra'), dict):
+                groups[thread.get('parentThreadID')].append(thread)
+        for lead in sorted(threads, key=lambda thread: thread.get('id', '')):
+            if (not lead.get('id') or isinstance(lead.get('hydra'), dict) or
+                    not (lead.get('hydraSpawnCount', 0) > 0 or lead.get('hydraJobs') or lead.get('hydraEnabled'))):
+                continue
+            items, turns, _, complete = reader.transcript(library.parent, lead['id'])
+            if not complete:
+                reader.issues['incomplete_verdict_lead_transcript'] += 1
+            requests = []
+            for position, item in enumerate(items):
+                kind, value = payload(item)
+                if kind == 'user' and not generated_user(value):
+                    requests.append(dict(id=item.get('id'), at=timestamp(item.get('date')),
+                                         text=value.get('text', ''), turn=item.get('turnID'), position=position))
+            batches = collections.defaultdict(list)
+            buckets = collections.defaultdict(list)
+            for head in groups[lead['id']]:
+                batches[head['hydra'].get('batchID') or ('head:' + head['id'])].append(head)
+            for members in batches.values():
+                times = [first_time(head['hydra'], ['queuedAt', 'startedAt', 'executionStartedAt'])[0]
+                         or timestamp(head.get('createdAt')) for head in members]
+                at = min((value for value in times if value is not None), default=None)
+                eligible = [index for index, request in enumerate(requests)
+                            if at is not None and request['at'] is not None and request['at'] <= at]
+                if eligible:
+                    buckets[eligible[-1]].extend(members)
+                else:
+                    reader.issues['unattributed_verdict_heads'] += len(members)
+            records = collections.defaultdict(list)
+            for record in lead.get('hydraJobs') or []:
+                if isinstance(record, dict) and record.get('mode', 'v2') == 'v2' and record.get('turnID'):
+                    records[record['turnID']].append(record)
+            reactions = [user_verdict(request['text']) for request in requests]
+            next_accept = None
+            distances = {}
+            for index in range(len(requests) - 1, -1, -1):
+                distances[index] = min(next_accept - index, 10) if next_accept is not None else None
+                if reactions[index][0] == 'accept':
+                    next_accept = index
+            for index, request in enumerate(requests):
+                following = requests[index + 1] if index + 1 < len(requests) else None
+                end = following['position'] if following else len(items)
+                tools = [payload(item)[1] for item in items[request['position']:end]
+                         if payload(item)[0] == 'tool']
+                edits = [tool for tool in tools if tool.get('edits') or tool.get('kind') in ('edit', 'write', 'patch')]
+                paths = set()
+                for tool in edits:
+                    paths.update(verdict_paths(tool.get('edits')))
+                    paths.update(verdict_paths([tool]))
+                jobs = records.get(request['turn'], [])
+                members = {head['id']: head for head in buckets[index]}
+                landed_count = False
+                for job in jobs:
+                    for head in job.get('heads') or []:
+                        if not isinstance(head, dict):
+                            continue
+                        landed_count |= (number(head.get('landedFiles')) or 0) > 0
+                        live = by_id.get(head.get('headID'))
+                        if live and (live.get('hydra') or {}).get('jobID') == job.get('id'):
+                            members[live['id']] = live
+                for head in members.values():
+                    landing = head['hydra'].get('landing')
+                    if isinstance(landing, dict) and not landing.get('error') and not landing.get('patchPath'):
+                        landed = verdict_paths(landing.get('files'))
+                        paths.update(landed)
+                        landed_count |= bool(landed)
+                start = request['at']
+                era = 'v2' if jobs else ('v1' if start is not None and start < cutoff else 'other')
+                outcome, rule = reactions[index + 1] if following else user_verdict(None)
+                size = ('large' if len(tools) >= 40 or len(paths) >= 8 else
+                        ('small' if len(tools) < 10 and len(paths) <= 2 else 'medium'))
+                rows.append(dict(host=verdict_host(library), era=era,
+                                 since_2_1_20=era == 'v2' and start is not None and start > recent,
+                                 thread_id=lead['id'], request_id=request['id'],
+                                 started=dt.datetime.fromtimestamp(start, dt.timezone.utc).isoformat() if start is not None else None,
+                                 task_type=classify(request['text']), size=size,
+                                 agentic=bool(edits or any(tool.get('kind') == 'command' for tool in tools) or landed_count),
+                                 delegated=bool(members or any(job.get('heads') for job in jobs)),
+                                 verdict=outcome, rule=rule, turns_to_accept=distances[index],
+                                 request_excerpt=redact(one_line(request['text']))[:80],
+                                 next_message_excerpt=redact(one_line(following['text']))[:80] if following else ''))
+    agentic = [row for row in rows if row['agentic']]
+    cohorts = [('v1', [row for row in agentic if row['era'] == 'v1']),
+               ('v2', [row for row in agentic if row['era'] == 'v2']),
+               ('v2-since-2.1.20', [row for row in agentic if row['since_2_1_20']])]
+    lines = ['# Hydra user verdicts', '',
+             f'Requests: {len(rows)}; agentic: {len(agentic)}; other-era requests excluded from comparisons: '
+             f'{sum(row["era"] == "other" for row in rows)}.', '',
+             'First-pass accept = accept / (accept + correction). Correction rate = correction / '
+             '(accept + correction + neutral); none is censored. Counts include none. Tables include agentic requests only.']
+    verdict_table(lines, 'By size', cohorts, 'size', ['small', 'medium', 'large'])
+    verdict_table(lines, 'By task type', cohorts, 'task_type', sorted({row['task_type'] for _, subset in cohorts for row in subset}))
+    verdict_table(lines, 'By delegation within era', cohorts, 'delegated', [True, False])
+    lines += ['', '## Caveats', '',
+              '- Keyword heuristic, not a quality judgment: correction wins over accept; Chinese substrings and case-insensitive English word/phrase boundaries are used. Negation, quotations and short words can misclassify messages. Neutral can be a new topic or question.',
+              '- Tasks, user habits and the app changed over time. Compare within size/task buckets; these are observational signals, not causal V1/V2 effects. The recent V2 cohort overlaps all V2.',
+              '- Each genuine user message is a request; the next genuine message supplies its verdict. Generated Hydra/Tivano messages and briefs use the existing filter. Follow-ups split tasks, and later approvals can refer to a different topic.',
+              '- Turns to accept counts subsequent genuine user messages to the first accept, capped at 10 even if acceptance occurs later. No later accept is NA; medians omit NA and report observed counts.',
+              '- V2 requires a matching mode=v2 job turnID. Otherwise only requests before 2026-10-26T06:19:41Z are V1. Recent V2 starts strictly after 2026-10-27T23:34:00Z. Missing dates cannot establish either time boundary.',
+              '- Heads use baseline nearest-preceding-request batch attribution, with earliest queuedAt/startedAt/executionStartedAt or createdAt. V2 ledger heads also establish delegation. Missing heads do not prove no historical delegation.',
+              '- Size uses observed lead tools before the next request and distinct recorded edit/landed paths. Failed/retained-patch landings are excluded. Ledger landed-file counts establish agentic activity but cannot establish distinct paths; owned-file lists are not landing evidence. Missing paths/revisions and shell edits can understate size or agentic activity; paths are compared as stored.',
+              '- Only snapshot library.json, sibling thread JSON and indexed turn revisions are read. No app data is modified. Repeated snapshots are separate observations; supply one snapshot per host to avoid duplicate requests. Excerpts are redacted before truncation; redaction is heuristic.',
+              f'- Read issues: {dict(reader.issues)}; files visibly changed during read: {reader.changed}.',
+              '', '## Ordered keywords', '']
+    for name, keywords in VERDICT_KEYWORDS:
+        lines.append('- ' + name + ': ' + ', '.join(keywords))
+    selected = []
+    sample_lines = ['# User verdict classifier sample', '',
+                    'Deterministic round-robin over correction, accept, neutral, none, ordered by host/thread/request/start; target 10 agentic requests per era. Shortages are reported, never filled with duplicates.']
+    for era, subset in cohorts[:2]:
+        queues = {name: collections.deque(sorted((row for row in subset if row['verdict'] == name),
+                  key=lambda row: (row['host'], row['thread_id'], str(row['request_id']), row['started'] or '')))
+                  for name in ('correction', 'accept', 'neutral', 'none')}
+        chosen = []
+        while len(chosen) < 10 and any(queues.values()):
+            for queue in queues.values():
+                if queue and len(chosen) < 10:
+                    chosen.append(queue.popleft())
+        selected.extend(chosen)
+        sample_lines.append(f'\n- {era}: {len(chosen)}/10 sampled from {len(subset)} agentic requests.')
+    for row in selected:
+        sample_lines += ['', f'## {row["era"]}: {row["host"]} / {row["thread_id"]} / {row["request_id"]}', '',
+                         '- Request: ' + row['request_excerpt'],
+                         '- Next user message: ' + (row['next_message_excerpt'] or '(none or empty)'),
+                         f'- Verdict: {row["verdict"]}; rule: {row["rule"]}.']
+    out.mkdir(parents=True, exist_ok=True)
+    write_rows(out / 'verdict.csv', VERDICT_FIELDS, rows)
+    for name, content in [('verdict.md', lines), ('verdict_sample.md', sample_lines)]:
+        with (out / name).open('x', encoding='utf-8') as handle:
+            handle.write(redact('\n'.join(content) + '\n'))
+    print(redact(f'Output: {out}; requests: {len(rows)}; sample: {len(selected)}'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
@@ -1009,6 +1456,15 @@ def main():
     command.add_argument('--out', required=True)
     command.add_argument('--n', type=int, default=10, help='maximum candidates (default: 10)')
     command.set_defaults(handler=replay_candidates)
+    command = sub.add_parser('decisions', help='Evaluate read-only Hydra decision ledgers')
+    command.add_argument('--out', required=True)
+    command.add_argument('--library', action='append', help='library.json; repeat to combine libraries')
+    command.add_argument('--ledger', action='append', help='decision JSONL ledger; repeat to combine ledgers')
+    command.set_defaults(handler=decisions)
+    command = sub.add_parser('verdict', help='Compare next-user verdicts from Hydra snapshot libraries')
+    command.add_argument('--out', required=True)
+    command.add_argument('--library', action='append', required=True, help='snapshot library.json; repeat for multiple hosts')
+    command.set_defaults(handler=verdict)
     args = parser.parse_args()
     args.handler(args)
 

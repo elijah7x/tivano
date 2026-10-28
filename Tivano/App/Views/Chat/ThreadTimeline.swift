@@ -576,9 +576,9 @@ struct ThreadTimeline: View, Equatable {
     private func waitsForHydraBlockEnd(_ block: DisplayBlock) -> Bool {
         guard let turnID = block.turnID else { return false }
         let jobs = model.thread(runtime.threadID)?.hydraJobs ?? []
-        if let job = jobs.last(where: { $0.turnID == turnID }) { return job.mode == .v2 }
+        if jobs.contains(where: { $0.turnID == turnID }) { return true }
         guard let date = runtime.entries.first(where: { $0.turnID == turnID })?.item.date else { return false }
-        return jobs.last(where: { $0.startedAt <= date && ($0.finishedAt.map { date <= $0 } ?? true) })?.mode == .v2
+        return jobs.contains(where: { $0.startedAt <= date && ($0.finishedAt.map { date <= $0 } ?? true) })
     }
 
     /// The most rows a work group may hold and still arrive with the soft appear.

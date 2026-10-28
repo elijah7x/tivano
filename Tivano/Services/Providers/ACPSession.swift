@@ -96,6 +96,8 @@ final class ACPSession: ProviderSession {
     private var toolKinds: [String: ToolCall.Kind] = [:]
     private var toolInputs: [String: (title: String, rawInput: JSONValue)] = [:]
     private var promptActive = false
+    private var promptPreparing = false
+    private var promptGeneration: UUID?
     private var cancelRequested = false
     private var cancelDeadline: Task<Void, Never>?
     private var miniMaxPermissionConfigID: String?
@@ -141,7 +143,7 @@ final class ACPSession: ProviderSession {
 
     var isRunning: Bool {
         guard let connection else { return false }
-        return !connection.isClosed
+        return !isStopping && !connection.isClosed
     }
 
     private var workingDirectory: String { configuration.workingDirectory.path }
@@ -340,38 +342,79 @@ final class ACPSession: ProviderSession {
         }
         guard isReady, !isStopping else { throw ProviderError.notRunning }
         guard let connection, !connection.isClosed, let sessionID else { throw ProviderError.notRunning }
+        guard !promptActive else { throw ProviderError.notRunning }
+        let generation = UUID()
+        promptGeneration = generation
+        promptActive = true
+        promptPreparing = true
+        cancelRequested = false
         runtimeMode = input.runtimeMode
-        try await applySelection(
-            model: input.model,
-            effort: input.effort,
-            fastMode: input.fastMode,
-            interaction: input.interactionMode
-        )
+        guard continuePromptPreparation(generation) else { return }
+        do {
+            try await applySelection(
+                model: input.model,
+                effort: input.effort,
+                fastMode: input.fastMode,
+                interaction: input.interactionMode,
+                generation: generation
+            )
+        } catch {
+            guard continuePromptPreparation(generation) else { return }
+            promptActive = false
+            promptPreparing = false
+            promptGeneration = nil
+            throw error
+        }
+        guard continuePromptPreparation(generation) else { return }
+        let images = await Attachment.base64Images(input.images)
+        guard continuePromptPreparation(generation) else { return }
         var prompt: [JSONValue] = [["type": "text", "text": .string(input.text)]]
-        for (image, base64) in await Attachment.base64Images(input.images) {
+        for (image, base64) in images {
             prompt.append(["type": "image", "mimeType": .string(image.mimeType), "data": .string(base64)])
         }
         messageID = nil
         thoughtID = nil
-        promptActive = true
-        cancelRequested = false
+        promptPreparing = false
         onEvent?(.turnStarted(providerTurnID: nil))
         Task { [weak self] in
+            guard let self, self.promptGeneration == generation, self.promptActive, !self.isStopping else { return }
+            if self.cancelRequested {
+                self.finishPrompt("cancelled", error: nil, generation: generation)
+                return
+            }
             do {
                 let result = try await connection.request("session/prompt", [
                     "sessionId": .string(sessionID),
                     "prompt": .array(prompt),
                 ])
-                self?.finishPrompt(result["stopReason"]?.string, error: nil)
+                self.finishPrompt(result["stopReason"]?.string, error: nil, generation: generation)
             } catch {
-                self?.finishPrompt(nil, error: error)
+                self.finishPrompt(nil, error: error, generation: generation)
             }
         }
+    }
+
+    private func continuePromptPreparation(_ generation: UUID) -> Bool {
+        guard promptGeneration == generation, promptActive, !isStopping else { return false }
+        if Task.isCancelled || cancelRequested {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return false
+        }
+        return true
     }
 
     func interrupt() async {
         guard promptActive, let connection, let sessionID else { return }
         cancelRequested = true
+        if promptPreparing {
+            // Selection RPCs may still be changing the CLI. Retire it before another
+            // turn can start, and let the stale preparation unwind without events.
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return
+        }
+        let generation = promptGeneration
         for (key, id) in pendingPermissions {
             connection.respond(to: id, result: ["outcome": ["outcome": "cancelled"]])
             onEvent?(.requestResolved(id: key))
@@ -382,7 +425,7 @@ final class ACPSession: ProviderSession {
         cancelDeadline?.cancel()
         cancelDeadline = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(5)) } catch { return }
-            guard let self, self.promptActive, self.cancelRequested else { return }
+            guard let self, self.promptGeneration == generation, self.promptActive, self.cancelRequested else { return }
             // A silent agent must not leave this task's process tree behind.
             self.connection?.close()
         }
@@ -460,6 +503,9 @@ final class ACPSession: ProviderSession {
 
     func stop() {
         isStopping = true
+        promptGeneration = nil
+        promptActive = false
+        promptPreparing = false
         cancelDeadline?.cancel()
         cancelDeadline = nil
         if miniMaxPermissionGuarded {
@@ -1033,9 +1079,9 @@ final class ACPSession: ProviderSession {
         return Self.sameModel(lhs, rhs)
     }
 
-    private func applySelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async throws {
+    private func applySelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode, generation: UUID? = nil) async throws {
         do {
-            try await updateSelection(model: model, effort: effort, fastMode: fastMode, interaction: interaction)
+            try await updateSelection(model: model, effort: effort, fastMode: fastMode, interaction: interaction, generation: generation)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -1043,9 +1089,11 @@ final class ACPSession: ProviderSession {
         }
     }
 
-    private func updateSelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode) async throws {
+    private func updateSelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode, generation: UUID? = nil) async throws {
+        try checkSelectionActive(generation)
         guard let connection, let sessionID else { throw ProviderError.notRunning }
         if configuration.provider == .minimaxCode { try await applyMiniMaxPermissions() }
+        try checkSelectionActive(generation)
         if let model, !model.isEmpty {
             if miniMaxHasEmptyVariantBug, model.hasSuffix(":v:"), model != currentModel {
                 throw ProviderError.failed(AppText.localized("This MiniMax Code version rejected the model variant. Choose a thinking variant, or update MiniMax Code."))
@@ -1058,11 +1106,13 @@ final class ACPSession: ProviderSession {
             if !sameSelectedModel(wireID, currentModel) {
                 if let modelConfigID {
                     try await setConfigOption(modelConfigID, value: wireID)
+                    try checkSelectionActive(generation)
                     if configuration.provider == .minimaxCode, !sameSelectedModel(wireID, currentModel) {
                         throw ProviderError.failed(AppText.localized("MiniMax Code returned an invalid ACP result."))
                     }
                 } else {
                     _ = try await deadlineRequest(connection, "session/set_model", ["sessionId": .string(sessionID), "modelId": .string(wireID)])
+                    try checkSelectionActive(generation)
                 }
                 currentModel = wireID
             }
@@ -1073,6 +1123,7 @@ final class ACPSession: ProviderSession {
         }
         if let effort, !effort.isEmpty, let effortConfigID, effort != currentEffort {
             try await setConfigOption(effortConfigID, value: effort)
+            try checkSelectionActive(generation)
             if configuration.provider == .minimaxCode, currentEffort != effort {
                 throw ProviderError.failed(AppText.localized("MiniMax Code returned an invalid ACP result."))
             }
@@ -1082,6 +1133,7 @@ final class ACPSession: ProviderSession {
             let wanted = fastMode ? "true" : "false"
             if wanted != currentFast {
                 try await setConfigOption(fastConfigID, value: wanted)
+                try checkSelectionActive(generation)
                 currentFast = wanted
             }
         }
@@ -1110,8 +1162,14 @@ final class ACPSession: ProviderSession {
             } else if hasModeAPI {
                 _ = try await deadlineRequest(connection, "session/set_mode", ["sessionId": .string(sessionID), "modeId": .string(mode)])
             }
+            try checkSelectionActive(generation)
             currentMode = mode
         }
+    }
+
+    private func checkSelectionActive(_ generation: UUID?) throws {
+        try Task.checkCancellation()
+        guard !isStopping, generation == nil || promptGeneration == generation else { throw CancellationError() }
     }
 
     private func applyMiniMaxPermissions() async throws {
@@ -1364,9 +1422,11 @@ final class ACPSession: ProviderSession {
         return (allowOnce ?? allowAlways)?["optionId"]?.string
     }
 
-    private func finishPrompt(_ stopReason: String?, error: Error?) {
-        guard promptActive else { return }
+    private func finishPrompt(_ stopReason: String?, error: Error?, generation: UUID? = nil) {
+        guard promptActive, generation == nil || promptGeneration == generation else { return }
         promptActive = false
+        promptPreparing = false
+        promptGeneration = nil
         cancelDeadline?.cancel()
         cancelDeadline = nil
         todoToolCallIDs.removeAll()

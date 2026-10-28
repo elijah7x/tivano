@@ -28,9 +28,7 @@ struct AlphaSettingsPage: View {
                         Text("Alpha")
                             .font(.ui(.title3, weight: .semibold))
                             .foregroundStyle(Chrome.primaryText)
-                        Text(verbatim: Chrome.localized(settings.isHydra2Enabled
-                            ? "Features here are early versions and may be unstable. Turning Alpha off ends the current voice call, disables local control and remote MCP, and returns new Hydra requests to the current Hydra. Individual feature choices are kept."
-                            : "Features here are early versions and may be unstable. Turning Alpha off ends the current voice call and disables local control and remote MCP. Individual feature choices are kept."))
+                        Text(verbatim: Chrome.localized("Features here are early versions and may be unstable. Turning Alpha off disables local control and remote MCP. Individual feature choices are kept."))
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -50,30 +48,17 @@ struct AlphaSettingsPage: View {
                     .padding(.horizontal, 4)
             }
         }
-        ChromeSection(title: "Realtime voice") {
-            ChromeCard {
-                ChromeRow(title: "Codex realtime voice", detail: "Talk with Codex out loud. Start a call from Start voice in the sidebar, or from the waveform button in any Codex chat to continue that chat by voice. Codex listens, answers and does the work in the chat. Needs Codex 0.159 or later, signed in with ChatGPT. Turning this off ends the current call.") {
-                    SettingsSwitch(isOn: $settings.alphaVoiceEnabled)
-                        .accessibilityLabel(Text("Codex realtime voice"))
-                }
-                if settings.alphaVoiceEnabled {
-                    ChromeRowDivider()
-                    VoiceStyleRow()
-                }
-            }
-        }
-        .modifier(AlphaGated(isOn: settings.alphaEnabled))
-        // Switching voice off, either way, ends a call underway.
-        .onChange(of: settings.isVoiceEnabled) { _, enabled in
-            if !enabled { model.voice.end() }
-        }
         ChromeSection(title: "Hydra") {
             ChromeCard {
-                ChromeRow(title: "Hydra 2.0", detail: settings.isHydra2Enabled
-                    ? "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model may review the changes before the job settles and any automatic merge. Turning it off returns new requests to the current Hydra."
-                    : "Every new request in a Hydra chat runs the new team design: the lead keeps judgement and does coupled work itself, heads get your request and the team's file split, report deviations and open points, can be sent back to rework their part, and another vendor's model reviews the changes before they merge. Turning it off returns new requests to the current Hydra.") {
-                    SettingsSwitch(isOn: $settings.alphaHydra2Enabled)
-                        .accessibilityLabel(Text("Hydra 2.0"))
+                ChromeRow(title: "Decision model (Jev)", detail: "Shadow test: asks TypeSafe Jev to judge head reports and each job before its review, and keeps the judgments on this Mac beside what happened next. Hydra itself does not change. Sends the request, head reports, the lead's replies, review findings and changed file paths with line counts; never diffs or file contents, though the text can quote code. Off stops calls at once; on applies from the next request.") {
+                    SettingsSwitch(isOn: $settings.alphaDecisionsEnabled)
+                        .accessibilityLabel(Text("Decision model (Jev)"))
+                }
+                if settings.alphaDecisionsEnabled {
+                    ChromeRowDivider()
+                    TypeSafeKeyRow()
+                    ChromeRowDivider()
+                    DecisionLedgerRow()
                 }
             }
         }
@@ -108,19 +93,61 @@ private struct AlphaGated: ViewModifier {
     }
 }
 
-private struct VoiceStyleRow: View {
-    @Environment(AppModel.self) private var model
+private struct TypeSafeKeyRow: View {
+    @State private var key = ""
+    @State private var showsKey = false
+    @State private var loaded = false
+    @State private var storeError: String?
 
     var body: some View {
-        @Bindable var settings = model.settings
-        var options = model.voice.voices
-        if let saved = settings.codexVoice, !options.contains(saved) { options.append(saved) }
-        return ChromeRow(title: "Codex voice style", detail: "Applies to your next voice session") {
-            GlassPickerButton(
-                options: [(String?.none, "Codex default")] + options.map { (String?.some($0), VoiceCatalog.label($0)) },
-                selection: $settings.codexVoice
-            )
-            .accessibilityLabel(Text("Codex voice style"))
+        ChromeRow(title: "TypeSafe API key", detail: storeError.map {
+            String(format: Chrome.localized("The Keychain did not take the key: %@"), $0)
+        } ?? "Stored in your Keychain for this edition. Get one at typesafe.ai.") {
+            HStack(spacing: 8) {
+                Group {
+                    if showsKey {
+                        TextField("", text: $key, prompt: Text("Paste your key"))
+                    } else {
+                        SecureField("", text: $key, prompt: Text("Paste your key"))
+                    }
+                }
+                .textFieldStyle(.roundedBorder)
+                .font(.ui(size: 12, design: .monospaced))
+                .frame(width: 200)
+                Button {
+                    showsKey.toggle()
+                } label: {
+                    Image(systemName: showsKey ? "eye.slash" : "eye")
+                        .font(.ui(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Chrome.secondaryText)
+                .help(Text(verbatim: Chrome.localized(showsKey ? "Hide the API key" : "Show the API key")))
+                .accessibilityLabel(Text(verbatim: Chrome.localized(showsKey ? "Hide the API key" : "Show the API key")))
+            }
+            .disabled(!loaded)
+        }
+        .task {
+            guard !loaded else { return }
+            key = await Task.detached { TypeSafeAPI.readKey() ?? "" }.value
+            loaded = true
+        }
+        .onChange(of: key) { _, newValue in
+            guard loaded else { return }
+            storeError = TypeSafeAPI.storeKey(newValue)
+        }
+    }
+}
+
+private struct DecisionLedgerRow: View {
+    var body: some View {
+        ChromeRow(title: "Decisions ledger", detail: "Every judgment and its outcome, kept on this Mac. Read it with scripts/hydra_eval.py decisions.") {
+            Button {
+                NSWorkspace.shared.open(DecisionLedger.directory)
+            } label: {
+                Text("Show in Finder").frame(height: Chrome.rowButtonLabelHeight)
+            }
+            .buttonStyle(.glass)
         }
     }
 }

@@ -554,6 +554,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## Simple Icons and the Git Logo
+
+Several MCP server marks in the MCP settings (`Tivano/Resources/Assets.xcassets/mcp-*.imageset`) and the DeepSeek
+provider mark use paths from Simple Icons (https://simpleicons.org, https://github.com/simple-icons/simple-icons),
+released under CC0 1.0 Universal. The brands themselves remain trademarks of their owners; see "Provider names and
+marks" below.
+
+The Git mark (`mcp-git.imageset`) is the Git Logo by Jason Long (https://git-scm.com/downloads/logos), licensed under the
+Creative Commons Attribution 3.0 Unported License (https://creativecommons.org/licenses/by/3.0/).
+
 ## Provider names and marks
 
 Codex, Claude, Cursor, OpenCode, Grok, DeepSeek, Meta, Devin, Antigravity, GitHub Copilot and Command

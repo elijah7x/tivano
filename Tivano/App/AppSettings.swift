@@ -157,6 +157,7 @@ final class AppSettings {
         static let notify = "notifyWhenFinished"
         static let chime = "chimeWhenFinished"
         static let confirmDelete = "confirmBeforeDeleting"
+        static let autoShelveDays = "autoShelveDays"
         static let showReasoning = "showReasoning"
         static let antiSlopEnabled = "antiSlopEnabled"
         static let showsWorkingCard = "showsWorkingCard"
@@ -166,12 +167,14 @@ final class AppSettings {
         static let codeFontSize = "codeFontSize"
         static let sidebarActivityView = "sidebarActivityView"
         static let sidebarProjectsCollapsed = "sidebarProjectsCollapsed"
+        static let sidebarShelfExpanded = "sidebarShelfExpanded"
         static let sidebarTasksCollapsed = "sidebarTasksCollapsed"
         static let showsSkylight = "showsSkylight"
         static let codexVoice = "codexVoice"
+        static let voiceEnabled = "voiceEnabled"
         static let alphaEnabled = "alphaEnabled"
         static let alphaVoiceEnabled = "alphaVoiceEnabled"
-        static let alphaHydra2Enabled = "alphaHydra2Enabled"
+        static let alphaDecisionsEnabled = "alphaDecisionsEnabled"
         static let externalControlEnabled = "externalControlEnabled"
         static let remoteMCPEnabled = "remoteMCPEnabled"
         static let remoteMCPPublicURL = "remoteMCPPublicURL"
@@ -219,12 +222,9 @@ final class AppSettings {
         static let hydraEnabled = "hydraEnabled"
         static let panelSize = "floatingPanelSize"
         static let hydraDefaultEnabled = AppSettings.hydraDefaultEnabledKey
-        static let hydraQueueHeads = "hydraQueueHeads"
-        static let hydraAlwaysHeads = "hydraAlwaysHeads"
         static let hydraTilt = "hydraTilt"
         static let hydraIsolateHeads = "hydraIsolateHeads"
         static let hydraAutoMerge = "hydraAutoMerge"
-        static let hydraReviewHeads = "hydraReviewHeads"
         static let hydraArchivesCodexHeads = "hydraArchivesCodexHeads"
         static let hydraShowsHeadDetails = "hydraShowsHeadDetails"
         static let hydraAutoPopsHeads = "hydraAutoPopsHeads"
@@ -284,6 +284,10 @@ final class AppSettings {
 
     var confirmBeforeDeleting: Bool {
         didSet { defaults.set(confirmBeforeDeleting, forKey: Key.confirmDelete) }
+    }
+
+    var autoShelveDays: Int {
+        didSet { defaults.set(autoShelveDays, forKey: Key.autoShelveDays) }
     }
 
     var showReasoning: Bool {
@@ -379,20 +383,22 @@ final class AppSettings {
         }
     }
 
-    /// Codex realtime voice, an Alpha feature.
-    var alphaVoiceEnabled: Bool {
-        didSet { defaults.set(alphaVoiceEnabled, forKey: Key.alphaVoiceEnabled) }
+    // Legacy Alpha voice flag, retained only for migration to voiceEnabled.
+    var alphaVoiceEnabled: Bool
+
+    var voiceEnabled: Bool {
+        didSet { defaults.set(voiceEnabled, forKey: Key.voiceEnabled) }
     }
 
-    var isVoiceEnabled: Bool { alphaEnabled && alphaVoiceEnabled }
+    var isVoiceEnabled: Bool { voiceEnabled }
 
-    /// Hydra 2.0: every new request of a Hydra lead runs the v2 decision layer
-    /// (docs/hydra2.md). Read once per request, see `ThreadRuntime.startTurn`.
-    var alphaHydra2Enabled: Bool {
-        didSet { defaults.set(alphaHydra2Enabled, forKey: Key.alphaHydra2Enabled) }
+    /// Labs decision model shadow points (docs/hydra-decisions.md).
+    /// Read once per Hydra job and checked again before every call.
+    var alphaDecisionsEnabled: Bool {
+        didSet { defaults.set(alphaDecisionsEnabled, forKey: Key.alphaDecisionsEnabled) }
     }
 
-    var isHydra2Enabled: Bool { alphaEnabled && alphaHydra2Enabled }
+    var isDecisionsEnabled: Bool { alphaEnabled && alphaDecisionsEnabled }
 
     /// Dedicated, default-false permission. Installing the command never changes it.
     var externalControlEnabled: Bool {
@@ -436,6 +442,10 @@ final class AppSettings {
 
     var sidebarProjectsCollapsed: Bool {
         didSet { defaults.set(sidebarProjectsCollapsed, forKey: Key.sidebarProjectsCollapsed) }
+    }
+
+    var sidebarShelfExpanded: Bool {
+        didSet { defaults.set(sidebarShelfExpanded, forKey: Key.sidebarShelfExpanded) }
     }
 
     var sidebarTasksCollapsed: Bool {
@@ -812,29 +822,10 @@ final class AppSettings {
         didSet { defaults.set(hasSeenHydraIntro, forKey: Key.hasSeenHydraIntro) }
     }
 
-    /// With Hydra on, a follow-up queued while a turn runs goes to a head at once
-    /// instead of waiting for the turn.
-    var hydraQueueHeads: Bool {
-        didSet { defaults.set(hydraQueueHeads, forKey: Key.hydraQueueHeads) }
-    }
-
-    /// With Hydra on, every message the user sends goes to a head, sent or queued, idle
-    /// lead or not: the lead only ever hears the heads' reports. When every head is busy,
-    /// a message goes the ordinary way.
-    var hydraAlwaysHeads: Bool {
-        didSet { defaults.set(hydraAlwaysHeads, forKey: Key.hydraAlwaysHeads) }
-    }
-
-    /// Hydra 2.0's one delegation control. The two routing switches above are v1's:
-    /// with Hydra 2.0 on every message goes to the lead, which decides what heads take.
+    /// Hydra's delegation control: every message goes to the lead, which decides what heads take.
     var hydraTilt: HydraTilt {
         didSet { defaults.set(hydraTilt.rawValue, forKey: Key.hydraTilt) }
     }
-
-    /// Whether queued follow-ups go straight to heads: v1's switches, off under Hydra 2.0.
-    var hydraQueuesToHeads: Bool { !isHydra2Enabled && (hydraQueueHeads || hydraAlwaysHeads) }
-    /// Whether every message goes straight to a head: v1's switch, off under Hydra 2.0.
-    var hydraSendsToHeads: Bool { !isHydra2Enabled && hydraAlwaysHeads }
 
     /// A head Tivano runs gets a copy of the checkout of its own, so no head ever
     /// sees another's half-done work; its changes land in the chat's checkout when it
@@ -859,12 +850,6 @@ final class AppSettings {
     /// merge request and lands, and the checkout is brought up to date. Off unless asked.
     var hydraAutoMerge: Bool {
         didSet { defaults.set(hydraAutoMerge, forKey: Key.hydraAutoMerge) }
-    }
-
-    /// The lead gives every head's landed work a quick audit before it finishes, reading
-    /// the files the reports name and correcting what is wrong itself. Off unless asked.
-    var hydraReviewHeads: Bool {
-        didSet { defaults.set(hydraReviewHeads, forKey: Key.hydraReviewHeads) }
     }
 
     /// Provider-side history, independent of Tivano's sidebar. Never sweeps old heads.
@@ -934,6 +919,8 @@ final class AppSettings {
         taskSleepMode = TaskSleepMode(rawValue: defaults.string(forKey: Key.taskSleepMode) ?? "")
             ?? (defaults.object(forKey: Key.preventSleepDuringTasks) as? Bool == false ? .off : .system)
         confirmBeforeDeleting = defaults.object(forKey: Key.confirmDelete) as? Bool ?? true
+        let storedAutoShelveDays = defaults.integer(forKey: Key.autoShelveDays)
+        autoShelveDays = ProjectShelfPolicy.dayOptions.contains(storedAutoShelveDays) ? storedAutoShelveDays : 0
         // Auto-continue is now chosen per chat. Drop the old global setting.
         defaults.removeObject(forKey: "autoContinueAfterLimit")
         showReasoning = defaults.object(forKey: Key.showReasoning) as? Bool ?? false
@@ -946,12 +933,22 @@ final class AppSettings {
         codeFontSize = Self.clampedFontSize(defaults, key: Key.codeFontSize, stock: TypeScale.defaultCode, range: TypeScale.codeRange)
         sidebarActivityView = defaults.bool(forKey: Key.sidebarActivityView)
         sidebarProjectsCollapsed = defaults.bool(forKey: Key.sidebarProjectsCollapsed)
+        sidebarShelfExpanded = defaults.bool(forKey: Key.sidebarShelfExpanded)
         sidebarTasksCollapsed = defaults.bool(forKey: Key.sidebarTasksCollapsed)
         showsSkylight = defaults.object(forKey: Key.showsSkylight) as? Bool ?? true
         codexVoice = defaults.string(forKey: Key.codexVoice)
-        alphaEnabled = defaults.bool(forKey: Key.alphaEnabled)
-        alphaVoiceEnabled = defaults.bool(forKey: Key.alphaVoiceEnabled)
-        alphaHydra2Enabled = defaults.bool(forKey: Key.alphaHydra2Enabled)
+        let storedAlphaEnabled = defaults.bool(forKey: Key.alphaEnabled)
+        let storedAlphaVoiceEnabled = defaults.bool(forKey: Key.alphaVoiceEnabled)
+        alphaEnabled = storedAlphaEnabled
+        alphaVoiceEnabled = storedAlphaVoiceEnabled
+        if defaults.object(forKey: Key.voiceEnabled) == nil {
+            let migratedVoiceEnabled = storedAlphaEnabled && storedAlphaVoiceEnabled
+            voiceEnabled = migratedVoiceEnabled
+            defaults.set(migratedVoiceEnabled, forKey: Key.voiceEnabled)
+        } else {
+            voiceEnabled = defaults.bool(forKey: Key.voiceEnabled)
+        }
+        alphaDecisionsEnabled = defaults.bool(forKey: Key.alphaDecisionsEnabled)
         externalControlEnabled = defaults.bool(forKey: Key.externalControlEnabled)
         remoteMCPEnabled = defaults.bool(forKey: Key.remoteMCPEnabled)
         remoteMCPPublicURL = defaults.string(forKey: Key.remoteMCPPublicURL) ?? ""
@@ -1012,13 +1009,10 @@ final class AppSettings {
         if let stored = defaults.array(forKey: Key.panelSize) as? [Double], stored.count == 2 {
             panelSize = CGSize(width: stored[0], height: stored[1])
         }
-        hydraQueueHeads = defaults.object(forKey: Key.hydraQueueHeads) as? Bool ?? true
-        hydraAlwaysHeads = defaults.object(forKey: Key.hydraAlwaysHeads) as? Bool ?? false
         hydraTilt = defaults.string(forKey: Key.hydraTilt).flatMap(HydraTilt.init(rawValue:)) ?? .active
         hydraIsolateHeads = defaults.object(forKey: Key.hydraIsolateHeads) as? Bool ?? true
         hydraMaxHeads = HydraPair.clampedCap(defaults.object(forKey: Key.hydraMaxHeads) as? Int)
         hydraAutoMerge = defaults.object(forKey: Key.hydraAutoMerge) as? Bool ?? false
-        hydraReviewHeads = defaults.object(forKey: Key.hydraReviewHeads) as? Bool ?? false
         hydraArchivesCodexHeads = defaults.object(forKey: Key.hydraArchivesCodexHeads) as? Bool ?? false
         hydraShowsHeadDetails = defaults.object(forKey: Key.hydraShowsHeadDetails) as? Bool ?? false
         hydraAutoPopsHeads = defaults.object(forKey: Key.hydraAutoPopsHeads) as? Bool ?? false

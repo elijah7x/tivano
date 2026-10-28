@@ -1,5 +1,6 @@
 import Foundation
 import Synchronization
+import Darwin
 
 struct GitStatus: Equatable, Sendable {
     var branch: String?
@@ -100,6 +101,22 @@ struct Git: Sendable {
 
     init(_ path: String) {
         directory = URL(fileURLWithPath: path)
+    }
+
+    /// The same lease for landing and merging, including linked worktrees and editions.
+    /// Callers hold it over their whole operation; helpers must not acquire it again.
+    func repositoryWriteLease(wait: Bool = false) async throws -> SharedLibraryLease {
+        let common = try await output(["rev-parse", "--path-format=absolute", "--git-common-dir"]).trimmed
+        guard !common.isEmpty else { throw ShellError(AppText.localized("Git did not return its common directory.")) }
+        let url = SharedResourceLock.url(resource: URL(fileURLWithPath: common).resolvingSymlinksInPath().path)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30 * 60))
+        while true {
+            try Task.checkCancellation()
+            do { return try SharedLibraryLease(at: url) }
+            catch let error as POSIXError where wait && error.code == .EWOULDBLOCK && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(150))
+            }
+        }
     }
 
     private static var executable: URL { LoginEnvironment.git }
@@ -228,7 +245,7 @@ struct Git: Sendable {
     }
 
     func removeWorktree(at path: String) async throws {
-        try Self.check(await run(["worktree", "remove", "--force", path]))
+        try Self.check(await run(["worktree", "remove", path]))
     }
 
     func remoteURL() async -> String? {
@@ -454,7 +471,7 @@ struct Git: Sendable {
         let index = fileManager.temporaryDirectory.appendingPathComponent("tivano-index-\(UUID().uuidString)")
         defer { try? fileManager.removeItem(at: index) }
         let environment = ["GIT_INDEX_FILE": index.path]
-        if await hasCommits() { try Self.check(await run(["read-tree", "HEAD"], environment: environment, lane: .checkpoint)) }
+        try Self.check(await run(["read-tree", "HEAD"], environment: environment, lane: .checkpoint))
         if !paths.isEmpty {
             try Self.check(await run(["--literal-pathspecs", "add", "-A", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(paths), timeout: 300, lane: .checkpoint))
         }
@@ -470,9 +487,10 @@ struct Git: Sendable {
     /// opened a conflicted merge request every five minutes. A file `base` changed since
     /// `head` too is merged three ways with git's own `merge-file` (head's version, the
     /// base's, the working tree's). Nil when any such file conflicts, is changed on one
-    /// side and deleted on the other, or was added on both sides differently; `merged`
-    /// holds every three-way result, for the checkout to take once the work has landed.
-    func captureTree(paths: [String], onto base: String, from head: String) async throws -> (tree: String, merged: [String: Data])? {
+    /// side and deleted on the other, or was added on both sides differently.
+    /// `sourceTree` is the immutable input, also used when synchronizing the checkout.
+    func captureTree(paths: [String], onto base: String, from head: String) async throws -> (tree: String, sourceTree: String)? {
+        let sourceTree = try await captureTree(paths: paths)
         let fileManager = FileManager.default
         let scratch = fileManager.temporaryDirectory.appendingPathComponent("tivano-rebase-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -485,14 +503,13 @@ struct Git: Sendable {
         let clean = paths.filter { !upstream.contains($0) }
         let contested = paths.filter { upstream.contains($0) }
         if !clean.isEmpty {
-            try Self.check(await run(["--literal-pathspecs", "add", "-A", "--ignore-errors", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(clean), timeout: 300, lane: .checkpoint))
+            try Self.check(await run(["--literal-pathspecs", "restore", "--staged", "--source=\(sourceTree)", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(clean), timeout: 300, lane: .checkpoint))
         }
 
-        var merged: [String: Data] = [:]
         for path in contested {
-            let ancestor = await blobData(head, path)
-            let remote = await blobData(base, path)
-            let working = try? Data(contentsOf: directory.appendingPathComponent(path))
+            let ancestor = try await blobData(head, path)
+            let remote = try await blobData(base, path)
+            let working = try await blobData(sourceTree, path)
             switch (remote, working) {
             case (nil, nil):
                 // Gone on both sides: the base already has it the way the team left it.
@@ -508,6 +525,11 @@ struct Git: Sendable {
                 guard remote != working else { continue }
                 // Added on both sides with different contents: nothing to merge from.
                 guard let ancestor else { return nil }
+                let ancestorMode = try await fileMode(head, path)
+                let remoteMode = try await fileMode(base, path)
+                let workingMode = try await fileMode(sourceTree, path)
+                let modes: [String?] = [ancestorMode, remoteMode, workingMode]
+                guard modes.allSatisfy({ $0 == "100644" || $0 == "100755" }) else { return nil }
                 let current = scratch.appendingPathComponent("current")
                 let common = scratch.appendingPathComponent("common")
                 let other = scratch.appendingPathComponent("other")
@@ -520,26 +542,27 @@ struct Git: Sendable {
                 let content = try Data(contentsOf: current)
                 let blob = try await run(["hash-object", "-w", "--stdin"], input: content, lane: .checkpoint)
                 try Self.check(blob)
-                let mode = await fileMode(base, path) ?? "100644"
+                let mode = (workingMode == ancestorMode ? remoteMode : workingMode) ?? "100644"
                 try Self.check(await run(["update-index", "--add", "--cacheinfo", "\(mode),\(blob.trimmedOutput),\(path)"], environment: environment, lane: .checkpoint))
-                merged[path] = content
             }
         }
         let tree = try await run(["write-tree"], environment: environment, lane: .checkpoint)
         try Self.check(tree)
-        return (tree.trimmedOutput, merged)
+        return (tree.trimmedOutput, sourceTree)
     }
 
     /// A file's bytes at a commit, or nil where the commit has no such file.
-    private func blobData(_ commit: String, _ path: String) async -> Data? {
-        guard let result = try? await run(["cat-file", "blob", "\(commit):\(path)"]), result.succeeded else { return nil }
+    private func blobData(_ commit: String, _ path: String) async throws -> Data? {
+        guard try await presentPaths(among: [path], in: commit).contains(path) else { return nil }
+        let result = try await run(["cat-file", "blob", "\(commit):\(path)"])
+        try Self.check(result)
         return result.stdout
     }
 
     /// A file's mode at a commit ("100644", "100755"), or nil where it has none.
-    private func fileMode(_ commit: String, _ path: String) async -> String? {
-        guard let listing = try? await output(["ls-tree", "-z", commit, "--", path]),
-              let entry = listing.split(separator: "\0").first,
+    private func fileMode(_ commit: String, _ path: String) async throws -> String? {
+        let listing = try await output(["--literal-pathspecs", "ls-tree", "-z", commit, "--", path])
+        guard let entry = listing.split(separator: "\0").first,
               let mode = entry.split(separator: " ").first else { return nil }
         return String(mode)
     }
@@ -615,8 +638,8 @@ struct Git: Sendable {
     }
 
     /// Paths with uncommitted changes, staged or not, untracked ones included.
-    func dirtyPaths() async -> [String] {
-        guard let text = try? await output(["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else { return [] }
+    func dirtyPaths() async throws -> [String] {
+        let text = try await output(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
         var records = text.split(separator: "\0", omittingEmptySubsequences: false)[...]
         var paths: [String] = []
         while let entry = records.popFirst() {
@@ -633,8 +656,10 @@ struct Git: Sendable {
     }
 
     /// Paths from `paths` that the checkout ignores.
-    func ignoredPaths(among paths: [String]) async -> Set<String> {
-        guard !paths.isEmpty, let result = try? await run(["check-ignore", "-z", "--stdin"], input: Self.nulSeparated(paths)), result.succeeded || result.status == 1 else { return [] }
+    func ignoredPaths(among paths: [String]) async throws -> Set<String> {
+        guard !paths.isEmpty else { return [] }
+        let result = try await run(["check-ignore", "-z", "--stdin"], input: Self.nulSeparated(paths))
+        if result.status != 1 { try Self.check(result) }
         return Set(result.output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init))
     }
 
@@ -644,25 +669,51 @@ struct Git: Sendable {
     /// and takes the whole `git add` down. `ls-files` reads no pathspec file, so the
     /// check goes through `cat-file --batch-check`, one `HEAD:<path>` per line on stdin,
     /// which answers in order with `missing` for what HEAD does not have.
-    func trackedPaths(among paths: [String]) async -> Set<String> {
-        await presentPaths(among: paths, in: "HEAD")
+    func trackedPaths(among paths: [String]) async throws -> Set<String> {
+        guard !paths.isEmpty else { return [] }
+        let committed: Set<String>
+        if await hasCommits() {
+            committed = try await presentPaths(among: paths, in: "HEAD")
+        } else {
+            // Only an absent symbolic branch is unborn; an unreadable existing ref
+            // must still fail rather than turn tracked files into an empty set.
+            let branch = try await output(["symbolic-ref", "HEAD"]).trimmed
+            let exists = try await run(["show-ref", "--verify", "--quiet", branch])
+            guard exists.status == 1 else {
+                try Self.check(exists)
+                throw ShellError(AppText.localized("The checkout's Git status could not be read."))
+            }
+            committed = []
+        }
+        let indexed = try await output(["ls-files", "--cached", "-z"])
+        return committed.union(Set(indexed.split(separator: "\0").map(String.init)).intersection(paths))
     }
 
     /// Paths from `paths` that `ref` holds, answered by one `cat-file --batch-check` over
     /// the lot rather than a `cat-file -e` per path: a branch that moved on by thousands
     /// of files (a build's output merged once by mistake, say) used to mean thousands of
     /// git processes one after another, with the main actor picking each one up in turn.
-    func presentPaths(among paths: [String], in ref: String) async -> Set<String> {
+    func presentPaths(among paths: [String], in ref: String) async throws -> Set<String> {
         guard !paths.isEmpty else { return [] }
+        // A missing ref must not make every requested path look deleted.
+        let tree = try await treeHash(of: ref)
         let input = paths.reduce(into: Data()) { data, path in
-            data.append(contentsOf: "\(ref):\(path)".utf8)
+            data.append(contentsOf: "\(tree):\(path)".utf8)
             data.append(0)
         }
-        guard let result = try? await run(["cat-file", "--batch-check=%(objecttype)", "-Z"], input: input), result.succeeded else { return [] }
-        let answers = result.output.split(separator: "\0", omittingEmptySubsequences: false)
+        let result = try await run(["cat-file", "--batch-check=%(objecttype)", "-Z"], input: input)
+        try Self.check(result)
+        var answers = result.output.split(separator: "\0", omittingEmptySubsequences: false)
+        guard answers.last == "" else { throw ShellError(AppText.localized("Incomplete git cat-file response.")) }
+        answers.removeLast()
+        guard answers.count == paths.count else { throw ShellError(AppText.localized("Incomplete git cat-file response.")) }
         var tracked = Set<String>()
-        for (path, answer) in zip(paths, answers) where !answer.hasSuffix(" missing") {
-            tracked.insert(path)
+        for (path, answer) in zip(paths, answers) {
+            if answer == "blob" || answer == "tree" || answer == "commit" || answer == "tag" {
+                tracked.insert(path)
+            } else if answer != "\(tree):\(path) missing" {
+                throw ShellError(AppText.localized("Unexpected git cat-file response."))
+            }
         }
         return tracked
     }
@@ -716,6 +767,79 @@ struct Git: Sendable {
 
     func pullFastForward() async throws {
         try Self.check(await run(["pull", "--ff-only", "--quiet"], timeout: 300))
+    }
+
+    /// Caller holds repositoryWriteLease. The real index lock excludes ordinary Git
+    /// writers; the patch is applied to current files, never copied from an old snapshot.
+    func synchronizeCheckout(from head: String, sourceTree: String, to remote: String, branch: String) async throws {
+        let manager = FileManager.default
+        let indexPath = try await output(["rev-parse", "--path-format=absolute", "--git-path", "index"]).trimmed
+        guard !indexPath.isEmpty else { throw ShellError(AppText.localized("Git did not return its index path.")) }
+        let lockPath = indexPath + ".lock"
+        let descriptor = open(lockPath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        var published = false
+        defer {
+            close(descriptor)
+            if !published { unlink(lockPath) }
+        }
+        let identifier = UUID().uuidString.lowercased()
+        let recovery = URL(fileURLWithPath: indexPath).deletingLastPathComponent()
+            .appendingPathComponent("tivano-recovery/\(identifier)", isDirectory: true)
+        try manager.createDirectory(at: recovery, withIntermediateDirectories: true)
+        do {
+            guard try await commitHash() == head,
+                  try await output(["symbolic-ref", "HEAD"]).trimmed == branch else {
+                throw ShellError(AppText.localized("The checkout changed while the merge was prepared."))
+            }
+            let original = recovery.appendingPathComponent("index.before")
+            try manager.copyItem(atPath: indexPath, toPath: original.path)
+            let next = recovery.appendingPathComponent("index.after")
+            try manager.copyItem(at: original, to: next)
+            let environment = ["GIT_INDEX_FILE": next.path]
+            // Two-tree index merging retains unrelated staged edits and refuses overlap.
+            try Self.check(await run(["read-tree", "-i", "-m", head, remote], environment: environment, lane: .checkpoint))
+            let patch = try await diff(from: sourceTree, to: remote, binary: true)
+            try Data(patch.utf8).write(to: recovery.appendingPathComponent("sync.patch"), options: .atomic)
+            let working = try await captureTree()
+            let recoveryRef = "refs/tivano/recovery/\(identifier)"
+            try await updateRef(recoveryRef + "/working", to: working)
+            try await updateRef(recoveryRef + "/source", to: sourceTree)
+            try await updateRef(recoveryRef + "/head", to: head)
+            let manifest = ["checkout": directory.path, "branch": branch, "head": head,
+                            "remote": remote, "sourceTree": sourceTree, "workingTree": working,
+                            "recoveryRef": recoveryRef]
+            try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
+                .write(to: recovery.appendingPathComponent("recovery.json"), options: .atomic)
+            let index = try Data(contentsOf: next)
+            // Write the held lock in place, preserving its inode until the final rename.
+            try index.write(to: URL(fileURLWithPath: lockPath))
+            let transaction = "start\nupdate \(branch) \(remote) \(head)\nprepare\n"
+            // Verify the expected branch value before touching working files.
+            try Self.check(await run(["update-ref", "--stdin"], input: Data((transaction + "abort\n").utf8), lane: .checkpoint))
+            if !patch.isEmpty {
+                let conflicts = try await apply(patch, allowConflicts: false)
+                guard conflicts.isEmpty else {
+                    throw ShellError(String(format: AppText.localized("Checkout synchronization has conflicts: %@"), conflicts.joined(separator: ", ")))
+                }
+            }
+            // index.lock blocks normal checkout/switch writers. Recheck HEAD after the
+            // file merge; the named branch update independently compares its old OID.
+            // A raw symbolic-ref writer does not honor index.lock; recovery remains
+            // available if an external process changes refs outside this protocol.
+            guard try await output(["symbolic-ref", "HEAD"]).trimmed == branch else {
+                throw ShellError(AppText.localized("The checkout changed while the merge was prepared."))
+            }
+            try Self.check(await run(["update-ref", "--stdin"], input: Data((transaction + "commit\n").utf8), lane: .checkpoint))
+            guard rename(lockPath, indexPath) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            published = true
+            for suffix in ["working", "source", "head"] {
+                _ = try? await run(["update-ref", "-d", recoveryRef + "/" + suffix], lane: .checkpoint)
+            }
+            try? manager.removeItem(at: recovery)
+        } catch {
+            throw ShellError(String(format: AppText.localized("Checkout synchronization failed. Recovery: %@\n%@"), recovery.path, error.localizedDescription))
+        }
     }
 
     // MARK: - Checkpoints
@@ -790,8 +914,9 @@ struct Git: Sendable {
         let environment = ["GIT_INDEX_FILE": index.path]
 
         // Starting from the real index keeps git's stat cache, so unchanged files are not re-hashed.
-        if let indexPath = await indexPath(), fileManager.fileExists(atPath: indexPath) {
-            try? fileManager.copyItem(atPath: indexPath, toPath: index.path)
+        let realIndex = try await output(["rev-parse", "--path-format=absolute", "--git-path", "index"]).trimmed
+        if fileManager.fileExists(atPath: realIndex) {
+            try fileManager.copyItem(atPath: realIndex, toPath: index.path)
         } else if await hasCommits() {
             try Self.check(await run(["read-tree", "HEAD"], environment: environment, lane: .checkpoint))
         }
@@ -1021,7 +1146,7 @@ struct Git: Sendable {
     /// is merged three-way against the blobs the patch names; a file the merge cannot
     /// settle keeps conflict markers, and those paths come back. Throws when nothing
     /// could be applied at all.
-    func apply(_ patch: String) async throws -> [String] {
+    func apply(_ patch: String, allowConflicts: Bool = true) async throws -> [String] {
         let data = Data(patch.utf8)
         let plain = try await run(["apply", "--binary", "--whitespace=nowarn", "-"], input: data)
         if plain.succeeded { return [] }
@@ -1032,22 +1157,44 @@ struct Git: Sendable {
         let index = fileManager.temporaryDirectory.appendingPathComponent("tivano-apply-\(UUID().uuidString)")
         defer { try? fileManager.removeItem(at: index) }
         let environment = ["GIT_INDEX_FILE": index.path]
-        if let indexPath = await indexPath(), fileManager.fileExists(atPath: indexPath) {
-            try? fileManager.copyItem(atPath: indexPath, toPath: index.path)
+        let realIndex = try await output(["rev-parse", "--path-format=absolute", "--git-path", "index"]).trimmed
+        if fileManager.fileExists(atPath: realIndex) {
+            try fileManager.copyItem(atPath: realIndex, toPath: index.path)
         } else if await hasCommits() {
             try Self.check(await run(["read-tree", "HEAD"], environment: environment, lane: .checkpoint))
         }
         try Self.check(await run(["add", "-A", "--", "."], environment: environment, timeout: 300, lane: .checkpoint))
-        let merged = try await run(["apply", "--3way", "--binary", "--whitespace=nowarn", "-"], environment: environment, input: data, lane: .checkpoint)
-        if merged.succeeded { return [] }
-        let unmerged = try await run(["diff", "--name-only", "--diff-filter=U", "-z"], environment: environment, lane: .checkpoint)
-        var conflicts = unmerged.output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
-        if conflicts.isEmpty {
-            // "U path" names each file left with markers; without one, nothing was applied.
-            conflicts = merged.errorOutput.split(separator: "\n").compactMap { line -> String? in
-                line.hasPrefix("U ") ? String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces) : nil
+        let before = try await run(["write-tree"], environment: environment, lane: .checkpoint)
+        try Self.check(before)
+        // A conflicted three-way apply writes markers. Pin the current contents first
+        // so deleting the scratch index cannot discard the user's pre-conflict version.
+        let recoveryRef = "refs/tivano/recovery/\(UUID().uuidString.lowercased())/before-apply"
+        if allowConflicts { try await updateRef(recoveryRef, to: before.trimmedOutput) }
+        if !allowConflicts {
+            let checked = try await run(["apply", "--cached", "--3way", "--binary", "--whitespace=nowarn", "-"], environment: environment, input: data, lane: .checkpoint)
+            if !checked.succeeded {
+                let unmerged = try await run(["diff", "--name-only", "--diff-filter=U", "-z"], environment: environment, lane: .checkpoint)
+                try Self.check(unmerged)
+                let conflicts = unmerged.output.split(separator: "\0").map(String.init)
+                guard !conflicts.isEmpty else { throw ShellError(checked.failureMessage) }
+                return conflicts
             }
+            let after = try await run(["write-tree"], environment: environment, lane: .checkpoint)
+            try Self.check(after)
+            let resolved = try await diff(from: before.trimmedOutput, to: after.trimmedOutput, binary: true)
+            if !resolved.isEmpty {
+                try Self.check(await run(["apply", "--binary", "--whitespace=nowarn", "-"], input: Data(resolved.utf8)))
+            }
+            return []
         }
+        let merged = try await run(["apply", "--3way", "--binary", "--whitespace=nowarn", "-"], environment: environment, input: data, lane: .checkpoint)
+        if merged.succeeded {
+            _ = try? await run(["update-ref", "-d", recoveryRef], lane: .checkpoint)
+            return []
+        }
+        let unmerged = try await run(["diff", "--name-only", "--diff-filter=U", "-z"], environment: environment, lane: .checkpoint)
+        try Self.check(unmerged)
+        let conflicts = unmerged.output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
         guard !conflicts.isEmpty else { throw ShellError(merged.failureMessage) }
         return conflicts
     }

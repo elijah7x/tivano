@@ -20,7 +20,9 @@ import SystemConfiguration
 final class VoiceController {
     private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "voice")
 
-    private(set) var phase: VoicePhase = .closed
+    private(set) var phase: VoicePhase = .closed {
+        didSet { if phase != oldValue { app?.updateTaskSleepPrevention() } }
+    }
     /// The orchestrator chat, once the call has made it.
     private(set) var threadID: UUID?
     private(set) var reason: VoiceRejection?
@@ -44,7 +46,10 @@ final class VoiceController {
     @ObservationIgnored private var epoch = 0
     @ObservationIgnored private var task: Task<Void, Never>?
     /// A new call must not overtake the previous call's thread-scoped stop.
-    @ObservationIgnored private var stopTask: Task<Void, Never>?
+    private var stopTask: Task<Void, Never>? {
+        didSet { app?.updateTaskSleepPrevention() }
+    }
+    @ObservationIgnored private var stopID: UUID?
     @ObservationIgnored private var levelsTask: Task<Void, Never>?
     @ObservationIgnored private var homeTask: Task<Void, Never>?
     @ObservationIgnored private var homeThread: ChatThread?
@@ -83,6 +88,7 @@ final class VoiceController {
 
     /// A call is underway (including its preparation and native stop).
     var isLive: Bool { phase.isLive }
+    var hasPendingWork: Bool { isLive || stopTask != nil }
 
     /// Keep the entry available so missing Codex is explained on an attempted call.
     var isOffered: Bool {
@@ -537,11 +543,17 @@ final class VoiceController {
         let stoppingSession = serverLive ? session : nil
         let stoppingThread = stoppingSession?.voiceThreadID
         if previousTask != nil || stoppingSession != nil {
-            stopTask = Task {
+            let id = UUID()
+            stopID = id
+            stopTask = Task { [weak self] in
                 await previousStop?.value
                 await previousTask?.value
                 if let stoppingSession, let stoppingThread {
                     _ = try? await stoppingSession.voiceRequest("thread/realtime/stop", ["threadId": .string(stoppingThread)], seconds: 2)
+                }
+                if let self, self.stopID == id {
+                    self.stopID = nil
+                    self.stopTask = nil
                 }
             }
         }

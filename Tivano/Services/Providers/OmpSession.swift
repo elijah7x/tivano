@@ -25,6 +25,7 @@ final class OmpSession: ProviderSession {
     private var gateURL: URL?
 
     private var turnActive = false
+    private var preparationID: UUID?
     private var interruptRequested = false
     /// The prompt whose `prompt_result` ends the turn.
     private var promptID: String?
@@ -243,7 +244,7 @@ final class OmpSession: ProviderSession {
         }
     }
 
-    private func selectModel(_ selection: String?) async throws {
+    private func selectModel(_ selection: String?, preparation: UUID? = nil) async throws {
         let wanted = selection.flatMap { $0.isEmpty ? nil : $0 } ?? "default"
         let selector: String
         if wanted == "default" {
@@ -263,6 +264,8 @@ final class OmpSession: ProviderSession {
             "provider": .string(String(selector[..<slash])),
             "modelId": .string(String(selector[selector.index(after: slash)...])),
         ])
+        try Task.checkCancellation()
+        guard !stopped, preparation == nil || preparationID == preparation else { throw CancellationError() }
         guard !response.isNull, response["success"]?.bool != false else {
             throw ProviderError.failed(String(format: String(localized: "omp could not switch to %@. %@"), wanted, response["error"]?.string ?? "").trimmed)
         }
@@ -274,26 +277,53 @@ final class OmpSession: ProviderSession {
     func send(_ input: TurnInput) async throws {
         guard isRunning, let process else { throw ProviderError.notRunning }
         try validateSelection(model: input.model, effort: input.effort)
-        guard !turnActive else { throw ProviderError.failed(String(localized: "omp is still on the last turn.")) }
+        guard !turnActive, preparationID == nil else { throw ProviderError.failed(String(localized: "omp is still on the last turn.")) }
         guard input.runtimeMode == runtimeMode, input.interactionMode == interactionMode else {
             throw ProviderError.failed(String(localized: "Restart the omp session to change its permission or interaction mode."))
         }
-        try await selectModel(input.model)
+        let preparation = UUID()
+        preparationID = preparation
+        interruptRequested = false
+        defer {
+            if preparationID == preparation { preparationID = nil }
+        }
+        guard continuePreparation(preparation) else { return }
+        do {
+            try await selectModel(input.model, preparation: preparation)
+        } catch {
+            guard continuePreparation(preparation) else { return }
+            throw error
+        }
+        guard continuePreparation(preparation) else { return }
         if let wanted = input.effort, !wanted.isEmpty, wanted != effort, OmpCLI.thinkingLevels.contains(wanted) {
             let response = await request(["type": .string("set_thinking_level"), "level": .string(wanted)])
+            guard continuePreparation(preparation) else { return }
             guard !response.isNull, response["success"]?.bool != false else {
                 throw ProviderError.failed(response["error"]?.string ?? String(localized: "omp could not change its thinking level."))
             }
             effort = wanted
         }
-        guard isRunning, !Task.isCancelled else { throw ProviderError.notRunning }
         try writeGate(finalReport: input.isFinalReport)
+        turnCounter += 1
+        let id = "tivano-turn-\(turnCounter)"
+        let text = input.isFinalReport ? Self.finalReportPrompt + "\n\n" + input.text : input.text
+        var fields: [String: JSONValue] = ["type": .string("prompt"), "id": .string(id), "message": .string(text)]
+        let encodedImages = await Attachment.base64Images(input.images)
+        guard continuePreparation(preparation) else { return }
+        let images: [JSONValue] = encodedImages.map { image, base64 in
+            ["type": "image", "data": .string(base64), "mimeType": .string(image.mimeType)]
+        }
+        if !images.isEmpty { fields["images"] = .array(images) }
+        let payload = await Self.encodePrompt(.object(fields))
+        guard continuePreparation(preparation) else { return }
+        guard payload.count <= 32 * 1024 * 1024 else {
+            throw ProviderError.failed(AppText.localized("The agent input queue exceeded 32 MB or the connection closed."))
+        }
+        preparationID = nil
         turnActive = true
-        interruptRequested = false
         isFinalReport = input.isFinalReport
         turnError = nil
         failure = Failure()
-        turnCounter += 1
         lastReplyText = ""
         toolNames.removeAll()
         toolInputs.removeAll()
@@ -301,21 +331,33 @@ final class OmpSession: ProviderSession {
         runningTools.removeAll()
         toolsAwaitingAnswer.removeAll()
         hiddenCalls.removeAll()
-        let id = "tivano-turn-\(turnCounter)"
         promptID = id
-        let text = input.isFinalReport ? Self.finalReportPrompt + "\n\n" + input.text : input.text
-        var fields: [String: JSONValue] = ["type": .string("prompt"), "id": .string(id), "message": .string(text)]
-        let images: [JSONValue] = input.images.compactMap { image in
-            guard image.isImage, let data = try? Data(contentsOf: image.url) else { return nil }
-            return ["type": "image", "data": .string(data.base64EncodedString()), "mimeType": .string(image.mimeType)]
-        }
-        if !images.isEmpty { fields["images"] = .array(images) }
-        process.send(.object(fields))
+        process.write(payload)
         onEvent?(.turnStarted(providerTurnID: nil))
+    }
+
+    @concurrent
+    private static func encodePrompt(_ prompt: JSONValue) async -> Data {
+        prompt.data() + Data([0x0A])
+    }
+
+    private func continuePreparation(_ id: UUID) -> Bool {
+        guard preparationID == id, !stopped else { return false }
+        if Task.isCancelled || interruptRequested {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return false
+        }
+        return isRunning
     }
 
     func interrupt() async {
         interruptRequested = true
+        if preparationID != nil {
+            stop()
+            onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            return
+        }
         process?.send(["type": .string("abort")])
     }
 
@@ -392,6 +434,7 @@ final class OmpSession: ProviderSession {
 
     func stop() {
         stopped = true
+        preparationID = nil
         started = false
         pendingResponses.resolveAll(.null)
         clearRequests()

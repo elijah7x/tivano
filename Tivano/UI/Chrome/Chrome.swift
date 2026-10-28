@@ -903,6 +903,8 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
     let title: String
     let isSelected: Bool
     let isEmphasized: Bool
+    /// Draws the title as supporting copy, for rows set aside (shelved projects).
+    let isMuted: Bool
     let accessoryWidth: CGFloat
     let action: () -> Void
     let icon: Icon
@@ -912,6 +914,7 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
         title: String,
         isSelected: Bool = false,
         isEmphasized: Bool = false,
+        isMuted: Bool = false,
         accessoryWidth: CGFloat = 0,
         action: @escaping () -> Void,
         @ViewBuilder icon: () -> Icon,
@@ -920,6 +923,7 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
         self.title = title
         self.isSelected = isSelected
         self.isEmphasized = isEmphasized
+        self.isMuted = isMuted
         self.accessoryWidth = accessoryWidth
         self.action = action
         self.icon = icon()
@@ -934,7 +938,7 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
                     .frame(width: Chrome.iconSize, alignment: .center)
                 Text(verbatim: Chrome.localized(title))
                     .font(.ui(.body, weight: isSelected || isEmphasized ? .medium : .regular))
-                    .foregroundStyle(Chrome.primaryText.opacity(isSelected ? 1 : 0.92))
+                    .foregroundStyle(isMuted ? Chrome.secondaryText : Chrome.primaryText.opacity(isSelected ? 1 : 0.92))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)

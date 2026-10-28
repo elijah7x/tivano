@@ -16,6 +16,11 @@ private struct HydraPatch: Sendable {
     var after: String
 }
 
+@MainActor
+private enum HydraLandingTasks {
+    static var latest: [ObjectIdentifier: UUID] = [:]
+}
+
 /// Absolute checkout paths compared the same way a repository lease is: standardized,
 /// symlinks resolved. Shared with the merge, which groups work by the same identity.
 enum HydraPaths {
@@ -267,7 +272,6 @@ extension AppModel {
             headProfiles: [],
             isolatesHeads: settings.hydraIsolateHeads,
             autoMerges: settings.hydraAutoMerge,
-            reviewsHeads: settings.hydraReviewHeads,
             projects: ownRefs,
             headsNote: keepsModel ? pair?.headsNote?.trimmed.nilIfEmpty : nil,
             headsMatchLead: headsMatchLead,
@@ -283,7 +287,7 @@ extension AppModel {
         guard on else {
             updateThread(id) { $0.hydraEnabled = false }
             settings.hydraDefaultEnabled = false
-            if openHydraJob(of: id)?.mode == .v2 {
+            if openHydraJob(of: id) != nil {
                 Task { await endHydraJobsForHydraOff(of: id) }
             }
             return
@@ -631,16 +635,13 @@ extension AppModel {
         info.pendingProjectReference = needsRoute ? project : nil
         info.canStop = true
         if let job {
-            info.mode = job.mode
             info.jobID = job.jobID
-        } else if let job = openHydraJob(of: parentID), job.mode == .v2,
-           existingRuntime(for: parentID)?.hydraJobMode == .v2 {
-            info.mode = .v2
+        } else if let job = openHydraJob(of: parentID) {
             info.jobID = job.id
         }
         head.hydra = info
         insertThread(head)
-        if info.mode == .v2, let jobID = info.jobID {
+        if let jobID = info.jobID {
             updateHydraJob(jobID, of: parentID) { job in
                 job.heads.append(HydraJobHeadRecord(
                     headID: head.id,
@@ -686,7 +687,7 @@ extension AppModel {
         updateHydraHead(id) { $0.targetCheckout = checkout }
         // A v2 head working in a checkout the job has no base for yet records that base
         // before any work goes in, so the review diffs only what the job did there.
-        if info.mode == .v2, let jobID = info.jobID, let leadID = head.parentThreadID,
+        if let jobID = info.jobID, let leadID = head.parentThreadID,
            thread(leadID)?.hydraJobs.first(where: { $0.id == jobID })?.baseTrees?[checkout] == nil,
            let tree = try? await Git(checkout).currentTree() {
             updateHydraJob(jobID, of: leadID) { job in
@@ -723,7 +724,7 @@ extension AppModel {
             $0.executionFinishedAt = nil
         }
         let headBrief = brief(info.persona, workplace)
-        if info.mode == .v2, let jobID = info.jobID {
+        if let jobID = info.jobID {
             updateHydraJob(jobID, of: parentID) { job in
                 guard let index = job.heads.firstIndex(where: { $0.headID == id }) else { return }
                 job.heads[index].briefChars = headBrief.count
@@ -788,14 +789,14 @@ extension AppModel {
         case .interrupted: .stopped
         case .running: .running
         }
-        let reportNotes = info.mode == .v2 && status == .completed ? HydraReportNotes.parse(summary ?? "") : nil
+        let reportNotes = info.jobID != nil && status == .completed ? HydraReportNotes.parse(summary ?? "") : nil
         // The progress the head reported while it ran lands on the record now, once.
         let live = existingRuntime(for: id)
         updateHydraHead(id) {
             $0.status = outcome
             $0.summary = summary ?? $0.summary
             $0.finishedAt = .now
-            if info.mode == .v2 { $0.reportNotes = reportNotes }
+            if info.jobID != nil { $0.reportNotes = reportNotes }
             if let landing { $0.landing = landing }
             if let live {
                 if let activity = live.hydraActivity { $0.activity = activity }
@@ -820,7 +821,7 @@ extension AppModel {
             }
         }
         guard let parentID = head.parentThreadID, let finished = thread(id)?.hydra else { return }
-        if finished.mode == .v2, let jobID = finished.jobID {
+        if let jobID = finished.jobID {
             let seconds = finished.executionStartedAt.flatMap { started in
                 finished.executionFinishedAt.map { $0.timeIntervalSince(started) }
             }
@@ -835,6 +836,21 @@ extension AppModel {
                 job.heads[index].notes = reportNotes
                 job.heads[index].followedReportFormat = status == .completed ? reportNotes != nil : nil
             }
+            if outcome == .completed, hydraJobRunsDecisions(jobID, of: parentID) {
+                let ownedFiles = thread(parentID)?.hydraJobs.first(where: { $0.id == jobID })?
+                    .heads.first(where: { $0.headID == id })?.files ?? []
+                let landed = landing ?? finished.landing
+                let request = HydraDecisionRequests.headReport(
+                    task: finished.task,
+                    ownedFiles: ownedFiles,
+                    landedFiles: landed?.landed == true ? landed?.files.map(\.path) ?? [] : [],
+                    conflicts: landed?.conflicts.count ?? 0,
+                    report: summary ?? "",
+                    notes: reportNotes,
+                    followedReportFormat: reportNotes != nil
+                )
+                runHydraDecision(request, leadID: parentID, jobID: jobID, headID: id)
+            }
         }
         let leadRuntime = runtime(for: parentID)
         let copyPath = info.hasOwnCopy ? head.worktreePath : nil
@@ -844,10 +860,10 @@ extension AppModel {
         // continuations until its job settles. Late heads of a closed job release now,
         // since no settlement remains to release them. Other stopped or failed heads keep
         // their copies until cleared by hand or steered on for another turn.
-        let jobAlreadyClosed = finished.mode == .v2 && finished.jobID.map { jobID in
+        let jobAlreadyClosed = finished.jobID.map { jobID in
             thread(parentID)?.hydraJobs.contains { $0.id == jobID && $0.finishedAt != nil } == true
         } == true
-        if (outcome == .completed && finished.mode != .v2) || (finished.isFinished && jobAlreadyClosed) {
+        if (outcome == .completed && finished.jobID == nil) || (finished.isFinished && jobAlreadyClosed) {
             releaseHydraCopy(of: id)
         }
     }
@@ -874,11 +890,11 @@ extension AppModel {
                 return note.message
             }
         } else { nil }
-        // A failed turn's prose, and a v2 completed report, come from this turn alone;
-        // v1 completed turns keep the previous last-reply behavior.
+        // A failed turn's prose and a completed job report come from this turn alone;
+        // heads without a job keep the previous last-reply behavior.
         let spoken = headRuntime?.entries.last(where: { entry in
             guard case .assistant(let message) = entry.item.content else { return false }
-            if status == .failed || (info.mode == .v2 && status == .completed) {
+            if status == .failed || (info.jobID != nil && status == .completed) {
                 return turnID != nil && entry.turnID == turnID && !message.text.trimmed.isEmpty
             }
             return true
@@ -1024,8 +1040,17 @@ extension AppModel {
         await waitForSettledCheckout(parentID, paths: sharesCheckout ? prepared.files.map(\.path) : [])
         let leadRuntime = runtime(for: parentID)
         let previous = leadRuntime.hydraLanding
+        let owner = ObjectIdentifier(leadRuntime)
+        let token = UUID()
+        HydraLandingTasks.latest[owner] = token
         let applied = Task<HydraLanding, Never> {
             await previous?.value
+            defer {
+                if HydraLandingTasks.latest[owner] == token {
+                    HydraLandingTasks.latest[owner] = nil
+                    leadRuntime.hydraLanding = nil
+                }
+            }
             return await self.applyHydraHead(id, landing: landing, patch: prepared)
         }
         leadRuntime.hydraLanding = Task { _ = await applied.value }
@@ -1068,7 +1093,11 @@ extension AppModel {
     /// something".
     private static func hydraWork(in copyGit: Git, from base: String, to after: String) async throws -> (paths: [String], droppedBuildOutputFiles: Int) {
         let changed = try await copyGit.changedPaths(from: base, to: after)
-        let paths = changed.filter { !TouchedPaths.isBuildOutput($0) }
+        // A tracked project file remains work even under a cache-looking directory.
+        // Include the base too: deleted tracked files no longer exist in `after`.
+        var tracked = try await copyGit.presentPaths(among: changed, in: base)
+        tracked.formUnion(try await copyGit.trackedPaths(among: changed))
+        let paths = changed.filter { tracked.contains($0) || !TouchedPaths.isBuildOutput($0) }
         return (paths, changed.count - paths.count)
     }
 
@@ -1107,12 +1136,38 @@ extension AppModel {
         updateHydraHead(id) { $0.landingStartedAt = .now; $0.landingFinishedAt = nil }
         defer { updateHydraHead(id) { $0.landingFinishedAt = .now } }
         let checkoutGit = Git(checkout)
+        let repoLease: SharedLibraryLease
+        do {
+            repoLease = try await checkoutGit.repositoryWriteLease(wait: true)
+            try Task.checkCancellation()
+        } catch {
+            landing.patchPath = keepHydraPatch(patch.text, of: info, headID: head.id)
+            landing.error = error.localizedDescription
+            noteHydraLanding(landing, of: info, to: parentID)
+            return landing
+        }
+        defer { withExtendedLifetime(repoLease) {} }
+        guard thread(id)?.worktreePath == head.worktreePath,
+              thread(id)?.hydra?.baseTree == info.baseTree,
+              thread(id)?.hydra?.targetCheckout == info.targetCheckout else {
+            landing.patchPath = keepHydraPatch(patch.text, of: info, headID: head.id)
+            landing.error = landing.patchPath == nil
+                ? AppText.localized("The head's recovery patch could not be saved; its copy was kept.")
+                : AppText.localized("The head changed while its landing was waiting; its patch was kept.")
+            noteHydraLanding(landing, of: info, to: parentID)
+            return landing
+        }
         // A rebase or a merge is half done in the checkout: a patch laid on top of that
         // would be impossible to tell from the operation's own conflicts, and resolving
         // either would lose the other. The work waits as a patch file instead.
         guard !(await checkoutGit.hasOperationInProgress()) else {
             landing.patchPath = keepHydraPatch(patch.text, of: info, headID: head.id)
-            landing.error = "a rebase or merge is underway in the checkout, or its git state cannot be read"
+            landing.error = AppText.localized("A rebase or merge is underway in the checkout, or its Git state could not be read.")
+            noteHydraLanding(landing, of: info, to: parentID)
+            return landing
+        }
+        guard let recovery = keepHydraPatch(patch.text, of: info, headID: head.id) else {
+            landing.error = AppText.localized("The head's recovery patch could not be saved; its copy was kept.")
             noteHydraLanding(landing, of: info, to: parentID)
             return landing
         }
@@ -1121,9 +1176,14 @@ extension AppModel {
             // Only a clean landing moves the base. With conflict markers in the checkout
             // the work is not settled, so the head keeps its whole diff: steered on, it
             // offers all of it again rather than leaving the unresolved part to nobody.
-            if landing.conflicts.isEmpty { updateHydraHead(id) { $0.baseTree = patch.after } }
+            if landing.conflicts.isEmpty {
+                updateHydraHead(id) { $0.baseTree = patch.after }
+                try? FileManager.default.removeItem(atPath: recovery)
+            } else {
+                landing.patchPath = recovery
+            }
         } catch {
-            landing.patchPath = keepHydraPatch(patch.text, of: info, headID: head.id)
+            landing.patchPath = recovery
             landing.error = error.localizedDescription
         }
         // The checkout has moved, so the next head captures it afresh rather than starting
@@ -1139,7 +1199,7 @@ extension AppModel {
     /// where it went; nil when even that failed.
     private func keepHydraPatch(_ text: String, of info: HydraHeadInfo, headID: UUID) -> String? {
         let slug = info.persona.name.replacingOccurrences(of: " ", with: "-").lowercased()
-        let url = Storage.patchesDirectory.appendingPathComponent("\(slug)-\(headID.uuidString.lowercased().prefix(8)).patch")
+        let url = Storage.patchesDirectory.appendingPathComponent("\(slug)-\(headID.uuidString.lowercased().prefix(8))-\(UUID().uuidString.lowercased()).patch")
         guard (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil else { return nil }
         return url.path
     }
@@ -1254,26 +1314,21 @@ extension AppModel {
               info.targetCheckout.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL == copyURL }) != true,
               !threads.contains(where: { $0.id == head.parentThreadID && $0.worktreePath == copy }) else { return }
         let runtime = existingRuntime(for: id)
-        let workIsPreserved = info.landing.map { landing in
-            landing.landed || landing.isEmpty
-                || landing.patchPath.map { FileManager.default.fileExists(atPath: $0) } == true
-        } ?? false
-        if info.status != .completed || !workIsPreserved {
+        do {
+            let git = Git(directory)
+            let lease = try await git.repositoryWriteLease(wait: true)
+            defer { withExtendedLifetime(lease) {} }
+            // A previous successful landing does not prove that the copy is unchanged
+            // now. Preserve current work, and let Git refuse any dirty-copy removal.
             guard let base = info.baseTree,
                   await keepHydraCopyAsPatch(id, name: info.persona.name, copy: copy, base: base) else {
-                alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
-                return
+                throw ShellError(AppText.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
             }
-        }
-        guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
-              existingRuntime(for: id) === runtime,
-              runtime?.isRunning != true, runtime?.isHydraMerging != true else { return }
-        runtime?.stopSession()
-        do {
-            let root = try await Git(directory).repositoryRoot()
+            let root = try await git.repositoryRoot()
             guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
                   existingRuntime(for: id) === runtime,
                   runtime?.isRunning != true, runtime?.isHydraMerging != true else { return }
+            runtime?.stopSession()
             try await Git(root.path).removeWorktree(at: copy)
             // A restarted head may now own another copy, even on the same thread.
             guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
@@ -1303,15 +1358,13 @@ extension AppModel {
         if work.paths.isEmpty { return true }
         guard let patch = try? await copyGit.diff(from: base, to: after, binary: true, paths: work.paths), !patch.isEmpty else { return false }
         let slug = name.replacingOccurrences(of: " ", with: "-").lowercased()
-        let url = Storage.patchesDirectory.appendingPathComponent("\(slug)-\(id.uuidString.lowercased().prefix(8))-unlanded.patch")
+        let url = Storage.patchesDirectory.appendingPathComponent("\(slug)-\(id.uuidString.lowercased().prefix(8))-\(base)-\(after)-unlanded.patch")
+        if FileManager.default.fileExists(atPath: url.path) {
+            return (try? String(contentsOf: url, encoding: .utf8)) == patch
+        }
         guard (try? patch.write(to: url, atomically: true, encoding: .utf8)) != nil else { return false }
         guard let parentID = thread(id)?.parentThreadID, let leadRuntime = existingRuntime(for: parentID) else { return true }
-        leadRuntime.appendHydraNote("""
-        \(name)'s unfinished work was kept as a patch before its copy was cleared.
-        \(url.path)
-
-        Nothing of it had landed in your checkout. Apply it with `git apply --3way \(url.path)` if you still want it.
-        """)
+        leadRuntime.appendHydraNote(String(format: AppText.localized("%@'s unfinished work was kept as a recovery patch.\n%@\n\nThe copy is removed only if Git confirms it has no uncommitted changes. Review the patch against your checkout before applying it with `git apply --3way %@`."), name, url.path, url.path))
         return true
     }
 

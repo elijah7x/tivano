@@ -8,6 +8,56 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-28
+
+### English
+
+### New features
+
+- Hydra 2.0 leaves Labs and is now simply Hydra, for every chat with Hydra on. The lead decides at every message what goes to heads, set by Settings › Hydra › Delegation (Restrained, Proactive or Aggressive); heads get your request and the team's file split, end their reports with deviations, unfinished work and doubts, and can be sent back to rework their part; another vendor's model reviews the job's changes before it settles. The old design is removed, and with it the switches Send queued follow-ups to heads, Prefer heads for messages and Ask the lead to review heads' changes: queued messages wait for the lead, which always checks the heads' work. A quiet 2.0 tag next to the title in Settings › Hydra marks the version.
+- Projects you are not working on can be shelved. Right-click a project, or open its ⋯ menu, and choose Shelve project: it moves into a Shelved group at the end of the project list, which opens and closes in place. Shelved projects keep their threads and their place; the button on a shelved project, or Unshelve project in its menus, puts it back where it was. Working in a shelved project brings it back on its own: sending a message, starting a thread in it, adding the same folder again or moving a thread into it. Opening an old thread or searching leaves it shelved, and a dot on the Shelved row marks unread threads inside. The Shelved row's icon can be changed like a project's.
+- Settings › General › Conversation can shelve idle projects automatically after 3, 7 or 14 days without activity in their latest thread. It is off by default. A project with a running, unread or open thread stays put, and one you unshelve by hand starts its idle time again.
+- Codex realtime voice leaves Alpha: it is now a regular feature in Settings › General › Realtime voice, off by default and no longer tied to the Alpha switch. If you already had it on in Alpha, it stays on.
+- Alpha › Hydra can run a decision model as a shadow test. Turn on Decision model (Jev) and add a TypeSafe API key: TypeSafe Jev then judges each head's report, each job before its review, and how the lead answered the review, and keeps those judgments on this Mac beside what actually happened next. Hydra itself behaves exactly as before. The request, head reports, the lead's replies, review findings and changed file paths with line counts go to TypeSafe; diffs and file contents do not.
+
+### Bug fixes
+
+- Stop now cancels requests still preparing a model or images. Failed question delivery keeps your draft for retry, and reopening a question preserves your choices, text and page.
+- File completion refreshes as project files change, reopened image previews pick up replacements, failed previews offer Retry, and streaming Markdown keeps updating during long replies.
+- Hydra merges preserve later edits and unrelated staged changes; conflicting checkout synchronization leaves working files unchanged. Dirty head copies and unreadable histories retain their recovery data, while successful merges clean up temporary recovery records. Hydra review and voice connection/teardown also block updates while active.
+- The license and notices in Settings › About read as paragraphs again, instead of breaking at every line of the source files.
+
+### Refinements
+
+- The Credits in Settings › About are one card with clearer weight: Droppy Code leads, Zeron, SwiftTerm and the thinking-orbs engine follow with what each brought, and smaller code, assets and references are grouped below. Links are quieter until hovered, and the Git logo by Jason Long and Simple Icons are now credited in the notices.
+- Large-image preparation runs in the background with resized payloads. Long-thread saves reuse one directory listing instead of checking every historical turn file separately, and completed Hydra landings no longer prevent idle runtime cleanup.
+
+### 简体中文
+
+### 新功能
+
+- Hydra 2.0 结束实验阶段，成为唯一的 Hydra，所有开启 Hydra 的对话都使用它。主智能体在每条消息时决定哪些工作交给 heads，程度由设置 › Hydra › 委派（克制、积极、激进）决定；heads 会收到你的原始请求和团队的文件分工，回报末尾写明偏离、未完成和不确定之处，也可以被送回返工；任务收尾前由另一家厂商的模型审查改动。旧设计已移除，「把排队的后续消息交给 heads」「消息优先交给 heads」「让主智能体审查 heads 的改动」这几个开关也随之移除：排队消息等待主智能体处理，主智能体总会检查 heads 的工作。设置 › Hydra 标题旁新增一个低调的 2.0 标记，用来表明版本。
+- 暂时不看的项目可以搁置。右键项目或打开它的「⋯」菜单，选择「搁置项目」，项目会收进项目列表末尾的「已搁置」分组，点击即可原地展开或收起。搁置的项目保留全部对话和原来的位置；点搁置项目上的按钮，或在菜单里选「放回项目列表」，它会回到原处。在搁置的项目里开始工作会自动放回：发消息、新建对话、再次添加同一文件夹，或把对话移进去。打开旧对话或搜索不会改变搁置，「已搁置」行上的圆点提示其中有未读对话。「已搁置」行的图标可以像项目一样更换。
+- 设置 › 通用 › 对话可以在项目最近的对话闲置 3、7 或 14 天后自动搁置项目，默认关闭。有对话正在运行、未读或正打开的项目不会被搁置，手动放回的项目会重新计算闲置时间。
+- Codex 实时语音结束 Alpha 阶段，成为正式功能，位于设置 › 通用 › 实时语音，默认关闭，不再受 Alpha 总开关控制。已在 Alpha 中开启的用户会保持开启。
+- Alpha › Hydra 新增决策模型影子测试。打开「决策模型（Jev）」并填入 TypeSafe API key，TypeSafe Jev 会评判每个 head 的回报、每个任务进入审查前的风险，以及 lead 对审查意见的处置，并把这些判断和之后的实际结果一起保存在这台 Mac 上。Hydra 本身的行为不变。发送给 TypeSafe 的内容包括用户请求、head 回报、lead 的回复、审查意见，以及改动文件的路径和增删行数，不包括 diff 和文件内容。
+
+### 问题修复
+
+- Stop 可以取消仍在准备模型或图片的请求。问答投递失败会保留草稿供重试，重新打开问答也会恢复选择、文字和页码。
+- 文件补全会随项目文件变化刷新，重新打开图片预览能读取替换后的内容，预览失败可以重试，长回复中的 Markdown 持续更新。
+- Hydra 合并保留后续编辑和无关暂存修改；checkout 同步遇到冲突时不改写工作文件。有修改的 head 副本和不可读历史保留恢复资料，成功合并则清理临时恢复记录。Hydra 评审及语音连接、收尾期间也会阻止更新。
+- 设置 › 关于中的许可证与第三方声明恢复按段落显示，不再在原文件的每一行处断开。
+
+### 优化改进
+
+- 设置 › 关于中的致谢合为一张层次分明的卡片：Droppy Code 居首，Zeron、SwiftTerm 与 thinking-orbs 动画引擎随后并注明各自贡献，较小的代码、素材与参考分组列在下方。链接平时更低调，悬停时才突出；第三方声明补充了 Jason Long 的 Git Logo 与 Simple Icons。
+- 大图在后台处理并缩小发送载荷。长对话保存复用一次目录枚举，不再逐个查询历史回合文件；Hydra 落地完成后，对话运行时可以正常闲置回收。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.1.20] - 2026-10-28
 
 ### English
