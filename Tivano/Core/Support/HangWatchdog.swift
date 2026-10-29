@@ -7,11 +7,13 @@ import os
 /// A freeze that ends in a force quit leaves nothing behind: the Dock asks spindump for a
 /// hang report, spindump declines for a development build, and the crash reporter never
 /// sees a process that was killed rather than crashed. So the app watches itself. A thread
-/// of its own pings the main thread twice a second; when a ping goes unanswered for
-/// `stallThreshold`, it runs `sample` on the process and writes every thread's stack to
-/// `~/Library/Logs/Tivano/hang-<date>.txt`. `sample` reads the stacks from outside,
+/// of its own checks the main thread twice a second; when an outstanding ping goes
+/// unanswered for `stallThreshold` from when it was sent, it runs `sample` on the process
+/// and writes every thread's stack to `~/Library/Logs/Tivano/hang-<date>.txt`.
+/// `sample` reads the stacks from outside,
 /// so a main thread stuck in a loop or a lock is exactly what it captures. One report per
-/// stall; the next stall gets one of its own.
+/// stall, with reports rate-limited to at most one per `minReportInterval` after the last
+/// report finishes.
 /// SwiftUI can also livelock, keeping the main thread busy while starving user input.
 /// A ping alone cannot detect this because the main queue still answers between layout passes.
 ///
@@ -36,6 +38,9 @@ enum HangWatchdog {
     /// long sample only delays the write.
     private static let sampleSeconds = 2
 
+    /// Caps how often `sample` can run against the app.
+    private static let minReportInterval: TimeInterval = 60
+
     /// Reports kept before the oldest is dropped, so a machine that freezes often does not
     /// fill its logs folder.
     private static let keptReports = 10
@@ -44,8 +49,9 @@ enum HangWatchdog {
 
     private struct State {
         /// System uptime, which stands still while the Mac sleeps, so a sleep is never a stall.
-        var lastPong = ProcessInfo.processInfo.systemUptime
+        var pingSentAt: TimeInterval?
         var reportedThisStall = false
+        var nextReportAllowed: TimeInterval = 0
         var started = false
         var mainThreadPort: thread_act_t = 0
     }
@@ -63,7 +69,6 @@ enum HangWatchdog {
             if state.started { return false }
             state.started = true
             state.mainThreadPort = mach_thread_self()
-            state.lastPong = ProcessInfo.processInfo.systemUptime
             return true
         }
         guard shouldStart else { return }
@@ -82,24 +87,32 @@ enum HangWatchdog {
     }
 
     private static func ping() {
-        DispatchQueue.main.async {
-            state.withLock { state in
-                state.lastPong = ProcessInfo.processInfo.systemUptime
-                state.reportedThisStall = false
+        state.withLock { state in
+            guard state.pingSentAt == nil else { return }
+            state.pingSentAt = ProcessInfo.processInfo.systemUptime
+            DispatchQueue.main.async {
+                self.state.withLock { state in
+                    state.pingSentAt = nil
+                    state.reportedThisStall = false
+                }
             }
         }
     }
 
     private static func check() {
         let stalledFor = state.withLock { state -> TimeInterval? in
-            let stalled = ProcessInfo.processInfo.systemUptime - state.lastPong
+            guard let pingSentAt = state.pingSentAt else { return nil }
+            let now = ProcessInfo.processInfo.systemUptime
+            let stalled = now - pingSentAt
             guard stalled >= stallThreshold, !state.reportedThisStall else { return nil }
+            guard now >= state.nextReportAllowed else { return nil }
             state.reportedThisStall = true
             return stalled
         }
         guard let stalledFor else { return }
         log.error("Main thread unresponsive for \(stalledFor, format: .fixed(precision: 1))s, sampling")
         writeReport(headline: "Tivano main thread unresponsive for \(String(format: "%.1f", stalledFor))s")
+        state.withLock { $0.nextReportAllowed = ProcessInfo.processInfo.systemUptime + minReportInterval }
     }
 
     private static func mainThreadCPUTime() -> TimeInterval? {
@@ -121,9 +134,10 @@ enum HangWatchdog {
             busy = BusyState()
             return
         }
-        let wallTime = ProcessInfo.processInfo.systemUptime
+        var baselineCPUTime: TimeInterval? = cpuTime
+        var wallTime = ProcessInfo.processInfo.systemUptime
         defer {
-            busy.lastCPUTime = cpuTime
+            busy.lastCPUTime = baselineCPUTime
             busy.lastWallTime = wallTime
         }
         guard let lastCPUTime = busy.lastCPUTime, let lastWallTime = busy.lastWallTime else { return }
@@ -139,9 +153,14 @@ enum HangWatchdog {
         guard let busySince = busy.busySince else { return }
         let busyFor = wallTime - busySince
         guard busyFor >= busyThreshold, !busy.reportedThisBusy else { return }
+        let measuredAt = wallTime
+        guard state.withLock({ measuredAt >= $0.nextReportAllowed }) else { return }
         busy.reportedThisBusy = true
         log.error("Main thread busy for \(busyFor, format: .fixed(precision: 1))s without a break, sampling")
         writeReport(headline: "Tivano main thread busy for \(String(format: "%.1f", busyFor))s at \(String(format: "%.0f", fraction * 100))% CPU (livelock: the main queue still answers, input does not)")
+        state.withLock { $0.nextReportAllowed = ProcessInfo.processInfo.systemUptime + minReportInterval }
+        baselineCPUTime = mainThreadCPUTime()
+        wallTime = ProcessInfo.processInfo.systemUptime
     }
 
     /// Runs `sample` against this process and writes what it saw. Runs on the watchdog's

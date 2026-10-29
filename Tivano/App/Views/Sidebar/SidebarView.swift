@@ -2562,7 +2562,7 @@ private enum ThreadActions {
 }
 
 private struct SidebarHeaderLayout: ViewModifier {
-    static let glyphWidth: CGFloat = 13
+    static let glyphWidth: CGFloat = 14
     var topSpacing: CGFloat = 17
 
     func body(content: Content) -> some View {

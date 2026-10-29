@@ -225,6 +225,9 @@ final class AppSettings {
         static let hydraTilt = "hydraTilt"
         static let hydraIsolateHeads = "hydraIsolateHeads"
         static let hydraAutoMerge = "hydraAutoMerge"
+        static let hydraReviewEnabled = "hydraReviewEnabled"
+        static let hydraReviewFirst = "hydraReviewFirst"
+        static let hydraReviewSecond = "hydraReviewSecond"
         static let hydraArchivesCodexHeads = "hydraArchivesCodexHeads"
         static let hydraShowsHeadDetails = "hydraShowsHeadDetails"
         static let hydraAutoPopsHeads = "hydraAutoPopsHeads"
@@ -852,6 +855,18 @@ final class AppSettings {
         didSet { defaults.set(hydraAutoMerge, forKey: Key.hydraAutoMerge) }
     }
 
+    var hydraReviewEnabled: Bool {
+        didSet { defaults.set(hydraReviewEnabled, forKey: Key.hydraReviewEnabled) }
+    }
+
+    var hydraReviewFirst: HydraReviewChoice {
+        didSet { store(hydraReviewFirst, forKey: Key.hydraReviewFirst) }
+    }
+
+    var hydraReviewSecond: HydraReviewChoice {
+        didSet { store(hydraReviewSecond, forKey: Key.hydraReviewSecond) }
+    }
+
     /// Provider-side history, independent of Tivano's sidebar. Never sweeps old heads.
     var hydraArchivesCodexHeads: Bool {
         didSet { defaults.set(hydraArchivesCodexHeads, forKey: Key.hydraArchivesCodexHeads) }
@@ -1013,6 +1028,19 @@ final class AppSettings {
         hydraIsolateHeads = defaults.object(forKey: Key.hydraIsolateHeads) as? Bool ?? true
         hydraMaxHeads = HydraPair.clampedCap(defaults.object(forKey: Key.hydraMaxHeads) as? Int)
         hydraAutoMerge = defaults.object(forKey: Key.hydraAutoMerge) as? Bool ?? false
+        hydraReviewEnabled = defaults.object(forKey: Key.hydraReviewEnabled) as? Bool ?? true
+        if let choice = Self.load(HydraReviewChoice.self, forKey: Key.hydraReviewFirst),
+           HydraReviewChoice.providers.contains(choice.provider) {
+            hydraReviewFirst = choice
+        } else {
+            hydraReviewFirst = .defaultFirst
+        }
+        if let choice = Self.load(HydraReviewChoice.self, forKey: Key.hydraReviewSecond),
+           HydraReviewChoice.providers.contains(choice.provider) {
+            hydraReviewSecond = choice
+        } else {
+            hydraReviewSecond = .defaultSecond
+        }
         hydraArchivesCodexHeads = defaults.object(forKey: Key.hydraArchivesCodexHeads) as? Bool ?? false
         hydraShowsHeadDetails = defaults.object(forKey: Key.hydraShowsHeadDetails) as? Bool ?? false
         hydraAutoPopsHeads = defaults.object(forKey: Key.hydraAutoPopsHeads) as? Bool ?? false

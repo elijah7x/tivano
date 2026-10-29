@@ -1,6 +1,83 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Independent review" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "独立审查"
+          }
+        }
+      }
+    },
+    "When the heads finish, the model you choose reviews the changes before they are merged and sends the lead what it finds." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "heads 完成后、合并之前，由你选的模型审阅改动，并把发现发给 lead。"
+          }
+        }
+      }
+    },
+    "Review models" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "审查模型"
+          }
+        }
+      }
+    },
+    "First choice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首选"
+          }
+        }
+      }
+    },
+    "Second choice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次选"
+          }
+        }
+      }
+    },
+    "First: %@ | Second: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首选：%@ | 次选：%@"
+          }
+        }
+      }
+    },
+    "If the first choice can't run (not signed in, or its CLI isn't found), the second is used; if neither can, the review is skipped. A provider other than the lead's gives a more independent review." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首选无法运行（未登录或找不到 CLI）时改用次选；两个都无法运行时跳过审查。选与 lead 不同的服务商，审查视角更独立。"
+          }
+        }
+      }
+    },
     "%lld projects" : {
       "extractionState" : "manual",
       "localizations" : {

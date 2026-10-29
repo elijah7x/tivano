@@ -8,6 +8,54 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.2.12] - 2026-10-29
+
+### English
+
+### New features
+
+- Settings › Hydra › When the team is done has an Independent review switch (on by default) and a Review models card: choose a first and a second reviewer, each with its provider (Codex or Claude), model and effort. The review uses the first choice when it can run and falls back to the second; the review row names the model and effort that read the changes.
+
+### Bug fixes
+
+- Tivano no longer grows sluggish everywhere (switching chats, scrolling, typing, opening Settings) after a Hydra head's brief arrives while the head is busy. The brief was put back in the head's queue and then refused and put back again without end, keeping the main thread fully busy even with every turn stopped and the window minimised; a message that cannot start now waits in the queue for the running turn to end.
+- A message sent with Return while a turn is still stopping no longer replaces the one already waiting to go out: the second waits at the front of the queue. Archiving a chat whose message was waiting for its turn to stop keeps that message in the queue instead of losing it.
+- A Hydra head that cannot start (its checkout unavailable, or the library not saving) now ends as failed, so the lead gets its report instead of waiting on a head that shows it is working forever. A head whose project could not be found shows the routing error once rather than again with every message.
+- An automatic Hydra merge that keeps failing stops after its retries and says so once, instead of re-running Git and the forge every minute for as long as the app is open. It tries again when the checkout changes or a new request finishes.
+- Waiting for a usage limit to reset is cancelled when the chat's model changes, so no hidden wait keeps the Mac awake; a continuation due while the chat is rewinding waits for the rewind instead of being dropped.
+- Token usage is saved off the main thread, so the app no longer pauses briefly every couple of seconds while a session runs, a pause that grew with the usage history. MCP server processes left behind by configuration reloads are released.
+- Starting Hydra heads no longer stalls the app for a moment: each new head's first save of the library now runs in the background instead of holding the main thread for a whole-library write (about 30 ms each on a library of 3 MB, paid once per head). Turning Hydra off no longer leaves a check running every tenth of a second when a head's status never leaves running.
+- The hang watchdog no longer counts the time it spends writing a report as a stall of its own. Under heavy system load it could sample the app every few seconds, which itself made the app stutter; reports are now at most one a minute.
+
+### Refinements
+
+- The sidebar's Focus on today icon is a little larger and its ring is drawn as short rounded dashes, so it no longer looks smaller than Search and the sidebar toggle beside it.
+
+### 简体中文
+
+### 新功能
+
+- 设置 › Hydra › 团队完成后新增「独立审查」开关（默认开启）和「审查模型」卡片：可分别设置首选和次选审查者的服务商（Codex 或 Claude）、模型和推理强度。审查优先使用首选，无法运行时改用次选；审查记录会显示实际使用的模型和推理强度。
+
+### 问题修复
+
+- 修复 Hydra head 在忙碌时收到任务说明后，Tivano 整体变卡（切换对话、滚动、打字、进入设置都卡顿）的问题。任务说明被放回 head 的待发队列后，会被反复拒绝、再放回，形成无限循环，即使所有对话都已停止、窗口已最小化，主线程仍被占满；现在暂时发不出去的消息会留在队列中，等当前回合结束再发送。
+- 回合尚在停止时再次按回车发送，不再覆盖已在等待发出的那条消息，后一条会排在队首等待。归档一个有消息正等待回合停止的对话时，该消息会保留在队列中，不再丢失。
+- Hydra head 无法启动（工作副本不可用或资料库无法保存）时，现在会以失败结束，lead 能收到它的报告，不再一直显示工作中。找不到项目的 head 只提示一次路由错误，不再每发一条消息就重复提示。
+- 持续失败的 Hydra 自动合并在重试用完后会停止并只提示一次，不再在 App 打开期间每分钟重复运行 Git 和代码托管平台的命令。工作副本有变化或新请求完成时会再次尝试。
+- 对话的模型更换后，等待用量重置的操作会被取消，不会再有看不见的等待让 Mac 保持唤醒；对话回退期间到点的自动续写会等回退结束再发送，不再被丢弃。
+- Token 用量改在后台保存，会话运行时不再每隔两秒短暂停顿（这种停顿会随用量历史增长而加重）。重新加载配置后遗留的 MCP 服务器进程会被释放。
+- 启动 Hydra head 时 App 不再短暂停顿：每个新 head 第一次保存资料库改在后台进行，不再占用主线程完整写一遍资料库（资料库约 3 MB 时每个 head 约 30 毫秒）。关闭 Hydra 后，若有 head 的状态一直停在运行中，也不会再留下每 0.1 秒运行一次的检查。
+- 卡死检测不再把自己写报告的时间算作卡顿。系统负载高时，它可能每隔几秒就对 App 采样一次，采样本身又会让 App 卡顿；现在报告最多每分钟一次。
+
+### 优化改进
+
+- 侧栏「今日聚焦」图标略微放大，外圈改为圆头短划，不再比旁边的搜索和侧栏按钮显得小一号。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.2.6] - 2026-10-29
 
 ### English

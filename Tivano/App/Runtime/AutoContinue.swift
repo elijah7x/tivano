@@ -83,15 +83,21 @@ final class AutoContinue {
 
     /// The offer the chat's composer shows, if it still applies: a chat whose model changed
     /// since the stop has moved on, and the old limit is no longer its question.
+    /// Read from the composer's body, so it only reads: a wait it no longer shows is
+    /// cancelled by the waiting task itself (see `wait`).
     func offer(for threadID: UUID) -> Offer? {
-        guard let offer = offers[threadID], let thread = app?.thread(threadID),
-              !thread.isArchived, thread.model == offer.model else { return nil }
+        guard let offer = offers[threadID], applies(offer, to: threadID) else { return nil }
         return offer
+    }
+
+    private func applies(_ offer: Offer, to threadID: UUID) -> Bool {
+        guard let thread = app?.thread(threadID) else { return false }
+        return !thread.isArchived && thread.provider == offer.provider && thread.model == offer.model
     }
 
     /// The user chose to continue once the limit resets.
     func wait(_ threadID: UUID) {
-        guard var offer = offers[threadID], let resetsAt = offer.resetsAt else { return }
+        guard var offer = offer(for: threadID), let resetsAt = offer.resetsAt else { return }
         tasks[threadID]?.cancel()
         offer.isWaiting = true
         offers[threadID] = offer
@@ -102,6 +108,14 @@ final class AutoContinue {
             // Short sleeps, measured against the wall clock each time, so a Mac that slept
             // through the reset or a clock that moved still goes on at the right moment.
             while true {
+                guard !Task.isCancelled, let self,
+                      let current = self.offers[threadID],
+                      current.id == offerID, current.isWaiting else { return }
+                // A wait the composer no longer shows (the model changed) must not run on unseen.
+                guard self.applies(current, to: threadID) else {
+                    self.clear(threadID)
+                    return
+                }
                 let remaining = resumeAt.timeIntervalSinceNow
                 guard remaining > 0 else { break }
                 try? await Task.sleep(for: .seconds(min(remaining, 60)))
@@ -140,11 +154,29 @@ final class AutoContinue {
 
     private func resume(_ threadID: UUID, offerID: UUID) {
         guard let app, let offer = offers[threadID], offer.id == offerID, offer.isWaiting else { return }
-        clear(threadID)
+        guard applies(offer, to: threadID) else {
+            clear(threadID)
+            return
+        }
+        guard let runtime = app.existingRuntime(for: threadID) else {
+            clear(threadID)
+            return
+        }
+        // A rewind can temporarily block sending without superseding the failed turn.
+        guard runtime.phase == .idle, !runtime.isReverting else {
+            tasks[threadID] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                self?.resume(threadID, offerID: offerID)
+            }
+            return
+        }
         // The chat moved on while it waited: nothing to continue.
-        guard let thread = app.thread(threadID), !thread.isArchived, thread.model == offer.model,
-              let runtime = app.existingRuntime(for: threadID), !runtime.isRunning,
-              runtime.turns.last?.id == offer.turnID else { return }
+        guard runtime.turns.last?.id == offer.turnID else {
+            clear(threadID)
+            return
+        }
+        clear(threadID)
         runtime.sendLimitContinuation(Self.continueMessage)
     }
 

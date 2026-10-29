@@ -3,8 +3,8 @@ import Foundation
 /// One-shot generation of thread titles and commit messages through a provider CLI with no tools.
 enum TextGeneration {
     enum Engine: Sendable {
-        case claude(executable: URL, environment: [String: String])
-        case codex(executable: URL, environment: [String: String], model: String)
+        case claude(executable: URL, environment: [String: String], model: String? = nil, effort: String? = nil)
+        case codex(executable: URL, environment: [String: String], model: String, effort: String? = nil)
     }
 
     static func threadTitle(for message: String, engine: Engine) async -> String? {
@@ -75,22 +75,25 @@ enum TextGeneration {
 
     static func review(_ prompt: String, engine: Engine, directory: URL) async -> String? {
         switch engine {
-        case .claude(let executable, let environment):
-            let arguments = [
+        case .claude(let executable, let environment, let model, let effort):
+            var arguments = [
                 "-p", "--output-format", "text", "--tools", "",
                 "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
                 "--no-session-persistence",
             ]
+            if let model, !model.isEmpty, model != "default" { arguments += ["--model", model] }
+            if let effort, !effort.isEmpty { arguments += ["--effort", effort] }
             guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900),
                   result.succeeded else { return nil }
             return result.trimmedOutput.nilIfEmpty
-        case .codex(let executable, let environment, let model):
+        case .codex(let executable, let environment, let model, let effort):
             let output = FileManager.default.temporaryDirectory.appendingPathComponent("tivano-\(UUID().uuidString).txt")
             defer { try? FileManager.default.removeItem(at: output) }
-            let arguments = [
+            var arguments = [
                 "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model,
-                "--config", "model_reasoning_effort=\"high\"", "--output-last-message", output.path, "-",
             ]
+            if let effort, !effort.isEmpty { arguments += ["--config", "model_reasoning_effort=\"\(effort)\""] }
+            arguments += ["--output-last-message", output.path, "-"]
             guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900),
                   result.succeeded else { return nil }
             return (try? String(contentsOf: output, encoding: .utf8))?
@@ -101,7 +104,7 @@ enum TextGeneration {
 
     private static func run(_ prompt: String, engine: Engine, directory: URL) async -> String? {
         switch engine {
-        case .claude(let executable, let environment):
+        case .claude(let executable, let environment, _, _):
             let arguments = [
                 "-p", "--output-format", "text", "--model", "haiku", "--tools", "",
                 "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
@@ -110,7 +113,7 @@ enum TextGeneration {
             guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 120),
                   result.succeeded else { return nil }
             return result.trimmedOutput.nilIfEmpty
-        case .codex(let executable, let environment, let model):
+        case .codex(let executable, let environment, let model, _):
             let output = FileManager.default.temporaryDirectory.appendingPathComponent("tivano-\(UUID().uuidString).txt")
             defer { try? FileManager.default.removeItem(at: output) }
             let arguments = [

@@ -89,6 +89,31 @@ struct HydraJobHeadRecord: Codable, Hashable, Sendable {
     var continuations = 0
 }
 
+/// One reviewer the independent review may run. A nil model or effort is the provider's own default.
+struct HydraReviewChoice: Codable, Equatable, Sendable {
+    var provider: ProviderKind
+    var model: String?
+    var effort: String?
+
+    /// The providers whose CLIs can review read-only and headless.
+    static let providers: [ProviderKind] = [.codex, .claude]
+    static let defaultFirst = HydraReviewChoice(provider: .codex, model: nil, effort: "high")
+    static let defaultSecond = HydraReviewChoice(provider: .claude, model: nil, effort: "high")
+
+    init(provider: ProviderKind, model: String? = nil, effort: String? = nil) {
+        self.provider = provider
+        self.model = model
+        self.effort = effort
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try container.decode(ProviderKind.self, forKey: .provider)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        effort = try container.decodeIfPresent(String.self, forKey: .effort)
+    }
+}
+
 /// One v2 job: a user request in a lead chat and everything Hydra did for it. Appended
 /// to `ChatThread.hydraJobs` when the request starts, closed when the job settles.
 struct HydraJobRecord: Codable, Hashable, Identifiable, Sendable {

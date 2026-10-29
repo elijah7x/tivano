@@ -1270,6 +1270,21 @@ final class AppModel {
         return true
     }
 
+    /// `beginThreadTurn` for a caller that can wait. The whole-library write runs on the
+    /// writer's queue while the main thread goes on: heads starting together each held the
+    /// app still for one full save.
+    func beginThreadTurnAsync(_ id: UUID) async -> Bool {
+        guard let thread = thread(id) else { return false }
+        if thread.hasStartedTurn { return true }
+        updateThread(id) { $0.hasStartedTurn = true }
+        guard persistenceEnabled else { return true }
+        guard await commitLibraryAsync(currentLibrary()) else {
+            updateThread(id) { $0.hasStartedTurn = false }
+            return false
+        }
+        return true
+    }
+
     func canChangeThreadAffiliation(_ id: UUID) -> Bool {
         guard let thread = thread(id), !thread.isHelper, !thread.isArchived, !thread.hasStartedTurn,
               thread.lastStatus == nil, !creatingWorktrees.contains(id), children(of: id).isEmpty else { return false }
@@ -2083,6 +2098,22 @@ final class AppModel {
         saveTask?.cancel()
         saveTask = nil
         guard DiskWriter.shared.writeSynchronously(library, to: Storage.libraryURL) else {
+            showLibrarySaveFailure()
+            scheduleSave()
+            return false
+        }
+        lastLibrarySave = .now
+        librarySaveFailureShown = false
+        return true
+    }
+
+    private func commitLibraryAsync(_ library: Library) async -> Bool {
+        guard isLibraryLoaded, persistenceEnabled, !libraryWritesBlocked else { return false }
+        saveTask?.cancel()
+        saveTask = nil
+        do {
+            try await DiskWriter.shared.writeOrThrow(library, to: Storage.libraryURL)
+        } catch {
             showLibrarySaveFailure()
             scheduleSave()
             return false
