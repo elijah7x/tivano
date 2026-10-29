@@ -1313,13 +1313,16 @@ extension AppModel {
               }),
               info.targetCheckout.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL == copyURL }) != true,
               !threads.contains(where: { $0.id == head.parentThreadID && $0.worktreePath == copy }) else { return }
+        guard hydraCopiesReleasing.insert(id).inserted else { return }
+        defer { hydraCopiesReleasing.remove(id) }
         let runtime = existingRuntime(for: id)
         do {
             let git = Git(directory)
             let lease = try await git.repositoryWriteLease(wait: true)
             defer { withExtendedLifetime(lease) {} }
             // A previous successful landing does not prove that the copy is unchanged
-            // now. Preserve current work, and let Git refuse any dirty-copy removal.
+            // now. Preserve current work first; once it is kept, the copy's uncommitted
+            // edits are expected and it is removed with force.
             guard let base = info.baseTree,
                   await keepHydraCopyAsPatch(id, name: info.persona.name, copy: copy, base: base) else {
                 throw ShellError(AppText.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
@@ -1329,7 +1332,7 @@ extension AppModel {
                   existingRuntime(for: id) === runtime,
                   runtime?.isRunning != true, runtime?.isHydraMerging != true else { return }
             runtime?.stopSession()
-            try await Git(root.path).removeWorktree(at: copy)
+            try await Git(root.path).removeWorktree(at: copy, force: true)
             // A restarted head may now own another copy, even on the same thread.
             guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
                   existingRuntime(for: id) === runtime,
@@ -1364,7 +1367,7 @@ extension AppModel {
         }
         guard (try? patch.write(to: url, atomically: true, encoding: .utf8)) != nil else { return false }
         guard let parentID = thread(id)?.parentThreadID, let leadRuntime = existingRuntime(for: parentID) else { return true }
-        leadRuntime.appendHydraNote(String(format: AppText.localized("%@'s unfinished work was kept as a recovery patch.\n%@\n\nThe copy is removed only if Git confirms it has no uncommitted changes. Review the patch against your checkout before applying it with `git apply --3way %@`."), name, url.path, url.path))
+        leadRuntime.appendHydraNote(String(format: AppText.localized("%@'s unfinished work was kept as a recovery patch.\n%@\n\nIts copy is then removed. Review the patch against your checkout before applying it with `git apply --3way %@`."), name, url.path, url.path))
         return true
     }
 

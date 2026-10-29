@@ -1,7 +1,7 @@
 // Development edition; version independent of release.xcconfig.
 // The app displays dev-$(MARKETING_VERSION); Apple's bundle version stays numeric.
-MARKETING_VERSION = 2.2.0
-CURRENT_PROJECT_VERSION = 189
+MARKETING_VERSION = 2.2.6
+CURRENT_PROJECT_VERSION = 195
 
 // Use the same Developer ID team as Release; credentials stay in Keychain.
 DEVELOPMENT_TEAM = 5WF7HRPLRX

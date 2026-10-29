@@ -167,6 +167,7 @@ extension AppModel {
         guard info.isFinished else { return "it is still at work" }
         let headRuntime = runtime(for: head.id)
         guard headRuntime.phase == .idle else { return "it is still at work" }
+        guard !hydraCopiesReleasing.contains(head.id) else { return "its copy is being released" }
         // A shared-checkout head never had a copy to release. A landed report with no
         // remaining copy is the durable trace of one that was released.
         if info.landing != nil, !info.hasOwnCopy || head.worktreePath == nil {

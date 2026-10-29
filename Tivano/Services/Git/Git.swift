@@ -244,8 +244,10 @@ struct Git: Sendable {
         try Self.check(await run(arguments))
     }
 
-    func removeWorktree(at path: String) async throws {
-        try Self.check(await run(["worktree", "remove", path]))
+    /// `force` is only for a copy whose work was just preserved elsewhere: a head's copy
+    /// keeps its edits uncommitted, so Git refuses to remove it without `--force`.
+    func removeWorktree(at path: String, force: Bool = false) async throws {
+        try Self.check(await run(["worktree", "remove"] + (force ? ["--force"] : []) + [path]))
     }
 
     func remoteURL() async -> String? {

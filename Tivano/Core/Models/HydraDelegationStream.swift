@@ -116,7 +116,6 @@ extension HydraPrompts {
         let project = entry["project"]?.string?.trimmed
             ?? entry["repo"]?.string?.trimmed
         let profile = entry["profile"]?.string?.trimmed
-        // Hydra 2 only; a v1 lead never writes them and v1 never reads them.
         let files = (entry["files"]?.array ?? []).compactMap { $0.string?.trimmed }.filter { !$0.isEmpty }
         let continueHead = entry["continue"]?.string?.trimmed
         return HydraDelegation(task: task.isEmpty ? TextCleanup.singleLine(prompt, limit: 60) : task, prompt: prompt, name: announced, project: (project?.isEmpty == false) ? project : nil, profile: (profile?.isEmpty == false) ? profile : nil, files: files, filesGiven: entry["files"]?.array != nil, continueHead: (continueHead?.isEmpty == false) ? continueHead : nil)

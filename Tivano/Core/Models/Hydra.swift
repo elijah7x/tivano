@@ -609,6 +609,8 @@ struct HydraReport: Hashable, Sendable {
     var startupFailure = false
     /// Hydra 2: the three lines the head's report ended with, when it wrote them.
     var notes: HydraReportNotes?
+    /// Whether the head was asked to end its report with the three Hydra 2 notes.
+    var expectsNotes = false
 }
 
 /// The per-request budgets behind a lead's delegation blocks: how many rounds of heads
@@ -716,11 +718,16 @@ enum HydraPrompts {
     /// request can chain heads that verify heads that verify heads.
     static let maxDelegationRounds = 3
 
-    /// The lead's team in a line, for the front of its messages: it should never have to
-    /// guess who is still out or what came back.
-    static func teamStatus(_ heads: [HydraHeadInfo], now: Date = .now) -> String? {
+    /// The current request's heads and any still running, in one line, with earlier
+    /// finished heads counted separately so the lead knows they cannot be sent back.
+    static func teamStatus(_ heads: [HydraHeadInfo], currentJobID: UUID?, now: Date = .now) -> String? {
         guard !heads.isEmpty else { return nil }
-        let parts = heads.map { info -> String in
+        let current = heads.filter { ($0.jobID == currentJobID && currentJobID != nil) || $0.status == .running }
+        let earlierCount = heads.count - current.count
+        guard !current.isEmpty else {
+            return "No heads on this request yet; \(earlierCount == 1 ? "1 head" : "\(earlierCount) heads") finished on earlier requests and cannot be sent back: send a new head for their part."
+        }
+        let parts = current.map { info -> String in
             let name = info.persona.name
             switch info.status {
             case .running:
@@ -737,7 +744,8 @@ enum HydraPrompts {
             case .stopped: return "\(name) (stopped)"
             }
         }
-        return "Your heads so far: " + parts.joined(separator: ", ") + "."
+        let earlier = earlierCount > 0 ? " \(earlierCount) more finished on earlier requests; they cannot be sent back." : ""
+        return "Your heads on this request: " + parts.joined(separator: ", ") + "." + earlier
     }
 
     /// The policy for a lead whose session keeps it in its system prompt: the API

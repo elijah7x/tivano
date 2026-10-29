@@ -36,7 +36,7 @@ extension HydraPrompts {
         [{"task": "short title", "prompt": "numbered steps naming files, symbols and exact changes", "files": ["paths/this/head/changes"]}]
         ```
 
-        Every new-head entry needs `"files"`: the paths that head changes, or `[]` for a head that only reads and reports. No path may appear in two entries. Optional: `"name"`, `"project"`. Use only this block to delegate, never your own sub-agent tool, and never put three backticks inside a prompt. Tivano gives every head the user's request and the team's file split; resolve design choices in the brief and ask the head no questions. To send a finished head back to its part, use an entry `{"continue": "<head name>", "prompt": "..."}`. A user message while heads are out belongs to the same job.
+        Every new-head entry needs `"files"`: the paths that head changes, or `[]` for a head that only reads and reports. No path may appear in two entries. Optional: `"name"`, `"project"`. Use only this block to delegate, never your own sub-agent tool, and never put three backticks inside a prompt. Tivano gives every head the user's request and the team's file split; resolve design choices in the brief and ask the head no questions. To send a finished head of this request back to its part, use an entry `{"continue": "<head name>", "prompt": "..."}`; heads of earlier requests cannot be sent back, so give their part to a new head. A user message while heads are out belongs to the same job.
 
         Heads never build, run tests or verify; you run the narrowest required build or test yourself after they report. Read the files their reports flag first.\(projects)\(merge)
         """
@@ -56,7 +56,7 @@ extension HydraPrompts {
     /// In front of a report message: team state and whether another round is available.
     static func v2ReportNote(team: String?, merge: String? = nil, canDelegate: Bool) -> String {
         let more = canDelegate
-            ? "If the reports open up the next stage of the work, or a head failed, or a piece of the user's request is still undone, send heads out again for exactly that, with the same ```hydra block at the end of your reply; to rework a finished head's own part, prefer an entry with \"continue\": \"<head name>\" and the instruction in \"prompt\", which continues in its own session and copy."
+            ? "If the reports open up the next stage of the work, or a head failed, or a piece of the user's request is still undone, send heads out again for exactly that, with the same ```hydra block at the end of your reply; to rework the own part of a head of this request, prefer an entry with \"continue\": \"<head name>\" and the instruction in \"prompt\", which continues in its own session and copy."
             : "Send out no more heads for this request; whatever is left, do yourself."
         return "[Hydra] Your heads reported back below." + (team.map { " " + $0 } ?? "") + (merge.map { " " + $0 } ?? "") + " " + more + "\n\n---\n\n"
     }
@@ -163,7 +163,7 @@ extension HydraPrompts {
                 if let deviations = notes.deviations { flags.append("Deviations: \(deviations)") }
                 if let unfinished = notes.unfinished { flags.append("Unfinished: \(unfinished)") }
                 if let uncertain = notes.uncertain { flags.append("Uncertain: \(uncertain)") }
-            } else if report.status == .completed {
+            } else if report.status == .completed, report.expectsNotes {
                 flags.append("Report format not followed.")
             }
             lines.append("Flags:\n" + (flags.isEmpty ? "none" : flags.joined(separator: "\n")))
@@ -252,7 +252,11 @@ extension HydraPrompts {
 
     /// Why a `"continue"` entry did not go out.
     static func v2ContinueRefusal(name: String, reason: String) -> String {
-        "[Hydra] \(name) was not sent back: \(reason). Do that part yourself or send a new head."
+        "[Hydra] \(name) was not sent back: \(reason). Do that part yourself or send a new head; this is a note for you, not something to tell the user."
+    }
+
+    static func v2EarlierHeadBrief(name: String, prompt: String) -> String {
+        "\(name) worked on this part in an earlier request of this chat; its changes are already in the checkout. Continue from them:\n\n" + prompt
     }
 
     /// The cross-vendor reviewer's whole prompt: request, head notes and the job's diff.

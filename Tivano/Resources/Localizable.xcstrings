@@ -1,6 +1,28 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%lld projects" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个项目"
+          }
+        }
+      }
+    },
+    "No shelved projects" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无已搁置项目"
+          }
+        }
+      }
+    },
     "Version 2.0" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -111,13 +133,24 @@
         }
       }
     },
-    "Code and assets" : {
+    "Code" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "代码与素材"
+            "value" : "代码"
+          }
+        }
+      }
+    },
+    "Assets" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "素材"
           }
         }
       }
@@ -331,13 +364,13 @@
         }
       }
     },
-    "%@'s unfinished work was kept as a recovery patch.\n%@\n\nThe copy is removed only if Git confirms it has no uncommitted changes. Review the patch against your checkout before applying it with `git apply --3way %@`." : {
+    "%@'s unfinished work was kept as a recovery patch.\n%@\n\nIts copy is then removed. Review the patch against your checkout before applying it with `git apply --3way %@`." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 尚未完成的工作已保存为恢复补丁。\n%@\n\n仅当 Git 确认副本没有未提交的修改时，才会移除副本。请先对照 checkout 检查补丁，再使用 `git apply --3way %@` 应用。"
+            "value" : "%@ 尚未完成的工作已保存为恢复补丁。\n%@\n\n随后会移除副本。请先对照 checkout 检查补丁，再使用 `git apply --3way %@` 应用。"
           }
         }
       }
@@ -16150,6 +16183,17 @@
         }
       }
     },
+    "Shelved projects" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已搁置项目"
+          }
+        }
+      }
+    },
     "Shelved" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -17657,13 +17701,24 @@
         }
       }
     },
-    "T3 Code (Droppy Code's origin) · mugen-markdown · OpenAI Codex · GitHub Octicons (Copilot mark) · oh-my-pi (omp mark) · anti-slop (writing policy) · Simple Icons and the Git Logo by Jason Long (service marks)" : {
+    "T3 Code (Droppy Code's origin) · mugen-markdown · OpenAI Codex · anti-slop (writing policy)" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "T3 Code（Droppy Code 的起源）· mugen-markdown · OpenAI Codex · GitHub Octicons（Copilot 标志）· oh-my-pi（omp 标志）· anti-slop（写作规范）· Simple Icons 与 Jason Long 的 Git Logo（服务图标）"
+            "value" : "T3 Code（Droppy Code 的起源）· mugen-markdown · OpenAI Codex · anti-slop（写作规范）"
+          }
+        }
+      }
+    },
+    "GitHub Octicons (Copilot mark) · oh-my-pi (omp mark) · Simple Icons and the Git Logo by Jason Long (service marks)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub Octicons（Copilot 标志）· oh-my-pi（omp 标志）· Simple Icons 与 Jason Long 的 Git Logo（服务图标）"
           }
         }
       }

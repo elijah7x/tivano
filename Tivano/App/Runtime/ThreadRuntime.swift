@@ -1828,7 +1828,7 @@ final class ThreadRuntime {
             // request is added below both paths.
             if let launch = app.hydraLaunch(for: thread) {
                 let merge = launch.autoMerges ? HydraPrompts.mergeStatus(merges: hydraMerges, unmergedFiles: app.hydraUnmergedFileCount(of: threadID)) : nil
-                let team = HydraPrompts.teamStatus(app.hydraTeam(of: threadID).compactMap(\.hydra))
+                let team = HydraPrompts.teamStatus(app.hydraTeam(of: threadID).compactMap(\.hydra), currentJobID: hydraJobID)
                 let canDelegate = hydraBudget.canDelegate
                 // A review turn (`hydraHeads == []`) carries no reports: it gets the plain
                 // note, not the report note's invitation to send heads out again.
@@ -3724,7 +3724,8 @@ final class ThreadRuntime {
             let report = HydraReport(
                 headIndex: info.index, task: info.task, origin: info.origin, status: status, text: summary ?? "",
                 landing: landing, copyPath: copyPath, elapsed: Date.now.timeIntervalSince(info.startedAt), toolCalls: info.toolCalls,
-                provider: provider, startupFailure: startupFailure, notes: info.reportNotes
+                provider: provider, startupFailure: startupFailure, notes: info.reportNotes,
+                expectsNotes: info.jobID != nil
             )
             hydraPendingReports.removeAll { $0.headIndex == info.index }
             if let batchID = info.batchID, hydraBatches[batchID] != nil {
@@ -3923,9 +3924,41 @@ final class ThreadRuntime {
         return spawnV2DelegatedHeads(app: app, thread: thread, launch: launch, entry: entry, message: message, stripped: stripped, delegations: delegations)
     }
 
+    private func v2ConvertingEarlierHeads(_ delegations: [HydraDelegation], app: AppModel, thread: ChatThread, jobID: UUID) -> [HydraDelegation] {
+        let team = app.hydraTeam(of: threadID)
+        return delegations.map { delegation in
+            guard let name = delegation.continueHead,
+                  !team.contains(where: {
+                      $0.hydra?.kind == .tivano && $0.hydra?.jobID == jobID
+                          && $0.hydra?.persona.name.caseInsensitiveCompare(name.trimmed) == .orderedSame
+                  }),
+                  let earlier = team.last(where: {
+                      $0.hydra?.kind == .tivano && $0.hydra?.jobID != jobID
+                          && $0.hydra?.isFinished == true
+                          && $0.hydra?.persona.name.caseInsensitiveCompare(name.trimmed) == .orderedSame
+                  }), let earlierName = earlier.hydra?.persona.name else { return delegation }
+            let recordedFiles = thread.hydraJobs.compactMap {
+                $0.heads.first { $0.headID == earlier.id }?.files
+            }.last
+            guard let files = delegation.filesGiven ? delegation.files : recordedFiles else { return delegation }
+            var fresh = delegation
+            fresh.continueHead = nil
+            fresh.name = nil
+            fresh.files = files
+            fresh.filesGiven = true
+            // The inherited paths belong to the checkout the earlier head landed in.
+            if delegation.project == nil, let target = earlier.hydra?.targetCheckout,
+               target != app.hydraCheckout(of: thread) {
+                fresh.project = target
+            }
+            fresh.task = delegation.task.trimmed.isEmpty ? "\(earlierName)'s part" : delegation.task
+            fresh.prompt = HydraPrompts.v2EarlierHeadBrief(name: earlierName, prompt: delegation.prompt)
+            return fresh
+        }
+    }
+
     private func spawnV2DelegatedHeads(app: AppModel, thread: ChatThread, launch: HydraLaunch, entry: TimelineEntry, message: AssistantMessage, stripped: String, delegations: [HydraDelegation]) -> DelegationOutcome {
         var message = message
-        let planned = v2DelegationsWithRosterNames(delegations, app: app, thread: thread)
         func refuse(_ refusal: String) -> DelegationOutcome {
             message.text = stripped.isEmpty ? "Asking for heads." : stripped
             entry.item.content = .assistant(message)
@@ -3933,12 +3966,13 @@ final class ThreadRuntime {
             scheduleSave()
             return refuseBlock(refusal, dropped: "Its delegation block was refused, and it had been told so already.")
         }
+        guard let job = app.openHydraJob(of: threadID), job.id == hydraJobID else {
+            return refuse("No heads went out: this Hydra job is no longer open.")
+        }
+        let planned = v2DelegationsWithRosterNames(v2ConvertingEarlierHeads(delegations, app: app, thread: thread, jobID: job.id), app: app, thread: thread)
         let missing = planned.filter { $0.continueHead == nil && !$0.filesGiven }
         guard missing.isEmpty else {
             return refuse(HydraPrompts.v2MissingFilesRefusal(tasks: missing.map(\.task)))
-        }
-        guard let job = app.openHydraJob(of: threadID), job.id == hydraJobID else {
-            return refuse("No heads went out: this Hydra job is no longer open.")
         }
         var admitted: [(delegation: HydraDelegation, continueHeadID: UUID?)] = []
         var refusals: [String] = []
@@ -3953,7 +3987,15 @@ final class ThreadRuntime {
                 $0.hydra?.kind == .tivano && $0.hydra?.jobID == job.id
                     && $0.hydra?.persona.name.caseInsensitiveCompare(name.trimmed) == .orderedSame
             }), let info = head.hydra else {
-                refusals.append(HydraPrompts.v2ContinueRefusal(name: name, reason: "no such head in this job"))
+                if team.last(where: {
+                    $0.hydra?.kind == .tivano && $0.hydra?.jobID != job.id
+                        && $0.hydra?.isFinished == true
+                        && $0.hydra?.persona.name.caseInsensitiveCompare(name.trimmed) == .orderedSame
+                }) != nil {
+                    refusals.append(HydraPrompts.v2ContinueRefusal(name: name, reason: "it belongs to an earlier request; send a new head with a \"files\" array"))
+                    continue
+                }
+                refusals.append(HydraPrompts.v2ContinueRefusal(name: name, reason: "no head of that name"))
                 continue
             }
             let reason: String?

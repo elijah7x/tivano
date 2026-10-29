@@ -56,6 +56,8 @@ final class AppModel {
     /// How often each Tivano-run head has been started again after failing at the door
     /// (see `hydraHeadTurnFinished`); a head gets two more goes.
     @ObservationIgnored var hydraHeadRetries: [UUID: Int] = [:]
+    /// Heads whose copy is being kept as a patch and removed: none of them may be sent back meanwhile.
+    @ObservationIgnored var hydraCopiesReleasing: Set<UUID> = []
 
     /// The lists are the source of truth for anything that shows several items at once. Single
     /// lookups go through the cells below, so the timeline rows, composer and chat header of one
@@ -1518,7 +1520,7 @@ final class AppModel {
                 guard let copy = item.copy else { continue }
                 do {
                     if let base = item.patchBase {
-                        // Preserve a recovery patch; Git still refuses to remove a dirty copy.
+                        // The work survives in the patch, so the copy goes even with changes.
                         guard await keepHydraCopyAsPatch(item.id, name: item.headName ?? "head", copy: copy, base: base) else {
                             alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
                             continue
@@ -1530,7 +1532,7 @@ final class AppModel {
                         }
                     }
                     let root = try await Git(item.directory).repositoryRoot()
-                    try await Git(root.path).removeWorktree(at: copy)
+                    try await Git(root.path).removeWorktree(at: copy, force: item.patchBase != nil)
                 } catch {
                     alert = AppAlert(title: "Could not remove worktree", message: error.localizedDescription)
                 }

@@ -8,6 +8,38 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.2.6] - 2026-10-29
+
+### English
+
+### Bug fixes
+
+- Hydra: a head that takes over an earlier request's part gets its name together with the rest of its block, so the team list each head sees names everyone correctly; a head can no longer be sent back while its copy is being removed; and reports from heads that were never asked for the three closing lines are no longer flagged for leaving them out.
+- A Hydra lead asked to rework the part of a head from an earlier request no longer stops with a message that the old head's session cannot be resumed: a new head takes that part over with the same files, starting from the changes already in the checkout. The lead is also told which heads belong to the current request, so it rarely tries.
+- Finished Hydra heads no longer raise "Could not remove worktree". Once a head's unfinished work is kept as a recovery patch, its copy is removed even though it still holds that work as uncommitted edits.
+
+### Refinements
+
+- Shelved projects open in a panel beside the sidebar instead of expanding the list. The Shelved projects row now looks like a project folder; clicking it shows the shelved projects, whose threads you can browse there without unshelving them. The panel grows with its contents up to most of the window height, then scrolls. The unshelve button uses a simpler, softer arrow.
+- Settings › About lists credits without separate link buttons; the Droppy Code attribution keeps its address. The smaller credits are split into Code, Assets and References.
+
+### 简体中文
+
+### 问题修复
+
+- Hydra：接手之前请求那部分工作的新 head 会和同一批的其他 head 一起分配名字，每个 head 看到的团队名单不再错位；head 的工作副本正在删除时不能再被送回返工；从未被要求写三行结尾的 head，汇报不再被标记为格式缺失。
+- Hydra 主智能体要求之前请求里的 head 返工时，不再提示旧会话无法续接：改由一个新 head 接手那部分工作，沿用相同的文件分工，并从 checkout 里已有的改动继续。主智能体也会被告知哪些 head 属于当前请求，因此很少再这样尝试。
+- Hydra head 完成后不再弹出「无法移除 worktree」。head 未完成的工作保存为恢复补丁后，即使副本里仍有这些未提交的修改，也会被移除。
+
+### 优化改进
+
+- 已搁置项目改为在侧栏右侧的浮层中打开，不再展开列表。「已搁置项目」一行与项目文件夹行样式一致；点击后显示已搁置项目，可以在浮层里浏览其中的对话，不会放回项目。浮层随内容增高，最高接近窗口高度，超出后可滚动。放回按钮改用更简洁柔和的箭头。
+- 设置 › 关于中的致谢不再单独显示链接按钮，Droppy Code 署名仍保留其网址；较小的致谢拆分为代码、素材和参考三组。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.2.0] - 2026-10-28
 
 ### English

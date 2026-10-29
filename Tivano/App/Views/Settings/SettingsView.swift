@@ -1597,11 +1597,6 @@ struct ArchiveFilter: Equatable {
 }
 
 private struct AboutSettingsPage: View {
-    private static let upstreamURL = URL(string: "https://getdroppycode.app")!
-    private static let zeronURL = URL(string: "https://github.com/zeronsh/zeron")!
-    private static let swiftTermURL = URL(string: "https://github.com/migueldeicaza/SwiftTerm")!
-    private static let thinkingOrbsURL = URL(string: "https://github.com/Jakubantalik/thinking-orbs")!
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Brings its own gap below, and only while it shows a card, so an empty one
@@ -1619,29 +1614,30 @@ private struct AboutSettingsPage: View {
     private var credits: some View {
         ChromeSection(title: "Credits") {
             ChromeCard {
-                UpstreamAttributionRow(url: Self.upstreamURL)
+                UpstreamAttributionRow()
                 ChromeRowDivider()
                 CreditDetailRow(
                     symbol: "waveform", title: "Zeron", meta: "Wing · MIT",
-                    detail: "Working indicators, the voice system and its sounds, and the voice orb integration. The streaming text fade (from mugen-markdown) and the Codex voice protocol (from OpenAI Codex, Apache-2.0) also came through Zeron.",
-                    linkTitle: "zeronsh/zeron", url: Self.zeronURL
+                    detail: "Working indicators, the voice system and its sounds, and the voice orb integration. The streaming text fade (from mugen-markdown) and the Codex voice protocol (from OpenAI Codex, Apache-2.0) also came through Zeron."
                 )
                 ChromeRowDivider()
                 CreditDetailRow(
                     symbol: "apple.terminal", title: "SwiftTerm", meta: "Miguel de Icaza · MIT",
-                    detail: "The built-in terminal.",
-                    linkTitle: "SwiftTerm", url: Self.swiftTermURL
+                    detail: "The built-in terminal."
                 )
                 ChromeRowDivider()
                 CreditDetailRow(
                     symbol: "circle.hexagongrid", title: "Thinking orbs", meta: "Animation engine · MIT",
-                    detail: "The voice orb animations: Bezel → gpui-thinking-orbs → Jakub Antalik's thinking-orbs.",
-                    linkTitle: "thinking-orbs", url: Self.thinkingOrbsURL
+                    detail: "The voice orb animations: Bezel → gpui-thinking-orbs → Jakub Antalik's thinking-orbs."
                 )
                 VStack(alignment: .leading, spacing: 12) {
                     CreditGroup(
-                        title: "Code and assets",
-                        items: "T3 Code (Droppy Code's origin) · mugen-markdown · OpenAI Codex · GitHub Octicons (Copilot mark) · oh-my-pi (omp mark) · anti-slop (writing policy) · Simple Icons and the Git Logo by Jason Long (service marks)"
+                        title: "Code",
+                        items: "T3 Code (Droppy Code's origin) · mugen-markdown · OpenAI Codex · anti-slop (writing policy)"
+                    )
+                    CreditGroup(
+                        title: "Assets",
+                        items: "GitHub Octicons (Copilot mark) · oh-my-pi (omp mark) · Simple Icons and the Git Logo by Jason Long (service marks)"
                     )
                     CreditGroup(title: "References", items: "MonoCode (usage reset flow)")
                 }
@@ -1757,11 +1753,9 @@ private struct LicensesRow: View {
     }
 }
 
-/// The upstream project, named and linked: the license keeps the credit for Droppy Code
+/// The upstream project, named with its address: the license keeps the credit for Droppy Code
 /// with its author, so the fork's About page carries it.
 private struct UpstreamAttributionRow: View {
-    let url: URL
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Where Tivano began")
@@ -1776,7 +1770,6 @@ private struct UpstreamAttributionRow: View {
             Text("Tivano is a fork of Droppy Code, under AGPL-3.0 with attribution terms.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
-            CreditLink(title: "getdroppycode.app", url: url)
         }
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1807,8 +1800,6 @@ private struct CreditDetailRow: View {
     let title: String
     let meta: String
     let detail: String
-    let linkTitle: String
-    let url: URL
 
     var body: some View {
         // The glyph sits on the title's baseline: top alignment rode it above the text.
@@ -1828,38 +1819,12 @@ private struct CreditDetailRow: View {
                 Text(verbatim: Chrome.localized(detail))
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
-                CreditLink(title: linkTitle, url: url)
             }
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, Chrome.contentHorizontalPadding)
         .padding(.vertical, 11)
-    }
-}
-
-private struct CreditLink: View {
-    let title: String
-    let url: URL
-    @State private var isHovering = false
-
-    var body: some View {
-        Link(destination: url) {
-            HStack(spacing: 4) {
-                Text(verbatim: title)
-                    .underline(isHovering)
-                Image(systemName: "arrow.up.right")
-                    .font(.ui(size: 9, weight: .semibold))
-            }
-            .font(.ui(.subheadline))
-            .foregroundStyle(isHovering ? Chrome.accent : Chrome.secondaryText)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
-        .help(Text(verbatim: url.absoluteString))
-        .accessibilityLabel(Text(verbatim: title + ", " + url.absoluteString))
     }
 }
 
