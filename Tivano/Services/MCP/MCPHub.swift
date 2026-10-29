@@ -588,6 +588,8 @@ private final class MCPLiveProcesses: Sendable {
     func add(_ process: StdioProcess) {
         state.withLock { processes in
             // Retain exited roots too: their descendants may still be in TERM grace.
+            // Those past it are done, so a reload after each config change does not pile up.
+            processes.removeAll(where: \.isFinished)
             processes.append(process)
         }
     }

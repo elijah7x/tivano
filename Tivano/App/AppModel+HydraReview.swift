@@ -1,6 +1,6 @@
 import Foundation
 
-// Hydra 2.0: the cross-vendor, read-only review of a job's diff before it is
+// Hydra 2.0: the independent, read-only review of a job's diff before it is
 // merged. See docs/hydra2.md §6.
 extension AppModel {
     enum HydraReviewOutcome { case started, pending, skipped }
@@ -14,6 +14,7 @@ extension AppModel {
             updateHydraJob(jobID, of: leadID) { $0.reviewSkipped = reason }
             return .skipped
         }
+        guard settings.hydraReviewEnabled else { return skip("independent review is off") }
         guard let checkoutPath = lead.worktreePath ?? project(lead.projectID)?.path else {
             return skip("review failed")
         }
@@ -22,9 +23,8 @@ extension AppModel {
         await runtime.ensureLoaded()
         guard runtime.phase == .idle, !runtime.isReverting else { return .pending }
         guard runtime.hydraReviewRunning == nil else { return .pending }
-        let leadProvider = job.leadProvider.flatMap { ProviderKind(storedValue: $0) } ?? lead.provider
-        guard let selected = hydraReviewEngine(for: leadProvider) else {
-            return skip("no other-vendor CLI available")
+        guard let selected = hydraReviewEngine() else {
+            return skip("no review model available")
         }
         runtime.hydraReviewRunning = selected.reviewer
         runtime.hydraReviewProvider = selected.provider
@@ -158,21 +158,30 @@ extension AppModel {
         return .started
     }
 
-    private func hydraReviewEngine(for provider: ProviderKind) -> (engine: TextGeneration.Engine, reviewer: String, provider: ProviderKind)? {
-        func claude() -> (engine: TextGeneration.Engine, reviewer: String, provider: ProviderKind)? {
-            guard providers.status(.claude).auth != .signedOut, let executable = providers.executable(for: .claude) else { return nil }
-            return (.claude(executable: executable, environment: providers.environment(for: .claude)), "Claude", .claude)
+    private func hydraReviewEngine() -> (engine: TextGeneration.Engine, reviewer: String, provider: ProviderKind)? {
+        for choice in [settings.hydraReviewFirst, settings.hydraReviewSecond] {
+            let provider = choice.provider
+            guard provider == .claude || provider == .codex,
+                  providers.status(provider).auth != .signedOut,
+                  let executable = providers.executable(for: provider) else { continue }
+            let environment = providers.environment(for: provider)
+            let engine: TextGeneration.Engine
+            let model: String?
+            switch provider {
+            case .claude:
+                model = choice.model
+                engine = .claude(executable: executable, environment: environment, model: model, effort: choice.effort)
+            case .codex:
+                guard let resolvedModel = choice.model ?? providers.defaultModel(for: .codex)?.id else { continue }
+                model = resolvedModel
+                engine = .codex(executable: executable, environment: environment, model: resolvedModel, effort: choice.effort)
+            default: continue
+            }
+            var reviewer = provider.displayName
+            if let model { reviewer += " \(providers.model(model, for: provider)?.name ?? model)" }
+            if let effort = choice.effort, !effort.isEmpty { reviewer += " · \(ModelOption.effortTitle(effort))" }
+            return (engine, reviewer, provider)
         }
-        func codex() -> (engine: TextGeneration.Engine, reviewer: String, provider: ProviderKind)? {
-            guard providers.status(.codex).auth != .signedOut,
-                  let executable = providers.executable(for: .codex),
-                  let model = providers.defaultModel(for: .codex)?.id else { return nil }
-            return (.codex(executable: executable, environment: providers.environment(for: .codex), model: model), "Codex \(model)", .codex)
-        }
-        switch provider {
-        case .claude: return codex()
-        case .codex: return claude()
-        default: return claude() ?? codex()
-        }
+        return nil
     }
 }

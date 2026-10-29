@@ -39,7 +39,25 @@ private enum HydraMergeActivity {
     }
     // Runtime eviction must not hide an async merge that still holds repository locks.
     static var owners: [ObjectIdentifier: [UUID: Entry]] = [:]
-    static var retryCounts: [ObjectIdentifier: [UUID: Int]] = [:]
+    struct Input: Equatable {
+        var head: String
+        let remote: String
+        let target: String
+        /// The working tree and a rebase or merge in progress: fixing files or aborting an
+        /// operation without a commit is a change worth another try too.
+        var tree: String?
+        var operationInProgress = false
+    }
+    struct RetryBudget {
+        let jobID: UUID?
+        var retries = 0
+        var failures = 0
+        var exhausted = false
+        var notified = false
+        var inputs: [String: Input] = [:]
+    }
+    // Closing a job must not give its unmerged work a fresh recovery budget.
+    static var retryBudgets: [ObjectIdentifier: [UUID: RetryBudget]] = [:]
 }
 
 extension AppModel {
@@ -135,6 +153,10 @@ extension AppModel {
         if waiting.projectID == nil {
             guard let directory = try? executionDirectory(for: waiting),
                   !hydraExplicitCheckouts(of: leadID, besides: directory).isEmpty else { return }
+        }
+        guard await hydraMergeBudgetAllowsAttempt(of: leadID) else {
+            recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
+            return
         }
         let owner = ObjectIdentifier(self)
         guard HydraMergeActivity.owners[owner]?.values.contains(where: { $0.leadID == leadID }) != true else { return }
@@ -340,14 +362,22 @@ extension AppModel {
         func advance(_ step: HydraMergeStage) { runtime.hydraMergeStage = stage(step.words); runtime.hydraMergeStep = step }
         func fail(_ headline: String, _ body: String, label: String? = nil, url: URL? = nil, retryable: Bool = false) -> HydraProjectMerge {
             let detail = title(headline) + ": " + body
-            if retryable { scheduleHydraMergeRetry(of: leadID, jobID: jobID) }
+            let owner = ObjectIdentifier(self)
+            if retryable {
+                HydraMergeActivity.retryBudgets[owner]?[leadID]?.failures += 1
+                scheduleHydraMergeRetry(of: leadID, jobID: jobID)
+            }
+            let budget = HydraMergeActivity.retryBudgets[owner]?[leadID]
+            let saysExhausted = retryable && budget?.exhausted == true
+                && (budget?.failures ?? 0) > 0 && budget?.notified != true
+            if saysExhausted {
+                HydraMergeActivity.retryBudgets[owner]?[leadID]?.notified = true
+                note(leadID, title(AppText.localized("Stopped") + ": " + headline), body, status: .failed)
+            }
             // The same failure again (the sweep retries every job it can) is not news.
             if let last = runtime.hydraMerges.last, last.outcome == .failed, last.detail == detail { return .failed }
-            // A failure that clears by itself is said once it has kept failing, never on
-            // the first try: the retry a minute from now normally just lands.
-            let saysIt = !retryable || runtime.hydraMerges.suffix(2).filter { $0.outcome == .failed && $0.retryable == true }.count >= 2
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .failed, project: project.name, label: label, url: url, files: 0, detail: detail, retryable: retryable ? true : nil))
-            if saysIt { note(leadID, title(headline), body, status: .failed) }
+            if !retryable { note(leadID, title(headline), body, status: .failed) }
             return .failed
         }
 
@@ -360,8 +390,14 @@ extension AppModel {
             return .deferred
         }
         defer { withExtendedLifetime(repoLease) {} }
-        guard await git.remoteURL() != nil else {
+        guard let remote = await git.remoteURL() else {
             return fail("Hydra did not merge: no remote.", "The team's work is in the checkout; there is no origin to push it to.")
+        }
+        let target = await git.defaultBranch()
+        if let head = try? await git.commitHash() {
+            HydraMergeActivity.retryBudgets[ObjectIdentifier(self)]?[leadID]?.inputs[checkout] =
+                .init(head: head, remote: remote, target: target,
+                      tree: try? await git.currentTree(), operationInProgress: await git.hasOperationInProgress())
         }
         // Someone is rebasing or merging in this checkout: the work waits for them, quietly,
         // and looks again in a minute.
@@ -383,7 +419,6 @@ extension AppModel {
 
         do {
             guard let status = await git.status() else { throw ShellError(AppText.localized("The checkout's Git status could not be read.")) }
-            let target = await git.defaultBranch()
             let current = status.branch
             // A spent branch is treated like the default branch: the job gets its own
             // branch on the remote, never on history the remote squashed away.
@@ -490,6 +525,8 @@ extension AppModel {
             } else if prepared.commit != head {
                 try await git.synchronizeCheckout(from: head, sourceTree: prepared.sourceTree,
                                                   to: prepared.commit, branch: "refs/heads/\(branch)")
+                // Our own commit is not new input that should replenish retries.
+                HydraMergeActivity.retryBudgets[ObjectIdentifier(self)]?[leadID]?.inputs[checkout]?.head = prepared.commit
                 try await git.updateRef("refs/tivano/sent/\(branch)", to: prepared.commit)
             }
             advance(.pushing)
@@ -551,6 +588,9 @@ extension AppModel {
                                                 target: target, branch: "refs/heads/\(current)",
                                                 sourceTree: prepared.sourceTree,
                                                 headIsMerged: spent || !ownBranch)
+                    if let synchronizedHead = try? await git.commitHash() {
+                        HydraMergeActivity.retryBudgets[ObjectIdentifier(self)]?[leadID]?.inputs[checkout]?.head = synchronizedHead
+                    }
                     lines.append("The checkout is up to date.")
                 } catch {
                     // The forge succeeded. Do not describe this as an unpushed job or
@@ -585,6 +625,30 @@ extension AppModel {
         }
     }
 
+    private func hydraMergeBudgetAllowsAttempt(of leadID: UUID) async -> Bool {
+        let owner = ObjectIdentifier(self)
+        let jobID = thread(leadID)?.hydraJobs.last?.id
+        guard let budget = HydraMergeActivity.retryBudgets[owner]?[leadID], budget.jobID == jobID else {
+            HydraMergeActivity.retryBudgets[owner, default: [:]][leadID] = .init(jobID: jobID)
+            return true
+        }
+        // Spent only on waiting (no merge reached the remote yet): the sweep's own pace is the cap.
+        guard budget.exhausted, !budget.inputs.isEmpty else { return true }
+        // An exhausted sweep only probes inputs; it never gathers a patch, fetches,
+        // describes a commit or contacts the forge until something actually changes.
+        for (checkout, previous) in budget.inputs {
+            let git = Git(checkout)
+            guard let head = try? await git.commitHash(), let remote = await git.remoteURL() else { continue }
+            let input = HydraMergeActivity.Input(head: head, remote: remote, target: await git.defaultBranch(),
+                                                 tree: try? await git.currentTree(), operationInProgress: await git.hasOperationInProgress())
+            if input != previous {
+                HydraMergeActivity.retryBudgets[owner, default: [:]][leadID] = .init(jobID: jobID)
+                return true
+            }
+        }
+        return false
+    }
+
     /// A retry a minute after a failure that clears by itself, rather than at the sweep
     /// five minutes on: the forge finishing its checks, a remote that moved, a push that
     /// timed out. One is pending per chat at a time.
@@ -592,22 +656,26 @@ extension AppModel {
         let owner = ObjectIdentifier(self)
         if let jobID {
             guard let job = openHydraJob(of: leadID), job.id == jobID, job.ending == nil else { return }
-            guard HydraMergeActivity.owners[owner]?.values.contains(where: {
-                $0.leadID == leadID && $0.jobID == jobID && $0.phase == .retry
-            }) != true else { return }
-            let attempts = HydraMergeActivity.retryCounts[owner]?[jobID] ?? 0
-            guard attempts < 3 else {
-                recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
-                return
-            }
-            HydraMergeActivity.retryCounts[owner, default: [:]][jobID] = attempts + 1
         }
+        guard HydraMergeActivity.owners[owner]?.values.contains(where: {
+            $0.leadID == leadID && $0.phase == .retry
+        }) != true else { return }
         guard let runtime = existingRuntime(for: leadID), !runtime.hasHydraMergeRetryPending else { return }
+        // A retry asked for before any attempt (the lead not ready yet) opens the budget.
+        let budget = HydraMergeActivity.retryBudgets[owner]?[leadID]
+            ?? .init(jobID: thread(leadID)?.hydraJobs.last?.id)
+        if HydraMergeActivity.retryBudgets[owner]?[leadID] == nil {
+            HydraMergeActivity.retryBudgets[owner, default: [:]][leadID] = budget
+        }
+        guard !budget.exhausted, budget.retries < 3 else {
+            HydraMergeActivity.retryBudgets[owner]?[leadID]?.exhausted = true
+            recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
+            return
+        }
+        HydraMergeActivity.retryBudgets[owner]?[leadID]?.retries += 1
         runtime.hasHydraMergeRetryPending = true
         let retryID = UUID()
-        if jobID != nil {
-            HydraMergeActivity.owners[owner, default: [:]][retryID] = .init(leadID: leadID, jobID: jobID, phase: .retry)
-        }
+        HydraMergeActivity.owners[owner, default: [:]][retryID] = .init(leadID: leadID, jobID: jobID, phase: .retry)
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(60))
             guard let self else { return }
@@ -1190,7 +1258,6 @@ extension AppModel {
                $0.leadID == leadID && $0.jobID == jobID && $0.phase == .retry
            }) == true { return }
         updateHydraJob(jobID, of: leadID) { $0.merge = outcome }
-        HydraMergeActivity.retryCounts[ObjectIdentifier(self)]?[jobID] = nil
     }
 
     private static func filesLine(_ files: [DiffFile]) -> String {

@@ -85,6 +85,9 @@ final class StdioProcess: @unchecked Sendable {
     }
 
     var isRunning: Bool { process.isRunning }
+
+    /// Exited, and its descendants are past their TERM/KILL grace: nothing left to clean up.
+    var isFinished: Bool { !process.isRunning && descendants.hasSettled }
     var processIdentifier: Int32 { process.processIdentifier }
 
     /// The last few kilobytes written to stderr, used when a provider fails.
@@ -242,6 +245,10 @@ final class StdioProcess: @unchecked Sendable {
         private var timer: DispatchSourceTimer?
         private var members: [pid_t: ProcessIdentity] = [:]
         private var terminating = false
+        private var settled = false
+
+        /// Whether the TERM/KILL sweep has run to its end; read off the tracker's queue.
+        var hasSettled: Bool { queue.sync { settled } }
 
         func start(_ pid: pid_t) {
             guard let root = StdioProcess.identity(pid) else { return }
@@ -299,6 +306,7 @@ final class StdioProcess: @unchecked Sendable {
                     observe()
                     StdioProcess.signal(postorder(), SIGKILL)
                     members.removeAll()
+                    settled = true
                 }
             }
         }

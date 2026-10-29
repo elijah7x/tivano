@@ -130,8 +130,8 @@ final class TokenLedger {
         if let codexRollout {
             state.liveCodex[codexRollout, default: 0] += spend
         }
-        // Usage arrives many times a turn from every running session: the write, a
-        // JSON encode and a file write, waits for a lull and lands whole.
+        // Usage arrives many times a turn from every running session: hand a
+        // value snapshot to the background writer at most every two seconds.
         guard liveSave == nil else { return }
         liveSave = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(2))
@@ -143,10 +143,9 @@ final class TokenLedger {
 
     /// Writes the live spend now, for the app quitting with a write still due.
     func flushLiveSpend() {
-        guard let liveSave else { return }
-        liveSave.cancel()
+        liveSave?.cancel()
         self.liveSave = nil
-        LiveSpendStateStore.save(state)
+        LiveSpendStateStore.save(state, flush: true)
     }
 
     /// Runs the Codex history scan once per process. Later calls are no-ops;
@@ -353,6 +352,8 @@ private struct LiveSpendState: Codable, Sendable {
 }
 
 private enum LiveSpendStateStore {
+    private static let writer = Writer()
+
     private static var fileURL: URL {
         Storage.root.appendingPathComponent("token-activity-live-v2-\(AppInfo.isDevelopment ? "dev" : "release").json")
     }
@@ -377,9 +378,50 @@ private enum LiveSpendStateStore {
         return state
     }
 
-    static func save(_ state: LiveSpendState) {
-        guard let data = try? JSONEncoder().encode(state) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+    @MainActor
+    static func save(_ state: LiveSpendState, flush: Bool = false) {
+        writer.enqueue(state, to: fileURL)
+        if flush { writer.flush() }
+    }
+
+    private final class Writer: @unchecked Sendable {
+        private let queue = DispatchQueue(label: "tivano.tokenledger.write", qos: .utility)
+        // The lock protects the pending value and drain flag; encoding and I/O
+        // run only on the serial queue, without holding the lock.
+        private let lock = NSLock()
+        private var pending: (state: LiveSpendState, url: URL)?
+        private var draining = false
+
+        func enqueue(_ state: LiveSpendState, to url: URL) {
+            lock.lock()
+            defer { lock.unlock() }
+            pending = (state, url)
+            guard !draining else { return }
+            draining = true
+            queue.async { self.drain() }
+        }
+
+        func flush() {
+            // Enqueue happens first on the main actor. The drain consumes its
+            // newest snapshot before this barrier can return, including when
+            // an older snapshot was already being written.
+            queue.sync {}
+        }
+
+        private func drain() {
+            while true {
+                lock.lock()
+                guard let snapshot = pending else {
+                    draining = false
+                    lock.unlock()
+                    return
+                }
+                pending = nil
+                lock.unlock()
+                guard let data = try? JSONEncoder().encode(snapshot.state) else { continue }
+                try? data.write(to: snapshot.url, options: .atomic)
+            }
+        }
     }
 }
 

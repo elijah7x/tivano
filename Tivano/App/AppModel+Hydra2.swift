@@ -135,8 +135,10 @@ extension AppModel {
         }
         Task { [weak self] in
             guard let self else { return }
-            // Interrupting a provider is asynchronous; let its final landing finish.
-            while self.hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) {
+            // Interrupting a provider is asynchronous; let its final landing finish. Capped at
+            // 30 seconds: a head whose status never leaves running must not keep this polling.
+            for _ in 0..<300 {
+                guard self.hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) else { break }
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
             }

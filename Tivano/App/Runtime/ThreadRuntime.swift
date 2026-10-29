@@ -1278,6 +1278,13 @@ final class ThreadRuntime {
             draft = ComposerDraft()
             return
         }
+        if pendingSend != nil {
+            followUps.insert(FollowUpPrompt(text: draft.outgoingText, attachments: draft.attachments), at: 0)
+            saveRevision += 1
+            scheduleSave()
+            draft = ComposerDraft()
+            return
+        }
         pendingSend = PendingSend(text: draft.outgoingText, attachments: draft.attachments)
         draft = ComposerDraft()
         interrupt()
@@ -1436,7 +1443,9 @@ final class ThreadRuntime {
         Task { await ensureLoaded(); await startTurn(text: text, attachments: []) }
     }
 
-    func enqueueFollowUp(text: String, attachments: [Attachment]) {
+    /// `flushesIfIdle` is false when `startTurn` puts back a prompt it could not start:
+    /// flushing it would hand it straight back to the same refusal, a loop that never yields.
+    func enqueueFollowUp(text: String, attachments: [Attachment], flushesIfIdle: Bool = true) {
         let prompt = FollowUpPrompt(
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: attachments
@@ -1449,7 +1458,7 @@ final class ThreadRuntime {
         // out: the queue only ever waits behind a running turn, never behind an
         // idle lead. Without this a prompt queued while the lead is idle (steered
         // behind heads at work) sits until the next turn ends, which may be never.
-        flushFollowUpsIfIdle()
+        if flushesIfIdle { flushFollowUpsIfIdle() }
     }
 
     /// Sends the next queued follow-up to an idle lead at once, even with heads still
@@ -1591,27 +1600,34 @@ final class ThreadRuntime {
             return
         }
         #endif
+        // A brief that does not start here goes back to the queue as an ordinary prompt;
+        // a startup flag left set would turn every later prompt away for good.
+        defer { if hydraBrief { hydraStartupPending = false } }
         // External requests reject races instead of entering the UI's implicit queue.
         if let externalTurnID {
             do { try validateExternalSubmission(externalTurnID, idle: true) }
             catch { failExternalBeforeTurn(externalTurnID, error: error); return }
         } else {
-            if externalSubmission != nil { enqueueFollowUp(text: text, attachments: attachments); return }
+            if externalSubmission != nil { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false); return }
             // A UI turn may wait for an archive; external control does not archive.
             await providerHistoryOperation?.value
         }
         if !hydraBrief && (hydraStartupPending || app?.thread(threadID)?.hydra?.pendingProjectReference != nil) {
             // External submissions reject races instead of joining the UI's queue.
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)); return }
-            enqueueFollowUp(text: text, attachments: attachments)
-            if !hydraStartupPending, let summary = app?.thread(threadID)?.hydra?.summary {
+            enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false)
+            if !hydraStartupPending, let summary = app?.thread(threadID)?.hydra?.summary,
+               !entries.contains(where: { entry in
+                   if case .notice(let notice) = entry.item.content { return notice.level == .error && notice.message == summary }
+                   return false
+               }) {
                 appendNotice(.error, summary)
             }
             return
         }
         guard phase == .idle, !isReverting else {
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)) }
-            else { enqueueFollowUp(text: text, attachments: attachments) }
+            else { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             return
         }
         guard let app, var initialThread = app.thread(threadID) else {
@@ -1638,6 +1654,8 @@ final class ThreadRuntime {
         } catch {
             if let externalTurnID {
                 failExternalBeforeTurn(externalTurnID, error: error as? ControlFailure ?? ControlFailure(code: .directoryUnavailable))
+            } else if hydraBrief {
+                app.finishHydraHead(threadID, status: .failed, summary: error.localizedDescription, startupFailure: true)
             } else { retainUnsentMessage(text: text, attachments: attachments); appendNotice(.error, error.localizedDescription) }
             return
         }
@@ -1647,13 +1665,20 @@ final class ThreadRuntime {
         }
         guard !initialThread.isArchived else {
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .archived)) }
-            else { enqueueFollowUp(text: text, attachments: attachments) }
+            else { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             return
         }
         if hydraBrief { hydraStartupPending = false }
-        guard app.beginThreadTurn(threadID) else {
+        guard await app.beginThreadTurnAsync(threadID) else {
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .persistence)) }
+            else if hydraBrief { app.finishHydraHead(threadID, status: .failed, summary: Chrome.localized("Could not save the library"), startupFailure: true) }
             else { retainUnsentMessage(text: text, attachments: attachments); appendNotice(.error, Chrome.localized("Could not save the library")) }
+            return
+        }
+        // The first turn's save is awaited, so another turn may have opened meanwhile.
+        guard phase == .idle, !isReverting else {
+            if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)) }
+            else { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             return
         }
         let turnIndex = (turns.map(\.index).max() ?? -1) + 1
@@ -3571,6 +3596,12 @@ final class ThreadRuntime {
         finishingGeneration = nil
         closingTurnID = nil
         guard thread?.isArchived != true else {
+            if let pending = pendingSend {
+                followUps.insert(FollowUpPrompt(text: pending.text, attachments: pending.attachments), at: 0)
+                pendingSend = nil
+                saveRevision += 1
+                saveNow()
+            }
             let continues = replayBackgroundTurn()
             app?.turnFinished(threadID, status: status, continues: continues, turnID: turnID, userStopped: userStopped)
             return
@@ -5185,7 +5216,7 @@ extension ThreadRuntime {
         await ensureLoaded()
         guard !Task.isCancelled else { throw CancellationError() }
         await ensureModel(thread)
-        guard app.beginThreadTurn(threadID) else { throw ProviderError.failed(Chrome.localized("Could not save the library")) }
+        guard await app.beginThreadTurnAsync(threadID) else { throw ProviderError.failed(Chrome.localized("Could not save the library")) }
         let session = try await ensureSession()
         guard let codex = session as? CodexSession else { throw VoiceRejection.wrongProvider }
         return codex

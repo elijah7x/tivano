@@ -199,8 +199,18 @@ struct HydraSettingsPage: View {
             }
             ChromeSection(title: "When the team is done") {
                 ChromeCard {
+                    toggleRow("Independent review", detail: "When the heads finish, the model you choose reviews the changes before they are merged and sends the lead what it finds.", isOn: $settings.hydraReviewEnabled)
+                    ChromeRowDivider()
+                    HydraReviewRow()
+                        .disabled(!settings.hydraReviewEnabled)
+                        .opacity(settings.hydraReviewEnabled ? 1 : 0.5)
+                    ChromeRowDivider()
                     toggleRow("Commit and merge automatically when done", detail: "Off: the team's changes stay in your working copy for you to handle. On: Tivano commits them, pushes to the remote, opens a pull or merge request and tries to merge it; needs a configured remote and access.", isOn: $settings.hydraAutoMerge)
                 }
+                Text("If the first choice can't run (not signed in, or its CLI isn't found), the second is used; if neither can, the review is skipped. A provider other than the lead's gives a more independent review.")
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .padding(.horizontal, 4)
             }
         }
         .disabled(!settings.hydraEnabled)
@@ -427,17 +437,7 @@ private struct HydraPairRow: View {
         return line
     }
 
-    /// A chosen model's short name, or its id while the catalog has not listed it.
-    private func namedModel(_ id: String?, provider: ProviderKind, registry: ProviderRegistry) -> String? {
-        guard let id else { return nil }
-        return registry.model(id, for: provider)?.shortName ?? id
-    }
 
-    /// A chosen effort in the words the rest of the app uses. Nil stays nil.
-    private func namedEffort(_ effort: String?) -> String? {
-        guard let effort, !effort.isEmpty else { return nil }
-        return Chrome.localized(ModelOption.effortTitle(effort))
-    }
 }
 
 private struct HydraPairGrip: View {
@@ -521,10 +521,10 @@ struct HydraPairEditor: View {
         let leadOption = registry.model(pair.orchestratorModel, for: pair.provider)
         let workerOption = registry.model(pair.workerModel, for: pair.headsProvider)
         // A lead that may be any model offers every effort the provider's models know.
-        let leadEfforts = Self.efforts(of: leadOption, fallback: Self.allEfforts(options))
+        let leadEfforts = efforts(of: leadOption, fallback: allEfforts(options))
         // Heads with no model chosen inherit the chat's, and its efforts; on another
         // provider they run its default model, so its efforts are the ones on offer.
-        let workerEfforts = Self.efforts(of: workerOption, fallback: pair.sendsHeadsElsewhere ? Self.efforts(of: registry.defaultModel(for: pair.headsProvider), fallback: Self.allEfforts(headsOptions)) : leadEfforts)
+        let workerEfforts = efforts(of: workerOption, fallback: pair.sendsHeadsElsewhere ? efforts(of: registry.defaultModel(for: pair.headsProvider), fallback: allEfforts(headsOptions)) : leadEfforts)
         VStack(alignment: .leading, spacing: 0) {
             if showsName {
                 // The name is the header: the pair's own word for itself, over what it
@@ -732,72 +732,222 @@ struct HydraPairEditor: View {
         }
     }
 
-    private func editorRow<Control: View>(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: Chrome.localized(title))
-                    .font(.ui(.body))
-                    .foregroundStyle(Chrome.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if let detail {
-                    Text(verbatim: Chrome.localized(detail))
-                        .font(.ui(.subheadline))
-                        .foregroundStyle(Chrome.secondaryText)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            control()
-                .layoutPriority(1)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 5)
-    }
-
-    /// A section's word, small and quiet, with a hairline above: the rows under it need
-    /// no sentence each once the section says what they are about.
-    private func sectionLabel(_ title: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Divider()
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-            Text(verbatim: Chrome.localized(title))
-                .font(.ui(.subheadline, weight: .semibold))
-                .foregroundStyle(Chrome.secondaryText)
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 4)
-        }
-    }
-
-    private func effortPicker(efforts: [String], inherit: String, selection: Binding<String?>) -> some View {
-        GlassPickerButton(
-            options: [(String?.none, inherit)] + efforts.map { (Optional($0), ModelOption.effortTitle($0)) },
-            selection: selection
-        )
-    }
-
-    /// Every effort any of the provider's models offers, in the order the first lists them.
-    private static func allEfforts(_ options: [ModelOption]) -> [String] {
-        var seen: [String] = []
-        for option in options {
-            for effort in option.efforts where !seen.contains(effort) { seen.append(effort) }
-        }
-        return seen
-    }
-
-    /// A model's efforts for the picker: its declared scale, or the fallback when the
-    /// declaration is empty — a catalog that has not walked the model's scale yet would
-    /// otherwise take the effort row away from a model that does reason.
-    private static func efforts(of option: ModelOption?, fallback: @autoclosure () -> [String]) -> [String] {
-        guard let option, !option.efforts.isEmpty else { return fallback() }
-        return option.efforts
-    }
-
     /// The providers whose catalogs the editor shows: the lead's and the heads', each once
     /// and in that order, so the pickers and the loading notes cover both.
     private static func catalogProviders(_ pair: HydraPair) -> [ProviderKind] {
         pair.sendsHeadsElsewhere ? [pair.provider, pair.headsProvider] : [pair.provider]
+    }
+}
+
+@MainActor fileprivate func editorRow<Control: View>(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(verbatim: Chrome.localized(title))
+                .font(.ui(.body))
+                .foregroundStyle(Chrome.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let detail {
+                Text(verbatim: Chrome.localized(detail))
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        control()
+            .layoutPriority(1)
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 5)
+}
+
+/// A section's word, small and quiet, with a hairline above: the rows under it need
+/// no sentence each once the section says what they are about.
+@MainActor fileprivate func sectionLabel(_ title: String, divided: Bool = true) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+        if divided {
+            Divider()
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+        }
+        Text(verbatim: Chrome.localized(title))
+            .font(.ui(.subheadline, weight: .semibold))
+            .foregroundStyle(Chrome.secondaryText)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+    }
+}
+
+@MainActor fileprivate func effortPicker(efforts: [String], inherit: String, selection: Binding<String?>) -> some View {
+    GlassPickerButton(
+        options: [(String?.none, inherit)] + efforts.map { (Optional($0), ModelOption.effortTitle($0)) },
+        selection: selection
+    )
+}
+
+/// Every effort any of the provider's models offers, in the order the first lists them.
+fileprivate func allEfforts(_ options: [ModelOption]) -> [String] {
+    var seen: [String] = []
+    for option in options {
+        for effort in option.efforts where !seen.contains(effort) { seen.append(effort) }
+    }
+    return seen
+}
+
+/// A model's efforts for the picker: its declared scale, or the fallback when the
+/// declaration is empty — a catalog that has not walked the model's scale yet would
+/// otherwise take the effort row away from a model that does reason.
+fileprivate func efforts(of option: ModelOption?, fallback: @autoclosure () -> [String]) -> [String] {
+    guard let option, !option.efforts.isEmpty else { return fallback() }
+    return option.efforts
+}
+
+
+/// A chosen model's short name, or its id while the catalog has not listed it.
+@MainActor fileprivate func namedModel(_ id: String?, provider: ProviderKind, registry: ProviderRegistry) -> String? {
+    guard let id else { return nil }
+    return registry.model(id, for: provider)?.shortName ?? id
+}
+
+/// A chosen effort in the words the rest of the app uses. Nil stays nil.
+@MainActor fileprivate func namedEffort(_ effort: String?) -> String? {
+    guard let effort, !effort.isEmpty else { return nil }
+    return Chrome.localized(ModelOption.effortTitle(effort))
+}
+
+private struct HydraReviewRow: View {
+    @Environment(AppModel.self) private var model
+    @State private var isEditing = false
+
+    var body: some View {
+        let settings = model.settings
+        ChromeRow(title: "Review models", detail: String(
+            format: Chrome.localized("First: %@ | Second: %@"),
+            summary(settings.hydraReviewFirst),
+            summary(settings.hydraReviewSecond)
+        )) {
+            Button {
+                isEditing = true
+            } label: {
+                // Drawn like GlassPickerButton, so it reads as one of the page's pickers.
+                HStack(spacing: 6) {
+                    HydraPairMark(lead: settings.hydraReviewFirst.provider, heads: settings.hydraReviewSecond.provider, leadSize: 14)
+                    Image(systemName: "chevron.down")
+                        .font(Chrome.chevronFont)
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+                .padding(.horizontal, Chrome.capsuleHorizontalPadding)
+                .frame(height: Chrome.capsuleContentHeight)
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .chromeGlassCapsule()
+            .accessibilityLabel(Text("Review models"))
+            .popover(isPresented: $isEditing, arrowEdge: .trailing) {
+                HydraReviewEditor()
+                    .frame(width: 360)
+                    .presentedChrome()
+            }
+        }
+    }
+
+    private func summary(_ choice: HydraReviewChoice) -> String {
+        let name = namedModel(choice.model, provider: choice.provider, registry: model.providers)
+            ?? String(format: Chrome.localized("%@'s default"), choice.provider.displayName)
+        let effort = namedEffort(choice.effort) ?? Chrome.localized("Default")
+        return "\(name) · \(effort)"
+    }
+}
+
+private struct HydraReviewEditor: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var settings = model.settings
+        let registry = model.providers
+        let providers = settings.hydraReviewFirst.provider == settings.hydraReviewSecond.provider
+            ? [settings.hydraReviewFirst.provider]
+            : [settings.hydraReviewFirst.provider, settings.hydraReviewSecond.provider]
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("First choice", divided: false)
+            choiceRows($settings.hydraReviewFirst)
+            sectionLabel("Second choice")
+            choiceRows($settings.hydraReviewSecond)
+            ForEach(providers, id: \.self) { provider in
+                if registry.models(for: provider).isEmpty {
+                    Text(verbatim: String(format: Chrome.localized(registry.loadingCatalogs.contains(provider) ? "Loading %@'s models…" : "No models loaded for %@ yet."), provider.displayName))
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 8)
+                }
+            }
+        }
+        // The first label has no hairline: its own top inset matches the bottom.
+        .padding(.top, 4)
+        .padding(.bottom, 14)
+        .task {
+            for provider in providers {
+                await registry.loadCatalog(provider)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func choiceRows(_ choice: Binding<HydraReviewChoice>) -> some View {
+        let registry = model.providers
+        let provider = choice.wrappedValue.provider
+        let options = registry.models(for: provider).filter { $0.id != "default" }
+        // No model chosen runs the provider's default, so its efforts are the ones on offer.
+        let reviewEfforts = { (model: String?, provider: ProviderKind) -> [String] in
+            efforts(of: registry.model(model, for: provider) ?? registry.defaultModel(for: provider), fallback: allEfforts(registry.models(for: provider)))
+        }
+        let availableEfforts = reviewEfforts(choice.wrappedValue.model, provider)
+        editorRow("Provider") {
+            GlassPickerButton(
+                options: HydraReviewChoice.providers.map { ($0, $0.displayName) },
+                selection: Binding(
+                    get: { choice.wrappedValue.provider },
+                    set: { provider in
+                        guard choice.wrappedValue.provider != provider else { return }
+                        var updated = choice.wrappedValue
+                        updated.provider = provider
+                        updated.model = nil
+                        if let effort = updated.effort, !reviewEfforts(nil, provider).contains(effort) {
+                            updated.effort = nil
+                        }
+                        choice.wrappedValue = updated
+                        Task { await registry.loadCatalog(provider) }
+                    }
+                ),
+                asset: { $0.iconName }
+            )
+        }
+        editorRow("Model") {
+            GlassPickerButton(
+                options: [(String?.none, String(format: Chrome.localized("%@'s default"), provider.displayName))]
+                    + options.map { (Optional($0.id), $0.label(among: options)) },
+                selection: Binding(
+                    get: { choice.wrappedValue.model },
+                    set: { id in
+                        var updated = choice.wrappedValue
+                        updated.model = id
+                        if let effort = updated.effort, !reviewEfforts(id, updated.provider).contains(effort) {
+                            updated.effort = nil
+                        }
+                        choice.wrappedValue = updated
+                    }
+                ),
+                maxWidth: 190
+            )
+        }
+        if !availableEfforts.isEmpty {
+            editorRow("Effort") {
+                effortPicker(efforts: availableEfforts, inherit: "Default", selection: choice.effort)
+            }
+        }
     }
 }
 
