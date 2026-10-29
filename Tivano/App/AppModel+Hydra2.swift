@@ -82,6 +82,9 @@ extension AppModel {
             updateHydraJob(job.id, of: leadID) {
                 $0.pendingReview = nil
                 $0.finishedAt = .now
+                if $0.reviewEngine == nil, $0.reviewSkipped == nil {
+                    $0.reviewSkipped = "not run: \(ending.rawValue)"
+                }
             }
             for head in hydraTeam(of: leadID) where head.hydra?.jobID == job.id && head.hydra?.isFinished == true {
                 guard let info = head.hydra, let copy = head.worktreePath, let base = info.baseTree else { continue }

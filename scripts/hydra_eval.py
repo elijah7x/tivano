@@ -404,7 +404,7 @@ V2_JOB_FIELDS = [
     'lead_provider', 'lead_model', 'lead_effort', 'heads_provider', 'heads_model',
     'heads_effort', 'heads_note', 'pair_id', 'pair_same_model',
     'base_commit', 'base_dirty', 'base_trees', 'ending', 'is_open',
-    'review_pending_delivery', 'review_outcome', 'heads', 'single_head', 'rounds', 'job_wall_seconds',
+    'review_pending_delivery', 'review_outcome', 'heads', 'single_head', 'rounds', 'job_wall_seconds', 'started_at', 'finished_at',
     'failed_or_stalled_heads', 'failure_observed_heads', 'stalled_heads',
     'conflicts', 'conflict_heads', 'conflict_observed_heads',
     'lead_edits_after_reports', 'lead_built', 'continuations_total',
@@ -537,11 +537,22 @@ def review_outcome(record):
         return 'pending'
     reason = record.get('reviewSkipped')
     if isinstance(reason, str) and reason.strip():
-        if re.search(r'fail|error|timed? ?out|timeout', reason, re.I):
+        reason = reason.strip().lower()
+        if reason.startswith('not applicable'):
+            return 'not_applicable'
+        if reason.startswith('not run:'):
+            return 'not_run'
+        # Legacy ledgers wrote a bare 'review failed' for every cause; the thread's current
+        # paths cannot show whether a checkout existed then, so those stay failed.
+        if reason.startswith('review failed') or re.search(r'error|timed? ?out|timeout', reason, re.I):
             return 'failed'
         return 'skipped'
-    if record.get('reviewEngine') and (pending is False or number(record.get('reviewAccepted')) is not None):
-        return 'delivered'
+    if record.get('reviewEngine'):
+        findings = number(record.get('reviewFindings'))
+        if findings == 0:
+            return 'clean'
+        if findings is not None and findings > 0:
+            return 'delivered'
     return 'unknown'
 
 
@@ -550,7 +561,7 @@ def terminal_job(job, v2):
         return boolean(job.get('final_reply_observed')) is True
     return (job.get('is_open') is False and
             job.get('review_pending_delivery') is not True and
-            job.get('review_outcome') in ('delivered', 'skipped', 'failed') and
+            job.get('review_outcome') in ('clean', 'delivered', 'skipped', 'failed', 'not_applicable', 'not_run') and
             job.get('ending') == 'completed')
 
 
@@ -730,6 +741,10 @@ def extract_v2(libraries, now):
                     single_head=(len(head_rows) == 1) if heads_known else None, rounds=number(record.get('rounds')),
                     job_wall_seconds=(round(finish - start, 3) if start is not None and
                                       finish is not None and finish >= start else None),
+                    started_at=(dt.datetime.fromtimestamp(start, dt.timezone.utc).isoformat()
+                                if start is not None else None),
+                    finished_at=(dt.datetime.fromtimestamp(finish, dt.timezone.utc).isoformat()
+                                 if finish is not None else None),
                     failed_or_stalled_heads=complete_sum(head_rows, 'failure_or_stall', heads_known),
                     failure_observed_heads=sum(h['failure_or_stall'] is not None for h in head_rows),
                     stalled_heads=complete_sum(head_rows, 'stalled', heads_known),
@@ -824,7 +839,7 @@ def comparison_markdown(now, v1_jobs, v1_heads, v2_jobs, v2_heads, inventory, re
     format_observed = [h for h in v2_heads if h['followed_report_format'] is not None]
     flags_observed = [h for h in v2_heads if h['flags_something'] is not None]
     built_observed = [j for j in v2_jobs if j['lead_built'] is not None]
-    delivered = [j for j in v2_jobs if j['review_outcome'] == 'delivered']
+    delivered = [j for j in v2_jobs if j['review_outcome'] in ('clean', 'delivered')]
     handled = [j for j in delivered if terminal_job(j, True) and j['review_accepted'] is not None]
     acceptance_jobs = [j for j in handled if j['review_findings'] is not None]
     findings = sum(j['review_findings'] for j in acceptance_jobs)
@@ -836,18 +851,18 @@ def comparison_markdown(now, v1_jobs, v1_heads, v2_jobs, v2_heads, inventory, re
               '- Lead built (observed command proxy): ' + rate(sum(j['lead_built'] is True for j in built_observed), len(built_observed)),
               f"- Open jobs: {sum(j['is_open'] is True for j in v2_jobs)}; unknown open state: {sum(j['is_open'] is None for j in v2_jobs)}.", '',
               '| Review outcome | Jobs | Share |', '|---|---:|---:|']
-    for outcome in ('delivered', 'pending', 'skipped', 'failed', 'unknown'):
+    for outcome in ('clean', 'delivered', 'pending', 'skipped', 'not_applicable', 'not_run', 'failed', 'unknown'):
         count = sum(j['review_outcome'] == outcome for j in v2_jobs)
         lines.append(f'| {outcome} | {count} | {rate(count, len(v2_jobs))} |')
-    lines += ['', '- Findings per delivered review: mean ' + mean_observed(delivered, 'review_findings') + '.',
+    lines += ['', '- Findings per clean/delivered review: mean ' + mean_observed(delivered, 'review_findings') + '.',
               '- Findings per completed, handled review: mean ' + mean_observed(handled, 'review_findings') + '.',
               f'- Review acceptance: {rate(accepted, findings)}; both counts present on {len(acceptance_jobs)}/{len(handled)} completed, handled jobs.',
-              'Delivered does not by itself mean handled. Pending/open jobs never enter acceptance. Engine presence alone does not prove delivery; absent delivery evidence remains unknown.', '',
+              'Clean means engine present with zero findings; delivered means engine present with positive findings and no pending delivery. Neither alone means handled. Pending/open jobs never enter acceptance. Missing finding counts remain unknown.', '',
               '### Review skip / failure reasons', '']
     reasons = collections.Counter((j['review_outcome'], one_line(j['review_skipped_reason']))
-                                  for j in v2_jobs if j['review_outcome'] in ('skipped', 'failed'))
+                                  for j in v2_jobs if j['review_outcome'] in ('skipped', 'not_applicable', 'not_run', 'failed'))
     lines += [f'- {outcome}: {reason}: {count} jobs' for (outcome, reason), count in sorted(reasons.items())] or ['- None recorded.']
-    lines += ['', 'No changes is a skipped/not-applicable reason, not a failed review. Failure/timeout classification uses the recorded reason text; unknown reasons are not guessed.', '',
+    lines += ['', 'No changes is skipped. Explicit not applicable and not run reasons are separate outcomes. Legacy review failed records become not_applicable only when checkout absence is determinable from the record or lead/project metadata; otherwise they remain failed. Failure/timeout classification uses recorded reason text.', '',
               '### Job endings', '']
     endings = collections.Counter(str(j.get('ending') or 'unknown') for j in v2_jobs)
     lines += [f'- {ending}: {count}' for ending, count in sorted(endings.items())]

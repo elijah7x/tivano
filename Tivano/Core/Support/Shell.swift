@@ -5,6 +5,7 @@ struct ShellResult: Sendable {
     var status: Int32
     var stdout: Data
     var stderr: Data
+    var timedOut: Bool = false
 
     var succeeded: Bool { status == 0 }
     var output: String { String(decoding: stdout, as: UTF8.self) }
@@ -60,6 +61,7 @@ enum Shell {
         stderr.fileHandleForReading.readabilityHandler = collector.reader(for: .stderr)
 
         let cancelled = Mutex(false)
+        let timedOut = Mutex(false)
         let descendants = StdioProcess.DescendantTracker()
         var deadline: Task<Void, Never>?
         defer {
@@ -84,6 +86,7 @@ enum Shell {
                     deadline = Task {
                         do { try await Task.sleep(for: .seconds(timeout)) }
                         catch { return }
+                        timedOut.withLock { $0 = true }
                         descendants.terminate()
                     }
                 } catch {
@@ -107,7 +110,7 @@ enum Shell {
         try Task.checkCancellation()
         let output = await collector.finished(within: 3)
         try Task.checkCancellation()
-        return ShellResult(status: status, stdout: output.stdout, stderr: output.stderr)
+        return ShellResult(status: status, stdout: output.stdout, stderr: output.stderr, timedOut: timedOut.withLock { $0 })
     }
 
     /// Runs a named tool found on the login PATH.

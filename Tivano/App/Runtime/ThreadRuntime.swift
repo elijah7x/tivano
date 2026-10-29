@@ -459,6 +459,7 @@ final class ThreadRuntime {
     /// ride on the lead's next turn. A message of the user's own starts the count over;
     /// a turn carrying head reports or a refusal notice continues the same request.
     @ObservationIgnored private var hydraBudget = HydraDelegationBudget()
+    @ObservationIgnored private var hydraTargetNotice: String?
     /// A Tivano-run head's time for one turn (see `HydraBudget`): past it, the head is
     /// stopped and its next turn is its report.
     @ObservationIgnored private var headBudget: Task<Void, Never>?
@@ -1254,6 +1255,8 @@ final class ThreadRuntime {
 
     /// Draft captured by Return while a turn runs: stop the turn, then send this
     /// right away instead of queueing it behind the queue.
+    var hasPendingSendForUpdate: Bool { pendingSend != nil }
+
     @ObservationIgnored private var pendingSend: PendingSend?
     /// A queued follow-up's turn is on its way to an idle lead (see
     /// `flushFollowUpsIfIdle`): a second prompt queued in the meantime waits its
@@ -1905,6 +1908,10 @@ final class ThreadRuntime {
             // A block dropped with no refusal turn left to say so still reaches the lead:
             // its notice rides on the front of whatever turn comes next. Taken here, with
             // the send about to run, so a turn that aborts while starting keeps it waiting.
+            if let notice = hydraTargetNotice {
+                prompt = notice + "\n\n" + prompt
+                hydraTargetNotice = nil
+            }
             if let notice = hydraBudget.takeDropNotice() {
                 prompt = notice + prompt
             }
@@ -3990,12 +3997,13 @@ final class ThreadRuntime {
 
     private func spawnV2DelegatedHeads(app: AppModel, thread: ChatThread, launch: HydraLaunch, entry: TimelineEntry, message: AssistantMessage, stripped: String, delegations: [HydraDelegation]) -> DelegationOutcome {
         var message = message
+        var targetNotice: String?
         func refuse(_ refusal: String) -> DelegationOutcome {
             message.text = stripped.isEmpty ? "Asking for heads." : stripped
             entry.item.content = .assistant(message)
             saveRevision += 1
             scheduleSave()
-            return refuseBlock(refusal, dropped: "Its delegation block was refused, and it had been told so already.")
+            return refuseBlock([refusal, targetNotice].compactMap { $0 }.joined(separator: "\n"), dropped: "Its delegation block was refused, and it had been told so already.")
         }
         guard let job = app.openHydraJob(of: threadID), job.id == hydraJobID else {
             return refuse("No heads went out: this Hydra job is no longer open.")
@@ -4047,6 +4055,19 @@ final class ThreadRuntime {
             }
         }
         guard !admitted.isEmpty else { return refuse(refusals.joined(separator: "\n\n")) }
+        let needsTarget = admitted.contains {
+            $0.continueHeadID == nil && !$0.delegation.files.isEmpty
+                && ($0.delegation.project?.trimmed.isEmpty ?? true)
+        }
+        let target = needsTarget ? app.hydraLeadWorktree(of: thread, runtime: self) : nil
+        if let target {
+            for index in admitted.indices where admitted[index].continueHeadID == nil
+                && !admitted[index].delegation.files.isEmpty
+                && (admitted[index].delegation.project?.trimmed.isEmpty ?? true) {
+                admitted[index].delegation.project = target
+            }
+            targetNotice = "Heads that change files work in \(target), the worktree you are working in, not in \(app.hydraCheckout(of: thread) ?? "your checkout"). Set \"project\" to choose another checkout."
+        }
         var owners: [String: [String]] = [:]
         var invalidPaths: [String] = []
         for operation in admitted {
@@ -4063,11 +4084,12 @@ final class ThreadRuntime {
             }
         }
         guard invalidPaths.isEmpty else {
-            return refuse("No heads went out. These ownership paths are empty, outside their target checkout, or have no resolvable checkout:\n" + invalidPaths.joined(separator: "\n"))
+            return refuse("No heads went out. These ownership paths are empty, outside their target checkout, or have no resolvable checkout:\n" + invalidPaths.joined(separator: "\n") + "\nTo work in a folder outside your checkout, set \"project\" to that folder's absolute path and list \"files\" relative to it.")
         }
         let overlaps = owners.filter { $0.value.count > 1 }
         guard overlaps.isEmpty else { return refuse(HydraPrompts.v2OverlapRefusal(overlaps)) }
 
+        if let targetNotice { hydraTargetNotice = targetNotice }
         hydraBudget.chargeRound()
         app.updateHydraJob(job.id, of: threadID) { $0.rounds += 1 }
         var packet = hydraJobPacketRequest ?? HydraHandoffPacket(request: job.request)
@@ -4151,7 +4173,7 @@ final class ThreadRuntime {
     }
 
     private static func v2OwnershipPath(_ file: String, checkout: String) -> String? {
-        let file = file.trimmed
+        let file = (file.trimmed as NSString).expandingTildeInPath
         guard !file.isEmpty else { return nil }
         let root = URL(fileURLWithPath: checkout, isDirectory: true).standardizedFileURL.path
         let path = URL(fileURLWithPath: file, relativeTo: URL(fileURLWithPath: root, isDirectory: true)).standardizedFileURL.path

@@ -631,6 +631,36 @@ private struct AboutIdentityPill: View {
     }
 }
 
+@MainActor
+private enum BackgroundUpdateStatus {
+    static var isReady: Bool {
+        guard !AppInfo.isDevelopment else { return false }
+        if case .ready = AppUpdater.shared.autoUpdate { return true }
+        return false
+    }
+
+    /// A background download in progress; the manual install waits for it instead.
+    static var isDownloading: Bool {
+        guard !AppInfo.isDevelopment else { return false }
+        if case .downloading = AppUpdater.shared.autoUpdate { return true }
+        return false
+    }
+
+    static var message: String? {
+        guard !AppInfo.isDevelopment else { return nil }
+        switch AppUpdater.shared.autoUpdate {
+        case .idle:
+            return nil
+        case .downloading(let version):
+            return String(format: Chrome.localized("Downloading version %@…"), version)
+        case .ready(let version):
+            return String(format: Chrome.localized("Version %@ is ready and will install automatically."), version)
+        case .failed(let version, _):
+            return String(format: Chrome.localized("Couldn't prepare version %@ automatically. Tivano will try again later."), version)
+        }
+    }
+}
+
 /// The one control of the update story. The blue Update & restart button while a release
 /// waits, the slider while it installs, and otherwise what the last check actually found:
 /// the green seal, a warning when the check failed, or a plain note before the first one.
@@ -641,7 +671,7 @@ private struct AboutVersionPill: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isReady: Bool {
-        checker.updateAvailable && checker.update != nil && !progress.showsProgressUI
+        (BackgroundUpdateStatus.isReady || (!BackgroundUpdateStatus.isDownloading && checker.updateAvailable && checker.update != nil)) && !progress.showsProgressUI
     }
 
     /// What the pill says when it is not the install button. The seal used to claim "Up to
@@ -698,17 +728,25 @@ private struct AboutVersionPill: View {
                 .chromeGlassCapsule()
             } else {
                 Button {
-                    guard let update = checker.update, isReady, !model.hasActiveTurns else { return }
-                    AppUpdater.shared.install(update)
+                    guard isReady, !model.hasActiveTurns else { return }
+                    if BackgroundUpdateStatus.isReady {
+                        AppUpdater.shared.restartToInstallStaged()
+                    } else if let update = checker.update {
+                        AppUpdater.shared.install(update)
+                    }
                 } label: {
                     HStack(spacing: 6) {
                         if isReady {
                             Image(systemName: "arrow.down.circle.fill")
                                 .font(Chrome.inlineIconFont)
                                 .foregroundStyle(Chrome.blue)
-                            Text("Update & restart")
+                            Text(verbatim: Chrome.localized(BackgroundUpdateStatus.isReady ? "Restart now" : "Update & restart"))
                                 .font(.ui(.callout, weight: .semibold))
                                 .foregroundStyle(Chrome.blue)
+                        } else if let message = BackgroundUpdateStatus.message {
+                            Text(verbatim: message)
+                                .font(.ui(.callout, weight: .semibold))
+                                .foregroundStyle(Chrome.secondaryText)
                         } else {
                             Image(systemName: standing.symbol)
                                 .font(Chrome.inlineIconFont)
@@ -764,9 +802,10 @@ private struct AboutVersionPill: View {
                     ? "Available once chats waiting for their usage limit have continued, or when you stop their wait"
                     : "Available after running chats finish") + " " + Chrome.localized("Settings › About lists what it waits for.")
             }
+            if let message = BackgroundUpdateStatus.message { return message }
             return String(format: Chrome.localized("Installs Tivano %@ and relaunches"), checker.update?.version ?? "")
         }
-        return standingHelp
+        return BackgroundUpdateStatus.message ?? standingHelp
     }
 
     /// The seal is not a button, but it is still worth saying what it means.
@@ -779,7 +818,7 @@ private struct AboutVersionPill: View {
     }
 
     private var accessibilityLabel: String {
-        isReady ? Chrome.localized("Update & restart") : String(format: Chrome.localized("Tivano %@, %@"), AppInfo.version, Chrome.localizedLowercased(standing.title))
+        isReady ? Chrome.localized(BackgroundUpdateStatus.isReady ? "Restart now" : "Update & restart") : BackgroundUpdateStatus.message ?? String(format: Chrome.localized("Tivano %@, %@"), AppInfo.version, Chrome.localizedLowercased(standing.title))
     }
 }
 
@@ -804,6 +843,17 @@ struct AboutSoftwareUpdateSection: View {
             language: Bundle.main.preferredLocalizations.first ?? "en"
         )
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
+            if let message = BackgroundUpdateStatus.message, !progress.showsProgressUI {
+                ChromeCard {
+                    ChromeRow(title: message) {
+                        if BackgroundUpdateStatus.isReady {
+                            Button("Restart now") { AppUpdater.shared.restartToInstallStaged() }
+                                .buttonStyle(.glass)
+                                .disabled(model.hasActiveTurns)
+                        }
+                    }
+                }
+            }
             if progress.phase == .waitingForMerge {
                 ChromeCard {
                     ChromeRow(title: "Waiting for Hydra merges to finish.") {
@@ -814,7 +864,7 @@ struct AboutSoftwareUpdateSection: View {
             }
             // An update that cannot install yet says what it waits for, chat by chat, so the
             // dimmed button is never a mystery.
-            if checker.updateAvailable, checker.update != nil, model.hasActiveTurns, !progress.showsProgressUI {
+            if (BackgroundUpdateStatus.isReady || (checker.updateAvailable && checker.update != nil)), model.hasActiveTurns, !progress.showsProgressUI {
                 installWaitCard
             }
             // The cards lead the page on their own, as on the About page; the version is
@@ -823,7 +873,7 @@ struct AboutSoftwareUpdateSection: View {
                 releaseBody(update, notes: notes ?? "")
             }
         }
-        .padding(.bottom, progress.phase == .waitingForMerge || (checker.updateAvailable && checker.update != nil)
+        .padding(.bottom, BackgroundUpdateStatus.message != nil || progress.phase == .waitingForMerge || (checker.updateAvailable && checker.update != nil)
             ? Chrome.pageSectionSpacing : 0)
         // The busy flag follows every runtime change, but a missed one must never keep the
         // install waiting for good: opening the page settles it again.
@@ -853,7 +903,7 @@ struct AboutSoftwareUpdateSection: View {
         let waitsOnLimit = blockers.contains { $0.reason == "Waiting for its usage limit to reset" }
         return ChromeCard {
             ChromeRow(
-                title: "Update & restart is available once these finish",
+                title: BackgroundUpdateStatus.isReady ? "Restart now is available once these finish" : "Update & restart is available once these finish",
                 detail: waitsOnLimit ? "A relaunch would drop a usage-limit wait. Stop the wait from that chat's box to update now." : nil
             ) { EmptyView() }
             ForEach(Array(blockers.prefix(Self.shownBlockers).enumerated()), id: \.offset) { _, blocker in

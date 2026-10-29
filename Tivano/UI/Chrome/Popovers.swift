@@ -97,20 +97,33 @@ struct PopoverMenu<Content: View>: View {
     /// Forces the popover open at this height. Needed because a ScrollView inside
     /// a popover otherwise collapses to a few rows and maxHeight never engages.
     var idealHeight: CGFloat?
+    /// Off for short, fixed content such as a confirmation: the popover takes the
+    /// content's own height instead of a scroll view's guess.
+    var scrolls = true
     @ViewBuilder var content: Content
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                content
+        if scrolls {
+            ScrollView {
+                stack
             }
-            .padding(6)
-            .frame(minWidth: 210, maxWidth: 360, alignment: .leading)
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollIndicators(.automatic)
+            .frame(idealHeight: idealHeight, maxHeight: maxHeight)
+            .presentedChrome()
+        } else {
+            stack
+                .fixedSize(horizontal: false, vertical: true)
+                .presentedChrome()
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .scrollIndicators(.automatic)
-        .frame(idealHeight: idealHeight, maxHeight: maxHeight)
-        .presentedChrome()
+    }
+
+    private var stack: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content
+        }
+        .padding(6)
+        .frame(minWidth: 210, maxWidth: 360, alignment: .leading)
     }
 }
 

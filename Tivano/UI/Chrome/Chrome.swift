@@ -901,6 +901,7 @@ struct SidebarIconBadge<Glyph: View>: View {
 
 struct SidebarRow<Icon: View, Accessory: View>: View {
     let title: String
+    let titleIsVerbatim: Bool
     let isSelected: Bool
     let isEmphasized: Bool
     /// Draws the title as supporting copy, for rows set aside (shelved projects).
@@ -912,6 +913,7 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
 
     init(
         title: String,
+        titleIsVerbatim: Bool = false,
         isSelected: Bool = false,
         isEmphasized: Bool = false,
         isMuted: Bool = false,
@@ -921,6 +923,7 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
         @ViewBuilder accessory: @escaping (Bool) -> Accessory
     ) {
         self.title = title
+        self.titleIsVerbatim = titleIsVerbatim
         self.isSelected = isSelected
         self.isEmphasized = isEmphasized
         self.isMuted = isMuted
@@ -936,7 +939,7 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
             HStack(spacing: 8) {
                 icon
                     .frame(width: Chrome.iconSize, alignment: .center)
-                Text(verbatim: Chrome.localized(title))
+                Text(verbatim: titleIsVerbatim ? title : Chrome.localized(title))
                     .font(.ui(.body, weight: isSelected || isEmphasized ? .medium : .regular))
                     .foregroundStyle(isMuted ? Chrome.secondaryText : Chrome.primaryText.opacity(isSelected ? 1 : 0.92))
                     .lineLimit(1)

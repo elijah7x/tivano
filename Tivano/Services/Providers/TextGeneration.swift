@@ -73,32 +73,61 @@ enum TextGeneration {
         return message.isEmpty ? nil : message
     }
 
-    static func review(_ prompt: String, engine: Engine, directory: URL) async -> String? {
-        switch engine {
-        case .claude(let executable, let environment, let model, let effort):
-            var arguments = [
-                "-p", "--output-format", "text", "--tools", "",
-                "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
-                "--no-session-persistence",
-            ]
-            if let model, !model.isEmpty, model != "default" { arguments += ["--model", model] }
-            if let effort, !effort.isEmpty { arguments += ["--effort", effort] }
-            guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900),
-                  result.succeeded else { return nil }
-            return result.trimmedOutput.nilIfEmpty
-        case .codex(let executable, let environment, let model, let effort):
-            let output = FileManager.default.temporaryDirectory.appendingPathComponent("tivano-\(UUID().uuidString).txt")
-            defer { try? FileManager.default.removeItem(at: output) }
-            var arguments = [
-                "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model,
-            ]
-            if let effort, !effort.isEmpty { arguments += ["--config", "model_reasoning_effort=\"\(effort)\""] }
-            arguments += ["--output-last-message", output.path, "-"]
-            guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900),
-                  result.succeeded else { return nil }
-            return (try? String(contentsOf: output, encoding: .utf8))?
-                .trimmed
-                .nilIfEmpty
+    enum ReviewFailure: Error, CustomStringConvertible {
+        case timedOut
+        case exit(Int32)
+        case launchFailed
+        case cancelled
+        case emptyOutput
+
+        var description: String {
+            switch self {
+            case .timedOut: "timed out after 900s"
+            // CLI output can echo the prompt or patch; retain only the exit code.
+            case .exit(let code): "exit \(code)"
+            case .launchFailed: "launch failed"
+            case .cancelled: "cancelled"
+            case .emptyOutput: "empty output"
+            }
+        }
+    }
+
+    static func review(_ prompt: String, engine: Engine, directory: URL) async -> Result<String, ReviewFailure> {
+        do {
+            switch engine {
+            case .claude(let executable, let environment, let model, let effort):
+                var arguments = [
+                    "-p", "--output-format", "text", "--tools", "",
+                    "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
+                    "--no-session-persistence",
+                ]
+                if let model, !model.isEmpty, model != "default" { arguments += ["--model", model] }
+                if let effort, !effort.isEmpty { arguments += ["--effort", effort] }
+                let result = try await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900)
+                if result.timedOut { return .failure(.timedOut) }
+                guard result.succeeded else { return .failure(.exit(result.status)) }
+                guard let text = result.trimmedOutput.nilIfEmpty else { return .failure(.emptyOutput) }
+                return .success(text)
+            case .codex(let executable, let environment, let model, let effort):
+                let output = FileManager.default.temporaryDirectory.appendingPathComponent("tivano-\(UUID().uuidString).txt")
+                defer { try? FileManager.default.removeItem(at: output) }
+                var arguments = [
+                    "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model,
+                ]
+                if let effort, !effort.isEmpty { arguments += ["--config", "model_reasoning_effort=\"\(effort)\""] }
+                arguments += ["--output-last-message", output.path, "-"]
+                let result = try await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900)
+                if result.timedOut { return .failure(.timedOut) }
+                guard result.succeeded else { return .failure(.exit(result.status)) }
+                guard let text = (try? String(contentsOf: output, encoding: .utf8))?.trimmed.nilIfEmpty else {
+                    return .failure(.emptyOutput)
+                }
+                return .success(text)
+            }
+        } catch is CancellationError {
+            return .failure(.cancelled)
+        } catch {
+            return .failure(.launchFailed)
         }
     }
 

@@ -598,7 +598,9 @@ struct SidebarView: View {
                 .padding(.trailing, Chrome.rowHorizontalPadding - (Chrome.iconSize - SidebarHeaderLayout.glyphWidth) / 2)
         }
         .modifier(SidebarHeaderLayout(
-            topSpacing: isFirstInList ? (section == .projects && !inPopover ? 0 : 8) : 7
+            // A later section's gap must exceed the 40pt rhythm of collapsed project rows,
+            // or its header reads as part of the group above.
+            topSpacing: isFirstInList ? (section == .projects && !inPopover ? 0 : 8) : 21
         ))
     }
 
@@ -716,6 +718,7 @@ struct SidebarView: View {
         heads.contains { (model.thread($0.id) ?? $0).hydra?.status == .running }
     }
 
+    /// Also decides the row's fold chevron, so a chat whose heads are all hidden has none.
     private func visibleHelpers(_ helpers: [ChatThread]) -> [ChatThread] {
         guard !hasRunningHead(helpers.filter(\.isHydraHead)) else { return helpers }
         return helpers.filter { !$0.isHydraHead }
@@ -792,7 +795,7 @@ struct SidebarView: View {
                 let own = helpers[thread.id] ?? []
                 items.append(SidebarItem(
                     id: SidebarItem.id(for: thread),
-                    kind: .thread(thread, projectName: nil, projectIcon: nil, peers: nil, hasHelpers: !own.isEmpty),
+                    kind: .thread(thread, projectName: nil, projectIcon: nil, peers: nil, hasHelpers: !visibleHelpers(own).isEmpty),
                     isNested: true
                 ))
                 items.append(contentsOf: helperItems(under: thread, helpers: own, isNested: true))
@@ -852,7 +855,7 @@ struct SidebarView: View {
             let own = helpers[thread.id] ?? []
             return [SidebarItem(
                 id: thread.id.uuidString,
-                kind: .thread(thread, projectName: nil, projectIcon: nil, peers: peers, hasHelpers: !own.isEmpty)
+                kind: .thread(thread, projectName: nil, projectIcon: nil, peers: peers, hasHelpers: !visibleHelpers(own).isEmpty)
             )] + helperItems(under: thread, helpers: own)
         }
     }
@@ -922,7 +925,7 @@ struct SidebarView: View {
                 if let project = result.project {
                     ProjectRow(snapshot: project, count: result.count, togglesExpansion: false)
                     ForEach(result.threads, id: \.id) { thread in
-                        threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !(helpers[thread.id] ?? []).isEmpty, isNested: true)
+                        threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !visibleHelpers(helpers[thread.id] ?? []).isEmpty, isNested: true)
                     }
                 } else {
                     sectionHeader(.tasks, isFirstInList: index == 0)
@@ -930,7 +933,7 @@ struct SidebarView: View {
                         let matchedIDs = Set(result.threads.map(\.id))
                         ForEach(result.threads.filter { !$0.isHelper && !$0.isHydraHead }, id: \.id) { thread in
                             let own = (helpers[thread.id] ?? []).filter { matchedIDs.contains($0.id) }
-                            threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !own.isEmpty)
+                            threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !visibleHelpers(own).isEmpty)
                             ForEach(helperItems(under: thread, helpers: own)) { item in
                                 itemView(item)
                             }
@@ -1326,14 +1329,18 @@ private struct DeleteThreadPopover: View {
 /// like the delete question. Clicking away keeps the thread's title.
 private struct RenameThreadPopover: View {
     let title: String
+    let heading: String
+    let allowsEmpty: Bool
     let onRename: (String) -> Void
     let onCancel: () -> Void
 
     @State private var text: String
     @FocusState private var isFocused: Bool
 
-    init(title: String, onRename: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+    init(title: String, heading: String = "Rename thread", allowsEmpty: Bool = false, onRename: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
         self.title = title
+        self.heading = heading
+        self.allowsEmpty = allowsEmpty
         self.onRename = onRename
         self.onCancel = onCancel
         _text = State(initialValue: title)
@@ -1341,7 +1348,7 @@ private struct RenameThreadPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Rename thread")
+            Text(verbatim: Chrome.localized(heading))
                 .font(.ui(.body, weight: .semibold))
             TextField("Title", text: $text)
                 .textFieldStyle(.roundedBorder)
@@ -1354,13 +1361,14 @@ private struct RenameThreadPopover: View {
                 Button("Rename") { onRename(text) }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!allowsEmpty && text.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .controlSize(.regular)
         }
         .padding(14)
         .frame(width: 300)
         .onAppear { isFocused = true }
+        .onExitCommand(perform: onCancel)
     }
 }
 
@@ -1423,6 +1431,11 @@ private final class SidebarHeightBox {
 }
 
 private struct ShelfRow: View {
+    @Environment(AppModel.self) private var model
+    @State private var renameEditor = ProjectIconEditorRequest()
+
+    private var customTitle: String { model.settings.shelfTitle.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var displayTitle: String { customTitle.isEmpty ? Chrome.localized("Shelved projects") : customTitle }
     let count: Int
     let hasUnread: Bool
     let isActive: Bool
@@ -1449,9 +1462,11 @@ private struct ShelfRow: View {
 
     var body: some View {
         @Bindable var iconEditor = iconEditor
+        @Bindable var renameEditor = renameEditor
         // The same row as a project folder, so the entry carries exactly a folder's weight.
         SidebarRow(
-            title: "Shelved projects",
+            title: displayTitle,
+            titleIsVerbatim: true,
             accessoryWidth: 40,
             action: onOpen,
             icon: {
@@ -1486,8 +1501,20 @@ private struct ShelfRow: View {
         .popover(isPresented: $iconEditor.isPresented, arrowEdge: .bottom) {
             ProjectIconPicker(icon: iconBinding)
         }
-        .contextMenu { [weak iconEditor] in
+        .popover(isPresented: $renameEditor.isPresented, arrowEdge: .bottom) {
+            RenameThreadPopover(title: displayTitle, heading: "Rename shelf", allowsEmpty: true, onRename: {
+                model.settings.shelfTitle = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                renameEditor.isPresented = false
+            }, onCancel: { renameEditor.isPresented = false })
+                .presentedChrome()
+        }
+        .contextMenu { [weak iconEditor, weak renameEditor] in
             RowActionMenuButtons(actions: [
+                RowAction(title: "Rename…", symbol: "pencil") { [weak renameEditor] in
+                    Task { @MainActor [weak renameEditor] in
+                        renameEditor?.isPresented = true
+                    }
+                },
                 RowAction(title: "Change icon…", symbol: "face.smiling") { [weak iconEditor] in
                     // Let the menu dismiss without retaining the row's state storage.
                     Task { @MainActor [weak iconEditor] in
@@ -1496,7 +1523,7 @@ private struct ShelfRow: View {
                 },
             ])
         }
-        .accessibilityLabel(Text("Shelved projects"))
+        .accessibilityLabel(Text(verbatim: displayTitle))
         .accessibilityValue(Text(verbatim: String(format: Chrome.localized("%lld projects"), Int64(count))))
     }
 }

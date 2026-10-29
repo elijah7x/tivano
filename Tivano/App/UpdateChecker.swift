@@ -191,6 +191,7 @@ final class UpdateChecker {
             lastError = nil
             lastCheckedAt = .now
             persist()
+            if updateAvailable, !CaptureRun.isEnabled { AppUpdater.shared.prepareInBackground(found) }
             if background, updateAvailable {
                 notifyOnce(about: found)
             }

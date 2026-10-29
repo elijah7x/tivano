@@ -419,9 +419,15 @@ struct ArchiveDeleteAllButton: View {
     @Environment(AppModel.self) private var model
     let threadIDs: Set<UUID>
     let isFiltered: Bool
-    @State private var isConfirming = false
-    @State private var pendingIDs: Set<UUID> = []
-    @State private var pendingIsFiltered = false
+    @State private var pending: PendingDeletion?
+
+    /// The chats a confirmation is about, handed to the popover with its presentation:
+    /// separate state read by `isPresented` content could still be empty when it renders.
+    private struct PendingDeletion: Identifiable {
+        let id = UUID()
+        let ids: Set<UUID>
+        let isFiltered: Bool
+    }
 
     var body: some View {
         ChromeTextButton(
@@ -432,23 +438,21 @@ struct ArchiveDeleteAllButton: View {
             isDestructive: true
         ) {
             if model.settings.confirmBeforeDeleting {
-                pendingIDs = threadIDs
-                pendingIsFiltered = isFiltered
-                isConfirming = true
+                pending = PendingDeletion(ids: threadIDs, isFiltered: isFiltered)
             } else {
                 model.deleteArchivedThreads(ids: threadIDs)
             }
         }
-        .popover(isPresented: $isConfirming, arrowEdge: .bottom) {
-            PopoverMenu {
-                PopoverSectionHeader(pendingIsFiltered ? "Delete matching archived chats?" : "Delete all archived threads?")
-                PopoverNote(String(format: Chrome.localized(pendingIsFiltered
+        .popover(item: $pending, arrowEdge: .bottom) { pending in
+            PopoverMenu(scrolls: false) {
+                PopoverSectionHeader(pending.isFiltered ? "Delete matching archived chats?" : "Delete all archived chats?")
+                PopoverNote(String(format: Chrome.localized(pending.isFiltered
                     ? "The histories of the %lld matching chats will be removed. Files in your projects stay as they are."
-                    : "The histories of all %lld threads will be removed. Files in your projects stay as they are."), pendingIDs.count))
+                    : "The histories of all %lld threads will be removed. Files in your projects stay as they are."), pending.ids.count))
                 PopoverDivider()
-                PopoverItem(String(format: Chrome.localized("Delete %lld threads"), pendingIDs.count), symbol: "trash", isDestructive: true) {
-                    model.deleteArchivedThreads(ids: pendingIDs)
-                    isConfirming = false
+                PopoverItem(String(format: Chrome.localized("Delete %lld threads"), pending.ids.count), symbol: "trash", isDestructive: true) {
+                    model.deleteArchivedThreads(ids: pending.ids)
+                    self.pending = nil
                 }
             }
         }

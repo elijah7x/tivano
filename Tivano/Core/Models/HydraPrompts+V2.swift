@@ -25,8 +25,8 @@ extension HydraPrompts {
         if !launch.headsMatchLead, let label = launch.headsLabel ?? launch.workerModel { heads += " Heads run on \(label)." }
         if let note = launch.headsNote?.trimmed, !note.isEmpty { heads += " They are good at: \(note)." }
         let others = launch.projects.dropFirst().map(\.name)
-        let projects = others.isEmpty ? "" : " A head can work in another sidebar project with `\"project\"` (its name or an absolute path): \(others.joined(separator: ", ")); its work lands and merges there."
-        let merge = launch.autoMerges ? " Tivano commits and merges the team's work after you finish: never run or delegate commits, branches or merge requests, and claim a merge only when a [Hydra] note confirms it." : ""
+        let projects = others.isEmpty ? "" : " Other sidebar projects also accept their name in `\"project\"`: \(others.joined(separator: ", "))."
+        let merge = launch.autoMerges ? " For Git checkouts, Tivano commits and merges the team's work after you finish: never run or delegate commits, branches or merge requests, and claim a merge only when a [Hydra] note confirms it." : ""
         return """
         [Hydra 2] You lead \(team) ("heads"). Before your first tool call on every user message, follow-ups such as "continue" included, decide which parts of the work go to heads. \(v2TiltRule(launch.tilt))\(heads) You keep judgement, cross-file design and integration, and revise the plan as reports arrive. An audit, review or sweep the user asks for is reading work heads can do: they read and report, you judge what they found.
 
@@ -38,7 +38,11 @@ extension HydraPrompts {
 
         Every new-head entry needs `"files"`: the paths that head changes, or `[]` for a head that only reads and reports. No path may appear in two entries. Optional: `"name"`, `"project"`. Use only this block to delegate, never your own sub-agent tool, and never put three backticks inside a prompt. Tivano gives every head the user's request and the team's file split; resolve design choices in the brief and ask the head no questions. To send a finished head of this request back to its part, use an entry `{"continue": "<head name>", "prompt": "..."}`; heads of earlier requests cannot be sent back, so give their part to a new head. A user message while heads are out belongs to the same job.
 
-        Heads never build, run tests or verify; you run the narrowest required build or test yourself after they report. Read the files their reports flag first.\(projects)\(merge)
+        Without `"project"`, a head works in and lands changes in your checkout. To work elsewhere—a worktree, another repository or any folder, including non-Git folders—set `"project"` to its absolute path and list `"files"` relative to it. Non-Git folders are changed in place: no copy, review, merge or undo, so brief precisely. SSH hosts are not supported workplaces: do remote writes yourself; heads can only read or prepare.\(projects)
+
+        Give each head every file its change needs, including callers, models and shared types. If one task produces an API another consumes, send the consumer after the producer lands, or give it the exact interface; do not batch dependent tasks without it. When a head must restore earlier content, name the base commit.
+
+        Heads never build, run tests or verify; you run the narrowest required build or test yourself after they report. Read the files their reports flag first.\(merge)
         """
     }
 
@@ -72,6 +76,10 @@ extension HydraPrompts {
     /// A new v2 head's whole brief: the lead's entry, the handoff packet, the workplace,
     /// how to work and the three-line report format.
     static func v2HeadPrompt(persona: HydraPersona, delegation: HydraDelegation, workplace: Workplace, packet: HydraHandoffPacket) -> String {
+        var workplaceText = workplaceRules(workplace)
+        if case .shared = workplace {
+            workplaceText += " If this shared folder is not a Git repository, changes are final in place; nothing is reverted."
+        }
         let limit = HydraHandoffPacket.requestLimit
         let request = String(packet.request.prefix(limit))
         let truncation = packet.request.count > limit ? "\n\n[The user's request was truncated to the first \(limit) characters.]" : ""
@@ -86,7 +94,7 @@ extension HydraPrompts {
         \(withoutVerificationSteps(delegation.prompt))
 
         ## Where you work
-        \(workplaceRules(workplace))
+        \(workplaceText)
 
         ## How to work
         \(v2HowToWork)
@@ -115,7 +123,7 @@ extension HydraPrompts {
         case .ownCopy, nil:
             workplaceRule = "You keep your own copy and files."
         case .shared(let path):
-            workplaceRule = "You continue in the lead's shared checkout at \(path), alongside others whose changes you must leave alone."
+            workplaceRule = "You continue in the lead's shared checkout at \(path), alongside others whose changes you must leave alone. If this shared folder is not a Git repository, changes are final in place; nothing is reverted."
         }
         return """
         The lead sends you back to your part:

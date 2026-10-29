@@ -479,10 +479,10 @@ extension AppModel {
         }
     }
 
-    /// Resolves an explicit path onto a sidebar project and a checkout. A linked worktree
-    /// of a repository already in the sidebar reuses that project. A repository that is
-    /// not reuses nothing and is added. Anything that is not a readable git checkout, and
-    /// not an exact sidebar path, fails the head instead of running it in the lead's folder.
+    /// Resolves an explicit absolute path onto a sidebar project and a working folder.
+    /// Missing folders are created only when their parent exists. System folders and
+    /// the app library (except task-workspaces) are refused. Linked Git worktrees reuse
+    /// their repository's project; other Git and non-Git folders join the sidebar.
     private func routeHydraHead(_ id: UUID, reference: String) async -> Bool {
         guard hydraHeadCanStart(id), let head = thread(id), let parentID = head.parentThreadID, let lead = thread(parentID) else { return false }
         let name = head.hydra?.persona.name ?? "The head"
@@ -490,18 +490,53 @@ extension AppModel {
         guard expanded.hasPrefix("/") else {
             return failHydraRoute(id, String(format: Chrome.localized("Hydra: no project named %@ is in the sidebar, so %@ did not start."), reference, name))
         }
+        let canonical = HydraPaths.canonical(expanded)
+        let library = HydraPaths.canonical(StoragePaths.root.path)
+        let taskWorkspaces = HydraPaths.canonical(StoragePaths.root.appendingPathComponent("task-workspaces", isDirectory: true).path)
+        func contains(_ root: String) -> Bool {
+            canonical == root || canonical.hasPrefix(root + "/")
+        }
+        let systemRoots = ["/System", "/Library", "/usr", "/bin", "/sbin", "/private/etc", "/Applications"]
+        if canonical == "/" || canonical == HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
+            || systemRoots.contains(where: { contains(HydraPaths.canonical($0)) })
+            || (contains(library) && !contains(taskWorkspaces)) {
+            return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is a system folder, so %@ did not start."), reference, name))
+        }
+        let manager = FileManager.default
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue else {
+        if !manager.fileExists(atPath: canonical, isDirectory: &isDir) {
+            let parent = URL(fileURLWithPath: canonical).deletingLastPathComponent().path
+            var parentIsDir: ObjCBool = false
+            guard manager.fileExists(atPath: parent, isDirectory: &parentIsDir), parentIsDir.boolValue else {
+                return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
+            }
+            do {
+                try manager.createDirectory(atPath: canonical, withIntermediateDirectories: false)
+                isDir = true
+            } catch {
+                return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
+            }
+        }
+        guard isDir.boolValue else {
             return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
         }
         guard let identity = await HydraGitIdentityReader.read(at: expanded) else {
             guard hydraHeadCanStart(id) else { return false }
-            let listed = projects.filter { HydraPaths.same($0.path, expanded) }
-            if let chosen = hydraPreferredProject(listed, lead: lead, mainCheckout: HydraPaths.canonical(expanded)) {
-                applyHydraRoute(id, project: chosen, checkout: HydraPaths.canonical(expanded), lead: lead)
-                return true
+            // Git metadata git cannot read is a broken repository, not a plain folder to edit in place.
+            var ancestor = URL(fileURLWithPath: canonical, isDirectory: true)
+            while true {
+                if FileManager.default.fileExists(atPath: ancestor.appendingPathComponent(".git").path) {
+                    return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a Git checkout Tivano can read, so %@ did not start."), reference, name))
+                }
+                let parent = ancestor.deletingLastPathComponent()
+                if parent.path == ancestor.path { break }
+                ancestor = parent
             }
-            return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a Git checkout Tivano can read, so %@ did not start."), reference, name))
+            let listed = projects.filter { HydraPaths.same($0.path, canonical) }
+            let chosen = hydraPreferredProject(listed, lead: lead, mainCheckout: canonical)
+                ?? addProject(at: URL(fileURLWithPath: canonical, isDirectory: true))
+            applyHydraRoute(id, project: chosen, checkout: canonical, lead: lead)
+            return true
         }
         guard hydraHeadCanStart(id) else { return false }
         if let chosen = await hydraProject(for: identity, lead: lead, headID: id) {

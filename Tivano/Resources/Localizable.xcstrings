@@ -1,6 +1,105 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Version %@ is ready and will install automatically.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "版本 %@ 已就绪，将自动安装。"
+          }
+        }
+      }
+    },
+    "Downloads new versions in the background and installs them while you're away.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在后台下载新版本，并在你不使用时自动安装。"
+          }
+        }
+      }
+    },
+    "Rename shelf": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重命名搁置区"
+          }
+        }
+      }
+    },
+    "Automatically update": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自动更新"
+          }
+        }
+      }
+    },
+    "Downloading version %@…": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在下载版本 %@…"
+          }
+        }
+      }
+    },
+    "Couldn't prepare version %@ automatically. Tivano will try again later.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未能自动准备版本 %@，Tivano 将稍后重试。"
+          }
+        }
+      }
+    },
+    "Restart now": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即重启"
+          }
+        }
+      }
+    },
+    "Restart now is available once these finish": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以下工作结束后即可立即重启"
+          }
+        }
+      }
+    },
+    "%@ already exists and belongs to another command." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已存在，属于其他命令。"
+          }
+        }
+      }
+    },
     "Independent review" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8,6 +107,72 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "独立审查"
+          }
+        }
+      }
+    },
+    "Install CLI" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安装 CLI"
+          }
+        }
+      }
+    },
+    "Installed at %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已安装在 %@。"
+          }
+        }
+      }
+    },
+    "Installed, but it points to an older copy of Tivano. Repair it to use this one." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已安装，但指向旧位置的 Tivano。修复后会改用当前这个。"
+          }
+        }
+      }
+    },
+    "Not installed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未安装。"
+          }
+        }
+      }
+    },
+    "Reinstall CLI" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新安装 CLI"
+          }
+        }
+      }
+    },
+    "Repair CLI" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修复 CLI"
           }
         }
       }
@@ -7515,6 +7680,17 @@
         }
       }
     },
+    "Delete all archived chats?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除全部归档对话？"
+          }
+        }
+      }
+    },
     "Delete every archived thread" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10074,6 +10250,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hydra：无法读取 %@ 的 checkout，因此未启动。"
+          }
+        }
+      }
+    },
+    "Hydra: %@ is a system folder, so %@ did not start." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra：%@ 是系统文件夹，因此 %@ 未启动。"
           }
         }
       }
