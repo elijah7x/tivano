@@ -28,6 +28,18 @@ enum ControlCLIInstaller {
         }
     }
 
+    enum Status { case notInstalled, installed, needsRepair, conflict }
+
+    /// What is in the command's place now, read from the link itself rather than the
+    /// saved receipt, so Settings shows the real state after an App move or a manual edit.
+    static func status(directory: URL, helper: URL, name: String, previousTarget: String?) -> Status {
+        let existing: String?
+        do { existing = try existingTarget(directory.appendingPathComponent(name)) } catch { return .conflict }
+        guard let existing else { return .notInstalled }
+        if existing == helper.path { return FileManager.default.isExecutableFile(atPath: helper.path) ? .installed : .needsRepair }
+        return existing == previousTarget ? .needsRepair : .conflict
+    }
+
     static func uninstall(directory: URL, name: String, previousTarget: String?) throws {
         guard !name.contains("/"), !name.isEmpty else { throw ControlFailure(code: .invalidRequest) }
         let link = directory.appendingPathComponent(name)

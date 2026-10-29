@@ -30,10 +30,12 @@ final class WindowManager {
 
     private static let mainFrameName = "TivanoMainWindow"
 
-    func showMain() {
+    var isMainVisible: Bool { mainWindow?.isVisible == true && mainWindow?.isMiniaturized == false }
+
+    func showMain(activating: Bool = true) {
         let window = mainWindow ?? makeMainWindow()
         mainWindow = window
-        present(window)
+        present(window, activating: activating)
     }
 
     func showSettings(page: SettingsPage? = nil) {
@@ -116,7 +118,8 @@ final class WindowManager {
         window.setFrame(frame, display: false)
     }
 
-    private func present(_ window: NSWindow) {
+    private func present(_ window: NSWindow, activating: Bool = true) {
+        guard activating else { window.orderFront(nil); return }
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }

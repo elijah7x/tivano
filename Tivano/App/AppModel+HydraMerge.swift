@@ -23,6 +23,7 @@ private enum HydraProjectMerge {
     case merged
     case syncFailed
     case alreadyOnMain
+    case nothing
     case failed
     /// Not now, and nothing to tell: the checkout is mid-rebase or mid-merge, or the lead
     /// took up work again while the files were gathered. The sweep picks the job up again.
@@ -152,7 +153,10 @@ extension AppModel {
               queued.isReadyForHydraMerge else { return }
         if waiting.projectID == nil {
             guard let directory = try? executionDirectory(for: waiting),
-                  !hydraExplicitCheckouts(of: leadID, besides: directory).isEmpty else { return }
+                  !hydraExplicitCheckouts(of: leadID, besides: directory).isEmpty else {
+                recordHydraJobMerge(.nothing, of: leadID, jobID: jobID)
+                return
+            }
         }
         guard await hydraMergeBudgetAllowsAttempt(of: leadID) else {
             recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
@@ -260,11 +264,15 @@ extension AppModel {
         // Heads whose checkout had nothing to send are marked with the job, not ahead of
         // a checkout that still has files. A failed group returns before either mark.
         let everyHeadID = groups.flatMap(\.work.headIDs)
+        var hasNonGitGroup = false
+        for group in groups where !(await Git(group.checkout).isRepository()) {
+            hasNonGitGroup = true
+        }
         groups.removeAll { $0.work.paths.isEmpty }
         guard !groups.isEmpty else {
             // Recovery gathered no patch to write. Absence of local changes alone
             // does not prove that an interrupted merge reached the remote.
-            if recovering, stray.isEmpty { return }
+            if recovering, stray.isEmpty, !hasNonGitGroup { return }
             guard !stray.isEmpty else {
                 guard project != nil else {
                     recordHydraJobMerge(.nothing, of: leadID, jobID: jobID)
@@ -276,7 +284,7 @@ extension AppModel {
                 runtime.markHydraMerged(own.turnIDs)
                 let spentAt = Date.now
                 for headID in everyHeadID { updateHydraHead(headID) { $0.mergedAt = spentAt } }
-                if runtime.hydraMerges.last?.outcome == .held {
+                if !hasNonGitGroup, runtime.hydraMerges.last?.outcome == .held {
                     recordHydraSettlement(leadID: leadID, runtime: runtime)
                 }
                 recordHydraJobMerge(.nothing, of: leadID, jobID: jobID)
@@ -297,7 +305,7 @@ extension AppModel {
             return
         }
         guard !outcomes.contains(.deferred) else { return }
-        if recovering, outcomes.allSatisfy({ $0 == .alreadyOnMain }) { return }
+        if recovering, !hasNonGitGroup, outcomes.allSatisfy({ $0 == .alreadyOnMain }) { return }
         // Another job that waited on this one, or was put off by it, goes now rather than
         // at the next sweep. Scheduled, so it starts once this merge has let go.
         Task { [weak self] in await self?.resumeHydraMerges() }
@@ -316,10 +324,10 @@ extension AppModel {
         if !stray.isEmpty {
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
             note(leadID, "Hydra left \(stray.count == 1 ? "a file" : "\(stray.count) files") outside every project.", strayBody(stray))
-        } else if outcomes.allSatisfy({ $0 == .alreadyOnMain }) {
+        } else if !hasNonGitGroup, outcomes.allSatisfy({ $0 == .alreadyOnMain }) {
             recordHydraSettlement(leadID: leadID, runtime: runtime)
         }
-        let outcome: HydraJobRecord.MergeOutcome = !stray.isEmpty ? .failed : outcomes.allSatisfy({ $0 == .alreadyOnMain }) ? .nothing : .merged
+        let outcome: HydraJobRecord.MergeOutcome = !stray.isEmpty ? .failed : outcomes.allSatisfy({ $0 == .alreadyOnMain || $0 == .nothing }) ? .nothing : .merged
         recordHydraJobMerge(outcome, of: leadID, jobID: jobID)
     }
 
@@ -382,7 +390,8 @@ extension AppModel {
         }
 
         let git = Git(checkout)
-        guard await git.isRepository(), await git.hasCommits() else { return .failed }
+        guard await git.isRepository() else { return .nothing }
+        guard await git.hasCommits() else { return .failed }
         // Linked worktrees share refs. Serialize automatic merges across editions
         // using the common git directory, not a per-process queue or checkout path.
         guard let repoLease = try? await git.repositoryWriteLease() else {

@@ -243,7 +243,17 @@ final class UpdateInstallProgress {
 /// cannot replace itself, so a shell script waits for it to quit, moves the old bundle aside,
 /// moves the new one into its place, clears the quarantine the check already covered, and
 /// opens it. A marker in the defaults lets the relaunched build finish the story.
+enum AutoUpdateState: Equatable {
+    case idle
+    case downloading(version: String)
+    case ready(version: String)
+    case failed(version: String, reason: AutoUpdateFailure)
+}
+
+enum AutoUpdateFailure: Equatable { case download, verification, install }
+
 @MainActor
+@Observable
 final class AppUpdater {
     static let shared = AppUpdater()
 
@@ -255,7 +265,179 @@ final class AppUpdater {
     private var installTask: Task<Void, Never>?
     private var progress: UpdateInstallProgress { .shared }
 
-    private init() {}
+    private(set) var autoUpdate: AutoUpdateState = .idle {
+        didSet { scheduleIdleInstall() }
+    }
+    @ObservationIgnored private var idleTimer: DispatchSourceTimer?
+    private static let silentKey = "appUpdater_silentRelaunch"
+    private static let threadKey = "appUpdater_selectedThread"
+    private static let visibleKey = "appUpdater_mainVisible"
+    private(set) var silentRelaunch = false
+    private(set) var restoredThreadID: UUID?
+    private(set) var restoreMainWindow = false
+    @ObservationIgnored private var prepareTask: Task<Void, Never>?
+    @ObservationIgnored private var powerOffObserver: NSObjectProtocol?
+    /// Logout, restart or shutdown can kill the installer mid-swap; the update waits for an ordinary quit.
+    @ObservationIgnored private var isPoweringOff = false
+    private var handedOff = false
+    /// A silent install quits without any alert; a failed save cancels it quietly instead.
+    private(set) var isSilentHandoff = false
+    private var automaticEnabled: Bool {
+        UserDefaults.standard.object(forKey: "autoUpdateEnabled") as? Bool ?? true
+    }
+    private var updatesRoot: URL { StoragePaths.root.appending(path: "Updates") }
+    private func stagedApp(_ version: String) -> URL {
+        updatesRoot.appending(path: version).appending(path: Bundle.main.bundleURL.lastPathComponent)
+    }
+
+    private init() {
+        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
+        powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { AppUpdater.shared.isPoweringOff = true }
+        }
+        let root = updatesRoot
+        let currentVersion = AppInfo.version
+        Task.detached(priority: .background) {
+        if let current = AppVersion(currentVersion),
+           let folders = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+            for folder in folders {
+                guard let version = AppVersion(folder.lastPathComponent) else { continue }
+                if version <= current { try? FileManager.default.removeItem(at: folder) }
+            }
+        }
+        }
+    }
+
+    /// Off hands the update back to the manual button; a staged copy stays on disk and is
+    /// reused if the setting comes back on.
+    func autoUpdateSettingChanged() {
+        if !automaticEnabled {
+            prepareTask?.cancel()
+            if case .downloading = autoUpdate {} else { autoUpdate = .idle }
+        }
+        scheduleIdleInstall()
+    }
+
+    private func scheduleIdleInstall() {
+        idleTimer?.cancel()
+        idleTimer = nil
+        guard automaticEnabled, !handedOff, !AppInfo.isDevelopment, !CaptureRun.isEnabled,
+              case .ready = autoUpdate else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + max(WindowManager.shared.model.secondsUntilInputIdle, 300), leeway: .seconds(15))
+        timer.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.installWhenIdle() }
+        }
+        idleTimer = timer
+        timer.resume()
+    }
+
+    private func installWhenIdle() {
+        idleTimer?.cancel()
+        idleTimer = nil
+        guard automaticEnabled, !handedOff, !isPoweringOff,
+              case .ready(let version) = autoUpdate else { return }
+        guard WindowManager.shared.model.isIdleForUpdate else { scheduleIdleInstall(); return }
+        do {
+            try handOff(staged: stagedApp(version), version: version, silent: true)
+        } catch {
+            scheduleIdleInstall()
+        }
+    }
+
+    func prepareInBackground(_ release: AvailableUpdate) {
+        guard automaticEnabled, !AppInfo.isDevelopment, !CaptureRun.isEnabled,
+              prepareTask == nil, installTask == nil,
+              let version = AppVersion(release.version), let current = AppVersion(AppInfo.version),
+              version > current, !release.version.contains("/"), release.version != ".." else { return }
+        if case .ready(let ready) = autoUpdate, let existing = AppVersion(ready), existing >= version { return }
+        autoUpdate = .downloading(version: release.version)
+        prepareTask = Task { [self] in
+            defer { prepareTask = nil }
+            var image: URL?
+            var temporary: URL?
+            var failure: AutoUpdateFailure = .download
+            defer {
+                if let image { try? FileManager.default.removeItem(at: image) }
+                if let temporary { try? FileManager.default.removeItem(at: temporary.deletingLastPathComponent()) }
+            }
+            do {
+                // A copy staged before a relaunch is reused once it verifies again.
+                let existing = stagedApp(release.version)
+                if FileManager.default.fileExists(atPath: existing.path),
+                   (try? await Task.detached(priority: .background) { try Self.verifySignature(of: existing) }.value) != nil,
+                   Bundle(url: existing)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == release.version {
+                    autoUpdate = .ready(version: release.version)
+                    return
+                }
+                do { image = try await download(release.downloadURL, reportsProgress: false) }
+                catch {
+                    try Task.checkCancellation()
+                    guard let fallback = release.fallbackDownloadURL else { throw error }
+                    image = try await download(fallback, reportsProgress: false)
+                }
+                try Task.checkCancellation()
+                failure = .verification
+                guard let image else { throw CancellationError() }
+                if let expected = release.sha256 {
+                    guard try await Task.detached(priority: .background) { try await Self.checksum(of: image) }.value == expected else {
+                        throw UpdateInstallError("Checksum mismatch")
+                    }
+                }
+                let staged = try await stage(image: image, expectedVersion: release.version, background: true)
+                temporary = staged
+                try Task.checkCancellation()
+                guard automaticEnabled else { throw CancellationError() }
+                let destination = stagedApp(release.version)
+                try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+                try FileManager.default.moveItem(at: staged, to: destination)
+                autoUpdate = .ready(version: release.version)
+            } catch {
+                if Task.isCancelled { autoUpdate = .idle }
+                else { autoUpdate = .failed(version: release.version, reason: failure) }
+            }
+        }
+    }
+
+    @discardableResult
+    func installStagedOnQuit() -> Bool {
+        guard automaticEnabled, !AppInfo.isDevelopment, !CaptureRun.isEnabled, !handedOff, !isPoweringOff,
+              case .ready(let version) = autoUpdate else { return false }
+        do {
+            try handOff(staged: stagedApp(version), version: version, relaunch: false)
+            return true
+        } catch {
+            autoUpdate = .failed(version: version, reason: .install)
+            return false
+        }
+    }
+
+    private func reverifyStaged(_ version: String) throws {
+        let app = stagedApp(version)
+        try Self.verifySignature(of: app)
+        guard Bundle(url: app)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version else {
+            throw UpdateInstallError("Staged version mismatch")
+        }
+    }
+
+    func restartToInstallStaged() {
+        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled, !handedOff,
+              installTask == nil, case .ready(let version) = autoUpdate else { return }
+        let model = WindowManager.shared.model
+        model.updateTaskSleepPrevention()
+        guard !model.hasActiveTurns else { return }
+        do {
+            try reverifyStaged(version)
+            progress.begin()
+            try handOff(staged: stagedApp(version), version: version)
+        } catch {
+            progress.fail()
+            autoUpdate = .failed(version: version, reason: .install)
+        }
+    }
 
     /// The relaunch after an install: true once, when the running version is the one the
     /// install promised. A stale marker (the swap failed) is dropped silently; the About page
@@ -263,12 +445,17 @@ final class AppUpdater {
     func consumeRelaunchMarker() -> Bool {
         let defaults = UserDefaults.standard
         guard let pending = defaults.string(forKey: Self.relaunchVersionKey) else { return false }
-        defaults.removeObject(forKey: Self.relaunchVersionKey)
+        silentRelaunch = defaults.bool(forKey: Self.silentKey)
+        restoredThreadID = defaults.string(forKey: Self.threadKey).flatMap(UUID.init(uuidString:))
+        restoreMainWindow = defaults.bool(forKey: Self.visibleKey)
+        for key in [Self.relaunchVersionKey, Self.silentKey, Self.threadKey, Self.visibleKey] {
+            defaults.removeObject(forKey: key)
+        }
         return pending == AppInfo.version
     }
 
     func install(_ update: AvailableUpdate) {
-        guard installTask == nil, !AppInfo.isDevelopment else { return }
+        guard installTask == nil, prepareTask == nil, !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
         installTask = Task { [self] in
             defer { installTask = nil }
             progress.begin()
@@ -310,6 +497,12 @@ final class AppUpdater {
                         try await Task.sleep(for: .milliseconds(250))
                     }
                     try Task.checkCancellation()
+                    model.updateTaskSleepPrevention()
+                    guard !model.hasActiveTurns else {
+                        try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
+                        progress.fail()
+                        return
+                    }
                     try handOff(staged: staged, version: update.version)
                 } catch {
                     try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
@@ -337,13 +530,13 @@ final class AppUpdater {
 
     // MARK: - Download
 
-    private func download(_ url: URL) async throws -> URL {
+    private func download(_ url: URL, reportsProgress: Bool = true) async throws -> URL {
         let destination = FileManager.default.temporaryDirectory
             .appending(path: "TivanoUpdate-\(UUID().uuidString).dmg")
         let downloader = Downloader { fraction in
-            Task { @MainActor in UpdateInstallProgress.shared.noteDownloadProgress(fraction) }
+            if reportsProgress { Task { @MainActor in UpdateInstallProgress.shared.noteDownloadProgress(fraction) } }
         }
-        try await downloader.download(url, to: destination)
+        try await downloader.download(url, to: destination, background: !reportsProgress)
         return destination
     }
 
@@ -360,15 +553,19 @@ final class AppUpdater {
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    private func stage(image: URL, expectedVersion: String) async throws -> URL {
+    private func stage(image: URL, expectedVersion: String, background: Bool = false) async throws -> URL {
         let staging = FileManager.default.temporaryDirectory
             .appending(path: "TivanoUpdate-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var completed = false
+        defer {
+            if !completed { try? FileManager.default.removeItem(at: staging) }
+        }
         let mount = staging.appending(path: "image", directoryHint: .isDirectory)
-        let attach = try await Shell.run(
+        let attach = try await runStagingTool(
             URL(filePath: "/usr/bin/hdiutil"),
             ["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.path, image.path],
-            timeout: 120
+            background: background, timeout: 120
         )
         guard attach.succeeded else {
             throw UpdateInstallError("The downloaded disk image could not be opened. \(attach.failureMessage)")
@@ -381,18 +578,18 @@ final class AppUpdater {
             guard let source = contents.first(where: { $0.pathExtension == "app" }) else {
                 throw UpdateInstallError("The disk image holds no app.")
             }
-            copy = try await Shell.run(URL(filePath: "/usr/bin/ditto"), [source.path, staged.path], timeout: 300)
-            _ = try? await Shell.run(URL(filePath: "/usr/bin/hdiutil"), ["detach", mount.path, "-force"], timeout: 60)
+            copy = try await runStagingTool(URL(filePath: "/usr/bin/ditto"), [source.path, staged.path], background: background, timeout: 300)
+            _ = try? await runStagingTool(URL(filePath: "/usr/bin/hdiutil"), ["detach", mount.path, "-force"], background: background, timeout: 60)
             try? FileManager.default.removeItem(at: image)
         } catch {
-            _ = try? await Shell.run(URL(filePath: "/usr/bin/hdiutil"), ["detach", mount.path, "-force"], timeout: 60)
+            _ = try? await runStagingTool(URL(filePath: "/usr/bin/hdiutil"), ["detach", mount.path, "-force"], background: background, timeout: 60)
             try? FileManager.default.removeItem(at: image)
             throw error
         }
         guard copy.succeeded else {
             throw UpdateInstallError("The update could not be copied. \(copy.failureMessage)")
         }
-        try await Task.detached(priority: .userInitiated) {
+        try await Task.detached(priority: background ? .background : .userInitiated) {
             try Self.verifySignature(of: staged)
         }.value
         let bundle = Bundle(url: staged)
@@ -400,26 +597,40 @@ final class AppUpdater {
         guard let version, let actual = AppVersion(version), let expected = AppVersion(expectedVersion), actual == expected else {
             throw UpdateInstallError("The downloaded app is version \(version ?? "unknown"), not \(expectedVersion).")
         }
-        let gatekeeper = try await Shell.run(URL(filePath: "/usr/sbin/spctl"), ["--assess", "--type", "execute", staged.path], timeout: 120)
+        let gatekeeper = try await runStagingTool(URL(filePath: "/usr/sbin/spctl"), ["--assess", "--type", "execute", staged.path], background: background, timeout: 120)
         guard gatekeeper.succeeded else {
             throw UpdateInstallError("Gatekeeper did not accept the downloaded app. \(gatekeeper.failureMessage)")
         }
+        completed = true
         return staged
+    }
+
+    private func runStagingTool(_ executable: URL, _ arguments: [String], background: Bool, timeout: TimeInterval) async throws -> ShellResult {
+        try await Shell.run(
+            background ? URL(filePath: "/usr/sbin/taskpolicy") : executable,
+            background ? ["-b", executable.path] + arguments : arguments,
+            timeout: timeout
+        )
     }
 
     /// The app must be signed with the team's Developer ID certificate and carry this app's
     /// identifier: anything else is not a Tivano release, whatever it is called.
-    nonisolated static func verifySignature(of appURL: URL) throws {
+    /// The installer checks the same requirement again right before the swap.
+    nonisolated static var signatureRequirement: String {
         let bundleID = Bundle.main.bundleIdentifier ?? "dev.tivano.Tivano"
-        var staticCode: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(appURL as CFURL, [], &staticCode) == errSecSuccess, let code = staticCode else {
-            throw UpdateInstallError("The downloaded app is not signed.")
-        }
-        let text = """
+        return """
         anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] \
         and certificate leaf[field.1.2.840.113635.100.6.1.13] \
         and certificate leaf[subject.OU] = "\(teamID)" and identifier "\(bundleID)"
         """
+    }
+
+    nonisolated static func verifySignature(of appURL: URL) throws {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(appURL as CFURL, [], &staticCode) == errSecSuccess, let code = staticCode else {
+            throw UpdateInstallError("The downloaded app is not signed.")
+        }
+        let text = signatureRequirement
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement else {
             throw UpdateInstallError("The signature requirement could not be built.")
@@ -437,7 +648,7 @@ final class AppUpdater {
 
     /// Starts the installer and quits. The installer waits for this process to end before it
     /// touches the installed app.
-    private func handOff(staged: URL, version: String) throws {
+    private func handOff(staged: URL, version: String, relaunch: Bool = true, silent: Bool = false) throws {
         let destination = Bundle.main.bundleURL
         let parent = destination.deletingLastPathComponent()
         guard FileManager.default.isWritableFile(atPath: parent.path) else {
@@ -454,30 +665,46 @@ final class AppUpdater {
             String(ProcessInfo.processInfo.processIdentifier),
             staged.path,
             destination.path,
+            relaunch ? (silent ? "2" : "1") : "0",
+            version,
+            Self.signatureRequirement,
         ]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = try FileHandle(forWritingTo: log)
         process.standardError = process.standardOutput
-        guard WindowManager.shared.model.flushForQuit() else {
+        if relaunch {
+        guard WindowManager.shared.model.flushForQuit(silently: silent) else {
             if WindowManager.shared.model.localControl.hasPendingMutations {
                 throw UpdateInstallError(Chrome.localized("Wait for accepted local-control operations to end before quitting or updating."))
             }
             throw UpdateInstallError(Chrome.localized("Tivano couldn't save your chats. The update was not installed. Resolve the disk error and try again."))
+        }
         }
         do { try process.run() }
         catch {
             WindowManager.shared.model.localControl.restoreAfterFailedShutdown()
             throw error
         }
+        handedOff = true
+        isSilentHandoff = silent
+        idleTimer?.cancel()
+        idleTimer = nil
+        guard relaunch else { return }
         UserDefaults.standard.set(version, forKey: Self.relaunchVersionKey)
-        progress.noteHandoff()
+        UserDefaults.standard.set(silent, forKey: Self.silentKey)
+        UserDefaults.standard.set(WindowManager.shared.model.selectedThreadID?.uuidString, forKey: Self.threadKey)
+        UserDefaults.standard.set(WindowManager.shared.isMainVisible, forKey: Self.visibleKey)
+        if !silent { progress.noteHandoff() }
         // If the quit is refused the installer gives up on its own; the pill goes back too.
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(Self.handoffTimeout))
-            guard UpdateInstallProgress.shared.phase == .handoff else { return }
+            guard self.handedOff else { return }
+            self.handedOff = false
+            self.isSilentHandoff = false
             UserDefaults.standard.removeObject(forKey: Self.relaunchVersionKey)
             WindowManager.shared.model.localControl.restoreAfterFailedShutdown()
-            UpdateInstallProgress.shared.fail()
+            if !silent { UpdateInstallProgress.shared.fail() }
+            self.scheduleIdleInstall()
         }
         // Do not yield after the merge check: a new merge must not start between
         // launching the installer and requesting termination.
@@ -490,7 +717,7 @@ final class AppUpdater {
     #!/bin/sh
     # Tivano update installer: waits for the app to quit, swaps in the update, relaunches.
     trap '' HUP
-    PID="$1"; NEW="$2"; DEST="$3"
+    PID="$1"; NEW="$2"; DEST="$3"; RELAUNCH="$4"; VERSION="$5"; REQUIREMENT="$6"
     STAGING="$(dirname "$NEW")"
     i=0
     while kill -0 "$PID" 2>/dev/null; do
@@ -498,10 +725,18 @@ final class AppUpdater {
       i=$((i + 1))
       if [ "$i" -gt 240 ]; then echo "The app did not quit"; rm -rf "$STAGING"; exit 1; fi
     done
+    # A staged copy that no longer verifies is left alone and the installed app reopens as it was.
+    reopen() {
+      if [ "$RELAUNCH" = "1" ]; then open "$DEST"; fi
+      if [ "$RELAUNCH" = "2" ]; then open -g "$DEST"; fi
+    }
+    /usr/sbin/taskpolicy -b /usr/bin/codesign --verify --deep --strict -R="$REQUIREMENT" "$NEW" || { echo "The staged app failed verification"; reopen; exit 1; }
+    ACTUAL=$(/usr/sbin/taskpolicy -b /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$NEW/Contents/Info.plist") || { reopen; exit 1; }
+    [ "$ACTUAL" = "$VERSION" ] || { echo "The staged app is $ACTUAL, not $VERSION"; reopen; exit 1; }
     BACKUP="$(dirname "$DEST")/.$(basename "$DEST").previous"
     rm -rf "$BACKUP"
     if [ -e "$DEST" ]; then
-      mv "$DEST" "$BACKUP" || { echo "Could not move the installed app aside"; rm -rf "$STAGING"; exit 1; }
+      mv "$DEST" "$BACKUP" || { echo "Could not move the installed app aside"; rm -rf "$STAGING"; reopen; exit 1; }
     fi
     if mv "$NEW" "$DEST"; then
       rm -rf "$BACKUP"
@@ -509,10 +744,11 @@ final class AppUpdater {
       echo "Could not move the update into place"
       [ -e "$BACKUP" ] && mv "$BACKUP" "$DEST"
       rm -rf "$STAGING"
+      reopen
       exit 1
     fi
     xattr -dr com.apple.quarantine "$DEST" 2>/dev/null
-    open "$DEST"
+    reopen
     rm -rf "$STAGING"
     """
 }
@@ -546,8 +782,9 @@ private final class Downloader: NSObject, URLSessionDownloadDelegate, @unchecked
         self.onProgress = onProgress
     }
 
-    func download(_ url: URL, to destination: URL) async throws {
+    func download(_ url: URL, to destination: URL, background: Bool) async throws {
         let configuration = URLSessionConfiguration.ephemeral
+        if background { configuration.networkServiceType = .background }
         configuration.timeoutIntervalForRequest = 8
         configuration.timeoutIntervalForResource = 1800
         configuration.waitsForConnectivity = false

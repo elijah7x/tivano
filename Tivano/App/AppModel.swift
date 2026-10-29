@@ -161,6 +161,10 @@ final class AppModel {
 
     @ObservationIgnored private let taskSleepPrevention = TaskSleepPrevention()
     @ObservationIgnored private var runtimes: [UUID: ThreadRuntime] = [:]
+    /// Composer drafts and queued prompts live only in memory: a relaunch would lose them.
+    var hasUnsentInput: Bool {
+        runtimes.values.contains { !$0.draft.isEmpty || !$0.followUps.isEmpty || $0.hasPendingSendForUpdate }
+    }
     private var creatingWorktrees: Set<UUID> = []
     @ObservationIgnored private var runtimeLastAccess: [UUID: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var runtimeCapacityScheduled = false
@@ -2093,12 +2097,12 @@ final class AppModel {
     /// `duringShutdown` lets the quit flush write after `persistenceEnabled` was switched
     /// off: quit flushes twice — once before sessions stop, once after the MCP shutdown —
     /// and the second pass still persists what that window changed.
-    private func commitLibrary(_ library: Library, duringShutdown: Bool = false) -> Bool {
+    private func commitLibrary(_ library: Library, duringShutdown: Bool = false, silently: Bool = false) -> Bool {
         guard isLibraryLoaded, duringShutdown || persistenceEnabled, !libraryWritesBlocked else { return false }
         saveTask?.cancel()
         saveTask = nil
         guard DiskWriter.shared.writeSynchronously(library, to: Storage.libraryURL) else {
-            showLibrarySaveFailure()
+            if !silently { showLibrarySaveFailure() }
             scheduleSave()
             return false
         }
@@ -2137,7 +2141,7 @@ final class AppModel {
     }
 
     /// The updater also uses this barrier before starting its external installer.
-    func flushForQuit() -> Bool {
+    func flushForQuit(silently: Bool = false) -> Bool {
         // No externally-admitted operation may write beyond the updater's flush barrier.
         // Refuse rather than silently cancel accepted turns or half-created worktrees.
         localControl.suspendForShutdown()
@@ -2150,13 +2154,13 @@ final class AppModel {
             }
         }
         guard !localControl.hasPendingMutations else {
-            alert = AppAlert(title: "Local control is busy", message: "Wait for accepted local-control operations to end before quitting or updating.")
+            if !silently { alert = AppAlert(title: "Local control is busy", message: "Wait for accepted local-control operations to end before quitting or updating.") }
             return false
         }
         guard isLibraryLoaded else { return false }
         for runtime in runtimes.values {
             if let snapshot = runtime.unsavedSnapshot(), !DiskWriter.shared.writeThreadSynchronously(snapshot) {
-                showLibrarySaveFailure()
+                if !silently { showLibrarySaveFailure() }
                 runtime.saveNow()
                 return false
             }
@@ -2165,11 +2169,11 @@ final class AppModel {
             if !projects.isEmpty || !threads.isEmpty {
                 guard let libraryRecoveryURL,
                       DiskWriter.shared.writeSynchronously(currentLibrary(), to: libraryRecoveryURL) else {
-                    showLibrarySaveFailure()
+                    if !silently { showLibrarySaveFailure() }
                     return false
                 }
             }
-        } else if !commitLibrary(currentLibrary(), duringShutdown: true) {
+        } else if !commitLibrary(currentLibrary(), duringShutdown: true, silently: silently) {
             return false
         }
         DiskWriter.shared.waitForQueuedWrites()
@@ -2179,8 +2183,8 @@ final class AppModel {
 
     /// Writes everything before stopping sessions, so a failed quit can still retry.
     @discardableResult
-    func saveBeforeQuit() -> Bool {
-        guard flushForQuit() else { return false }
+    func saveBeforeQuit(silently: Bool = false) -> Bool {
+        guard flushForQuit(silently: silently) else { return false }
         voice.shutdown()
         persistenceEnabled = false
         saveTask?.cancel()

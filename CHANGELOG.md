@@ -8,6 +8,54 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.2.22] - 2026-10-29
+
+### English
+
+### New features
+
+- Settings › About has an Automatically update switch, on by default: a new version downloads and is verified in the background at low priority, then installs silently once Tivano is idle (nothing running, no unsent drafts, no keyboard or mouse use for 10 minutes) and reopens in the background on the chat you had open. Otherwise it installs when you quit; Restart now installs it at once when nothing is running.
+- Right-click Shelved projects in the sidebar to give it your own name; an empty name restores the default.
+- Hydra heads can work in any folder, including ones that are not Git repositories: the lead names the folder's path, Tivano adds it to the sidebar (creating it when only its parent exists) and the heads change files there in place. System folders are refused.
+
+### Bug fixes
+
+- A Hydra lead chatting on a repository's main checkout while it works in one of that repository's worktrees now sends its heads' changes to that worktree instead of the main checkout.
+- Hydra work in a folder that is not a Git repository no longer reports a failed merge or a failed review; it has nothing to merge and the review is marked not applicable.
+- After a Hydra job finishes, its chat row in the sidebar no longer shows a fold arrow that opens nothing; the arrow appears only while there are helpers to show.
+- Settings › Storage: the confirmation for deleting all archived chats shows the same count as its button, is translated, and no longer scrolls.
+- Update & restart now checks again for running work right before it quits, not only when it is clicked.
+- Settings › CLI command now says whether the command is installed, and its button reads Install CLI, Reinstall CLI or Repair CLI to match, instead of always Install or repair CLI.
+
+### Refinements
+
+- The sidebar's Tasks heading now sits farther from the projects above it than collapsed projects sit from each other, so it reads as the start of its own group.
+
+### 简体中文
+
+### 新功能
+
+- 设置 › 关于新增「自动更新」开关，默认开启：新版本会以低优先级在后台下载并完成校验，等 Tivano 空闲时（没有运行中的工作、没有未发送的草稿、键盘鼠标 10 分钟无操作）静默安装，并在后台重新打开、回到原来的对话。没等到空闲则在你退出时安装；没有任务在运行时，可点「立即重启」马上安装。
+- 在侧栏右键「已搁置项目」可以给它改成自己的名字；名字留空即恢复默认。
+- Hydra head 现在可以在任意文件夹里工作，包括不是 Git 仓库的文件夹：lead 指明文件夹路径后，Tivano 会把它加入侧栏（只有上级文件夹存在时会先创建它），head 直接在原处修改文件。系统文件夹会被拒绝。
+
+### 问题修复
+
+- Hydra lead 的对话开在仓库主 checkout、实际却在该仓库某个 worktree 里工作时，head 的改动现在会落到那个 worktree，而不是主 checkout。
+- 在非 Git 文件夹里完成的 Hydra 工作不再报告合并失败或审查失败：没有需要合并的内容，审查记为不适用。
+- Hydra 任务结束后，侧栏里该对话行不再显示点开为空的展开箭头；只有存在可显示的子代理时才出现。
+- 设置 › 存储：删除全部归档对话的确认框现在显示与按钮一致的数量，标题已翻译，也不再出现滚动。
+- 「更新并重启」现在会在真正退出前再次确认没有正在运行的工作，而不只在点击时检查。
+- 设置 › CLI 命令现在会显示是否已安装，按钮也随之显示为「安装 CLI」「重新安装 CLI」或「修复 CLI」，不再固定为「安装或修复 CLI」。
+
+### 优化改进
+
+- 侧栏「任务」标题与上方项目之间的距离现在大于收起的项目彼此之间的距离，一眼就能看出它是新的一组。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.2.12] - 2026-10-29
 
 ### English

@@ -40,6 +40,8 @@ lead 在每条用户消息开始、首次工具调用之前明确决定哪些部
 - 自动合并开启时始终给出自动合并规则，有合并状态时再附 `[Hydra]` 状态说明；多项目时直接给出完整路由与逐 checkout 合并规则。
 - 每个 job 最多 3 轮派发，整批计一次；`continue` 返工与新派发共用预算，追加用户消息不重置预算。
 
+未指定 `project` 时，head 默认在 lead 的 checkout 工作并落地；只有 lead 线程位于主 checkout、未绑定 worktree，且 lead 在当前请求中恰好引用该仓库的一个 linked worktree 时，修改文件的 heads 才自动跟随到那个 worktree。只读 heads 不变，显式 `project` 始终优先。要指定其他工作目录，用绝对路径填写 `project`，`files` 相对该目录填写；非 Git 文件夹也接受，会注册为侧栏项目，目录不存在但父目录存在时可创建，系统目录则拒绝。非 Git 目录直接原地修改，没有副本、审查或撤销，审查记录为 `not applicable: not a Git checkout`，也没有需要合并的内容。远程 SSH 主机不支持作为工作目录，远程写入由 lead 自己执行，heads 只能阅读或准备。
+
 ## 3. 交接包
 
 每个 head 的 brief 后由 Tivano 附加（不经 `withoutVerificationSteps` 处理）：
@@ -63,6 +65,8 @@ lead 在每条用户消息开始、首次工具调用之前明确决定哪些部
 - 完成 head 的副本保留到 job settle；自动合并开启时等合并调用返回后再定稿、释放，关闭时等最终回复与审查处理结束。落地继续使用增量 `baseTree`；会话恢复失败时走通用新会话路径并给出警告。
 
 ## 6. 异家只读检查
+
+`reviewSkipped` 使用稳定的英文原因：`no changes`、`independent review is off`、`no review model available`、`not applicable: no checkout` 表示未执行审查的条件，不算审查失败。非正常完成且尚无审查结果的 job 记录 `not run: <ending>`，其中 ending 使用原始值。实际失败记录为 `review failed: ...`（如 `git tree`、`git diff`）或 `review failed (<reviewer>): ...`，保留所选审查者及超时、退出码、启动失败或空输出的原因。
 
 - v2 的固定环节，没有单独开关。Claude lead 用 Codex，Codex lead 用 Claude，其他 lead 优先 Claude、再试 Codex。Codex 使用默认模型、高推理和 read-only sandbox；Claude 单次禁用工具，未显式固定模型或推理强度。不可用、失败或 15 分钟超时记录原因，继续后续收尾。
 - lead 工作回合结束后，对 job 的改动尝试审查，自动合并开启时先审后合；关闭自动合并也审查。无改动记录为不适用，不算审查失败。

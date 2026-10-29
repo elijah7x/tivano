@@ -1597,6 +1597,7 @@ struct ArchiveFilter: Equatable {
 }
 
 private struct AboutSettingsPage: View {
+    @Environment(AppModel.self) private var model
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Brings its own gap below, and only while it shows a card, so an empty one
@@ -1651,7 +1652,8 @@ private struct AboutSettingsPage: View {
     }
 
     private var appCard: some View {
-        ChromeCard {
+        @Bindable var settings = model.settings
+        return ChromeCard {
             HStack(spacing: 14) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
@@ -1668,6 +1670,12 @@ private struct AboutSettingsPage: View {
             .padding(16)
             ChromeRowDivider()
             AboutUpdateCheckRow()
+            if !AppInfo.isDevelopment {
+                ChromeRowDivider()
+                ChromeRow(title: "Automatically update", detail: "Downloads new versions in the background and installs them while you're away.") {
+                    SettingsSwitch(isOn: $settings.autoUpdateEnabled)
+                }
+            }
         }
     }
 }

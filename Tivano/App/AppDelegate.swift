@@ -23,15 +23,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
         #endif
-        windows.showMain()
-        windows.model.openThreadOnLaunch()
-        Task { await windows.model.bootstrap() }
-        UpdateChecker.shared.startBackgroundChecks()
-        // The relaunch after an install: the update story finishes on About, where it began.
-        if AppUpdater.shared.consumeRelaunchMarker() {
-            UpdateInstallProgress.shared.armCelebration()
-            windows.showSettings(page: .about)
+        let updater = AppUpdater.shared
+        let updated = updater.consumeRelaunchMarker()
+        if updater.silentRelaunch {
+            if updater.restoreMainWindow { windows.showMain(activating: false) }
+            Task {
+                await windows.model.bootstrap()
+                if let id = updater.restoredThreadID, windows.model.thread(id) != nil {
+                    windows.model.openThread(id)
+                } else {
+                    windows.model.openThreadOnLaunch()
+                }
+            }
+        } else {
+            windows.showMain()
+            windows.model.openThreadOnLaunch()
+            Task { await windows.model.bootstrap() }
+            if updated {
+                UpdateInstallProgress.shared.armCelebration()
+                windows.showSettings(page: .about)
+            }
         }
+        UpdateChecker.shared.startBackgroundChecks()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -45,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if quitPending { return .terminateLater }
         if let model, model.isLibraryLoaded, !model.isAnyHydraMergeRunning {
-            guard model.saveBeforeQuit() else { return .terminateCancel }
+            guard model.saveBeforeQuit(silently: AppUpdater.shared.isSilentHandoff) else { return .terminateCancel }
             if !MCPHub.hasLiveProcesses { return .terminateNow }
         } else if model == nil, !MCPHub.hasLiveProcesses {
             return .terminateNow
@@ -63,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     while model.isAnyHydraMergeRunning, Date.now < deadline {
                         try? await Task.sleep(for: .milliseconds(250))
                     }
-                    guard model.saveBeforeQuit() else {
+                    guard model.saveBeforeQuit(silently: AppUpdater.shared.isSilentHandoff) else {
                         quitPending = false
                         sender.reply(toApplicationShouldTerminate: false)
                         return
@@ -78,8 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if let model, model.isLibraryLoaded { model.saveBeforeQuit() }
+        if let model, model.isLibraryLoaded { model.saveBeforeQuit(silently: AppUpdater.shared.isSilentHandoff) }
         TokenLedger.shared.flushLiveSpend()
+        AppUpdater.shared.installStagedOnQuit()
         // The MCP servers the hub started go with the app.
         if !mcpShutdownCompleted { MCPHub.terminateAll() }
     }

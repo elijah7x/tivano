@@ -159,6 +159,7 @@ final class AppSettings {
         static let confirmDelete = "confirmBeforeDeleting"
         static let autoShelveDays = "autoShelveDays"
         static let showReasoning = "showReasoning"
+        static let autoUpdateEnabled = "autoUpdateEnabled"
         static let antiSlopEnabled = "antiSlopEnabled"
         static let showsWorkingCard = "showsWorkingCard"
         static let timelineHapticStyle = "timelineHapticStyle"
@@ -199,6 +200,7 @@ final class AppSettings {
         static let preventSleepDuringTasks = "preventSleepDuringTasks"
         static let taskSleepMode = "taskSleepMode"
         static let appLanguage = "appLanguage"
+        static let shelfTitle = "shelfTitle"
         static let commitInstructions = "commitInstructions"
         static let terminalHeight = "terminalHeight"
         static let modelList = "modelList"
@@ -295,6 +297,13 @@ final class AppSettings {
 
     var showReasoning: Bool {
         didSet { defaults.set(showReasoning, forKey: Key.showReasoning) }
+    }
+
+    var autoUpdateEnabled: Bool {
+        didSet {
+            defaults.set(autoUpdateEnabled, forKey: Key.autoUpdateEnabled)
+            AppUpdater.shared.autoUpdateSettingChanged()
+        }
     }
 
     var antiSlopEnabled: Bool {
@@ -512,6 +521,10 @@ final class AppSettings {
 
     var textGeneration: TextGenerationChoice {
         didSet { defaults.set(textGeneration.rawValue, forKey: Key.textGeneration) }
+    }
+
+    var shelfTitle: String {
+        didSet { defaults.set(shelfTitle, forKey: Key.shelfTitle) }
     }
 
     var commitInstructions: String {
@@ -939,6 +952,7 @@ final class AppSettings {
         // Auto-continue is now chosen per chat. Drop the old global setting.
         defaults.removeObject(forKey: "autoContinueAfterLimit")
         showReasoning = defaults.object(forKey: Key.showReasoning) as? Bool ?? false
+        autoUpdateEnabled = defaults.object(forKey: Key.autoUpdateEnabled) as? Bool ?? true
         antiSlopEnabled = defaults.object(forKey: Key.antiSlopEnabled) as? Bool ?? true
         showsWorkingCard = defaults.object(forKey: Key.showsWorkingCard) as? Bool ?? true
         timelineHapticStyle = TimelineHapticStyle(rawValue: defaults.string(forKey: Key.timelineHapticStyle) ?? "") ?? .soft
@@ -982,6 +996,7 @@ final class AppSettings {
         ThemeManager.current = initialTheme
         appLanguage = AppLanguage(rawValue: defaults.string(forKey: Key.appLanguage) ?? "") ?? .system
         textGeneration = TextGenerationChoice(rawValue: defaults.string(forKey: Key.textGeneration) ?? "") ?? .automatic
+        shelfTitle = defaults.string(forKey: Key.shelfTitle) ?? ""
         commitInstructions = defaults.string(forKey: Key.commitInstructions) ?? ""
         terminalHeight = defaults.object(forKey: Key.terminalHeight) as? Double ?? 260
         recentDownloadsPicker = defaults.object(forKey: Key.recentDownloadsPicker) as? Bool ?? true

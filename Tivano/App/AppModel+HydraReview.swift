@@ -16,13 +16,24 @@ extension AppModel {
         }
         guard settings.hydraReviewEnabled else { return skip("independent review is off") }
         guard let checkoutPath = lead.worktreePath ?? project(lead.projectID)?.path else {
-            return skip("review failed")
+            return skip("not applicable: no checkout")
         }
         let checkout = URL(fileURLWithPath: checkoutPath, isDirectory: true)
         let runtime = runtime(for: leadID)
         await runtime.ensureLoaded()
         guard runtime.phase == .idle, !runtime.isReverting else { return .pending }
         guard runtime.hydraReviewRunning == nil else { return .pending }
+        let jobHeads = hydraTeam(of: leadID).filter { $0.hydra?.jobID == jobID }
+        if !(await Git(checkoutPath).isRepository()) {
+            var hasGitTarget = false
+            for head in jobHeads {
+                if let target = head.hydra?.targetCheckout, await Git(target).isRepository() {
+                    hasGitTarget = true
+                    break
+                }
+            }
+            guard hasGitTarget else { return skip("not applicable: not a Git checkout") }
+        }
         guard let selected = hydraReviewEngine() else {
             return skip("no review model available")
         }
@@ -35,7 +46,6 @@ extension AppModel {
             updateTaskSleepPrevention()
         }
 
-        let jobHeads = hydraTeam(of: leadID).filter { $0.hydra?.jobID == jobID }
         var paths: [String: Set<String>] = [:]
         func collect(_ path: String, root: String) {
             let trimmed = path.trimmed
@@ -65,9 +75,14 @@ extension AppModel {
             }
         }
         var patch = ""
+        var skippedNonGitChanges = false
         for root in paths.keys.sorted() {
             let git = Git(root)
-            guard let current = try? await git.currentTree() else { return skip("review failed") }
+            guard await git.isRepository() else {
+                skippedNonGitChanges = true
+                continue
+            }
+            guard let current = try? await git.currentTree() else { return skip("review failed: git tree") }
             let base: String
             if let recorded = job.baseTrees?[root] {
                 base = recorded
@@ -85,13 +100,15 @@ extension AppModel {
                 let chunk = Array(sortedPaths[start..<min(start + 400, sortedPaths.count)])
                 // Both trees include untracked files, including those already present at job start.
                 guard let diff = try? await git.run(["--literal-pathspecs", "diff", "--no-ext-diff", base, current, "--"] + chunk),
-                      diff.succeeded else { return skip("review failed") }
+                      diff.succeeded else { return skip("review failed: git diff") }
                 checkoutPatch += diff.output
                 start += chunk.count
             }
             if !checkoutPatch.trimmed.isEmpty { patch += "# checkout: \(root)\n\(checkoutPatch)\n" }
         }
-        guard !patch.trimmed.isEmpty else { return skip("no changes") }
+        guard !patch.trimmed.isEmpty else {
+            return skip(skippedNonGitChanges ? "not applicable: not a Git checkout" : "no changes")
+        }
         let fileStats = DiffStats.files(inPatch: patch)
         if patch.count > 80_000 {
             let notice = "\n\n[Patch truncated to 80,000 characters.]"
@@ -128,8 +145,11 @@ extension AppModel {
             runHydraDecision(request, leadID: leadID, jobID: jobID)
         }
         let prompt = HydraPrompts.v2ReviewPrompt(request: job.request, notes: noteLines.joined(separator: "\n"), patch: patch)
-        guard let findings = await TextGeneration.review(prompt, engine: selected.engine, directory: checkout) else {
-            return skip("review failed")
+        let findings: String
+        switch await TextGeneration.review(prompt, engine: selected.engine, directory: checkout) {
+        case .success(let text): findings = text
+        case .failure(let failure):
+            return skip("review failed (\(selected.reviewer)): \(failure.description)")
         }
         guard openHydraJob(of: leadID)?.id == jobID, openHydraJob(of: leadID)?.ending == nil else { return .skipped }
         let findingCount = findings.contains("NO FINDINGS") ? 0 : findings.components(separatedBy: .newlines).count {
