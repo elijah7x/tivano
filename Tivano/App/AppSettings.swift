@@ -34,6 +34,20 @@ enum TextGenerationChoice: String, CaseIterable, Identifiable {
     }
 }
 
+enum ThreadTitleMode: String, CaseIterable, Identifiable {
+    case firstTurn
+    case continuous
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .firstTurn: "Name once"
+        case .continuous: "Keep updated"
+        }
+    }
+}
+
 enum TimelineHapticStyle: String, CaseIterable, Identifiable {
     case soft
     case strong
@@ -154,6 +168,9 @@ final class AppSettings {
         static let workspaceMode = "defaultWorkspaceMode"
         static let newThreadModelSelection = "newThreadModelSelection"
         static let newThreadLocation = "newThreadLocation"
+        static let quickChatEnabled = "quickChatEnabled"
+        static let quickChatChord = "quickChatChord"
+        static let quickChatChordCleared = "quickChatChordCleared"
         static let notify = "notifyWhenFinished"
         static let chime = "chimeWhenFinished"
         static let confirmDelete = "confirmBeforeDeleting"
@@ -197,6 +214,7 @@ final class AppSettings {
         static let openCodeProviderMigrated = "openCodeProviderMigrated"
         static let lastHydraPair = "lastHydraPairID"
         static let textGeneration = "textGeneration"
+        static let threadTitleMode = "threadTitleMode"
         static let preventSleepDuringTasks = "preventSleepDuringTasks"
         static let taskSleepMode = "taskSleepMode"
         static let appLanguage = "appLanguage"
@@ -266,6 +284,19 @@ final class AppSettings {
 
     var newThreadLocation: NewThreadLocation {
         didSet { defaults.set(newThreadLocation.rawValue, forKey: Key.newThreadLocation) }
+    }
+
+    var quickChatEnabled: Bool {
+        didSet { defaults.set(quickChatEnabled, forKey: Key.quickChatEnabled) }
+    }
+
+    static let defaultQuickChatChord = KeyChord(keyCode: 49, modifiers: [.shift, .command])
+
+    var quickChatChord: KeyChord? {
+        didSet {
+            store(quickChatChord, forKey: Key.quickChatChord)
+            defaults.set(quickChatChord == nil, forKey: Key.quickChatChordCleared)
+        }
     }
 
     var notifyWhenFinished: Bool {
@@ -521,6 +552,10 @@ final class AppSettings {
 
     var textGeneration: TextGenerationChoice {
         didSet { defaults.set(textGeneration.rawValue, forKey: Key.textGeneration) }
+    }
+
+    var threadTitleMode: ThreadTitleMode {
+        didSet { defaults.set(threadTitleMode.rawValue, forKey: Key.threadTitleMode) }
     }
 
     var shelfTitle: String {
@@ -941,6 +976,8 @@ final class AppSettings {
         defaultWorkspaceMode = WorkspaceMode(rawValue: defaults.string(forKey: Key.workspaceMode) ?? "") ?? .local
         newThreadModelSelection = Self.load(NewThreadModelSelection.self, forKey: Key.newThreadModelSelection)
         newThreadLocation = NewThreadLocation(rawValue: defaults.string(forKey: Key.newThreadLocation) ?? "") ?? .recent
+        quickChatEnabled = defaults.bool(forKey: Key.quickChatEnabled)
+        quickChatChord = defaults.bool(forKey: Key.quickChatChordCleared) ? nil : (Self.load(KeyChord.self, forKey: Key.quickChatChord) ?? Self.defaultQuickChatChord)
         notifyWhenFinished = defaults.object(forKey: Key.notify) as? Bool ?? true
         chimeWhenFinished = defaults.object(forKey: Key.chime) as? Bool ?? true
         // The mode replaced an on/off switch: an earlier "off" stays off, an earlier "on" keeps the Mac awake.
@@ -996,6 +1033,7 @@ final class AppSettings {
         ThemeManager.current = initialTheme
         appLanguage = AppLanguage(rawValue: defaults.string(forKey: Key.appLanguage) ?? "") ?? .system
         textGeneration = TextGenerationChoice(rawValue: defaults.string(forKey: Key.textGeneration) ?? "") ?? .automatic
+        threadTitleMode = ThreadTitleMode(rawValue: defaults.string(forKey: Key.threadTitleMode) ?? "") ?? .firstTurn
         shelfTitle = defaults.string(forKey: Key.shelfTitle) ?? ""
         commitInstructions = defaults.string(forKey: Key.commitInstructions) ?? ""
         terminalHeight = defaults.object(forKey: Key.terminalHeight) as? Double ?? 260

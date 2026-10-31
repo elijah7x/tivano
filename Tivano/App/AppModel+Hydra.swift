@@ -413,8 +413,7 @@ extension AppModel {
     }
 
     /// The sidebar project an explicit path belongs to, read from the project list after
-    /// the git calls return. An unmatched repository is registered in the same actor
-    /// turn as the final lookup.
+    /// the git calls return. An unmatched repository stays under the lead’s project.
     private func hydraProject(for identity: HydraGitIdentityReader.Identity, lead: ChatThread, headID: UUID) async -> Project? {
         func choose(from list: [Project], commons: [UUID: String]) -> Project? {
             let exact = list.filter { HydraPaths.same($0.path, identity.checkout) }
@@ -438,25 +437,25 @@ extension AppModel {
             // New projects can arrive during any git read, including the last one.
             guard projects.allSatisfy({ examined.contains($0.id) }) else { continue }
             if let chosen = choose(from: projects, commons: commons) { return chosen }
-            return addProject(at: URL(fileURLWithPath: identity.checkout, isDirectory: true))
+            return project(lead.projectID)
         }
     }
 
     /// Points a head at the project and checkout an explicit path resolved to, before
     /// any copy or provider starts. The landing checkout remains after a copy is released;
     /// a head sent somewhere else does not inherit the parent's worktree.
-    private func applyHydraRoute(_ id: UUID, project chosen: Project, checkout: String, lead: ChatThread) {
+    private func applyHydraRoute(_ id: UUID, project chosen: Project?, checkout: String, lead: ChatThread) {
         guard let head = thread(id), let parentID = head.parentThreadID, let parent = thread(parentID) else { return }
-        let sameProject = chosen.id == parent.projectID
+        let sameProject = chosen?.id == parent.projectID
         let inherited: String?
         if sameProject {
-            inherited = parent.worktreePath ?? self.project(parent.projectID)?.path
+            inherited = hydraCheckout(of: parent)
         } else {
-            inherited = chosen.path
+            inherited = chosen?.path
         }
         let differs = inherited.map { !HydraPaths.same($0, checkout) } ?? true
         updateThread(id) { thread in
-            thread.projectID = chosen.id
+            thread.projectID = chosen?.id
             if differs {
                 thread.worktreePath = nil
                 thread.branch = nil
@@ -467,8 +466,9 @@ extension AppModel {
                 thread.worktreePath = nil
                 thread.branch = nil
             }
-            if !sameProject, let info = head.hydra, !info.task.isEmpty {
-                var title = "\(info.persona.name) · \(TextCleanup.singleLine(info.task, limit: 60)) · \(chosen.name)"
+            if !sameProject || differs, let info = head.hydra, !info.task.isEmpty {
+                let folder = sameProject ? URL(fileURLWithPath: checkout).lastPathComponent : (chosen?.name ?? URL(fileURLWithPath: checkout).lastPathComponent)
+                var title = "\(info.persona.name) · \(TextCleanup.singleLine(info.task, limit: 60)) · \(folder)"
                 if let profile = info.profile { title += " · \(profile)" }
                 thread.title = title
             }
@@ -482,7 +482,8 @@ extension AppModel {
     /// Resolves an explicit absolute path onto a sidebar project and a working folder.
     /// Missing folders are created only when their parent exists. System folders and
     /// the app library (except task-workspaces) are refused. Linked Git worktrees reuse
-    /// their repository's project; other Git and non-Git folders join the sidebar.
+    /// their repository's project; paths outside every sidebar project stay under the
+    /// lead's project and work in place at that path.
     private func routeHydraHead(_ id: UUID, reference: String) async -> Bool {
         guard hydraHeadCanStart(id), let head = thread(id), let parentID = head.parentThreadID, let lead = thread(parentID) else { return false }
         let name = head.hydra?.persona.name ?? "The head"
@@ -534,17 +535,15 @@ extension AppModel {
             }
             let listed = projects.filter { HydraPaths.same($0.path, canonical) }
             let chosen = hydraPreferredProject(listed, lead: lead, mainCheckout: canonical)
-                ?? addProject(at: URL(fileURLWithPath: canonical, isDirectory: true))
+                ?? project(lead.projectID)
             applyHydraRoute(id, project: chosen, checkout: canonical, lead: lead)
             return true
         }
         guard hydraHeadCanStart(id) else { return false }
-        if let chosen = await hydraProject(for: identity, lead: lead, headID: id) {
-            guard hydraHeadCanStart(id) else { return false }
-            applyHydraRoute(id, project: chosen, checkout: identity.checkout, lead: lead)
-            return true
-        }
-        return false
+        let chosen = await hydraProject(for: identity, lead: lead, headID: id)
+        guard hydraHeadCanStart(id) else { return false }
+        applyHydraRoute(id, project: chosen, checkout: identity.checkout, lead: lead)
+        return true
     }
 
     // MARK: - Sending heads out
@@ -1473,10 +1472,11 @@ extension AppModel {
     func sweepHydraCopies() {
         // Copies deleted from disk still hold their names in the registry until pruned:
         // only the projects that ever had a copy, one git process at a time.
-        let projects = self.projects
-        let projectsWithCopies = Set(threads.filter { $0.hydra?.hasOwnCopy == true }.map(\.projectID))
+        let checkouts = Set(threads.filter { $0.hydra?.hasOwnCopy == true }.compactMap { head in
+            head.hydra?.targetCheckout ?? project(head.projectID)?.path
+        })
         Task {
-            for project in projects where projectsWithCopies.contains(project.id) { await Git(project.path).pruneWorktrees() }
+            for checkout in checkouts { await Git(checkout).pruneWorktrees() }
         }
         for head in threads where head.hydra?.hasOwnCopy == true {
             guard let copy = head.worktreePath, !FileManager.default.fileExists(atPath: copy) else { continue }

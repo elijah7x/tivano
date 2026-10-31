@@ -129,7 +129,7 @@ struct ProseRunRepresentable: NSViewRepresentable {
     @MainActor
     private static func append(_ block: MarkdownBlock, depth: Int, indent: CGFloat, dimmed: Bool, spacing: CGFloat, pointSize: CGFloat, mentions: [HydraPersona], targets: [String: HydraMentionTarget], to out: NSMutableAttributedString) {
         let base = NSFont.systemFont(ofSize: pointSize)
-        let color = dimmed ? NSColor.labelColor.withAlphaComponent(0.7) : NSColor.labelColor
+        let color = dimmed ? LinkParagraphView.dimmedLabel : NSColor.labelColor
         // One text view holds the whole run, so the line spacing also falls between its
         // paragraphs; each gap gives it back to stay the SwiftUI blocks' own spacing.
         let lineSpacing = TypeScale.proseLineSpacing(pointSize)

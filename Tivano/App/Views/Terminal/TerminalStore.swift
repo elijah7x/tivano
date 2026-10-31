@@ -10,6 +10,8 @@ final class TerminalSession: Identifiable {
     let directory: String
     var title: String
     private(set) var isRunning = true
+    /// The shell's file name, to tell it from a program it was replaced by with `exec`.
+    let shellName: String
 
     @ObservationIgnored let view: LocalProcessTerminalView
     @ObservationIgnored private var bridge: TerminalBridge?
@@ -18,6 +20,7 @@ final class TerminalSession: Identifiable {
         self.threadID = threadID
         self.directory = directory
         self.title = title
+        shellName = (LoginEnvironment.userShell() as NSString).lastPathComponent
         view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 240))
         view.font = TerminalFont.preferred()
         view.optionAsMetaKey = true
@@ -32,12 +35,12 @@ final class TerminalSession: Identifiable {
         environment["TERM_PROGRAM"] = "Tivano"
         environment["TIVANO_PROJECT_ROOT"] = directory
         let pairs = environment.map { "\($0.key)=\($0.value)" }
-        let shellName = "-" + (shell as NSString).lastPathComponent
+        let execName = "-" + shellName
         var arguments: [String] = []
         if let command {
             arguments = ["-l", "-i", "-c", "\(command); exec \(shell) -l"]
         }
-        view.startProcess(executable: shell, args: arguments, environment: pairs, execName: shellName, currentDirectory: directory)
+        view.startProcess(executable: shell, args: arguments, environment: pairs, execName: execName, currentDirectory: directory)
     }
 
     /// The appearance last applied: setting the colours again clears SwiftTerm's attribute
@@ -75,6 +78,49 @@ final class TerminalSession: Identifiable {
         return info.kp_eproc.e_tpgid == info.kp_eproc.e_pgid
     }
 
+    /// Whether something other than the shell's prompt holds the terminal: a job in its own
+    /// group, a command the shell runs in its group (job control off), or a program the shell
+    /// was replaced by with `exec`. Unlike foregroundJobIsTheShell, a failed read means not
+    /// busy, so a vanished shell never holds an update back.
+    nonisolated static func foregroundJobIsRunning(_ shell: pid_t, shellName: String) -> Bool {
+        guard shell > 0 else { return false }
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, shell]
+        guard sysctl(&name, 4, &info, &size, nil, 0) == 0, size > 0 else { return false }
+        let foreground = info.kp_eproc.e_tpgid
+        guard foreground > 0 else { return false }
+        if foreground != info.kp_eproc.e_pgid { return true }
+        let command = withUnsafeBytes(of: info.kp_proc.p_comm) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        if !command.isEmpty, !shellName.hasPrefix(command) { return true }
+        return processes(inGroup: foreground).contains { $0 != shell }
+    }
+
+    nonisolated static func jobIsRunning(_ shell: pid_t, shellName: String) -> Bool {
+        guard shell > 0 else { return false }
+        if foregroundJobIsRunning(shell, shellName: shellName) { return true }
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&name, 4, nil, &size, nil, 0) == 0, size > 0 else { return true }
+        var list = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride + 4)
+        size = list.count * MemoryLayout<kinfo_proc>.stride
+        // A failed snapshot cannot establish that it is safe to quit.
+        guard sysctl(&name, 4, &list, &size, nil, 0) == 0 else { return true }
+        return list.prefix(size / MemoryLayout<kinfo_proc>.stride).contains {
+            $0.kp_eproc.e_ppid == shell && $0.kp_proc.p_pid != shell
+        }
+    }
+
+    nonisolated private static func processes(inGroup group: pid_t) -> [pid_t] {
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PGRP, group]
+        var size = 0
+        guard sysctl(&name, 4, nil, &size, nil, 0) == 0, size > 0 else { return [] }
+        var list = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride + 4)
+        size = list.count * MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&name, 4, &list, &size, nil, 0) == 0 else { return [] }
+        return list.prefix(size / MemoryLayout<kinfo_proc>.stride).map(\.kp_proc.p_pid)
+    }
+
     fileprivate func processEnded() {
         isRunning = false
     }
@@ -105,6 +151,24 @@ private final class TerminalBridge: NSObject, LocalProcessTerminalViewDelegate {
 final class TerminalStore {
     private(set) var sessions: [UUID: [TerminalSession]] = [:]
     var selection: [UUID: UUID] = [:]
+
+    /// Whether a foreground job currently owns a terminal.
+    var hasForegroundJob: Bool {
+        sessions.values.contains { list in
+            list.contains { session in
+                session.isRunning && TerminalSession.foregroundJobIsRunning(session.view.process.shellPid, shellName: session.shellName)
+            }
+        }
+    }
+
+    /// Background jobs also need to finish before an update can quit their shell.
+    var hasRunningJob: Bool {
+        sessions.values.contains { list in
+            list.contains { session in
+                session.isRunning && TerminalSession.jobIsRunning(session.view.process.shellPid, shellName: session.shellName)
+            }
+        }
+    }
 
     func sessions(for threadID: UUID) -> [TerminalSession] {
         sessions[threadID] ?? []

@@ -32,7 +32,9 @@ def mask(value):
     if isinstance(value, str):
         value = re.sub(r'-----BEGIN [^-]*KEY-----.*?(?:-----END [^-]*KEY-----|\Z)',
                        '[masked]', value, flags=re.S)
-        value = re.sub(r'\b(?:sk-(?:ant-)?|ghp_|github_pat_|xox[abp]-|AKIA)[A-Za-z0-9_./+=-]+',
+        value = re.sub(r'\b(?:(?:sk-(?:ant-)?|ghp_|github_pat_|xox[abp]-|AKIA)[A-Za-z0-9_./+=-]+|AIza[0-9A-Za-z_-]{35})',
+                       '[masked]', value)
+        value = re.sub(r'\b[0-9a-f]{32}\.[A-Za-z0-9]{16}\b',
                        '[masked]', value)
         return re.sub(r'(?i)\bBearer\s+[^\s"\x27,;}]+', '[masked]', value)
     if isinstance(value, list):

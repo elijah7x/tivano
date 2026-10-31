@@ -160,7 +160,13 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var iconName: String { self == .dsh ? "provider-deepseek" : "provider-\(rawValue)" }
+    var iconName: String {
+        switch self {
+        case .dsh: "provider-deepseek"
+        case .zai: "provider-zcode"
+        default: "provider-\(rawValue)"
+        }
+    }
 
     var loginCommand: String {
         switch self {

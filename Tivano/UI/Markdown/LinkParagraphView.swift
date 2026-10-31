@@ -120,6 +120,17 @@ struct LinkParagraphView: NSViewRepresentable {
     /// The four faces per point size, looked up once: the italic conversion goes through
     /// the font manager, and a streaming link paragraph rebuilds its string every flush.
     private struct FontKey: Hashable { let prose: CGFloat; let code: CGFloat }
+    /// Quote and thinking text. `withAlphaComponent` on `labelColor` resolves it once,
+    /// in the appearance current when the string is built (the system's, not the chat's),
+    /// so dark chats on a light system drew near-black quotes; this resolves per draw.
+    static let dimmedLabel = NSColor(name: nil) { appearance in
+        var color = NSColor.labelColor
+        appearance.performAsCurrentDrawingAppearance {
+            color = NSColor.labelColor.usingColorSpace(.sRGB)?.withAlphaComponent(0.7) ?? .secondaryLabelColor
+        }
+        return color
+    }
+
     @MainActor private static var fonts: [FontKey: (base: NSFont, bold: NSFont, italic: NSFont, mono: NSFont)] = [:]
 
     @MainActor
@@ -134,7 +145,7 @@ struct LinkParagraphView: NSViewRepresentable {
             fonts[key] = set
             return set
         }()
-        let textColor = dimmed ? NSColor.labelColor.withAlphaComponent(0.7) : NSColor.labelColor
+        let textColor = dimmed ? dimmedLabel : NSColor.labelColor
         let out = NSMutableAttributedString()
         for run in pretty.runs {
             let string = String(pretty[run.range].characters)

@@ -11,6 +11,9 @@ final class AutoContinue {
     /// The message sent to pick the task back up. Every provider gets the same one.
     static let continueMessage = "The usage limit has reset. Continue exactly where you left off and finish the task."
 
+    /// The message sent after a chat moves to another account with usage left.
+    static let switchContinueMessage = "The previous account reached its usage limit and this chat now continues on another account. Check the current state of the work first, then continue exactly where you left off and finish the task."
+
     /// How long past the reset time the chat waits, so the limit has really lifted.
     static let margin: TimeInterval = 60
 
@@ -43,6 +46,9 @@ final class AutoContinue {
     /// The countdown, or the reset-time lookup, of each chat's offer.
     @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
 
+    @ObservationIgnored private var switchCounts: [UUID: Int] = [:]
+    @ObservationIgnored private var pendingSwitch: Set<UUID> = []
+
     init(app: AppModel) {
         self.app = app
     }
@@ -59,9 +65,65 @@ final class AutoContinue {
     func turnFinished(_ threadID: UUID, turnID: UUID, status: TurnStatus, continues: Bool, userStopped: Bool) {
         guard let note = noted.removeValue(forKey: threadID), note.turnID == turnID,
               status == .failed, !continues, !userStopped,
-              let app, let thread = app.thread(threadID), !thread.isHydraHead,
-              Self.supportedProviders.contains(thread.provider) else { return }
+              let app, let thread = app.thread(threadID) else { return }
         clear(threadID)
+        guard !thread.isHydraHead,
+              Self.supportedProviders.contains(thread.provider) else { return }
+        let accounts = app.providers.accounts
+        let usedAccount = app.existingRuntime(for: threadID)?.codexAccountInUse
+        guard ProviderAccounts.supportedProviders.contains(thread.provider),
+              accounts.switchMode(for: thread.provider) == .automatic,
+              switchCounts[threadID, default: 0] < ProviderAccounts.maxSwitchesPerPrompt else {
+            openOffer(threadID, turnID: turnID, note: note, thread: thread)
+            return
+        }
+        // Account states load lazily, so a chat that hits its limit before Settings was opened
+        // reads them first; an account read in the last five minutes is not asked again.
+        tasks[threadID] = Task { [weak self] in
+            await accounts.refresh(thread.provider, force: false)
+            guard let self, !Task.isCancelled else { return }
+            self.tasks[threadID] = nil
+            guard accounts.switchMode(for: thread.provider) == .automatic else {
+                self.openOffer(threadID, turnID: turnID, note: note, thread: thread)
+                return
+            }
+            guard !self.switchAccount(threadID, turnID: turnID, provider: thread.provider, used: usedAccount, resetsAt: note.resetsAt) else { return }
+            // Every account is spent: wait for whichever recovers first, on that account.
+            var offerNote = note
+            if let recovery = accounts.earliestRecovery(for: thread.provider),
+               recovery.date < (note.resetsAt ?? .distantFuture) {
+                if accounts.activeAccount(for: thread.provider)?.id != recovery.account.id { accounts.use(recovery.account) }
+                offerNote.resetsAt = recovery.date
+            }
+            self.openOffer(threadID, turnID: turnID, note: offerNote, thread: thread)
+        }
+    }
+
+    /// Moves the chat to another signed-in account with usage left and continues it there.
+    /// Returns false when no account can take over.
+    private func switchAccount(_ threadID: UUID, turnID: UUID, provider: ProviderKind, used: UUID?, resetsAt: Date?) -> Bool {
+        guard let app else { return false }
+        let accounts = app.providers.accounts
+        guard let active = accounts.activeAccount(for: provider) else { return false }
+        let used = used ?? active.id
+        guard let current = accounts.accounts(for: provider).first(where: { $0.id == used }),
+              // Another chat may have moved to a fresh account already; follow it rather than skip past it.
+              let next = active.id != used && accounts.isUsable(active.id) ? active : accounts.nextAccount(for: provider, after: used)
+        else { return false }
+        if next.id != active.id { accounts.use(next) }
+        switchCounts[threadID, default: 0] += 1
+        let message: String
+        if let reset = resetsAt {
+            message = String(format: AppText.localized("Switched Codex from %@ to %@: the usage limit resets at %@."), accounts.title(of: current), accounts.title(of: next), Self.format(reset))
+        } else {
+            message = String(format: AppText.localized("Switched Codex from %@ to %@: the usage limit was reached."), accounts.title(of: current), accounts.title(of: next))
+        }
+        app.runtime(for: threadID).appendNotice(.info, message)
+        resumeSwitch(threadID, turnID: turnID, provider: provider)
+        return true
+    }
+
+    private func openOffer(_ threadID: UUID, turnID: UUID, note: (turnID: UUID, resetsAt: Date?), thread: ChatThread) {
         let resetsAt = note.resetsAt.flatMap { UsageLimitSignal.supportsResetTime($0) ? $0 : nil }
         let offer = Offer(id: UUID(), turnID: turnID, provider: thread.provider, model: thread.model, resetsAt: resetsAt)
         guard resetsAt == nil else {
@@ -148,8 +210,31 @@ final class AutoContinue {
 
     /// A new turn opened in the chat: whatever started it, the stop is behind it now.
     func turnOpened(_ threadID: UUID) {
+        if pendingSwitch.remove(threadID) == nil { switchCounts[threadID] = nil }
         guard offers[threadID] != nil || tasks[threadID] != nil else { return }
         clear(threadID)
+    }
+
+    private func resumeSwitch(_ threadID: UUID, turnID: UUID, provider: ProviderKind) {
+        guard let app, let thread = app.thread(threadID), !thread.isArchived,
+              thread.provider == provider, let runtime = app.existingRuntime(for: threadID),
+              runtime.turns.last?.id == turnID,
+              // Switching turned to Manual while the chat waited to go on: leave it stopped.
+              app.providers.accounts.switchMode(for: provider) == .automatic else {
+            clear(threadID)
+            return
+        }
+        guard runtime.phase == .idle, !runtime.isReverting else {
+            tasks[threadID] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                self?.resumeSwitch(threadID, turnID: turnID, provider: provider)
+            }
+            return
+        }
+        clear(threadID)
+        pendingSwitch.insert(threadID)
+        runtime.sendLimitContinuation(Self.switchContinueMessage)
     }
 
     private func resume(_ threadID: UUID, offerID: UUID) {
@@ -177,6 +262,13 @@ final class AutoContinue {
             return
         }
         clear(threadID)
+        // The account chosen when the wait began may have been swapped since; go on with one that has usage left.
+        let accounts = app.providers.accounts
+        if accounts.switchMode(for: offer.provider) == .automatic,
+           let active = accounts.activeAccount(for: offer.provider), !accounts.isUsable(active.id),
+           let next = accounts.nextAccount(for: offer.provider, after: active.id) {
+            accounts.use(next)
+        }
         runtime.sendLimitContinuation(Self.continueMessage)
     }
 

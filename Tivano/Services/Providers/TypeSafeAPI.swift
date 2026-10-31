@@ -50,7 +50,7 @@ enum TypeSafeAPI {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Tivano", forHTTPHeaderField: "User-Agent")
         request.httpBody = JSONValue.object([
-            "model": .string(model), "state": state, "questions": .object(questions),
+            "model": .string(model), "state": SecretMask.masked(state), "questions": SecretMask.masked(.object(questions)),
         ]).data()
         do {
             let (data, response) = try await session.data(for: request)

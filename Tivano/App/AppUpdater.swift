@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 import Synchronization
@@ -280,6 +281,8 @@ final class AppUpdater {
     /// Logout, restart or shutdown can kill the installer mid-swap; the update waits for an ordinary quit.
     @ObservationIgnored private var isPoweringOff = false
     private var handedOff = false
+    @ObservationIgnored private var isClearingStorage = false
+    @ObservationIgnored private var deferredPreparation: AvailableUpdate?
     /// A silent install quits without any alert; a failed save cancels it quietly instead.
     private(set) var isSilentHandoff = false
     private var automaticEnabled: Bool {
@@ -297,23 +300,576 @@ final class AppUpdater {
         ) { _ in
             MainActor.assumeIsolated { AppUpdater.shared.isPoweringOff = true }
         }
-        let root = updatesRoot
-        let currentVersion = AppInfo.version
-        Task.detached(priority: .background) {
-        if let current = AppVersion(currentVersion),
-           let folders = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
-            for folder in folders {
-                guard let version = AppVersion(folder.lastPathComponent) else { continue }
-                if version <= current { try? FileManager.default.removeItem(at: folder) }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await clearObsoleteStorage()
+            } catch {
+                NSLog("Update storage cleanup was deferred: %@", error.localizedDescription)
             }
         }
+    }
+
+    private var storageIsInUse: Bool {
+        if prepareTask != nil || installTask != nil || handedOff || isSilentHandoff || isPoweringOff
+            || progress.isInstallRunning { return true }
+        switch autoUpdate {
+        case .downloading, .ready: return true
+        case .idle, .failed: return false
         }
+    }
+
+    func measureStorage() async throws -> RuntimeStorageUsage {
+        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return RuntimeStorageUsage() }
+        let root = updatesRoot
+        let appName = Bundle.main.bundleURL.lastPathComponent
+        let version = AppInfo.version
+        let wasInUse = storageIsInUse || isClearingStorage
+        var usage = try await Task.detached(priority: .utility) {
+            let scan = try Self.storageFolders(root: root, appName: appName, currentVersion: version)
+            guard scan.failures.isEmpty else { throw StorageErrors(failures: scan.failures) }
+            var result = RuntimeStorageUsage()
+            for folder in scan.folders {
+                result.totalBytes = try Self.addStorageBytes(result.totalBytes, folder.bytes, at: folder.url)
+                if folder.isObsolete && !folder.hasInstallerFiles {
+                    result.cleanableBytes = try Self.addStorageBytes(result.cleanableBytes, folder.bytes, at: folder.url)
+                }
+            }
+            for job in scan.cleanupJobs {
+                let bytes = try Self.cleanupBytes(job)
+                result.totalBytes = try Self.addStorageBytes(result.totalBytes, bytes, at: job)
+                result.cleanableBytes = try Self.addStorageBytes(result.cleanableBytes, bytes, at: job)
+            }
+            return result
+        }.value
+        if wasInUse || storageIsInUse || isClearingStorage { usage.cleanableBytes = 0 }
+        return usage
+    }
+
+    func clearObsoleteStorage() async throws {
+        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
+        guard !storageIsInUse, !isClearingStorage else {
+            throw CocoaError(.fileLocking, userInfo: [NSFilePathErrorKey: updatesRoot.path])
+        }
+        // Hold this across the detached work: no prepare, install or handoff may start at an await.
+        isClearingStorage = true
+        idleTimer?.cancel()
+        idleTimer = nil
+        defer {
+            isClearingStorage = false
+            let pending = deferredPreparation
+            deferredPreparation = nil
+            scheduleIdleInstall()
+            if let pending { prepareInBackground(pending) }
+        }
+        let root = updatesRoot
+        let appName = Bundle.main.bundleURL.lastPathComponent
+        let version = AppInfo.version
+        try await Task.detached(priority: .utility) {
+            let scan = try Self.storageFolders(root: root, appName: appName, currentVersion: version)
+            var failures = scan.failures
+            for job in scan.cleanupJobs {
+                do { try Self.resumeCleanup(job) }
+                catch { failures.append(error as NSError) }
+            }
+            for folder in scan.folders where folder.isObsolete && !folder.hasInstallerFiles {
+                do { try Self.removeStorageFolder(folder, appName: appName) }
+                catch { failures.append(error as NSError) }
+            }
+            if !failures.isEmpty { throw StorageErrors(failures: failures) }
+        }.value
+    }
+
+    private struct StorageFolder: Sendable {
+        let url: URL
+        let bytes: Int64
+        let isObsolete: Bool
+        let hasInstallerFiles: Bool
+        let parentIdentity: StorageIdentity
+        let identities: [String: StorageIdentity]
+    }
+
+    private struct StorageScan: Sendable {
+        var folders: [StorageFolder] = []
+        var failures: [NSError] = []
+        var cleanupJobs: [URL] = []
+    }
+
+    private struct StorageErrors: LocalizedError {
+        let failures: [NSError]
+        var errorDescription: String? {
+            failures.map { error in
+                [error.userInfo[NSFilePathErrorKey] as? String, error.localizedDescription]
+                    .compactMap { $0 }.joined(separator: ": ")
+            }.joined(separator: "\n")
+        }
+    }
+
+    nonisolated private static func storageFolders(root: URL, appName: String, currentVersion: String) throws -> StorageScan {
+        do {
+            try validateStorageDirectory(root)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            guard root.standardizedFileURL.path == root.resolvingSymlinksInPath().standardizedFileURL.path else { throw error }
+            return StorageScan()
+        }
+        var ancestor = root.deletingLastPathComponent()
+        while ancestor.path != "/" {
+            try validateStorageDirectory(ancestor)
+            ancestor.deleteLastPathComponent()
+        }
+        let folders = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        var scan = StorageScan()
+        for folder in folders {
+            if cleanupID(folder.lastPathComponent) != nil {
+                scan.cleanupJobs.append(folder)
+                continue
+            }
+            guard storageVersion(folder.lastPathComponent) != nil else { continue }
+            do {
+                scan.folders.append(try storageFolder(folder, appName: appName, currentVersion: currentVersion))
+            } catch {
+                scan.failures.append(error as NSError)
+            }
+        }
+        return scan
+    }
+
+    nonisolated private static func storageVersion(_ text: String) -> AppVersion? {
+        guard text == text.trimmingCharacters(in: .whitespacesAndNewlines),
+              text.utf8.allSatisfy({ (48...57).contains($0) || $0 == 46 || $0 == 118 || $0 == 86 }) else { return nil }
+        return AppVersion(text)
+    }
+
+    nonisolated private static func storageFolder(_ folder: URL, appName: String, currentVersion: String) throws -> StorageFolder {
+        guard let version = storageVersion(folder.lastPathComponent), let current = AppVersion(currentVersion) else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: folder.path])
+        }
+        try validateStorageDirectory(folder)
+        let parent = try openStorageDirectory(folder.deletingLastPathComponent())
+        defer { Darwin.close(parent) }
+        let descriptor = try openStorageDirectory(folder)
+        defer { Darwin.close(descriptor) }
+        let parentIdentity = try storageIdentity(parent)
+        let identities = try storageSnapshot(descriptor)
+        let children = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        let names = Set(children.map(\.lastPathComponent))
+        guard !names.isEmpty, names.isSubset(of: [appName, "install.sh", "install.log", "install.complete"]) else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: folder.path])
+        }
+        let app = folder.appendingPathComponent(appName, isDirectory: true)
+        var bytes: Int64 = 0
+        for child in children {
+            bytes = try addStorageBytes(bytes, storageBytes(at: child, appRoot: app), at: folder)
+        }
+        let hasMarkers = !names.subtracting([appName]).isEmpty
+        // Old installers have no completion evidence. Protect only their own directory.
+        let completed = try names.contains("install.complete") && names.contains("install.sh")
+            && String(contentsOf: folder.appendingPathComponent("install.complete"), encoding: .utf8) == "complete\n"
+            && String(contentsOf: folder.appendingPathComponent("install.sh"), encoding: .utf8) == installerScript
+        if names.contains(appName) {
+            try validateStorageDirectory(app)
+            try verifySignature(of: app)
+            guard let installed = Bundle(url: app)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+                  AppVersion(installed) == version else {
+                throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: app.path])
+            }
+        } else if !hasMarkers {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: folder.path])
+        }
+        guard try storageSnapshot(descriptor) == identities,
+              try storageIdentity(at: folder.lastPathComponent, parent: parent) == identities[""],
+              try storageIdentityAtPath(folder.deletingLastPathComponent()) == parentIdentity else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: folder.path])
+        }
+        return StorageFolder(url: folder, bytes: bytes, isObsolete: version <= current,
+                             hasInstallerFiles: hasMarkers && !completed,
+                             parentIdentity: parentIdentity, identities: identities)
+    }
+
+    nonisolated private static func validateStorageDirectory(_ url: URL) throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isVolumeKey])
+        guard values.isDirectory == true, values.isSymbolicLink == false, values.isVolume == false,
+              url.standardizedFileURL.path == url.resolvingSymlinksInPath().standardizedFileURL.path else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: url.path])
+        }
+    }
+
+    nonisolated private static func storageBytes(at url: URL, appRoot: URL) throws -> Int64 {
+        guard !url.lastPathComponent.hasSuffix(".previous") else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        // attributesOfItem reports the link itself; resourceValues and resolvingSymlinks may follow it.
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let type = attributes[.type] as? FileAttributeType
+        if type == .typeSymbolicLink {
+            guard url.path.hasPrefix(appRoot.path + "/") else {
+                throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: url.path])
+            }
+            return 0
+        }
+        guard url.standardizedFileURL.path == url.resolvingSymlinksInPath().standardizedFileURL.path else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        if type == .typeDirectory {
+            try validateStorageDirectory(url)
+            var bytes: Int64 = 0
+            for child in try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+                bytes = try addStorageBytes(bytes, storageBytes(at: child, appRoot: appRoot), at: url)
+            }
+            return bytes
+        }
+        guard type == .typeRegular,
+              let references = attributes[.referenceCount] as? NSNumber, references.uint64Value == 1,
+              let size = attributes[.size] as? NSNumber, size.int64Value >= 0 else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        return size.int64Value
+    }
+
+    private struct StorageIdentity: Codable, Equatable, Sendable {
+        let device: Int32
+        let inode: UInt64
+        let type: UInt16
+        let size: Int64
+        let modifiedSeconds: Int64
+        let modifiedNanos: Int64
+
+        init(_ info: stat) {
+            device = info.st_dev
+            inode = info.st_ino
+            type = info.st_mode & mode_t(S_IFMT)
+            // Directory size/times change as children are removed during a retry.
+            let directory = type == mode_t(S_IFDIR)
+            size = directory ? 0 : info.st_size
+            modifiedSeconds = directory ? 0 : Int64(info.st_mtimespec.tv_sec)
+            modifiedNanos = directory ? 0 : Int64(info.st_mtimespec.tv_nsec)
+        }
+    }
+
+    private struct CleanupManifest: Codable {
+        let format: Int
+        let version: String
+        let appName: String
+        let directory: StorageIdentity
+        let identities: [String: StorageIdentity]
+    }
+
+    nonisolated private static func openStorageDirectory(_ url: URL) throws -> Int32 {
+        var descriptor = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard descriptor >= 0 else { throw storagePOSIXError(url) }
+        do {
+            for component in url.standardizedFileURL.pathComponents.dropFirst() {
+                let next = Darwin.openat(descriptor, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                guard next >= 0 else { throw storagePOSIXError(url) }
+                Darwin.close(descriptor)
+                descriptor = next
+            }
+            return descriptor
+        } catch {
+            Darwin.close(descriptor)
+            throw error
+        }
+    }
+
+    nonisolated private static func storageIdentity(_ descriptor: Int32) throws -> StorageIdentity {
+        var info = stat()
+        guard Darwin.fstat(descriptor, &info) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        return StorageIdentity(info)
+    }
+
+    nonisolated private static func storageIdentity(at name: String, parent: Int32) throws -> StorageIdentity {
+        var info = stat()
+        guard Darwin.fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        return StorageIdentity(info)
+    }
+
+    nonisolated private static func storageIdentityAtPath(_ url: URL) throws -> StorageIdentity {
+        let descriptor = try openStorageDirectory(url)
+        defer { Darwin.close(descriptor) }
+        return try storageIdentity(descriptor)
+    }
+
+    nonisolated private static func storageSnapshot(_ descriptor: Int32) throws -> [String: StorageIdentity] {
+        let root = try storageIdentity(descriptor)
+        var result = ["": root]
+        for name in try storageChildNames(descriptor, at: URL(fileURLWithPath: "/")) {
+            var info = stat()
+            guard Darwin.fstatat(descriptor, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            let identity = StorageIdentity(info)
+            guard identity.device == root.device, !name.hasSuffix(".previous") else { throw CocoaError(.fileReadCorruptFile) }
+            if identity.type == mode_t(S_IFDIR) {
+                let child = Darwin.openat(descriptor, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                guard child >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+                defer { Darwin.close(child) }
+                guard try storageIdentity(child) == identity else { throw CocoaError(.fileReadUnknown) }
+                for (path, value) in try storageSnapshot(child) {
+                    result[path.isEmpty ? name : name + "/" + path] = value
+                }
+            } else {
+                guard (identity.type == mode_t(S_IFREG) && info.st_nlink == 1)
+                        || identity.type == mode_t(S_IFLNK) else { throw CocoaError(.fileReadCorruptFile) }
+                result[name] = identity
+            }
+        }
+        return result
+    }
+
+    nonisolated private static func cleanupID(_ name: String) -> UUID? {
+        guard name.hasPrefix(".cleanup-") else { return nil }
+        return UUID(uuidString: String(name.dropFirst(".cleanup-".count)))
+    }
+
+    nonisolated private static func quarantineStorageFolder(_ folder: StorageFolder, appName: String) throws -> URL {
+        guard folder.isObsolete, !folder.hasInstallerFiles else { throw CocoaError(.fileLocking) }
+        let parent = try openStorageDirectory(folder.url.deletingLastPathComponent())
+        defer { Darwin.close(parent) }
+        let source = Darwin.openat(parent, folder.url.lastPathComponent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard source >= 0 else { throw storagePOSIXError(folder.url) }
+        defer { Darwin.close(source) }
+        guard try storageIdentity(parent) == folder.parentIdentity,
+              try storageSnapshot(source) == folder.identities else { throw CocoaError(.fileWriteUnknown) }
+        let job = folder.url.deletingLastPathComponent().appendingPathComponent(".cleanup-" + UUID().uuidString)
+        guard Darwin.mkdirat(parent, job.lastPathComponent, mode_t(0o700)) == 0 else { throw storagePOSIXError(job) }
+        let descriptor = Darwin.openat(parent, job.lastPathComponent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw storagePOSIXError(job) }
+        defer { Darwin.close(descriptor) }
+        let manifest = CleanupManifest(format: 1, version: folder.url.lastPathComponent, appName: appName,
+                                       directory: try storageIdentity(descriptor), identities: folder.identities)
+        let data = try JSONEncoder().encode(manifest)
+        guard data.count <= 16 * 1_024 * 1_024 else { throw CocoaError(.fileWriteOutOfSpace) }
+        try publishCleanupManifest(data, job: job, descriptor: descriptor)
+        guard try storageIdentity(at: folder.url.lastPathComponent, parent: parent) == folder.identities[""],
+              try storageSnapshot(source) == folder.identities else { throw CocoaError(.fileWriteUnknown) }
+        // macOS renameatx_np(RENAME_EXCL): atomic move, never replace an existing destination.
+        guard Darwin.renameatx_np(parent, folder.url.lastPathComponent, descriptor, "payload", UInt32(RENAME_EXCL)) == 0 else {
+            throw storagePOSIXError(folder.url)
+        }
+        guard Darwin.fsync(parent) == 0, Darwin.fsync(descriptor) == 0 else { throw storagePOSIXError(job) }
+        guard try storageIdentity(at: "payload", parent: descriptor) == folder.identities[""] else {
+            // A replacement is preserved in quarantine, never recursively deleted.
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: job.path])
+        }
+        return job
+    }
+
+    nonisolated private static func publishCleanupManifest(_ data: Data, job: URL, descriptor: Int32) throws {
+        // A crash or short write leaves only a pending file; payload is moved only
+        // after the complete manifest and its directory entry are durable.
+        let file = Darwin.openat(descriptor, "manifest.pending", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+        guard file >= 0 else { throw storagePOSIXError(job) }
+        let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        try handle.close()
+        guard Darwin.renameatx_np(descriptor, "manifest.pending", descriptor, "manifest.json", UInt32(RENAME_EXCL)) == 0,
+              Darwin.fsync(descriptor) == 0 else { throw storagePOSIXError(job) }
+    }
+
+    nonisolated private static func cleanupDirectoryIdentity(_ job: URL, descriptor: Int32) throws -> StorageIdentity {
+        guard cleanupID(job.lastPathComponent) != nil else { throw CocoaError(.fileReadCorruptFile) }
+        var directory = stat()
+        guard Darwin.fstat(descriptor, &directory) == 0, directory.st_uid == geteuid(),
+              directory.st_mode & 0o077 == 0 else { throw CocoaError(.fileReadNoPermission) }
+        return StorageIdentity(directory)
+    }
+
+    nonisolated private static func abandonedCleanupMetadata(_ job: URL, descriptor: Int32) throws -> [String: StorageIdentity]? {
+        _ = try cleanupDirectoryIdentity(job, descriptor: descriptor)
+        let names = Set(try storageChildNames(descriptor, at: job))
+        // Even an unreadable or symlinked payload must go through manifest validation.
+        guard !names.contains("payload") else { return nil }
+        guard names.isSubset(of: ["manifest.json", "manifest.pending"]) else { throw CocoaError(.fileReadCorruptFile) }
+        var files: [String: StorageIdentity] = [:]
+        for name in names {
+            var info = stat()
+            guard Darwin.fstatat(descriptor, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw storagePOSIXError(job) }
+            guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_nlink == 1,
+                  info.st_uid == geteuid(), info.st_size >= 0 else { throw CocoaError(.fileReadCorruptFile) }
+            files[name] = StorageIdentity(info)
+        }
+        return files
+    }
+
+    nonisolated private static func cleanupManifest(_ job: URL, descriptor: Int32) throws -> CleanupManifest {
+        let identity = try cleanupDirectoryIdentity(job, descriptor: descriptor)
+        let names = Set(try storageChildNames(descriptor, at: job))
+        guard names.isSubset(of: ["manifest.json", "payload"]), names.contains("manifest.json") else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let file = Darwin.openat(descriptor, "manifest.json", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard file >= 0 else { throw storagePOSIXError(job) }
+        let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard Darwin.fstat(file, &info) == 0, info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              info.st_nlink == 1, info.st_uid == geteuid(), info.st_size <= 16 * 1_024 * 1_024 else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let manifest = try JSONDecoder().decode(CleanupManifest.self, from: handle.readToEnd() ?? Data())
+        guard manifest.format == 1, manifest.directory == identity,
+              manifest.appName == Bundle.main.bundleURL.lastPathComponent,
+              let version = storageVersion(manifest.version), let current = AppVersion(AppInfo.version), version <= current,
+              manifest.identities[""]?.type == mode_t(S_IFDIR) else { throw CocoaError(.fileReadCorruptFile) }
+        return manifest
+    }
+
+    nonisolated private static func cleanupSnapshot(_ job: URL, descriptor: Int32, manifest: CleanupManifest) throws -> [String: StorageIdentity] {
+        let payload = Darwin.openat(descriptor, "payload", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        if payload < 0 {
+            if errno == ENOENT { return [:] }
+            throw storagePOSIXError(job)
+        }
+        defer { Darwin.close(payload) }
+        let snapshot = try storageSnapshot(payload)
+        guard snapshot.allSatisfy({ manifest.identities[$0.key] == $0.value }) else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: job.path])
+        }
+        return snapshot
+    }
+
+    nonisolated private static func cleanupBytes(_ job: URL) throws -> Int64 {
+        let descriptor = try openStorageDirectory(job)
+        defer { Darwin.close(descriptor) }
+        if let files = try abandonedCleanupMetadata(job, descriptor: descriptor) {
+            return try files.values.reduce(Int64(0)) { try addStorageBytes($0, $1.size, at: job) }
+        }
+        let manifest = try cleanupManifest(job, descriptor: descriptor)
+        return try cleanupSnapshot(job, descriptor: descriptor, manifest: manifest).values.reduce(Int64(0)) {
+            try addStorageBytes($0, $1.type == mode_t(S_IFREG) ? $1.size : 0, at: job)
+        }
+    }
+
+    nonisolated private static func resumeCleanup(_ job: URL) throws {
+        let parent = try openStorageDirectory(job.deletingLastPathComponent())
+        defer { Darwin.close(parent) }
+        let descriptor = Darwin.openat(parent, job.lastPathComponent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw storagePOSIXError(job) }
+        defer { Darwin.close(descriptor) }
+        let identity = try cleanupDirectoryIdentity(job, descriptor: descriptor)
+        if var files = try abandonedCleanupMetadata(job, descriptor: descriptor) {
+            for name in files.keys.sorted() {
+                guard try storageIdentity(at: job.lastPathComponent, parent: parent) == identity,
+                      try abandonedCleanupMetadata(job, descriptor: descriptor) == files else { throw CocoaError(.fileWriteUnknown) }
+                guard Darwin.unlinkat(descriptor, name, 0) == 0 else { throw storagePOSIXError(job) }
+                files.removeValue(forKey: name)
+            }
+            guard try storageIdentity(at: job.lastPathComponent, parent: parent) == identity,
+                  try storageChildNames(descriptor, at: job).isEmpty,
+                  Darwin.unlinkat(parent, job.lastPathComponent, AT_REMOVEDIR) == 0 else { throw storagePOSIXError(job) }
+            return
+        }
+        let manifest = try cleanupManifest(job, descriptor: descriptor)
+        let snapshot = try cleanupSnapshot(job, descriptor: descriptor, manifest: manifest)
+        if !snapshot.isEmpty {
+            try removeStorageEntry(job.appendingPathComponent("payload"), parent: descriptor,
+                                   device: manifest.directory.device, allowsLink: false, expected: manifest.identities)
+        }
+        guard Set(try storageChildNames(descriptor, at: job)) == ["manifest.json"],
+              try storageIdentity(at: job.lastPathComponent, parent: parent) == manifest.directory else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        guard Darwin.unlinkat(descriptor, "manifest.json", 0) == 0,
+              Darwin.unlinkat(parent, job.lastPathComponent, AT_REMOVEDIR) == 0 else { throw storagePOSIXError(job) }
+    }
+
+    nonisolated private static func removeStorageFolder(_ folder: StorageFolder, appName: String) throws {
+        try resumeCleanup(quarantineStorageFolder(folder, appName: appName))
+    }
+
+    // POSIX unlinkat removes a symlink, never its target; openat(O_NOFOLLOW) prevents descending through one.
+    // https://pubs.opengroup.org/onlinepubs/9799919799/functions/unlink.html
+    nonisolated private static func removeStorageEntry(
+        _ url: URL, parent: Int32, device: dev_t, allowsLink: Bool,
+        expected: [String: StorageIdentity], relative: String = ""
+    ) throws {
+        let name = url.lastPathComponent
+        guard !name.hasSuffix(".previous") else {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        var info = stat()
+        guard Darwin.fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw storagePOSIXError(url) }
+        guard info.st_dev == device, expected[relative] == StorageIdentity(info) else {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        let type = info.st_mode & mode_t(S_IFMT)
+        if type == mode_t(S_IFDIR) {
+            let descriptor = Darwin.openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard descriptor >= 0 else { throw storagePOSIXError(url) }
+            defer { Darwin.close(descriptor) }
+            var opened = stat()
+            guard Darwin.fstat(descriptor, &opened) == 0 else { throw storagePOSIXError(url) }
+            guard opened.st_dev == info.st_dev, opened.st_ino == info.st_ino else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+            }
+            let names = try storageChildNames(descriptor, at: url)
+            for child in names {
+                try removeStorageEntry(url.appendingPathComponent(child), parent: descriptor, device: device,
+                                       allowsLink: true, expected: expected,
+                                       relative: relative.isEmpty ? child : relative + "/" + child)
+            }
+            var remaining = stat()
+            guard Darwin.fstatat(parent, name, &remaining, AT_SYMLINK_NOFOLLOW) == 0 else { throw storagePOSIXError(url) }
+            guard remaining.st_dev == info.st_dev, remaining.st_ino == info.st_ino else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+            }
+            guard Darwin.unlinkat(parent, name, AT_REMOVEDIR) == 0 else { throw storagePOSIXError(url) }
+        } else {
+            guard allowsLink,
+                  (type == mode_t(S_IFREG) && info.st_nlink == 1) || type == mode_t(S_IFLNK) else {
+                throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: url.path])
+            }
+            guard Darwin.unlinkat(parent, name, 0) == 0 else { throw storagePOSIXError(url) }
+        }
+    }
+
+    nonisolated private static func storageChildNames(_ descriptor: Int32, at url: URL) throws -> [String] {
+        let copy = Darwin.openat(descriptor, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard copy >= 0 else { throw storagePOSIXError(url) }
+        guard let directory = Darwin.fdopendir(copy) else {
+            let error = storagePOSIXError(url)
+            Darwin.close(copy)
+            throw error
+        }
+        defer { Darwin.closedir(directory) }
+        var names: [String] = []
+        while true {
+            errno = 0
+            guard let entry = Darwin.readdir(directory) else {
+                if errno != 0 { throw storagePOSIXError(url) }
+                return names
+            }
+            let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
+                String(bytes: bytes.prefix(while: { $0 != 0 }), encoding: .utf8)
+            }
+            guard let name else { throw CocoaError(.fileReadInvalidFileName, userInfo: [NSFilePathErrorKey: url.path]) }
+            if name != ".", name != ".." { names.append(name) }
+        }
+    }
+
+    nonisolated private static func storagePOSIXError(_ url: URL) -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSFilePathErrorKey: url.path])
+    }
+
+    nonisolated private static func addStorageBytes(_ lhs: Int64, _ rhs: Int64, at url: URL) throws -> Int64 {
+        let (bytes, overflow) = lhs.addingReportingOverflow(rhs)
+        guard !overflow else { throw CocoaError(.fileReadTooLarge, userInfo: [NSFilePathErrorKey: url.path]) }
+        return bytes
     }
 
     /// Off hands the update back to the manual button; a staged copy stays on disk and is
     /// reused if the setting comes back on.
     func autoUpdateSettingChanged() {
         if !automaticEnabled {
+            deferredPreparation = nil
             prepareTask?.cancel()
             if case .downloading = autoUpdate {} else { autoUpdate = .idle }
         }
@@ -323,7 +879,7 @@ final class AppUpdater {
     private func scheduleIdleInstall() {
         idleTimer?.cancel()
         idleTimer = nil
-        guard automaticEnabled, !handedOff, !AppInfo.isDevelopment, !CaptureRun.isEnabled,
+        guard automaticEnabled, !handedOff, !isClearingStorage, !AppInfo.isDevelopment, !CaptureRun.isEnabled,
               case .ready = autoUpdate else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + max(WindowManager.shared.model.secondsUntilInputIdle, 300), leeway: .seconds(15))
@@ -337,21 +893,26 @@ final class AppUpdater {
     private func installWhenIdle() {
         idleTimer?.cancel()
         idleTimer = nil
-        guard automaticEnabled, !handedOff, !isPoweringOff,
+        guard automaticEnabled, !handedOff, !isPoweringOff, !isClearingStorage,
               case .ready(let version) = autoUpdate else { return }
         guard WindowManager.shared.model.isIdleForUpdate else { scheduleIdleInstall(); return }
         do {
             try handOff(staged: stagedApp(version), version: version, silent: true)
         } catch {
-            scheduleIdleInstall()
+            autoUpdate = .failed(version: version, reason: .install)
         }
     }
 
     func prepareInBackground(_ release: AvailableUpdate) {
         guard automaticEnabled, !AppInfo.isDevelopment, !CaptureRun.isEnabled,
-              prepareTask == nil, installTask == nil,
+              prepareTask == nil, installTask == nil, !handedOff,
               let version = AppVersion(release.version), let current = AppVersion(AppInfo.version),
               version > current, !release.version.contains("/"), release.version != ".." else { return }
+        if isClearingStorage {
+            if let pending = deferredPreparation, let queued = AppVersion(pending.version), queued > version { return }
+            deferredPreparation = release
+            return
+        }
         if case .ready(let ready) = autoUpdate, let existing = AppVersion(ready), existing >= version { return }
         autoUpdate = .downloading(version: release.version)
         prepareTask = Task { [self] in
@@ -404,7 +965,7 @@ final class AppUpdater {
 
     @discardableResult
     func installStagedOnQuit() -> Bool {
-        guard automaticEnabled, !AppInfo.isDevelopment, !CaptureRun.isEnabled, !handedOff, !isPoweringOff,
+        guard automaticEnabled, !AppInfo.isDevelopment, !CaptureRun.isEnabled, !handedOff, !isPoweringOff, !isClearingStorage,
               case .ready(let version) = autoUpdate else { return false }
         do {
             try handOff(staged: stagedApp(version), version: version, relaunch: false)
@@ -424,7 +985,7 @@ final class AppUpdater {
     }
 
     func restartToInstallStaged() {
-        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled, !handedOff,
+        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled, !handedOff, !isClearingStorage,
               installTask == nil, case .ready(let version) = autoUpdate else { return }
         let model = WindowManager.shared.model
         model.updateTaskSleepPrevention()
@@ -455,7 +1016,7 @@ final class AppUpdater {
     }
 
     func install(_ update: AvailableUpdate) {
-        guard installTask == nil, prepareTask == nil, !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
+        guard installTask == nil, prepareTask == nil, !handedOff, !isClearingStorage, !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
         installTask = Task { [self] in
             defer { installTask = nil }
             progress.begin()
@@ -649,6 +1210,9 @@ final class AppUpdater {
     /// Starts the installer and quits. The installer waits for this process to end before it
     /// touches the installed app.
     private func handOff(staged: URL, version: String, relaunch: Bool = true, silent: Bool = false) throws {
+        guard !isClearingStorage else {
+            throw CocoaError(.fileLocking, userInfo: [NSFilePathErrorKey: updatesRoot.path])
+        }
         let destination = Bundle.main.bundleURL
         let parent = destination.deletingLastPathComponent()
         guard FileManager.default.isWritableFile(atPath: parent.path) else {
@@ -704,6 +1268,10 @@ final class AppUpdater {
             UserDefaults.standard.removeObject(forKey: Self.relaunchVersionKey)
             WindowManager.shared.model.localControl.restoreAfterFailedShutdown()
             if !silent { UpdateInstallProgress.shared.fail() }
+            // The installer deletes staging when it gives up; stop silent quit retries and let the next update check reverify or download again.
+            if case .ready(let ready) = self.autoUpdate, self.stagedApp(ready) == staged {
+                self.autoUpdate = .failed(version: ready, reason: .install)
+            }
             self.scheduleIdleInstall()
         }
         // Do not yield after the merge check: a new merge must not start between
@@ -713,12 +1281,16 @@ final class AppUpdater {
 
     /// Waits for the app to quit, swaps the bundles, and opens the new one. A swap that fails
     /// puts the old app back. Everything it was given is cleaned up at the end.
-    private static let installerScript = """
+    private nonisolated static let installerScript = """
     #!/bin/sh
     # Tivano update installer: waits for the app to quit, swaps in the update, relaunches.
     trap '' HUP
     PID="$1"; NEW="$2"; DEST="$3"; RELAUNCH="$4"; VERSION="$5"; REQUIREMENT="$6"
     STAGING="$(dirname "$NEW")"
+    # Call only after the last child has finished; an EXIT trap can also run on a signal.
+    mark_complete() {
+      if [ -d "$STAGING" ]; then printf "complete\\n" > "$STAGING/install.complete"; fi
+    }
     i=0
     while kill -0 "$PID" 2>/dev/null; do
       sleep 0.25
@@ -730,13 +1302,13 @@ final class AppUpdater {
       if [ "$RELAUNCH" = "1" ]; then open "$DEST"; fi
       if [ "$RELAUNCH" = "2" ]; then open -g "$DEST"; fi
     }
-    /usr/sbin/taskpolicy -b /usr/bin/codesign --verify --deep --strict -R="$REQUIREMENT" "$NEW" || { echo "The staged app failed verification"; reopen; exit 1; }
-    ACTUAL=$(/usr/sbin/taskpolicy -b /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$NEW/Contents/Info.plist") || { reopen; exit 1; }
-    [ "$ACTUAL" = "$VERSION" ] || { echo "The staged app is $ACTUAL, not $VERSION"; reopen; exit 1; }
+    /usr/sbin/taskpolicy -b /usr/bin/codesign --verify --deep --strict -R="$REQUIREMENT" "$NEW" || { echo "The staged app failed verification"; reopen; mark_complete; exit 1; }
+    ACTUAL=$(/usr/sbin/taskpolicy -b /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$NEW/Contents/Info.plist") || { reopen; mark_complete; exit 1; }
+    [ "$ACTUAL" = "$VERSION" ] || { echo "The staged app is $ACTUAL, not $VERSION"; reopen; mark_complete; exit 1; }
     BACKUP="$(dirname "$DEST")/.$(basename "$DEST").previous"
     rm -rf "$BACKUP"
     if [ -e "$DEST" ]; then
-      mv "$DEST" "$BACKUP" || { echo "Could not move the installed app aside"; rm -rf "$STAGING"; reopen; exit 1; }
+      mv "$DEST" "$BACKUP" || { echo "Could not move the installed app aside"; rm -rf "$STAGING"; reopen; mark_complete; exit 1; }
     fi
     if mv "$NEW" "$DEST"; then
       rm -rf "$BACKUP"
@@ -745,11 +1317,13 @@ final class AppUpdater {
       [ -e "$BACKUP" ] && mv "$BACKUP" "$DEST"
       rm -rf "$STAGING"
       reopen
+      mark_complete
       exit 1
     fi
     xattr -dr com.apple.quarantine "$DEST" 2>/dev/null
     reopen
     rm -rf "$STAGING"
+    mark_complete
     """
 }
 

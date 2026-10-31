@@ -1,6 +1,644 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Add ⌘, ⌃ or ⌥ so the shortcut works in every app.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请加上 ⌘、⌃ 或 ⌥，快捷键才能在所有应用中使用。"
+          }
+        }
+      }
+    },
+    "Another app or macOS is using this shortcut. Choose another.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该快捷键已被其他应用或 macOS 占用，请换一个。"
+          }
+        }
+      }
+    },
+    "Ask anything, or hand the agent a task…": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "问点什么，或交给 Agent 做点什么…"
+          }
+        }
+      }
+    },
+    "Global shortcut": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全局快捷键"
+          }
+        }
+      }
+    },
+    "Measured categories below, not all app data on this Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以下为已统计的类别，不涵盖这台 Mac 上的全部应用数据。"
+          }
+        }
+      }
+    },
+    "Measured storage: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已统计占用：%@"
+          }
+        }
+      }
+    },
+    "Diagnostics are not included in the measured total yet.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "诊断文件尚未计入已统计总量。"
+          }
+        }
+      }
+    },
+    "Open in Tivano": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Tivano 中展开完整对话"
+          }
+        }
+      }
+    },
+    "Opens a quick chat box over any app. Return sends it as a new chat, placed and modelled like any other new chat.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在任意应用上方呼出快速对话框。按 ↩ 发送为新对话，位置和模型与普通新对话一致。"
+          }
+        }
+      }
+    },
+    "Opens or hides the quick chat box.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "呼出或收起快速对话框。"
+          }
+        }
+      }
+    },
+    "Quick chat": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "快速对话"
+          }
+        }
+      }
+    },
+    "Shortcut": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "快捷键"
+          }
+        }
+      }
+    },
+    "Update files are not included in the measured total yet.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新文件尚未计入已统计总量。"
+          }
+        }
+      }
+    },
+    "Recovery patches": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复补丁"
+          }
+        }
+      }
+    },
+    "Diagnostic files": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "诊断文件"
+          }
+        }
+      }
+    },
+    "Update files": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新文件"
+          }
+        }
+      }
+    },
+    "Keeps the latest hang report and current logs.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留最新卡顿报告和当前日志。"
+          }
+        }
+      }
+    },
+    "Keeps pending installations and rollback files.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留待安装及回滚文件。"
+          }
+        }
+      }
+    },
+    "Diagnostics and update files": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "诊断与更新文件"
+          }
+        }
+      }
+    },
+    "Clean up…": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理…"
+          }
+        }
+      }
+    },
+    "Clean up diagnostic files": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理诊断文件"
+          }
+        }
+      }
+    },
+    "Clean up update files": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理更新文件"
+          }
+        }
+      }
+    },
+    "Clean up diagnostic files?": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理诊断文件？"
+          }
+        }
+      }
+    },
+    "Clean up update files?": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理更新文件？"
+          }
+        }
+      }
+    },
+    "Clean up": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理"
+          }
+        }
+      }
+    },
+    "Deletes only eligible older diagnostic reports and rotated logs. Keeps the latest hang report and current logs. Chats, attachments, worktrees and recovery data are not removed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅删除符合清理条件的旧诊断报告和已轮转日志，保留最新卡顿报告和当前日志。不会删除对话、附件、worktree 或恢复数据。"
+          }
+        }
+      }
+    },
+    "Deletes only obsolete update files that are no longer in use. Keeps files used by downloads, pending installations and rollback. Chats, attachments, worktrees and recovery data are not removed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅删除已不再使用的过期更新文件，保留下载、待安装及回滚使用的文件。不会删除对话、附件、worktree 或恢复数据。"
+          }
+        }
+      }
+    },
+    "Cleaning up…": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在清理…"
+          }
+        }
+      }
+    },
+    "Could not measure these files. Not included in the measured total. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法统计这些文件，未计入已统计总量。%@"
+          }
+        }
+      }
+    },
+    "Total: %@ · Cleanable: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "总量：%@ · 可清理：%@"
+          }
+        }
+      }
+    },
+    "No files found.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有文件。"
+          }
+        }
+      }
+    },
+    "Nothing to clean up.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有可清理的文件。"
+          }
+        }
+      }
+    },
+    "Measurement unavailable. Not included in the measured total.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "统计结果不可用，未计入已统计总量。"
+          }
+        }
+      }
+    },
+    "Cleanup did not finish. Some files may already have been removed. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理未完成，部分文件可能已被删除。%@"
+          }
+        }
+      }
+    },
+    "Account switching": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "账号切换"
+          }
+        }
+      }
+    },
+    "New turns use the account you pick.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新一轮对话使用你选择的账号。"
+          }
+        }
+      }
+    },
+    "When an account reaches its usage limit, Tivano continues the chat on the account with the most usage left.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "账号额度用完时，Tivano 会切换到剩余额度最多的账号继续对话。"
+          }
+        }
+      }
+    },
+    "Manual": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手动"
+          }
+        }
+      }
+    },
+    "Waiting for sign-in…": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待登录…"
+          }
+        }
+      }
+    },
+    "Signed out": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未登录"
+          }
+        }
+      }
+    },
+    "Usage limit reached · resets %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "额度已用完 · %@重置"
+          }
+        }
+      }
+    },
+    "In use": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用中"
+          }
+        }
+      }
+    },
+    "Use this account": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用此账号"
+          }
+        }
+      }
+    },
+    "Remove account": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除账号"
+          }
+        }
+      }
+    },
+    "Remove this account?": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除此账号？"
+          }
+        }
+      }
+    },
+    "Tivano signs this account out and deletes its sign-in folder on this Mac. Chats keep their history.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tivano 会退出此账号，并删除这台 Mac 上对应的登录文件夹。对话历史会保留。"
+          }
+        }
+      }
+    },
+    "Rename account": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重命名账号"
+          }
+        }
+      }
+    },
+    "Account actions": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "账号操作"
+          }
+        }
+      }
+    },
+    "Add account": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加账号"
+          }
+        }
+      }
+    },
+    "Found %lld Codex accounts saved by other tools": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发现其他工具保存的 %lld 个 Codex 账号"
+          }
+        }
+      }
+    },
+    "Importing copies their sign-in into Tivano. The copy in the other tool may need to sign in again after Tivano refreshes it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入会将登录凭据复制到 Tivano。Tivano 刷新凭据后，其他工具中的账号可能需要重新登录。"
+          }
+        }
+      }
+    },
+    "Import": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入"
+          }
+        }
+      }
+    },
+    "%@ · %lld%%": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ · %2$lld%%"
+          }
+        }
+      }
+    },
+    "Default account": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "默认账号"
+          }
+        }
+      }
+    },
+    "New account": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新账号"
+          }
+        }
+      }
+    },
+    "Switched Codex from %@ to %@: the usage limit resets at %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex 已从 %1$@ 切换到 %2$@：原账号额度将于 %3$@ 重置。"
+          }
+        }
+      }
+    },
+    "Switched Codex from %@ to %@: the usage limit was reached.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex 已从 %1$@ 切换到 %2$@：原账号额度已用完。"
+          }
+        }
+      }
+    },
+    "Codex could not carry this chat's history to the other account. Start a new chat to continue there.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex 无法把这段对话的历史带到另一个账号，请新开对话继续。"
+          }
+        }
+      }
+    },
     "Version %@ is ready and will install automatically.": {
       "extractionState": "manual",
       "localizations": {
@@ -935,6 +1573,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重命名分支…"
+          }
+        }
+      }
+    },
+    "Running terminal jobs" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终端任务运行中"
           }
         }
       }
@@ -10738,6 +11387,17 @@
         }
       }
     },
+    "Keep updated" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "持续更新"
+          }
+        }
+      }
+    },
     "Keep visible" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12120,6 +12780,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "名称"
+          }
+        }
+      }
+    },
+    "Name once" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首次命名"
+          }
+        }
+      }
+    },
+    "Name once titles a chat from its first message. Keep updated renames it every few turns when the work moves on. Titles you set yourself never change." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首次命名：根据第一条消息为会话起名。持续更新：工作方向变化时每隔几个回合重新命名。你自己设置的标题不会被改动。"
           }
         }
       }
@@ -19941,6 +20623,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "对话标题 · 点击可复制或重命名"
+          }
+        }
+      }
+    },
+    "Thread titles" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话标题"
           }
         }
       }
