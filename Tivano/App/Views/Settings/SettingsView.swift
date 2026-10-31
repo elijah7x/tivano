@@ -614,6 +614,15 @@ private struct GeneralSettingsPage: View {
                 ) {
                     GlassPickerButton(options: Self.textGenerationOptions, selection: $settings.textGeneration, asset: { ProviderKind(rawValue: $0.rawValue)?.iconName })
                 }
+                if settings.textGeneration != .off {
+                    ChromeRowDivider()
+                    ChromeRow(
+                        title: "Thread titles",
+                        detail: "Name once titles a chat from its first message. Keep updated renames it every few turns when the work moves on. Titles you set yourself never change."
+                    ) {
+                        GlassPickerButton(options: ThreadTitleMode.allCases.map { ($0, $0.title) }, selection: $settings.threadTitleMode)
+                    }
+                }
             }
         }
         ChromeSection(title: "Power") {
@@ -717,7 +726,7 @@ private struct NewThreadModelSettingsRow: View {
     }
 }
 
-private struct NewThreadModelPicker: View {
+struct NewThreadModelPicker: View {
     @Environment(AppModel.self) private var model
     let selection: NewThreadModelSelection?
     let selectedModelID: String?
@@ -1392,6 +1401,10 @@ private struct ProviderSettingsSection: View {
                                 }
                             }
                         }
+                    }
+                    if ProviderAccounts.supportedProviders.contains(provider), status.isInstalled {
+                        ChromeRowDivider()
+                        ProviderAccountsSection(provider: provider)
                     }
                 }
             }

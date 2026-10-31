@@ -290,6 +290,9 @@ final class AppModel {
             out.append((voice.threadID, Chrome.localized("Voice"), voice.isLive ? voice.statusText : "Ending voice…"))
         }
         out.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        if terminals.hasRunningJob {
+            out.append((nil, Chrome.localized("Terminal"), "Running terminal jobs"))
+        }
         if localControl.hasPendingMutations {
             out.append((nil, Chrome.localized("Local control"), "An external control request is in progress"))
         }
@@ -1076,7 +1079,7 @@ final class AppModel {
     }
 
     @discardableResult
-    func newThread(affiliation choice: NewThreadAffiliation, workspace: WorkspaceMode? = nil) -> ChatThread? {
+    func newThread(affiliation choice: NewThreadAffiliation, workspace: WorkspaceMode? = nil, overridingModel: NewThreadModelSelection? = nil) -> ChatThread? {
         let affiliation: ThreadAffiliation
         switch choice {
         case .current:
@@ -1098,7 +1101,7 @@ final class AppModel {
         var thread = makeThread(
             in: project,
             carrying: selectedThread,
-            modelSelection: CaptureRun.isEnabled ? nil : settings.newThreadModelSelection
+            modelSelection: CaptureRun.isEnabled ? nil : (overridingModel ?? settings.newThreadModelSelection)
         )
         if project != nil, (workspace ?? settings.defaultWorkspaceMode) == .worktree {
             thread.controlWorkspace = ControlWorkspace(mode: .worktree, phase: .preparing, enforcesExecutionReadiness: false)
@@ -1113,6 +1116,15 @@ final class AppModel {
             Task { await createWorktree(for: thread.id) }
         }
         return thread
+    }
+
+    /// Previews the model for quick chat without creating or selecting a thread.
+    func newThreadPreview(overridingModel: NewThreadModelSelection? = nil) -> ChatThread {
+        let affiliation: ThreadAffiliation = !CaptureRun.isEnabled && settings.newThreadLocation == .standalone
+            ? .standalone : currentAffiliation
+        let project = project(affiliation.projectID)
+        return makeThread(in: project, carrying: selectedThread,
+                          modelSelection: CaptureRun.isEnabled ? nil : (overridingModel ?? settings.newThreadModelSelection))
     }
 
     /// Copies conversation context into an unsent thread with independent provider state.

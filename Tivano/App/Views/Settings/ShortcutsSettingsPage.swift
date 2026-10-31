@@ -6,6 +6,7 @@ import SwiftUI
 struct ShortcutsSettingsPage: View {
     var body: some View {
         LazyVStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
+            QuickChatShortcutsCard()
             ForEach(AppShortcut.Section.allCases) { section in
                 ShortcutSectionCard(section: section)
             }
@@ -222,6 +223,113 @@ private struct ShortcutRecorder: View {
             })
         }
         return actions
+    }
+}
+
+private struct QuickChatShortcutsCard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var settings = model.settings
+        VStack(alignment: .leading, spacing: Chrome.pageSectionHeaderSpacing) {
+            ShortcutSectionHeader(title: "Quick chat", symbol: "text.bubble") { EmptyView() }
+            ChromeCard {
+                ShortcutSettingsRow(title: "Global shortcut", detail: "Opens a quick chat box over any app. Return sends it as a new chat, placed and modelled like any other new chat.") {
+                    SettingsSwitch(isOn: $settings.quickChatEnabled)
+                }
+                Divider().padding(.leading, ShortcutRowMetrics.dividerLeadingInset)
+                ShortcutSettingsRow(title: "Shortcut", detail: detail) {
+                    QuickChatShortcutRecorder(settings: settings)
+                        .disabled(!settings.quickChatEnabled)
+                        .opacity(settings.quickChatEnabled ? 1 : 0.5)
+                }
+            }
+        }
+    }
+
+    private var detail: String {
+        let explanation = Chrome.localized("Opens or hides the quick chat box.")
+        if model.settings.quickChatEnabled, GlobalHotKey.shared.lastRegistrationFailed {
+            return explanation + " " + Chrome.localized("Another app or macOS is using this shortcut. Choose another.")
+        }
+        return explanation
+    }
+}
+
+private struct QuickChatShortcutRecorder: View {
+    @Bindable var settings: AppSettings
+
+    @State private var session = ShortcutRecordingSession()
+    @State private var isPresenting = false
+
+    var body: some View {
+        let chord = settings.quickChatChord
+        Button {
+            isPresenting.toggle()
+        } label: {
+            Group {
+                if let chord {
+                    HStack(spacing: 7) {
+                        ForEach(Keycap.caps(for: chord)) { cap in
+                            Text(verbatim: cap.symbol)
+                                .font(.ui(.body, weight: .semibold))
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(verbatim: chord.description))
+                } else {
+                    Text("Record shortcut")
+                        .font(.ui(.callout, weight: .medium))
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: ShortcutRowMetrics.controlWidth, height: ShortcutRowMetrics.controlHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ShortcutCombinedControlStyle(isSet: chord != nil, isRecording: isPresenting))
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: chord)
+        .popover(isPresented: $isPresenting, arrowEdge: .top) {
+            ShortcutRecordingPopoverContent(session: session)
+                .presentedChrome()
+        }
+        .onChange(of: isPresenting) { _, presenting in
+            if presenting {
+                session.begin(validate: validate, actions: actions(current: chord)) {
+                    isPresenting = false
+                } onCommit: { captured in
+                    settings.quickChatChord = captured
+                }
+            } else {
+                session.cancel()
+            }
+        }
+        .onDisappear { session.cancel() }
+    }
+
+    private func validate(_ chord: KeyChord) -> String? {
+        if KeyNames.isModifierKey(chord.keyCode) { return "Add a key to the modifiers." }
+        if chord.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+            return "Add ⌘, ⌃ or ⌥ so the shortcut works in every app."
+        }
+        if let owner = AppShortcut.allCases.first(where: { ShortcutStore.shared.chord(for: $0) == chord }) {
+            return String(format: AppText.localized("%@ already uses this chord."), AppText.localized(owner.title))
+        }
+        return nil
+    }
+
+    private func actions(current: KeyChord?) -> [ShortcutRecordingAction] {
+        [
+            ShortcutRecordingAction(id: "clear", title: "Remove shortcut", isDestructive: true) {
+                settings.quickChatChord = nil
+                isPresenting = false
+            },
+            ShortcutRecordingAction(id: "reset", title: "Reset to default", isDestructive: false) {
+                settings.quickChatChord = AppSettings.defaultQuickChatChord
+                isPresenting = false
+            }
+        ]
     }
 }
 
@@ -516,7 +624,7 @@ final class ShortcutRecordingSession {
     private(set) var message: String?
 
     @ObservationIgnored private var isActive = false
-    @ObservationIgnored private var shortcut: AppShortcut?
+    @ObservationIgnored private var validate: ((KeyChord) -> String?)?
     @ObservationIgnored private var onClose: (() -> Void)?
     @ObservationIgnored private var onCommit: ((KeyChord) -> Void)?
     @ObservationIgnored private var heldModifiers: NSEvent.ModifierFlags = []
@@ -541,8 +649,18 @@ final class ShortcutRecordingSession {
         onClose: @escaping () -> Void,
         onCommit: @escaping (KeyChord) -> Void
     ) {
+        begin(validate: { ShortcutStore.shared.refusal(for: $0, replacing: shortcut) },
+              actions: actions, onClose: onClose, onCommit: onCommit)
+    }
+
+    func begin(
+        validate: @escaping (KeyChord) -> String?,
+        actions: [ShortcutRecordingAction],
+        onClose: @escaping () -> Void,
+        onCommit: @escaping (KeyChord) -> Void
+    ) {
         if isActive { close() }
-        self.shortcut = shortcut
+        self.validate = validate
         self.actions = actions
         self.onClose = onClose
         self.onCommit = onCommit
@@ -633,7 +751,7 @@ final class ShortcutRecordingSession {
 
     private func judge(_ chord: KeyChord) {
         latched = chord
-        if let shortcut, let refusal = ShortcutStore.shared.refusal(for: chord, replacing: shortcut) {
+        if let refusal = validate?(chord) {
             verdict = .rejected
             message = refusal
             Haptics.perform(.generic)

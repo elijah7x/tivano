@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
         #endif
+        syncQuickChatHotKey()
         let updater = AppUpdater.shared
         let updated = updater.consumeRelaunchMarker()
         if updater.silentRelaunch {
@@ -45,6 +46,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         }
         UpdateChecker.shared.startBackgroundChecks()
+    }
+
+    private func syncQuickChatHotKey() {
+        guard let settings = model?.settings else { return }
+        withObservationTracking {
+            _ = settings.quickChatEnabled
+            _ = settings.quickChatChord
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.syncQuickChatHotKey() }
+        }
+        if settings.quickChatEnabled, let chord = settings.quickChatChord {
+            GlobalHotKey.shared.register(chord) { [weak self] in
+                guard let model = self?.model else { return }
+                QuickChatPanelController.shared.toggle(model: model)
+            }
+        } else {
+            GlobalHotKey.shared.unregister()
+            QuickChatPanelController.shared.hide()
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

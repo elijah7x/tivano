@@ -665,6 +665,7 @@ final class ThreadRuntime {
     @ObservationIgnored private var saveNoticeID: String?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var historyLoad: Task<Void, Never>?
+    @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var persistenceEnabled = true
     @ObservationIgnored private var currentTurnID: UUID? {
         didSet {
@@ -730,8 +731,14 @@ final class ThreadRuntime {
     /// left holding the turn's finished set once it ends (`finishTurn`).
     @ObservationIgnored private(set) var hydraCurrentTurnTouchedPaths: Set<String> = []
 
+    @ObservationIgnored private var switchedCodexAccount = false
+
+    /// The Codex account the running session signed in with, which may differ from the one now selected.
+    var codexAccountInUse: UUID? { sessionSignature?.codexAccount }
+
     private struct SessionSignature: Equatable {
         var provider: ProviderKind
+        var codexAccount: UUID?
         var directory: String
         var launchRuntimeMode: RuntimeMode?
         var launchEffort: String?
@@ -1443,7 +1450,11 @@ final class ThreadRuntime {
     /// that is busy again has moved on, and the continuation is dropped.
     func sendLimitContinuation(_ text: String) {
         guard phase == .idle, !isReverting else { return }
-        Task { await ensureLoaded(); await startTurn(text: text, attachments: []) }
+        Task {
+            await ensureLoaded()
+            switchedCodexAccount = text == AutoContinue.switchContinueMessage
+            await startTurn(text: text, attachments: [])
+        }
     }
 
     /// `flushesIfIdle` is false when `startTurn` puts back a prompt it could not start:
@@ -2084,6 +2095,7 @@ final class ThreadRuntime {
         let hydra = app.hydraLaunch(for: thread)
         let signature = SessionSignature(
             provider: thread.provider,
+            codexAccount: thread.provider == .codex ? app.providers.accounts.activeAccount(for: .codex)?.id : nil,
             directory: directory,
             launchRuntimeMode: thread.provider == .cursor || thread.provider == .grok || thread.provider == .devin || thread.provider == .antigravity || thread.provider == .omp || thread.provider == .dsh ? thread.runtimeMode : copilotLaunchMode,
             launchEffort: thread.provider == .claude || thread.provider == .antigravity ? thread.effort : nil,
@@ -2112,6 +2124,10 @@ final class ThreadRuntime {
                 }
             }
             return session
+        }
+        if thread.provider == .codex, let previous = sessionSignature?.codexAccount,
+           previous != signature.codexAccount {
+            switchedCodexAccount = true
         }
         // A message sent right after launch waits for the login shell, where a CLI installed
         // off the fallback PATH is found; this must not read as "not installed".
@@ -3326,6 +3342,9 @@ final class ThreadRuntime {
         case .notice(let notice):
             appendNotice(notice.level, notice.message)
         case .usageLimit(let resetsAt):
+            if sessionSignature?.provider == .codex, let id = sessionSignature?.codexAccount {
+                app?.providers.accounts.noteLimit(id, until: resetsAt)
+            }
             if let currentTurnID { app?.autoContinue.noteLimit(threadID, turnID: currentTurnID, resetsAt: resetsAt) }
         case .modeChanged(let mode):
             app?.updateThread(threadID) { $0.interactionMode = mode }
@@ -3594,6 +3613,9 @@ final class ThreadRuntime {
         // The turn's own events shared one save every few seconds; whatever they left is
         // written here, so a finished turn is always on disk.
         saveNow()
+        if status == .completed, !userStopped, externalSubmission?.turnID != turnID {
+            refreshTitleIfDue()
+        }
         finishControlTurn(turnID, status: status)
         let budgetSpent = headBudgetSpent
         headBudgetSpent = false
@@ -4982,8 +5004,14 @@ final class ThreadRuntime {
         scheduleSave()
     }
 
-    private func appendNotice(_ level: Notice.Level, _ message: String) {
+    func appendNotice(_ level: Notice.Level, _ message: String) {
         append(TimelineItem(turnID: turnIDForNewRows, content: .notice(Notice(level: level, message: message))))
+        if level == .error, switchedCodexAccount,
+           message.localizedCaseInsensitiveContains("invalid_encrypted_content")
+            || message.localizedCaseInsensitiveContains("organization_id did not match") {
+            switchedCodexAccount = false
+            append(TimelineItem(turnID: turnIDForNewRows, content: .notice(Notice(level: .error, message: AppText.localized("Codex could not carry this chat's history to the other account. Start a new chat to continue there.")))))
+        }
         scheduleSave()
     }
 
@@ -4991,6 +5019,67 @@ final class ThreadRuntime {
         guard let index = turns.firstIndex(where: { $0.id == id }) else { return }
         change(&turns[index])
         saveRevision += 1
+    }
+
+    private func refreshTitleIfDue() {
+        guard let app, app.settings.threadTitleMode == .continuous,
+              let thread = app.thread(threadID), !thread.hasCustomTitle,
+              thread.title != ChatThread.untitled, !thread.isHydraHead,
+              titleRefreshTask == nil else { return }
+        let done = turns.filter { $0.status == .completed }.count
+        guard done - (thread.titleRefreshTurn ?? 1) >= 6,
+              let engine = app.textEngine(preferring: thread.provider) else { return }
+        let currentTitle = thread.title
+        let context = threadTitleContext()
+        let threadID = threadID
+        app.updateThread(threadID) { $0.titleRefreshTurn = done }
+        titleRefreshTask = Task { [weak self] in
+            let title = await TextGeneration.refreshedThreadTitle(current: currentTitle, context: context, engine: engine)
+            guard let self else { return }
+            defer { self.titleRefreshTask = nil }
+            // The setting may have changed while the model was answering.
+            guard let title, app.settings.threadTitleMode == .continuous,
+                  app.settings.textGeneration != .off else { return }
+            app.updateThread(threadID) { thread in
+                if !thread.hasCustomTitle && thread.title == currentTitle {
+                    thread.title = title
+                }
+            }
+        }
+    }
+
+    private func threadTitleContext() -> String {
+        var sections: [String] = []
+        if let first = turns.first {
+            let text = TextCleanup.singleLine(userText(of: first), limit: 600)
+            if !text.isEmpty { sections.append("First request: \(text)") }
+        }
+        let firstSectionCount = sections.count
+        var length = sections.first?.count ?? 0
+        for turn in turns.suffix(8).reversed() {
+            var lines: [String] = []
+            let user = TextCleanup.singleLine(userText(of: turn), limit: 300)
+            if !user.isEmpty { lines.append("User: \(user)") }
+            let assistant = TextCleanup.singleLine(assistantText(of: turn), limit: 300)
+            if !assistant.isEmpty { lines.append("Assistant: \(assistant)") }
+            guard !lines.isEmpty else { continue }
+            let section = lines.joined(separator: "\n")
+            let separatorLength = sections.isEmpty ? 0 : 1
+            let available = 3_000 - length - separatorLength
+            guard available > 0 else { break }
+            let clipped = String(section.prefix(available))
+            sections.insert(clipped, at: firstSectionCount)
+            length += separatorLength + clipped.count
+            if clipped.count < section.count { break }
+        }
+        return sections.joined(separator: "\n")
+    }
+
+    private func assistantText(of turn: TurnRecord) -> String {
+        for entry in entries.reversed() where entry.item.turnID == turn.id {
+            if case .assistant(let message) = entry.item.content { return message.text }
+        }
+        return ""
     }
 
     /// Names the chat the moment its first message goes in, so the row never sits at
@@ -5001,7 +5090,10 @@ final class ThreadRuntime {
         guard turns.count == 1 || thread.title == ChatThread.untitled else { return }
         let names = attachments.map(\.name)
         let input = names.isEmpty ? text : text + "\nAttached: " + names.joined(separator: ", ")
-        app.updateThread(threadID) { $0.title = TextCleanup.singleLine(text, limit: 48) }
+        app.updateThread(threadID) {
+            $0.title = TextCleanup.singleLine(text, limit: 48)
+            $0.titleRefreshTurn = 1
+        }
         guard let engine = app.textEngine(preferring: thread.provider) else { return }
         let threadID = threadID
         Task {

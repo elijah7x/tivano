@@ -130,6 +130,7 @@ enum DshIntegrationConfiguration {
 @MainActor
 @Observable
 final class ProviderRegistry {
+    @ObservationIgnored lazy var accounts = ProviderAccounts(registry: self)
     private(set) var statuses: [ProviderKind: ProviderStatus] = [:]
     private(set) var catalogs: [ProviderKind: [ModelOption]] = [:] {
         didSet {
@@ -515,6 +516,20 @@ final class ProviderRegistry {
     }
 
     func environment(for provider: ProviderKind) -> [String: String] {
+        guard !DshIntegrationConfiguration.isEnabled else { return baseEnvironment(for: provider) }
+        return environment(for: provider, account: accounts.activeAccount(for: provider))
+    }
+
+    func environment(for provider: ProviderKind, account: ProviderAccount?) -> [String: String] {
+        var environment = baseEnvironment(for: provider)
+        guard !DshIntegrationConfiguration.isEnabled else { return environment }
+        if provider == .codex, let home = account?.home, !home.isEmpty {
+            environment["CODEX_HOME"] = home
+        }
+        return environment
+    }
+
+    func baseEnvironment(for provider: ProviderKind) -> [String: String] {
         if DshIntegrationConfiguration.isEnabled {
             return provider == .dsh ? DshIntegrationConfiguration.environment : [:]
         }
@@ -1024,6 +1039,15 @@ final class ProviderRegistry {
         UserDefaults.standard.set(data, forKey: catalogDatesKey)
     }
 
+    /// Drops the provider's limits and any read in flight, so numbers from the previous account never land on the new one.
+    func resetPlanLimits(_ provider: ProviderKind) {
+        limitReadGenerations[provider] = nil
+        limitReadTasks.removeValue(forKey: provider)?.cancel()
+        limitsFetchedAt[provider] = nil
+        planLimits[provider] = nil
+        loadingLimits.remove(provider)
+    }
+
     /// Reads the provider's plan limits, at most once a minute after a successful read unless forced.
     /// The read runs on its own task, so closing the popover that asked for it cannot cancel it.
     func refreshPlanLimits(_ provider: ProviderKind, force: Bool = false,
@@ -1087,6 +1111,9 @@ final class ProviderRegistry {
         }
         if planLimits[provider] != limits { planLimits[provider] = limits }
         limitsFetchedAt[provider] = limits.problem == nil ? .now : nil
+        if let account = accounts.activeAccount(for: provider) {
+            accounts.receiveLimits(limits, for: account.id)
+        }
     }
 
     /// Spends one of a provider's banked resets and re-reads its limits so the bars show the cleared window. Codex through its app-server, Z.ai through its reset-card endpoint.
@@ -1251,7 +1278,7 @@ final class ProviderRegistry {
         return nil
     }
 
-    private static func auth(_ provider: ProviderKind, _ executable: URL, _ environment: [String: String]) async -> ProviderStatus.Auth {
+    static func auth(_ provider: ProviderKind, _ executable: URL, _ environment: [String: String]) async -> ProviderStatus.Auth {
         switch provider {
         case .codex:
             guard let result = try? await Shell.run(executable, ["login", "status"], environment: environment, timeout: 20) else {

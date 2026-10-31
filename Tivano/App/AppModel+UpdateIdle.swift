@@ -10,6 +10,7 @@ extension AppModel {
 
     var isIdleForUpdate: Bool {
         isLibraryLoaded && alert == nil && installBlockers().isEmpty
+            && !terminals.hasRunningJob
             && !SettingsNavigation.shared.isPresented
             && !NSApp.windows.contains { $0.attachedSheet != nil || $0.isModalPanel }
             && !hasUnsentInput

@@ -8,6 +8,59 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.2.34] - 2026-10-31
+
+### English
+
+### New features
+
+- Settings › Text generation adds a Thread titles choice. Name once keeps today's behavior; Keep updated looks at a chat again every six completed turns and renames it when the work has moved on, keeping the title when it still fits. Titles you set yourself never change.
+
+- Quick chat opens a minimal glass box over any app with a global shortcut (⇧⌘Space by default; turn it on and change it in Settings › Shortcuts). Return sends it as a new chat, placed and modelled like any other new chat; ⌘Return also opens Tivano; the model chip changes the model for that message, and the expand button carries the draft into the full chat. Esc or clicking away hides it and keeps the draft.
+
+- Settings › Storage shows the total and cleanable size of diagnostic and update files, with separate cleanup confirmations. Manual cleanup keeps the latest hang report, current logs, active update and rollback files, and recovery data; the overview includes successful measurements and identifies recovery patches separately. Automatic hang-report retention remains capped at 10 reports, 30 days and 20 MiB.
+
+- Codex can use several accounts. Settings › Providers › Codex lists each account with its plan and usage, adds one through the browser sign-in, and imports accounts saved by Codex Account Switcher or codex-auth. Pick the account new turns use, or turn on automatic switching: when an account reaches its usage limit, the chat continues on the signed-in account with the most usage left, and when every account is spent it waits for the first one to reset.
+
+### Bug fixes
+
+- An interrupted cleanup-manifest write no longer blocks update storage measurement or cleanup. Incomplete metadata is recoverable only when no update payload is present.
+- Hydra heads sent to a folder outside your sidebar projects stay under their chat’s project instead of adding that folder to the sidebar; a chat’s quotes stay readable in a dark chat on a light system.
+- Automatic updates no longer install silently while a terminal is running something, such as a build, an SSH session, an editor or a job started in the background with `&` or nohup; a shell waiting at its prompt with nothing running does not hold the update back.
+- When Tivano cannot quit for a silent update, it no longer tries again every few minutes without telling you: the update is marked as failed and is checked again, or downloaded again, at the next update check.
+
+### Refinements
+
+- TypeSafe Jev decisions mask private keys, common API tokens (including Google and Z.ai keys) and Bearer credentials in what they send, the same way the offline replay does.
+- Z.ai uses the same icon as ZCode.
+
+### 简体中文
+
+### 新功能
+
+- 设置 › 文本生成新增“会话标题”选项。“首次命名”保持原有行为；“持续更新”每完成六个回合重新看一次对话，工作方向变了就重新命名，仍然贴切则保留原标题。你自己设置的标题不会被改动。
+
+- 新增快速对话：用全局快捷键（默认 ⇧⌘Space，可在设置 › 快捷键中开启和修改）在任意应用上方呼出极简玻璃输入框。按 ↩ 发送为新对话，位置和模型与普通新对话一致；⌘↩ 发送并打开 Tivano；模型胶囊可为这条消息换模型，展开按钮把草稿带到完整对话。按 esc 或点击别处收起，草稿保留。
+
+- 设置 › 存储新增诊断与更新文件的总量、可清理量和独立清理确认。手动清理会保留最新卡顿报告、当前日志、正在使用的更新及回滚文件和恢复数据；概览计入成功统计的占用，并单独标明恢复补丁。卡顿报告的自动保留仍以 10 份、30 天和 20 MiB 为上限。
+- Codex 支持多个账号。设置 › Providers › Codex 会列出每个账号的套餐和用量，可通过浏览器登录添加账号，也可导入 Codex Account Switcher 或 codex-auth 保存的账号。可以手动选择新一轮使用的账号，也可以开启自动切换：某个账号额度用完时，对话会在剩余额度最多的已登录账号上继续；所有账号都用完时，等最早恢复的账号重置后再继续。
+
+### 问题修复
+
+- 清理清单写入中断后，不再阻塞更新文件的统计和清理；仅在隔离目录内没有更新文件时回收未完成的清单。
+- Hydra 助手前往侧边栏项目之外的文件夹时，仍归属主对话的项目，不再把该文件夹添加到侧边栏；系统为浅色、聊天为深色时，引用文字也能清晰阅读。
+- 终端里有任务在运行（例如构建、SSH 会话、编辑器，或用 `&`、nohup 放到后台的任务）时，自动更新不再静默安装；停在提示符、没有任务运行的 shell 不会拦住更新。
+- Tivano 无法为静默更新退出时，不再每隔几分钟悄悄重试：这次更新会标记为失败，等下一次检查更新时重新校验或重新下载。
+
+### 优化改进
+
+- TypeSafe Jev 决策发出的内容会遮蔽私钥、常见 API token（包括 Google 和 Z.ai 的 key）和 Bearer 凭据，与离线回放的处理方式一致。
+- Z.ai 改用与 ZCode 相同的图标。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.2.22] - 2026-10-29
 
 ### English

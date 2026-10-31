@@ -181,6 +181,8 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var lastAttentionTurnID: UUID?
     var pendingResultTurnID: UUID?
     var hasCustomTitle: Bool
+    /// The completed-turn count at the last title generation attempt.
+    var titleRefreshTurn: Int?
     /// The thread's place once its project has been reordered by dragging; nil keeps newest first.
     var sortOrder: Double?
     /// The thread's place within its group in the activity layout once dragged there.
@@ -299,6 +301,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         isArchived = false
         hasUnread = false
         hasCustomTitle = false
+        titleRefreshTurn = nil
         hydraEnabled = Self.hydraDefaultEnabled()
     }
 
@@ -339,6 +342,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         lastAttentionTurnID = container.value(.lastAttentionTurnID, default: nil)
         pendingResultTurnID = container.value(.pendingResultTurnID, default: nil)
         hasCustomTitle = container.value(.hasCustomTitle, default: false)
+        titleRefreshTurn = container.value(.titleRefreshTurn, default: nil)
         sortOrder = container.value(.sortOrder, default: nil)
         activityOrder = container.value(.activityOrder, default: nil)
         activityOrderDay = container.value(.activityOrderDay, default: nil)

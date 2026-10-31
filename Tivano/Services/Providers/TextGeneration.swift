@@ -23,6 +23,35 @@ enum TextGeneration {
         guard let text = await run(prompt, engine: engine, directory: FileManager.default.temporaryDirectory) else {
             return nil
         }
+        return cleanedTitle(text)
+    }
+
+    static func refreshedThreadTitle(current: String, context: String, engine: Engine) async -> String? {
+        let prompt = """
+        Decide whether the current title still describes this coding conversation.
+        If it still summarizes the work the conversation is doing now, reply with KEEP only.
+        If the work has substantially changed direction, write a new title.
+        Rules for a new title: 3 to 7 words, under 40 characters, sentence case, no quotes, no trailing punctuation.
+        Name the subject and the outcome. Do not copy the request word for word.
+        Never ask a question, never explain, never mention the request or the word title.
+        Reply with KEEP or the new title only.
+
+        Current title:
+        \(current)
+
+        Conversation:
+        \(context.prefix(3_000))
+        """
+        guard let text = await run(prompt, engine: engine, directory: FileManager.default.temporaryDirectory) else {
+            return nil
+        }
+        let marker = text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'")))
+        guard marker.caseInsensitiveCompare("KEEP") != .orderedSame else { return nil }
+        guard let title = cleanedTitle(text), title != current else { return nil }
+        return title
+    }
+
+    private static func cleanedTitle(_ text: String) -> String? {
         let cleaned = TextCleanup.singleLine(text, limit: 60)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`*#. "))
         if let title = usable(cleaned) { return title }

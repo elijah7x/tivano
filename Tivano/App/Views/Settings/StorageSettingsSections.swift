@@ -7,20 +7,47 @@ struct StorageSettingsPage: View {
     @Binding var filter: ArchiveFilter
     @State private var usage: StorageUsage?
     @State private var generation = 0
+    @State private var libraryGeneration = 0
+    @State private var measuringLibrary = true
+    @State private var refreshing = true
+    @State private var diagnostics = RuntimeStorageState(kind: .diagnostics)
+    @State private var updates = RuntimeStorageState(kind: .updates)
+
+    private var isBusy: Bool {
+        refreshing || measuringLibrary || diagnostics.isMeasuring || updates.isMeasuring
+            || diagnostics.isClearing || updates.isClearing
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
-            StorageOverviewSection(usage: usage) { generation += 1 }
+            StorageOverviewSection(usage: usage, diagnostics: diagnostics, updates: updates, isBusy: isBusy) {
+                guard !isBusy else { return }
+                refreshing = true
+                generation += 1
+            }
+            RuntimeStorageSection(diagnostics: diagnostics, updates: updates)
             if let usage, !usage.worktrees.isEmpty {
-                StorageWorktreesSection(worktrees: usage.worktrees) { generation += 1 }
+                StorageWorktreesSection(worktrees: usage.worktrees) { libraryGeneration += 1 }
             }
             ArchivedChatsSection(filter: $filter, usage: usage)
         }
         // Deleting a chat can take its worktree with it, so the measure follows the library.
-        .task(id: "\(model.threads.count)-\(generation)") {
+        .task(id: "\(model.threads.count)-\(generation)-\(libraryGeneration)") {
+            guard !Task.isCancelled else { return }
+            measuringLibrary = true
             let measured = await Storage.measureUsage()
             guard !Task.isCancelled else { return }
             usage = measured
+            measuringLibrary = false
+        }
+        .task(id: generation) {
+            guard !Task.isCancelled else { return }
+            refreshing = true
+            async let measuredDiagnostics: Void = diagnostics.measure()
+            async let measuredUpdates: Void = updates.measure()
+            _ = await (measuredDiagnostics, measuredUpdates)
+            guard !Task.isCancelled else { return }
+            refreshing = false
         }
     }
 }
@@ -46,6 +73,9 @@ private struct StorageSectionNote: View {
 private struct StorageOverviewSection: View {
     @Environment(AppModel.self) private var model
     let usage: StorageUsage?
+    let diagnostics: RuntimeStorageState
+    let updates: RuntimeStorageState
+    let isBusy: Bool
     let refresh: () -> Void
 
     private struct Part: Identifiable {
@@ -57,26 +87,26 @@ private struct StorageOverviewSection: View {
 
     var body: some View {
         ChromeSection(title: "On this Mac") {
-            StorageSectionNote(text: "Chats, attachments and the worktrees Tivano made for your projects.")
+            StorageSectionNote(text: "Measured categories below, not all app data on this Mac.")
             ChromeCard {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
-                        Text(verbatim: usage.map { String(format: Chrome.localized("Tivano uses %@"), formattedSize(total($0))) }
+                        Text(verbatim: usage.map { String(format: Chrome.localized("Measured storage: %@"), formattedSize(total($0))) }
                             ?? Chrome.localized("Measuring…"))
                             .font(.ui(.body, weight: .semibold))
                             .foregroundStyle(Chrome.primaryText)
                         Spacer(minLength: 12)
-                        if usage == nil {
+                        if isBusy {
                             ProgressView().controlSize(.small)
-                        } else {
-                            Button("Refresh", action: refresh)
-                                .buttonStyle(.glass)
-                                .controlSize(.small)
                         }
+                        Button("Refresh", action: refresh)
+                            .buttonStyle(.glass)
+                            .controlSize(.small)
+                            .disabled(isBusy)
                     }
                     let parts = parts
                     bar(parts)
-                    HStack(alignment: .top, spacing: 24) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 24, alignment: .leading)], alignment: .leading, spacing: 14) {
                         ForEach(parts) { part in
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
@@ -92,6 +122,12 @@ private struct StorageOverviewSection: View {
                                     .padding(.leading, 14)
                             }
                         }
+                    }
+                    if diagnostics.usage == nil {
+                        StorageSectionNote(text: "Diagnostics are not included in the measured total yet.")
+                    }
+                    if updates.usage == nil {
+                        StorageSectionNote(text: "Update files are not included in the measured total yet.")
                     }
                     if let usage, usage.buildFilesTotal > 0 {
                         Text(verbatim: String(format: Chrome.localized("%@ of the worktrees is dependencies and build output, which can be deleted and rebuilt."),
@@ -115,13 +151,20 @@ private struct StorageOverviewSection: View {
             Part(title: "Worktrees", bytes: usage?.worktreesTotal ?? 0, color: Chrome.success),
         ]
         if let patches = usage?.patches, patches > 0 {
-            parts.append(Part(title: "Other", bytes: patches, color: Chrome.gray))
+            parts.append(Part(title: "Recovery patches", bytes: patches, color: Chrome.gray))
+        }
+        if let measured = diagnostics.usage {
+            parts.append(Part(title: "Diagnostic files", bytes: measured.totalBytes, color: Chrome.accent))
+        }
+        if let measured = updates.usage {
+            parts.append(Part(title: "Update files", bytes: measured.totalBytes, color: Chrome.warning))
         }
         return parts
     }
 
     private func total(_ usage: StorageUsage) -> Int64 {
         usage.chats + usage.attachments + usage.worktreesTotal + usage.patches
+            + (diagnostics.usage?.totalBytes ?? 0) + (updates.usage?.totalBytes ?? 0)
     }
 
     private func bar(_ parts: [Part]) -> some View {
@@ -142,6 +185,163 @@ private struct StorageOverviewSection: View {
         }
         .frame(height: 10)
         .accessibilityHidden(true)
+    }
+}
+
+@MainActor
+@Observable
+private final class RuntimeStorageState {
+    enum Kind: Equatable {
+        case diagnostics, updates
+
+        var title: String {
+            switch self {
+            case .diagnostics: "Diagnostic files"
+            case .updates: "Update files"
+            }
+        }
+
+        var protection: String {
+            switch self {
+            case .diagnostics: "Keeps the latest hang report and current logs."
+            case .updates: "Keeps pending installations and rollback files."
+            }
+        }
+    }
+
+    let kind: Kind
+    private(set) var usage: RuntimeStorageUsage?
+    private(set) var isMeasuring = true
+    private(set) var isClearing = false
+    private(set) var measurementError: String?
+    private(set) var cleanupError: String?
+    private var measurementID = UUID()
+
+    init(kind: Kind) {
+        self.kind = kind
+    }
+
+    var canClear: Bool {
+        !isMeasuring && !isClearing && (usage?.cleanableBytes ?? 0) > 0
+    }
+
+    func measure() async {
+        guard !Task.isCancelled, !isClearing else { return }
+        let id = UUID()
+        measurementID = id
+        isMeasuring = true
+        usage = nil
+        measurementError = nil
+        defer {
+            if measurementID == id { isMeasuring = false }
+        }
+        do {
+            let measured: RuntimeStorageUsage
+            switch kind {
+            case .diagnostics: measured = try await Storage.measureDiagnostics()
+            case .updates: measured = try await AppUpdater.shared.measureStorage()
+            }
+            guard !Task.isCancelled, measurementID == id else { return }
+            usage = measured
+        } catch {
+            guard !Task.isCancelled, measurementID == id else { return }
+            measurementError = error.localizedDescription
+        }
+    }
+
+    func clear() {
+        guard canClear else { return }
+        isClearing = true
+        usage = nil
+        cleanupError = nil
+        Task {
+            do {
+                switch kind {
+                case .diagnostics: try await Storage.clearDiagnostics()
+                case .updates: try await AppUpdater.shared.clearObsoleteStorage()
+                }
+            } catch {
+                cleanupError = error.localizedDescription
+            }
+            isClearing = false
+            // A failed cleanup can still have removed some files; keep its error separate.
+            await measure()
+        }
+    }
+}
+
+private struct RuntimeStorageSection: View {
+    let diagnostics: RuntimeStorageState
+    let updates: RuntimeStorageState
+
+    var body: some View {
+        ChromeSection(title: "Diagnostics and update files") {
+            ChromeCard {
+                RuntimeStorageRow(state: diagnostics)
+                ChromeRowDivider()
+                RuntimeStorageRow(state: updates)
+            }
+        }
+    }
+}
+
+private struct RuntimeStorageRow: View {
+    let state: RuntimeStorageState
+    @State private var confirming = false
+
+    var body: some View {
+        ChromeRow(title: state.kind.title, detail: detail, localizesDetail: false) {
+            HStack(spacing: 8) {
+                if state.isMeasuring || state.isClearing {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Clean up…") { confirming = true }
+                    .buttonStyle(.glass)
+                    .disabled(!state.canClear)
+                    .accessibilityLabel(Text(verbatim: Chrome.localized(state.kind == .diagnostics
+                        ? "Clean up diagnostic files" : "Clean up update files")))
+            }
+            .controlSize(.small)
+        }
+        .confirmationDialog(
+            Text(verbatim: Chrome.localized(state.kind == .diagnostics
+                ? "Clean up diagnostic files?" : "Clean up update files?")),
+            isPresented: $confirming,
+            titleVisibility: .visible
+        ) {
+            Button("Clean up", role: .destructive) { state.clear() }
+                .disabled(!state.canClear)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(verbatim: Chrome.localized(state.kind == .diagnostics
+                ? "Deletes only eligible older diagnostic reports and rotated logs. Keeps the latest hang report and current logs. Chats, attachments, worktrees and recovery data are not removed."
+                : "Deletes only obsolete update files that are no longer in use. Keeps files used by downloads, pending installations and rollback. Chats, attachments, worktrees and recovery data are not removed."))
+        }
+    }
+
+    private var detail: String {
+        var lines = [Chrome.localized(state.kind.protection)]
+        if state.isClearing {
+            lines.append(Chrome.localized("Cleaning up…"))
+        } else if state.isMeasuring {
+            lines.append(Chrome.localized("Measuring…"))
+        } else if let error = state.measurementError {
+            lines.append(String(format: Chrome.localized("Could not measure these files. Not included in the measured total. %@"), error))
+        } else if let usage = state.usage {
+            lines.append(String(format: Chrome.localized("Total: %@ · Cleanable: %@"),
+                                formattedSize(usage.totalBytes), formattedSize(usage.cleanableBytes)))
+            if usage.totalBytes == 0 {
+                lines.append(Chrome.localized("No files found."))
+            } else if usage.cleanableBytes == 0 {
+                lines.append(Chrome.localized("Nothing to clean up."))
+            }
+        } else {
+            lines.append(Chrome.localized("Measurement unavailable. Not included in the measured total."))
+        }
+        if let error = state.cleanupError {
+            lines.append(String(format: Chrome.localized("Cleanup did not finish. Some files may already have been removed. %@"), error))
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
