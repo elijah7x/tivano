@@ -155,6 +155,8 @@ struct ControlCreate: Codable, Sendable {
     var workspace: ControlWorkspaceMode
     var provider: String
     var model: String? = nil
+    /// Nil or false starts with Hydra off; true enables this chat's Hydra switch (requires app-wide Hydra).
+    var hydra: Bool? = nil
 }
 
 /// Automatic chooses fresh for an unsent thread, transcript for API providers, and
@@ -212,6 +214,7 @@ struct ControlThread: Codable, Sendable {
     var archived: Bool
     var provider: String
     var model: String?
+    var hydra: Bool
     var createdAt: Date
     var updatedAt: Date
     var lastStatus: String?

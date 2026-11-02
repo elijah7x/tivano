@@ -236,6 +236,21 @@ enum DshCLI {
         return nil
     }
 
+    /// Where DSH's routes and models come from, as path, presence and modification date per
+    /// file: any difference from the last listing, a deleted patch included, may change the catalog.
+    static func configurationFingerprint(environment: [String: String]) -> String {
+        let home = accountHome(environment: environment)
+        let profiles = home.appendingPathComponent("profiles", isDirectory: true)
+        let files = [home.appendingPathComponent("cordis.patch.yml"), home.appendingPathComponent(".credentials.yaml")]
+            + ["desktop", "web"].flatMap { name in
+                ["cordis.patch.yml", "package.json"].map { profiles.appendingPathComponent(name, isDirectory: true).appendingPathComponent($0) }
+            }
+        return files.map { file in
+            let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970
+            return "\(file.path)=\(date.map { String($0) } ?? "-")"
+        }.joined(separator: "\n")
+    }
+
     static func launchArguments(mode: DshAgentMode, delegationOff: Bool, environment: [String: String], finalReport: Bool = false) -> [String] {
         var arguments = ["--profile", "acp"]
         if let patch = userProfilePatch(environment: environment) {

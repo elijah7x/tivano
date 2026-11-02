@@ -1017,6 +1017,21 @@ struct RowAccessoryIcon: View {
     }
 }
 
+/// Trailing disclosure mark; always shown while folded, shown on hover while open.
+struct DisclosureChevron: View {
+    let collapsed: Bool
+    var hovering = false
+
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(Chrome.chevronFont)
+            .rotationEffect(.degrees(collapsed ? 0 : 90))
+            .opacity(collapsed || hovering ? 1 : 0)
+            .animation(Chrome.hover, value: hovering)
+            .accessibilityHidden(true)
+    }
+}
+
 struct SidebarSearchField: View {
     @Binding var text: String
     var prompt = "Search"

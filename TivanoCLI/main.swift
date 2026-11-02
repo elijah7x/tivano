@@ -15,7 +15,7 @@ private enum CLIText {
     static let usage = """
     Tivano local control (the app must already be running and manually enabled in Settings > Alpha).
     Commands: info | providers | projects | threads | thread UUID | history UUID
-      create --workspace local|worktree --provider ID [--project UUID] [--model ID]
+      create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]
       send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]
       send UUID --stdin [--continuation MODE]
       interrupt UUID --turn UUID
@@ -151,7 +151,14 @@ private enum CLI {
         case "create":
             guard values.isEmpty, let workspace = args.take("--workspace").flatMap(ControlWorkspaceMode.init(rawValue:)),
                   let provider = args.take("--provider"), !provider.isEmpty else { throw ControlFailure(code: .invalidRequest) }
-            return .create(ControlCreate(ticket: ticket, projectID: try args.uuid("--project"), workspace: workspace, provider: provider, model: args.take("--model")))
+            let hydra: Bool?
+            switch args.take("--hydra") {
+            case nil: hydra = nil
+            case "on": hydra = true
+            case "off": hydra = false
+            default: throw ControlFailure(code: .invalidRequest)
+            }
+            return .create(ControlCreate(ticket: ticket, projectID: try args.uuid("--project"), workspace: workspace, provider: provider, model: args.take("--model"), hydra: hydra))
         case "send":
             let threadID = try id()
             guard let mode = ControlContinuation(rawValue: args.take("--continuation") ?? "automatic") else { throw ControlFailure(code: .invalidRequest) }

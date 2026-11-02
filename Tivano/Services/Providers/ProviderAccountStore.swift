@@ -23,8 +23,7 @@ enum ProviderAccountStore {
     @discardableResult
     nonisolated static func save(_ book: ProviderAccountBook) -> Bool {
         do {
-            let data = try JSONEncoder().encode(book)
-            try writePrivate(data, to: fileURL)
+            try saveThrowing(book)
             return true
         } catch {
             NSLog("Tivano could not save %@: %@", fileURL.lastPathComponent, error.localizedDescription)
@@ -32,8 +31,13 @@ enum ProviderAccountStore {
         }
     }
 
+    nonisolated static func saveThrowing(_ book: ProviderAccountBook) throws {
+        try writePrivate(JSONEncoder().encode(book), to: fileURL)
+    }
+
     nonisolated static var accountsRoot: String {
-        URL(fileURLWithPath: LoginEnvironment.homeDirectory)
+        if let root = CaptureRun.storageRoot { return root.appendingPathComponent("accounts").path }
+        return URL(fileURLWithPath: LoginEnvironment.homeDirectory)
             .appendingPathComponent(AppInfo.stateDirectoryName).appendingPathComponent("accounts").path
     }
 
@@ -44,11 +48,41 @@ enum ProviderAccountStore {
         return (LoginEnvironment.homeDirectory as NSString).appendingPathComponent(".codex")
     }
 
+    nonisolated static func defaultClaudeHome(environment: [String: String]) -> String {
+        let path = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? (LoginEnvironment.homeDirectory as NSString).appendingPathComponent(".claude")
+        return (path as NSString).expandingTildeInPath
+    }
+
+    nonisolated static func writeClaudeIdentity(_ candidate: ClaudeSwapImportCandidate, into home: String) throws {
+        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
+        var identity: [String: String] = ["emailAddress": candidate.email]
+        identity["accountUuid"] = candidate.accountID
+        identity["organizationUuid"] = candidate.organizationID
+        identity["organizationName"] = candidate.organizationName
+        let data = try JSONSerialization.data(withJSONObject: ["oauthAccount": identity])
+        try writePrivate(data, to: URL(fileURLWithPath: home).appendingPathComponent(".claude.json"))
+    }
+
+    nonisolated static func claudeIdentity(home: String, isDefault: Bool = false) -> JSONValue? {
+        guard !CaptureRun.isEnabled else { return nil }
+        let url = isDefault ? URL(fileURLWithPath: LoginEnvironment.homeDirectory).appendingPathComponent(".claude.json")
+            : URL(fileURLWithPath: home).appendingPathComponent(".claude.json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return JSONValue.parse(data)?["oauthAccount"]
+    }
+
+    nonisolated static func claudeCredentials(environment: [String: String]) async throws -> Data? {
+        try await ClaudeAccountCredentials.readUnattended(environment: environment,
+            isManaged: environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1")
+    }
+
     nonisolated static func makeHome(provider: ProviderKind, id: UUID, linkingFrom source: String) throws -> String {
+        if provider == .claude, CaptureRun.isEnabled { throw ClaudeCredentialError.capture }
         let home = URL(fileURLWithPath: accountsRoot).appendingPathComponent(provider.rawValue).appendingPathComponent(id.uuidString)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: home.path)
-        linkShared(home: home.path, source: source)
+        if provider == .codex { linkShared(home: home.path, source: source) }
         return home.path
     }
 
@@ -75,6 +109,30 @@ enum ProviderAccountStore {
         let target = URL(fileURLWithPath: (home as NSString).expandingTildeInPath).standardizedFileURL
         guard target.resolvingSymlinksInPath().path.hasPrefix(root + "/") else { return }
         try? FileManager.default.removeItem(at: target)
+    }
+
+    nonisolated static func removeHomeThrowing(_ home: String) throws {
+        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
+        let root = URL(fileURLWithPath: accountsRoot).standardizedFileURL.resolvingSymlinksInPath().path
+        let target = URL(fileURLWithPath: home).standardizedFileURL
+        let parent = target.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath().path
+        guard parent.hasPrefix(root + "/"), target == target.resolvingSymlinksInPath() else {
+            throw ClaudeCredentialError.invalidDirectory
+        }
+        do { try FileManager.default.removeItem(at: target) }
+        catch CocoaError.fileNoSuchFile { return }
+    }
+
+    nonisolated static func replaceClaudeMetadata(_ data: Data?, home: String) throws {
+        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
+        // Reuse the credential boundary before writing to a managed profile.
+        _ = try ClaudeAccountCredentials.snapshot(configDirectory: home)
+        let url = URL(fileURLWithPath: home).appendingPathComponent(".claude.json")
+        if let data { try writePrivate(data, to: url) }
+        else {
+            do { try FileManager.default.removeItem(at: url) }
+            catch CocoaError.fileNoSuchFile { return }
+        }
     }
 
     nonisolated static func codexIdentity(home: String) -> CodexIdentity? {

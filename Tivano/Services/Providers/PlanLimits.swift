@@ -74,7 +74,7 @@ enum PlanLimitsReader {
         do {
             let limits: PlanLimits? = switch provider {
             case .codex: try await CodexSession.readPlanLimits(executable: executable, environment: environment)
-            case .claude: await readClaude(executable: executable, environment: environment)
+            case .claude: await readClaude(environment: environment)
             case .antigravity: try await AntigravitySession.readPlanLimits(executable: executable, environment: environment)
             case .copilot: try await CopilotSession.readPlanLimits(executable: executable, environment: environment)
             case .commandcode: await CommandCodeAPI.planLimits(environment: environment)
@@ -156,13 +156,21 @@ enum PlanLimitsReader {
 
     // MARK: - Claude
 
-    /// Claude Code's own OAuth usage endpoint first, the way it reads limits itself; the CLI's
-    /// `get_usage` control request when no stored login can be read.
-    private static func readClaude(executable: URL, environment: [String: String]) async -> PlanLimits? {
-        if let limits = await readClaudeUsageEndpoint(executable: executable, environment: environment) {
-            return limits
+    /// Reads existing credentials and usage only. Normal Claude sessions own token refresh.
+    static func readClaude(environment: [String: String]) async -> PlanLimits? {
+        guard !CaptureRun.isEnabled else { return nil }
+        let managed = environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1"
+        let account = ProviderAccountStore.load().accounts.first {
+            $0.provider == .claude && (managed ? $0.home == environment["CLAUDE_CONFIG_DIR"] : $0.isDefault)
         }
-        return await readClaudeFromCLI(executable: executable, environment: environment)
+        guard !managed || account != nil,
+              account?.requiresClaudeActivation != true,
+              account?.requiresClaudeCleanup != true else { return nil }
+        let accountID: UUID?
+        do { accountID = try ProviderAccounts.beginClaudeCredentialRead(environment: environment) }
+        catch { return failure(ProviderAccounts.safeClaudeError(error), kind: .unavailable) }
+        defer { if let accountID { ProviderAccounts.endRead(accountID) } }
+        return await readClaudeUsageEndpoint(environment: environment)
     }
 
     private struct ClaudeLogin {
@@ -182,71 +190,42 @@ enum PlanLimitsReader {
     }
 
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    private static let keychainService = "Claude Code-credentials"
+    private static let claudeUsageUnavailable = "Claude usage is temporarily unavailable. Use Claude normally to let the official CLI refresh its login, then check usage again."
 
-    private static func readClaudeUsageEndpoint(executable: URL, environment: [String: String]) async -> PlanLimits? {
-        guard var login = await claudeLogin(environment: environment) else { return nil }
-        // A token about to expire is refreshed by the CLI, which owns the single-use refresh token.
-        if let expiresAt = login.expiresAt, expiresAt < Date.now.addingTimeInterval(300) {
-            await refreshClaudeLogin(executable: executable, environment: environment)
-            guard let refreshed = await claudeLogin(environment: environment) else { return nil }
-            login = refreshed
-        }
+    private static func readClaudeUsageEndpoint(environment: [String: String]) async -> PlanLimits? {
         do {
-            var response = try await fetchClaudeUsage(token: login.accessToken)
+            guard let login = try await claudeLogin(environment: environment) else {
+                return failure("Claude credentials could not be read. Check this account's sign-in and macOS credential access.", kind: .unavailable)
+            }
+            if let expiresAt = login.expiresAt, expiresAt <= .now {
+                return failure(claudeUsageUnavailable, kind: .unavailable)
+            }
+            let response = try await fetchClaudeUsage(token: login.accessToken)
             if response.status == 401 {
-                await refreshClaudeLogin(executable: executable, environment: environment)
-                if let refreshed = await claudeLogin(environment: environment), refreshed.accessToken != login.accessToken {
-                    login = refreshed
-                    response = try await fetchClaudeUsage(token: login.accessToken)
-                }
+                return failure(claudeUsageUnavailable, kind: .unavailable)
             }
             guard response.status == 200 else {
                 let detail = JSONValue.parse(response.data)?["error"]?["message"]?.string
                     ?? HTTPURLResponse.localizedString(forStatusCode: response.status)
                 return failure(String(format: AppText.localized("Claude usage request failed (HTTP %lld): %@"), response.status, detail),
-                               kind: response.status == 401 ? .authentication : .unavailable)
+                               kind: .unavailable)
             }
             guard let json = JSONValue.parse(response.data), json.object != nil else {
                 return failure("Claude returned an invalid usage response.")
             }
             return parseClaudeUsage(json, limits: json["limits"]?.array ?? [], planName: login.planName)
                 ?? failure("The provider reported no usage windows for this account.", kind: .noWindows)
+        } catch let error as ClaudeCredentialError {
+            return failure(ProviderAccounts.safeClaudeError(error), kind: .unavailable)
         } catch {
             return failure(error.localizedDescription, kind: .unavailable)
         }
     }
 
     /// The stored Claude Code login: `.credentials.json`, or the macOS Keychain item the CLI writes.
-    private static func claudeLogin(environment: [String: String]) async -> ClaudeLogin? {
-        var directories: [String] = []
-        if let configured = environment["CLAUDE_CONFIG_DIR"], !configured.isEmpty {
-            directories.append(configured)
-        }
-        directories.append((LoginEnvironment.homeDirectory as NSString).appendingPathComponent(".claude"))
-        for directory in directories {
-            let file = URL(fileURLWithPath: directory).appendingPathComponent(".credentials.json")
-            if let data = try? Data(contentsOf: file), let login = parseLogin(data) {
-                return login
-            }
-        }
-
-        let security = URL(fileURLWithPath: "/usr/bin/security")
-        var attempts: [[String]] = []
-        if let user = environment["USER"] ?? environment["LOGNAME"], !user.isEmpty {
-            attempts.append(["find-generic-password", "-s", keychainService, "-a", user, "-w"])
-        }
-        attempts.append(["find-generic-password", "-s", keychainService, "-w"])
-        for arguments in attempts {
-            guard let result = try? await Shell.run(security, arguments, environment: environment, timeout: 5),
-                  result.succeeded else { continue }
-            let text = result.output.trimmed
-            let data = text.hasPrefix("{") ? Data(text.utf8) : (hexDecoded(text) ?? Data(text.utf8))
-            if let login = parseLogin(data) {
-                return login
-            }
-        }
-        return nil
+    private static func claudeLogin(environment: [String: String]) async throws -> ClaudeLogin? {
+        guard let data = try await ProviderAccountStore.claudeCredentials(environment: environment) else { return nil }
+        return parseLogin(data)
     }
 
     private static func parseLogin(_ data: Data) -> ClaudeLogin? {
@@ -260,24 +239,6 @@ enum PlanLimitsReader {
         )
     }
 
-    private static func hexDecoded(_ text: String) -> Data? {
-        guard text.count.isMultiple(of: 2), text.allSatisfy(\.isHexDigit) else { return nil }
-        var bytes: [UInt8] = []
-        bytes.reserveCapacity(text.count / 2)
-        var index = text.startIndex
-        while index < text.endIndex {
-            let next = text.index(index, offsetBy: 2)
-            guard let byte = UInt8(text[index..<next], radix: 16) else { return nil }
-            bytes.append(byte)
-            index = next
-        }
-        return Data(bytes)
-    }
-
-    private static func refreshClaudeLogin(executable: URL, environment: [String: String]) async {
-        _ = try? await Shell.run(executable, ["auth", "status"], environment: environment, timeout: 20)
-    }
-
     private static func fetchClaudeUsage(token: String) async throws -> (status: Int, data: Data) {
         var request = URLRequest(url: usageURL, timeoutInterval: 15)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -286,51 +247,6 @@ enum PlanLimitsReader {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         return (http.statusCode, data)
-    }
-
-    /// Claude reports limits through the `get_usage` control request, so a short-lived session asks for them.
-    private static func readClaudeFromCLI(executable: URL, environment: [String: String]) async -> PlanLimits? {
-        let process = StdioProcess(
-            executable: executable,
-            arguments: ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"],
-            directory: FileManager.default.temporaryDirectory,
-            environment: environment
-        )
-        do {
-            try process.start()
-        } catch {
-            return failure(error.localizedDescription)
-        }
-        // Ending the process finishes the message stream, which is what bounds a request that never answers.
-        let watchdog = Task {
-            do { try await Task.sleep(for: .seconds(20)) } catch { return }
-            process.terminate()
-        }
-        defer {
-            watchdog.cancel()
-            process.terminate()
-        }
-        process.send(["type": "control_request", "request_id": "tivano-init", "request": ["subtype": "initialize", "hooks": .null]])
-        for await message in process.messages {
-            guard message["type"]?.string == "control_response" else { continue }
-            let response = message["response"] ?? .null
-            if response["subtype"]?.string == "error" {
-                return failure(response["error"]?.string ?? "Claude CLI rejected the usage request.")
-            }
-            switch response["request_id"]?.string {
-            case "tivano-init":
-                process.send(["type": "control_request", "request_id": "tivano-usage", "request": ["subtype": "get_usage"]])
-            case "tivano-usage":
-                let usage = response["response"] ?? .null
-                let rateLimits = usage["rate_limits"] ?? .null
-                guard !rateLimits.isNull else { return failure("Claude CLI did not provide usage data. This CLI may not support the usage request.") }
-                return parseClaudeUsage(rateLimits, limits: rateLimits["limits"]?.array ?? [], planName: planName(usage["subscription_type"]?.string))
-                    ?? failure("The provider reported no usage windows for this account.", kind: .noWindows)
-            default:
-                continue
-            }
-        }
-        return failure("Claude CLI ended without a usage response or the request timed out.")
     }
 
     /// The `limits` rows (session, weekly, weekly per model), falling back to the top-level

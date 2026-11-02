@@ -24,6 +24,12 @@ extension CLI {
         }
         guard case .create(let create) = try parse(["create", "--workspace", "local", "--provider", "codex"]) else { throw ControlFailure(code: .internalError) }
         try check(create.projectID == nil && create.workspace == .local && create.ticket == ticket, "create parser requires explicit scope/provider without cwd inheritance")
+        try check(create.hydra == nil, "create leaves Hydra unspecified by default")
+        guard case .create(let hydraOn) = try parse(["create", "--workspace", "local", "--provider", "codex", "--hydra", "on"]) else { throw ControlFailure(code: .internalError) }
+        try check(hydraOn.hydra == true, "create accepts Hydra on")
+        guard case .create(let hydraOff) = try parse(["create", "--workspace", "local", "--provider", "codex", "--hydra", "off"]) else { throw ControlFailure(code: .internalError) }
+        try check(hydraOff.hydra == false, "create accepts Hydra off")
+        try rejects(["create", "--workspace", "local", "--provider", "codex", "--hydra", "yes"], "create rejects invalid Hydra values")
         try rejects(["create", "--provider", "codex"], "workspace is mandatory")
         try rejects(["create", "--workspace", "local"], "provider is mandatory")
         guard case .submit(let send) = try parse(["send", thread.uuidString, "--text", "text with spaces", "--continuation", "providerSession"]) else { throw ControlFailure(code: .internalError) }

@@ -1013,10 +1013,10 @@ def replay_candidates(args):
 
 
 DECISION_FIELDS = [
-    'at', 'point', 'status', 'error', 'latencyMs', 'inputTokens', 'outputTokens',
+    'at', 'point', 'qv', 'status', 'error', 'latencyMs', 'inputTokens', 'outputTokens',
     'responseModel', 'jobID', 'headID', 'decisions', 'reviewFindings', 'reviewAccepted',
-    'headStatus', 'continuations', 'continued', 'notes_flagged', 'format_missing',
-    'findings', 'accepted_any', 'churn', 'filesTotal', 'headFlags', 'leadBuilt',
+    'headStatus', 'continuations', 'continued', 'continued_after', 'notes_flagged', 'format_missing',
+    'findings', 'accepted_any', 'accepted_any_jev', 'churn', 'filesTotal', 'headFlags', 'leadBuilt',
     'not_leadBuilt', 'accepted',
 ]
 
@@ -1026,7 +1026,7 @@ def decision_answers(record):
     answers = record.get('answers') or {}
     flat = {}
     for key, question in questions.items():
-        if not re.fullmatch(r'gapUnreported|reworkLikely|completion|defectLikely|finding_[1-8]', key):
+        if not re.fullmatch(r'gapUnreported|reworkLikely|completion|defectLikely|unrelatedChanges|finding_[1-8]', key):
             continue
         if not isinstance(question, dict):
             continue
@@ -1057,14 +1057,16 @@ def decision_answers(record):
     return flat
 
 
-def decision_auc(rows, score, label):
+def decision_auc(rows, score, label, numeric=False, minimum=10):
     pairs = [(number(row.get(score)), row.get(label)) for row in rows]
     pairs = sorted((value, int(target)) for value, target in pairs
                    if value is not None and target in (0, 1))
     positives = sum(target for _, target in pairs)
     negatives = len(pairs) - positives
     counts = f'positive={positives}, negative={negatives}, missing={len(rows) - len(pairs)}'
-    if positives < 10 or negatives < 10:
+    if positives < minimum or negatives < minimum:
+        if numeric:
+            return None
         return counts + '; insufficient data'
     rank_sum, start = 0, 0
     while start < len(pairs):
@@ -1074,7 +1076,100 @@ def decision_auc(rows, score, label):
         rank_sum += ((start + 1 + end) / 2) * sum(target for _, target in pairs[start:end])
         start = end
     auc = (rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
-    return f'{auc:.4f} ({counts})'
+    return auc if numeric else f'{auc:.4f} ({counts})'
+
+
+
+def decision_spearman(rows, left, right):
+    pairs = [(number(row.get(left)), number(row.get(right))) for row in rows]
+    pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
+    count = len(pairs)
+    if count < 2:
+        return f'insufficient data (paired n={count})'
+
+    def ranks(values):
+        ordered = sorted(range(len(values)), key=lambda i: values[i])
+        result = [0.0] * len(values)
+        start = 0
+        while start < len(values):
+            end = start + 1
+            while end < len(values) and values[ordered[end]] == values[ordered[start]]:
+                end += 1
+            for index in ordered[start:end]:
+                result[index] = (start + 1 + end) / 2
+            start = end
+        return result
+
+    a, b = (ranks(values) for values in zip(*pairs))
+    mean = (count + 1) / 2
+    covariance = sum((x - mean) * (y - mean) for x, y in zip(a, b))
+    denominator = (sum((x - mean) ** 2 for x in a)
+                   * sum((y - mean) ** 2 for y in b)) ** 0.5
+    if not denominator:
+        return f'undefined (constant ranks; paired n={count})'
+    return f'{covariance / denominator:.4f} (paired n={count})'
+
+
+def decision_threshold(rows, score, label, baselines):
+    import random
+
+    # Paired complete cases keep missingness from changing the comparator cohort.
+    cohort = [r for r in rows if r.get(label) in (0, 1)
+              and all(number(r.get(k)) is not None for k in (score, *baselines))]
+    positive = sum(r[label] for r in cohort)
+    negative = len(cohort) - positive
+
+    def compare(sample, minimum=10):
+        value = decision_auc(sample, score, label, numeric=True, minimum=minimum)
+        if value is None:
+            return None
+        best = max(decision_auc(sample, b, label, numeric=True, minimum=minimum)
+                   for b in baselines)
+        return value, best, value - best
+
+    full = compare(cohort)
+    interval = 'insufficient'
+    if full is not None:
+        clusters = collections.defaultdict(list)
+        for row in cohort:
+            clusters[row['_job_key']].append(row)
+        groups = list(clusters.values())
+        rng = random.Random(0)
+        deltas = []
+        for _ in range(2000):
+            sample = [r for _ in groups for r in rng.choice(groups)]
+            result = compare(sample, minimum=1)
+            if result is not None:
+                deltas.append(result[2])
+        if deltas:
+            deltas.sort()
+            def percentile(fraction):
+                position = (len(deltas) - 1) * fraction
+                low = int(position)
+                high = min(low + 1, len(deltas) - 1)
+                return deltas[low] + (deltas[high] - deltas[low]) * (position - low)
+            interval = f'[{percentile(0.025):.4f}, {percentile(0.975):.4f}] (valid={len(deltas)}/2000)'
+    halves = [None, None]
+    if all(timestamp(r.get('at')) is not None for r in cohort):
+        ordered = sorted(cohort, key=lambda r: timestamp(r['at']))
+        middle = len(ordered) // 2
+        halves = [compare(ordered[:middle]), compare(ordered[middle:])]
+    consistent = 'insufficient'
+    if all(part is not None for part in halves):
+        # A zero delta has no direction and cannot establish consistency.
+        # The thresholds need Jev ahead in both halves, not merely the same sign.
+        consistent = 'yes' if halves[0][2] > 0 and halves[1][2] > 0 else 'no'
+    passed = ('insufficient' if full is None or consistent == 'insufficient' else
+              'yes' if positive >= 30 and negative >= 30 and full[2] >= 0.05
+              and consistent == 'yes' else 'no')
+    delta = f'{full[2]:.4f}' if full else 'insufficient'
+    half_text = '; '.join(f'{name}: Jev={part[0]:.4f}, best heuristic={part[1]:.4f}, delta={part[2]:.4f}'
+                          if part is not None else f'{name}: insufficient'
+                          for name, part in zip(('first half', 'second half'), halves))
+    detail = (f'- {score} against {label}: delta={delta}; job bootstrap 95% CI={interval}; '
+              f'{half_text}; direction consistent={consistent}.')
+    summary = f'{score}: positive={positive}, negative={negative}, delta={delta}, CI={interval}, direction={consistent}, threshold={passed}'
+    return detail, summary
 
 
 def decision_percentile(rows, fraction):
@@ -1138,6 +1233,14 @@ def decisions(args):
         except OSError:
             reader.issues['missing_or_unreadable_ledger'] += 1
 
+    latest_dispositions = {}
+    for root, record in records:
+        if record['point'] == 'reviewDisposition' and record['status'] == 'ok':
+            key = (root, record['jobID'])
+            previous = latest_dispositions.get(key)
+            if previous is None or (timestamp(record.get('at')) or 0) >= (timestamp(previous.get('at')) or 0):
+                latest_dispositions[key] = record
+
     rows, row_keys = [], []
     for root, record in records:
         job_id = record['jobID']
@@ -1150,15 +1253,18 @@ def decisions(args):
             row[field] = value if isinstance(value, str) else None
         for field in ('latencyMs', 'inputTokens', 'outputTokens'):
             row[field] = number(record.get(field))
+        row['qv'] = record.get('qv', 1)
         row.update(decision_answers(record))
         row['decisions'] = boolean(job.get('decisions'))
         row['reviewFindings'] = number(job.get('reviewFindings'))
         row['reviewAccepted'] = number(job.get('reviewAccepted'))
         state = record.get('state') or {}
         key = (root, job_id)
+        row['_job_key'] = key
         if record['point'] == 'headReport':
             heads = job.get('heads')
             head = next((h for h in heads if isinstance(h, dict) and h.get('headID') == record.get('headID')), {}) if isinstance(heads, list) else {}
+            row['_head_matched'] = bool(head) and bool(row['headID'])
             row['headStatus'] = head.get('status') if isinstance(head.get('status'), str) else None
             row['continuations'] = number(head.get('continuations'))
             row['continued'] = int(row['continuations'] > 0) if row['continuations'] is not None else None
@@ -1169,6 +1275,13 @@ def decisions(args):
         elif record['point'] == 'preReview':
             outcome = outcomes.get(key, {})
             row['findings'] = number(outcome.get('findings'))
+            disposition = latest_dispositions.get(key)
+            if disposition is not None:
+                choices = [value for field, value in decision_answers(disposition).items()
+                           if re.fullmatch(r'finding_[1-8]_choice', field)]
+                row['accepted_any_jev'] = (1 if 'accepted' in choices else
+                                           0 if choices and all(v in ('rejected', 'unaddressed') for v in choices)
+                                           else None)
             row['accepted_any'] = int(row['reviewAccepted'] > 0) if row['reviewAccepted'] is not None else None
             added, deleted = number(state.get('linesAdded')), number(state.get('linesDeleted'))
             row['churn'] = added + deleted if added is not None and deleted is not None else None
@@ -1182,12 +1295,36 @@ def decisions(args):
         rows.append(row)
         row_keys.append(key)
 
+    head_groups = collections.defaultdict(list)
+    for row in rows:
+        if row['point'] == 'headReport' and row['headID']:
+            head_groups[(row['_job_key'], row['headID'])].append(row)
+    # Each completed continuation triggers headReport again (AppModel+Hydra.swift:873).
+    # A later decision, including failed/skipped calls, therefore marks a later report;
+    # the cumulative library counter cannot identify which report preceded continuation.
+    for group in head_groups.values():
+        if any(timestamp(row['at']) is None for row in group):
+            continue
+        ordered = sorted(group, key=lambda row: timestamp(row['at']))
+        for index, row in enumerate(ordered):
+            if not row['_head_matched']:
+                continue
+            if index < len(ordered) - 1:
+                row['continued_after'] = 1
+            elif row['continuations'] is not None and len(ordered) >= row['continuations'] + 1:
+                row['continued_after'] = 0
+            else:
+                # Fewer decisions than continuations: the next report is pending or was never
+                # recorded (Jev off, capture), so whether this one was continued is unknown.
+                row['continued_after'] = None
+
     lines = ['# Hydra decision evaluation', '',
              'Sources opened read-only. CSV contains metadata, numeric answers, option keys and labels; no state text.',
-             'Unknown labels stay blank. Only ok decisions enter quality metrics. Repeated decisions remain separate AUROC observations.',
+             'Unknown labels stay blank. Only ok decisions enter quality metrics. Repeated decisions remain separate AUROC observations; quality metrics are computed per question version (qv; missing = 1) and never pooled.',
              'AUROC uses Mann–Whitney ranks with half credit for ties; latency percentiles use linear interpolation.', '',
              f'- Decisions: {len(rows)}; outcome jobs: {len(outcomes)}.',
              f'- Read issues: {dict(reader.issues)}; libraries visibly changed during read: {reader.changed}.']
+    versions = sorted({row['qv'] for row in rows})
     for point in ('headReport', 'preReview', 'reviewDisposition'):
         subset = [row for row in rows if row['point'] == point]
         counts = collections.Counter(row['status'] for row in subset)
@@ -1195,6 +1332,7 @@ def decisions(args):
         models = collections.Counter(row['responseModel'] or 'unknown' for row in subset)
         lines += ['', f'## {point} coverage', '',
                   '- ' + '; '.join(f'{status}={counts[status]}' for status in ('ok', 'failed', 'skipped')),
+                  *[f"- questions v{qv}: ok={sum(r['status'] == 'ok' for r in subset if r['qv'] == qv)}; failed={sum(r['status'] == 'failed' for r in subset if r['qv'] == qv)}" for qv in versions],
                   f'- Errors by status: {dict(errors)}',
                   f'- Latency ms: p50={decision_percentile(subset, 0.5)}; p95={decision_percentile(subset, 0.95)}',
                   f'- responseModel versions: {dict(models)}']
@@ -1208,34 +1346,89 @@ def decisions(args):
     lines += [f'- {root.name}: {job_id}' for root, job_id in missing] or ['- None.']
     ok = [row for row in rows if row['status'] == 'ok']
     head_rows = [row for row in ok if row['point'] == 'headReport']
-    lines += ['', '## headReport AUROC against continued', '']
-    for score in ('gapUnreported_p', 'reworkLikely_p', 'notes_flagged', 'format_missing'):
-        lines.append(f'- {score}: {decision_auc(head_rows, score, "continued")}')
-    lines += ['', '### Completion × continued', '', '| Completion | No | Yes | Unknown |', '|---|---:|---:|---:|']
-    for choice in ('complete', 'partial', 'blocked', 'unknown'):
-        subset = [row for row in head_rows if (row.get('completion_choice') or 'unknown') == choice]
-        lines.append(f'| {choice} | {sum(r["continued"] == 0 for r in subset)} | {sum(r["continued"] == 1 for r in subset)} | {sum(r["continued"] is None for r in subset)} |')
-    review_rows = [dict(row, findings_any=int(row['findings'] > 0) if row['findings'] is not None else None)
-                   for row in ok if row['point'] == 'preReview']
-    lines += ['', '## preReview AUROC', '']
-    for label in ('findings_any', 'accepted_any'):
-        for score in ('defectLikely_p', 'churn', 'filesTotal', 'headFlags', 'not_leadBuilt'):
-            lines.append(f'- {score} against {label}: {decision_auc(review_rows, score, label)}')
-    latest = {}
-    for key, row in zip(row_keys, rows):
-        if row['status'] != 'ok':
-            continue
-        group = (key, row['point'])
-        if group not in latest or (timestamp(row['at']) or 0) >= (timestamp(latest[group]['at']) or 0):
-            latest[group] = row
-    disposition = [row for row in ok if row['point'] == 'reviewDisposition']
-    distribution = collections.Counter(value for row in disposition for field, value in row.items()
-                                       if re.fullmatch(r'finding_[1-8]_choice', field) and value is not None)
-    agreement = [row for (_, point), row in latest.items() if point == 'reviewDisposition'
-                 and row['accepted'] is not None and row['reviewAccepted'] is not None]
-    lines += ['', '## reviewDisposition', '', f'- Choice distribution (ok decisions): {dict(distribution)}',
-              '- Per-job agreement (latest ok decision): ' + rate(sum(row['accepted'] == row['reviewAccepted'] for row in agreement), len(agreement)),
-              'Only jobs with complete choice answers and a known regex reviewAccepted count enter agreement. Questions are capped at eight; counts are compared as recorded.', '']
+    frequency = collections.Counter(min(len(group), 3) for group in head_groups.values())
+    lines += ['', '## headReport decision frequency', '',
+              '- Decisions per head (all statuses): ' + '; '.join(
+                  f'{name}={frequency[count]} heads' for count, name in ((1, '1'), (2, '2'), (3, '3+'))),
+              'Groups use source root, jobID and headID; missing headID rows are excluded. '
+              'continued_after is unknown for unmatched heads or groups with missing timestamps. '
+              'Equal timestamps retain ledger input order; the last report is zero only when continuations is known.']
+    for qv in versions:
+        version_ok = [row for row in ok if row['qv'] == qv]
+        head_rows = [row for row in version_ok if row['point'] == 'headReport']
+        for label in ('continued_after', 'continued'):
+            title = label + (' (cumulative control)' if label == 'continued' else '')
+            lines += ['', f'## headReport AUROC against {title} (questions v{qv})', '']
+            for score in ('gapUnreported_p', 'reworkLikely_p', 'completion_p', 'notes_flagged', 'format_missing'):
+                if any(score in row for row in head_rows):
+                    lines.append(f'- {score}: {decision_auc(head_rows, score, label)}')
+            if any('completion_choice' in row for row in head_rows):
+                lines += ['', f'### Completion × {title} (questions v{qv})', '', '| Completion | No | Yes | Unknown |', '|---|---:|---:|---:|']
+                for choice in ('complete', 'partial', 'blocked', 'unknown'):
+                    subset = [row for row in head_rows if (row.get('completion_choice') or 'unknown') == choice]
+                    lines.append(f'| {choice} | {sum(r[label] == 0 for r in subset)} | {sum(r[label] == 1 for r in subset)} | {sum(r[label] is None for r in subset)} |')
+        review_rows = [dict(row, findings_any=int(row['findings'] > 0) if row['findings'] is not None else None)
+                       for row in version_ok if row['point'] == 'preReview']
+        lines += ['', f'## preReview AUROC (questions v{qv})', '']
+        for label in ('findings_any', 'accepted_any_jev', 'accepted_any'):
+            for score in ('defectLikely_p', 'unrelatedChanges_p', 'churn', 'filesTotal', 'headFlags', 'not_leadBuilt'):
+                if not any(score in row for row in review_rows):
+                    continue
+                lines.append(f'- {score} against {label}' + (' (regex control)' if label == 'accepted_any' else '') + f': {decision_auc(review_rows, score, label)}')
+        if any('unrelatedChanges_p' in row for row in review_rows):
+            lines += ['', f'### preReview Spearman correlations (questions v{qv})', '']
+            for other in ('defectLikely_p', 'headFlags'):
+                lines.append(f'- unrelatedChanges_p vs {other}: '
+                             + decision_spearman(review_rows, 'unrelatedChanges_p', other))
+        latest = {}
+        for key, row in zip(row_keys, rows):
+            if row['status'] != 'ok' or row['qv'] != qv:
+                continue
+            group = (key, row['point'])
+            if group not in latest or (timestamp(row['at']) or 0) >= (timestamp(latest[group]['at']) or 0):
+                latest[group] = row
+        disposition = [row for row in version_ok if row['point'] == 'reviewDisposition']
+        distribution = collections.Counter(value for row in disposition for field, value in row.items()
+                                           if re.fullmatch(r'finding_[1-8]_choice', field) and value is not None)
+        agreement = [row for (_, point), row in latest.items() if point == 'reviewDisposition'
+                     and row['accepted'] is not None and row['reviewAccepted'] is not None]
+        lines += ['', f'## reviewDisposition (questions v{qv})', '', f'- Choice distribution (ok decisions): {dict(distribution)}',
+                  '- Per-job agreement (latest ok decision): ' + rate(sum(row['accepted'] == row['reviewAccepted'] for row in agreement), len(agreement)),
+                  'Only jobs with complete choice answers and a known regex reviewAccepted count enter agreement. Questions are capped at eight; counts are compared as recorded.', '']
+        summaries = []
+        lines += ['', f'## Threshold comparisons (questions v{qv})', '',
+                  'Paired complete cases; best heuristic is selected again in each bootstrap sample and time half. '
+                  'Bootstrap resamples source-root/job clusters, retaining all their observations; single-class samples are omitted. '
+                  'Missing decision times make the half comparison insufficient. CI is descriptive, not an additional threshold. '
+                  'completion_p is confidence in the selected choice, not a calibrated rework probability; interpret its comparison cautiously.',
+                  'continued measures any continuation, not proven rework: HydraJobHeadRecord stores only continuations '
+                  '(Tivano/Core/Models/Hydra2.swift:89); every successful continue increments it without a reason '
+                  '(Tivano/App/Runtime/ThreadRuntime.swift:4280). No reworked label is inferred.']
+        for point, subset, labels, scores, baselines in (
+                ('headReport', head_rows, ('continued_after', 'continued'), ('gapUnreported_p', 'reworkLikely_p', 'completion_p'),
+                 ('notes_flagged', 'format_missing')),
+                ('preReview', review_rows, ('findings_any', 'accepted_any_jev', 'accepted_any'),
+                 ('defectLikely_p', 'unrelatedChanges_p'), ('churn', 'filesTotal', 'headFlags', 'not_leadBuilt'))):
+            for label in labels:
+                results = []
+                for score in scores:
+                    if not any(score in row for row in subset):
+                        continue
+                    detail, summary = decision_threshold(subset, score, label, baselines)
+                    if label == 'continued':
+                        detail = detail.replace('against continued:', 'against continued (cumulative control):')
+                    lines.append(detail)
+                    results.append(summary)
+                if not results:
+                    continue
+                summaries.append(f'- {point} / {label}' + (' (regex control)' if label == 'accepted_any' else
+                                                                        ' (cumulative control)' if label == 'continued' else '')
+                                 + ': ' + '; '.join(results))
+        lines += ['', f'## Threshold summary (questions v{qv})', '', *summaries]
+    # Internal clustering identities never enter the CSV.
+    for row in rows:
+        row.pop('_job_key', None)
+        row.pop('_head_matched', None)
     out.mkdir(parents=True, exist_ok=True)
     fields = DECISION_FIELDS + sorted({field for row in rows for field in row} - set(DECISION_FIELDS))
     write_rows(out / 'decisions.csv', fields, rows)

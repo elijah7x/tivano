@@ -173,6 +173,10 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var controlWorkspace: ControlWorkspace?
     var providerSessionID: String?
     var providerResumeAt: String?
+    /// Nil on new chats until their first Claude process; legacy chats explicitly use the CLI default.
+    var claudeAccountID: UUID? = nil
+    var claudeUsesDefaultAccount: Bool? = nil
+    var claudeIdentity: ClaudeAccountIdentity? = nil
     var isPinned: Bool
     var isArchived: Bool
     var hasUnread: Bool
@@ -334,6 +338,11 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         }
         providerSessionID = container.value(.providerSessionID, default: nil)
         providerResumeAt = container.value(.providerResumeAt, default: nil)
+        claudeAccountID = try container.decodeIfPresent(UUID.self, forKey: .claudeAccountID)
+        claudeUsesDefaultAccount = try container.decodeIfPresent(Bool.self, forKey: .claudeUsesDefaultAccount)
+        claudeIdentity = try container.decodeIfPresent(ClaudeAccountIdentity.self, forKey: .claudeIdentity)
+        if provider == .claude, claudeAccountID == nil, claudeUsesDefaultAccount == nil,
+           hasStartedTurn || providerSessionID != nil { claudeUsesDefaultAccount = true }
         isPinned = container.value(.isPinned, default: false)
         isArchived = container.value(.isArchived, default: false)
         hasUnread = container.value(.hasUnread, default: false)

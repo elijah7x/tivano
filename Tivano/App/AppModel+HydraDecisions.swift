@@ -9,10 +9,13 @@ extension AppModel {
     }
 
     func runHydraDecision(_ request: HydraDecisionRequest, leadID: UUID, jobID: UUID, headID: UUID? = nil) {
+        guard hydraJobRunsDecisions(jobID, of: leadID) else { return }
         let at = Date.now.ISO8601Format()
         Task.detached(priority: .utility) {
+            guard await self.hydraJobRunsDecisions(jobID, of: leadID) else { return }
             var record: [String: JSONValue] = [
                 "v": .int(1),
+                "qv": .int(HydraDecisionRequests.questionVersion),
                 "kind": .string("decision"),
                 "id": .string(UUID().uuidString),
                 "at": .string(at),
@@ -32,7 +35,21 @@ extension AppModel {
                 "answers": .null
             ]
             if let headID { record["headID"] = .string(headID.uuidString) }
+            let acquired = await HydraDecisionConcurrency.shared.acquire()
+            guard await self.hydraJobRunsDecisions(jobID, of: leadID) else {
+                if acquired { await HydraDecisionConcurrency.shared.release() }
+                return
+            }
+            guard acquired else {
+                record["error"] = .string("skipped_busy")
+                await DecisionLedger.shared.append(.object(record))
+                return
+            }
             if let key = TypeSafeAPI.readKey() {
+                guard await self.hydraJobRunsDecisions(jobID, of: leadID) else {
+                    await HydraDecisionConcurrency.shared.release()
+                    return
+                }
                 let clock = ContinuousClock()
                 let start = clock.now
                 let result = await TypeSafeAPI.evaluate(state: request.state, questions: request.questions, key: key)
@@ -50,6 +67,7 @@ extension AppModel {
                     record["error"] = .string(failure.rawValue)
                 }
             }
+            await HydraDecisionConcurrency.shared.release()
             await DecisionLedger.shared.append(.object(record))
         }
     }
@@ -69,5 +87,20 @@ extension AppModel {
         Task.detached(priority: .utility) {
             await DecisionLedger.shared.append(record)
         }
+    }
+}
+
+private actor HydraDecisionConcurrency {
+    static let shared = HydraDecisionConcurrency()
+    private var inFlight = 0
+
+    func acquire() -> Bool {
+        guard inFlight < 4 else { return false }
+        inFlight += 1
+        return true
+    }
+
+    func release() {
+        inFlight -= 1
     }
 }

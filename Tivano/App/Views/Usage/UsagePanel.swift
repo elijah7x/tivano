@@ -12,10 +12,12 @@ struct UsagePanel: View {
     /// The pair's heads provider, when it differs from the lead's. Nil keeps the panel
     /// to the chat's own provider, exactly as before.
     let headsProvider: ProviderKind?
-    init(usage: ContextUsage?, provider: ProviderKind, headsProvider: ProviderKind? = nil) {
+    let threadID: UUID?
+    init(usage: ContextUsage?, provider: ProviderKind, headsProvider: ProviderKind? = nil, threadID: UUID? = nil) {
         self.usage = usage
         self.provider = provider
         self.headsProvider = headsProvider
+        self.threadID = threadID
     }
 
     var body: some View {
@@ -49,7 +51,7 @@ struct UsagePanel: View {
                     if showsContext {
                         Divider().padding(.vertical, 14)
                     }
-                    PlanLimitsView(provider: provider)
+                    PlanLimitsView(provider: provider, isChat: true, claudeAccountID: claudeAccountID)
                 }
 
                 if showsCredits {
@@ -63,13 +65,29 @@ struct UsagePanel: View {
         .padding(16)
         .frame(width: 360)
         .onAppear {
-            registry.refreshPlanLimits(provider)
+            if provider != .claude { registry.refreshPlanLimits(provider) }
             registry.refreshCredits(provider)
             if let heads {
-                registry.refreshPlanLimits(heads)
+                if heads != .claude { registry.refreshPlanLimits(heads) }
                 registry.refreshCredits(heads)
             }
         }
+    }
+
+    private var claudeAccountID: UUID? {
+        guard let threadID, let thread = model.thread(threadID) else { return nil }
+        return ThreadRuntime.claudeAccountForChat(thread, app: model)?.id
+    }
+
+    private var claudeHeadsAccountIDs: [UUID] {
+        guard let threadID else { return [] }
+        return Self.claudeHeadAccountIDs(model.hydraHeads(of: threadID), app: model)
+    }
+
+    private static func claudeHeadAccountIDs(_ heads: [ChatThread], app: AppModel) -> [UUID] {
+        var seen = Set<UUID>()
+        return heads.compactMap { ThreadRuntime.claudeAccountForChat($0, app: app)?.id }
+            .filter { seen.insert($0).inserted }
     }
 
     /// One provider's limits and credits under a small Lead/Heads header. A provider
@@ -90,7 +108,13 @@ struct UsagePanel: View {
             }
             .padding(.bottom, 8)
             if showsLimits {
-                PlanLimitsView(provider: p)
+                if p == .claude, p != provider, !claudeHeadsAccountIDs.isEmpty {
+                    ForEach(claudeHeadsAccountIDs, id: \.self) { accountID in
+                        PlanLimitsView(provider: p, isChat: true, claudeAccountID: accountID)
+                    }
+                } else {
+                    PlanLimitsView(provider: p, isChat: true, claudeAccountID: p == provider ? claudeAccountID : nil)
+                }
             }
             if showsLimits && showsCredits {
                 Divider().padding(.vertical, 14)

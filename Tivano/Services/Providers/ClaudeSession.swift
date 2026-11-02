@@ -43,6 +43,7 @@ final class ClaudeSession: ProviderSession {
     private var agentsByTask: [String: String] = [:]
     private var tasksByAgent: [String: String] = [:]
     private var backgroundTasks: [(id: String, description: String)] = []
+    private var activeNativeTasks: Set<String> = []
     private var turnActive = false
     private var preparationID: UUID?
     private var contextRevision = 0
@@ -66,6 +67,13 @@ final class ClaudeSession: ProviderSession {
 
     var isRunning: Bool { !isStopping && (process?.isRunning ?? false) }
 
+    var canReleaseForSignIn: Bool {
+        isStarted && !isStopping && !turnActive && preparationID == nil
+            && pendingTools.isEmpty && backgroundTasks.isEmpty && activeNativeTasks.isEmpty
+    }
+
+    var hasExitedForSignIn: Bool { hasClosed && process?.isRunning != true }
+
     private var workingDirectory: String { configuration.workingDirectory.path }
 
     /// The newer CLI options are only passed when `--help` lists them, so an older
@@ -82,7 +90,15 @@ final class ClaudeSession: ProviderSession {
     }
 
     func start() async throws -> String {
+        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
         guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
+        let accountID = configuration.claudeAccountID
+        if let accountID, !ProviderAccounts.beginProcess(accountID) {
+            throw ProviderError.failed(AppText.localized("This account is busy. Wait for its sessions and account checks to finish."))
+        }
+        var handedToReader = false
+        defer { if !handedToReader, let accountID { ProviderAccounts.endProcess(accountID) } }
+        try await validateAccountIdentity()
         let id = configuration.resumeID ?? UUID().uuidString.lowercased()
         var arguments = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -134,10 +150,11 @@ final class ClaudeSession: ProviderSession {
         self.process = process
         try process.start()
         let messages = process.messages
+        handedToReader = true
         readTask = Task { [weak self] in
+            defer { if let accountID { ProviderAccounts.endProcess(accountID) } }
             for await message in messages {
-                guard let self else { return }
-                await self.handle(message)
+                if let self { await self.handle(message) }
             }
             self?.didClose()
         }
@@ -172,6 +189,7 @@ final class ClaudeSession: ProviderSession {
     /// What the CLI reports in its handshake: its models, and the slash commands it finds
     /// for `directory`. A bare process, not a session: it gets the initialize and nothing else.
     static func handshake(executable: URL, directory: URL, environment: [String: String]) async throws -> (models: [ModelOption], commands: [SlashCommand]) {
+        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
         let process = StdioProcess(
             executable: executable,
             arguments: ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--setting-sources", "user,project,local"],
@@ -198,6 +216,16 @@ final class ClaudeSession: ProviderSession {
         } onCancel: {
             process.terminate()
         }
+    }
+
+    private func validateAccountIdentity() async throws {
+        guard configuration.environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1" else { return }
+        guard let expected = configuration.claudeIdentity else { throw ClaudeAccountValidationError.identityUnavailable }
+        guard let executable = configuration.executable else { throw ProviderError.notInstalled(.claude) }
+        let actual = try await ProviderRegistry.claudeIdentity(executable: executable,
+            environment: configuration.environment, directory: configuration.workingDirectory,
+            reusingFor: configuration.claudeAccountID)
+        guard expected.matches(actual) else { throw ClaudeAccountValidationError.identityChanged }
     }
 
     func send(_ input: TurnInput) async throws {
@@ -228,8 +256,18 @@ final class ClaudeSession: ProviderSession {
                 ["type": "image", "source": ["type": "base64", "media_type": .string(image.mimeType), "data": .string(base64)]]
             }
             content.append(["type": "text", "text": .string(input.text)])
+            try await validateAccountIdentity()
+            guard continuePreparation(preparation) else { return }
             preparationID = nil
             writeUserMessage(.array(content))
+        } catch ClaudeAccountValidationError.verificationFailed {
+            throw ClaudeAccountValidationError.verificationFailed
+        } catch let error as ClaudeAccountValidationError {
+            stop()
+            throw error
+        } catch let error as ClaudeCredentialError {
+            stop()
+            throw error
         } catch {
             guard continuePreparation(preparation) else { return }
             throw error
@@ -264,6 +302,10 @@ final class ClaudeSession: ProviderSession {
 
     func compact() async throws {
         guard let process, process.isRunning else { throw ProviderError.notRunning }
+        do { try await validateAccountIdentity() }
+        catch ClaudeAccountValidationError.verificationFailed { throw ClaudeAccountValidationError.verificationFailed }
+        catch { stop(); throw error }
+        guard isRunning else { throw ProviderError.notRunning }
         writeUserMessage("/compact")
     }
 
@@ -512,6 +554,7 @@ final class ClaudeSession: ProviderSession {
                 onEvent?(.backgroundTasks(backgroundTasks.map(\.description)))
                 return
             }
+            activeNativeTasks.remove(taskID)
             guard let agentID = agentsByTask[taskID] else { return }
             let status: TurnStatus = switch message["status"]?.string {
             case "failed": .failed
@@ -537,6 +580,7 @@ final class ClaudeSession: ProviderSession {
         }
         let toolUseID = message["tool_use_id"]?.string
         let agentID = toolUseID ?? taskID
+        activeNativeTasks.insert(taskID)
         agentsByTask[taskID] = agentID
         tasksByAgent[agentID] = taskID
         onEvent?(.agentStarted(AgentSpawn(

@@ -20946,13 +20946,13 @@
         }
       }
     },
-    "Tivano local control (the app must already be running and manually enabled in Settings > Alpha).\nCommands: info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\nList flags: --limit N --cursor TOKEN\nThread flags: --archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\nWrites: --operation INSTANCE/UUID/TIMESTAMP reuses an existing ticket in that instance only.\nSave the ticket printed before delivery. A disconnect is not failure; query the ticket instead of repeating the write.\nJSON output reports acceptance, not task success. Expired/restarted outcomes are unknown. No automatic retries or app launch." : {
+    "Tivano local control (the app must already be running and manually enabled in Settings > Alpha).\nCommands: info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\nList flags: --limit N --cursor TOKEN\nThread flags: --archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\nWrites: --operation INSTANCE/UUID/TIMESTAMP reuses an existing ticket in that instance only.\nSave the ticket printed before delivery. A disconnect is not failure; query the ticket instead of repeating the write.\nJSON output reports acceptance, not task success. Expired/restarted outcomes are unknown. No automatic retries or app launch." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 本地控制（应用必须已运行，并在设置 > Alpha 中手动启用）。\n命令：info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\n列表选项：--limit N --cursor TOKEN\n线程选项：--archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\n写操作：--operation INSTANCE/UUID/TIMESTAMP 仅在同一应用实例中复用已有操作凭据。\n请保存发送前打印的操作凭据。断开连接不代表失败；应查询凭据，而非重复执行写操作。\nJSON 输出表示操作已接受，不代表任务成功。过期或重启后的结果为 unknown。不会自动重试或启动应用。"
+            "value" : "Tivano 本地控制（应用必须已运行，并在设置 > Alpha 中手动启用）。\n命令：info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\n列表选项：--limit N --cursor TOKEN\n线程选项：--archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\n写操作：--operation INSTANCE/UUID/TIMESTAMP 仅在同一应用实例中复用已有操作凭据。\n请保存发送前打印的操作凭据。断开连接不代表失败；应查询凭据，而非重复执行写操作。\nJSON 输出表示操作已接受，不代表任务成功。过期或重启后的结果为 unknown。不会自动重试或启动应用。"
           }
         }
       }
@@ -25075,6 +25075,710 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "粘贴你的隧道 HTTPS 地址"
+          }
+        }
+      }
+    },
+    "Enable this imported login in account settings before using it. Accounts awaiting cleanup must be removed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先在账号设置中启用此导入的登录凭证。等待清理的账号必须先移除。"
+          }
+        }
+      }
+    },
+    "Enable imported login": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启用导入的登录凭证"
+          }
+        }
+      }
+    },
+    "Enable imported login?": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启用导入的登录凭证？"
+          }
+        }
+      }
+    },
+    "Refreshing this copied login may require CSWAP or another Tivano instance to sign in again. We recommend signing in separately in each instance.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "刷新这份登录凭证副本可能导致 CSWAP 或另一个 Tivano 实例需要重新登录。建议在每个实例中分别登录。"
+          }
+        }
+      }
+    },
+    "Cleanup required. Retry removing this account.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要清理，请重试移除此账号。"
+          }
+        }
+      }
+    },
+    "Saved, not activated": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已保存，尚未启用"
+          }
+        }
+      }
+    },
+    "No Claude account bound": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未绑定 Claude 账号"
+          }
+        }
+      }
+    },
+    "Default profile: follows the external Claude CLI login.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "默认配置：跟随外部 Claude CLI 的登录账号。"
+          }
+        }
+      }
+    },
+    "This chat uses this Claude account, regardless of the account selected for new chats.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此对话使用这个 Claude 账号，不受新对话所选账号影响。"
+          }
+        }
+      }
+    },
+    "Usage appears after this chat binds to an account.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此对话绑定账号后显示额度。"
+          }
+        }
+      }
+    },
+    "Sign in again from this account’s settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请在此账号的设置中重新登录。"
+          }
+        }
+      }
+    },
+    "The Claude account directory is not safe to access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法安全访问该 Claude 账号目录。"
+          }
+        }
+      }
+    },
+    "The Claude credentials are damaged or use an unsupported format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 凭证已损坏，或使用了不支持的格式。"
+          }
+        }
+      }
+    },
+    "The Claude account file could not be read.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 Claude 账号文件。"
+          }
+        }
+      }
+    },
+    "The Claude credential file could not be removed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法删除 Claude 凭证文件。"
+          }
+        }
+      }
+    },
+    "The Claude credentials could not be read from Keychain. Unlock it or allow access, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法从钥匙串读取 Claude 凭证，请解锁钥匙串或允许访问后重试。"
+          }
+        }
+      }
+    },
+    "The Claude credentials could not be saved to Keychain.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法将 Claude 凭证保存到钥匙串。"
+          }
+        }
+      }
+    },
+    "The Claude credentials could not be removed from Keychain.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法从钥匙串删除 Claude 凭证。"
+          }
+        }
+      }
+    },
+    "Claude account credentials are unavailable during captures.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "截图录制期间无法访问 Claude 账号凭证。"
+          }
+        }
+      }
+    },
+    "The CSWAP account index is damaged or uses an unsupported format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CSWAP 账号索引已损坏，或使用了不支持的格式。"
+          }
+        }
+      }
+    },
+    "The CSWAP account changed. Refresh the account list and select it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CSWAP 账号已变更，请刷新账号列表后重新选择。"
+          }
+        }
+      }
+    },
+    "No saved OAuth credentials were found for this CSWAP account.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未找到该 CSWAP 账号保存的 OAuth 凭证。"
+          }
+        }
+      }
+    },
+    "The Claude account operation failed. Try again or sign in with Claude.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 账号操作失败，请重试或通过 Claude 登录。"
+          }
+        }
+      }
+    },
+    "The Claude account or organization changed. Restore the original login to continue this chat.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 账号或组织已变更，请恢复原来的登录身份后继续此对话。"
+          }
+        }
+      }
+    },
+    "Claude did not provide a verifiable account and organization identity. No message was sent.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 未提供可验证的账号和组织身份，未发送消息。"
+          }
+        }
+      }
+    },
+    "Claude authentication settings conflict with this chat's account. Remove the API key, helper, or provider override before continuing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 认证设置与此对话的账号冲突，请移除 API key、认证辅助脚本或 provider 覆盖设置后继续。"
+          }
+        }
+      }
+    },
+    "This older Claude chat has no verified account identity. Its history is kept; start a new chat with the intended account.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此旧版 Claude 对话没有经过验证的账号身份。历史记录已保留，请选择所需账号新建对话。"
+          }
+        }
+      }
+    },
+    "Claude account identity could not be verified. Check your connection and sign-in, then try again. No message was sent.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法验证 Claude 账号身份，请检查网络连接和登录状态后重试，未发送消息。"
+          }
+        }
+      }
+    },
+    "%@ — import failed: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ — 导入失败：%@"
+          }
+        }
+      }
+    },
+    "Accounts used by saved Claude chats cannot be removed. Removing another account deletes only its local Tivano credentials and profile; CSWAP is unchanged.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已有保存的 Claude 对话使用的账号无法移除。移除其他账号仅删除其本地 Tivano 凭证和配置目录，不影响 CSWAP。"
+          }
+        }
+      }
+    },
+    "This account is busy. Wait for its sessions and account checks to finish.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此账号正忙，请等待它的会话和账号检查结束。"
+          }
+        }
+      }
+    },
+    "Claude sign-in failed. Try signing in again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 登录失败，请重试。"
+          }
+        }
+      }
+    },
+    "This account is bound to saved chats. Delete those chats before removing the account.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已有保存的对话绑定此账号，请先删除这些对话，再移除账号。"
+          }
+        }
+      }
+    },
+    "Claude sign-out failed. The account was kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 退出登录失败，账号已保留。"
+          }
+        }
+      }
+    },
+    "Claude credentials could not be removed. The account was kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法删除 Claude 凭证，账号已保留。"
+          }
+        }
+      }
+    },
+    "Claude account authentication could not be confirmed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法确认 Claude 账号的登录状态。"
+          }
+        }
+      }
+    },
+    "Sign in with a Claude subscription account.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请使用 Claude 订阅账号登录。"
+          }
+        }
+      }
+    },
+    "%@ — already saved; skipped": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ — 已保存，已跳过"
+          }
+        }
+      }
+    },
+    "%@ — imported": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ — 已导入"
+          }
+        }
+      }
+    },
+    "%@ — import failed; sign in with Claude instead": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ — 导入失败，请通过 Claude 登录"
+          }
+        }
+      }
+    },
+    "Claude sign-in has expired. Sign in again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 登录已过期，请重新登录。"
+          }
+        }
+      }
+    },
+    "Claude credentials could not be read. Sign in again or allow macOS credential access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 Claude 凭证，请重新登录或允许 macOS 凭证访问。"
+          }
+        }
+      }
+    },
+    "This chat's Claude account is unavailable. Restore the account to continue.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此对话绑定的 Claude 账号不可用，请恢复该账号后继续。"
+          }
+        }
+      }
+    },
+    "Account selection": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "账号选择"
+          }
+        }
+      }
+    },
+    "Your selection applies only to new Claude chats. Existing chats keep their profile. The default profile follows your CLI login.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择仅对新的 Claude 对话生效。已有对话保留原配置；默认配置跟随 CLI 的登录账号。"
+          }
+        }
+      }
+    },
+    "Import from CSWAP": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从 CSWAP 导入"
+          }
+        }
+      }
+    },
+    "Reading selected credentials may require macOS permission. Using the same imported login in CSWAP and Tivano may require signing in again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取所选凭证可能需要 macOS 授权。在 CSWAP 和 Tivano 中同时使用同一份导入的登录凭证，可能需要重新登录。"
+          }
+        }
+      }
+    },
+    "Choose accounts": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择账号"
+          }
+        }
+      }
+    },
+    "CSWAP accounts could not be read. Use Add account to sign in with Claude.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 CSWAP 账号，请使用“添加账号”通过 Claude 登录。"
+          }
+        }
+      }
+    },
+    "No CSWAP accounts found": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未找到 CSWAP 账号"
+          }
+        }
+      }
+    },
+    "Import selected accounts": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入所选账号"
+          }
+        }
+      }
+    },
+    "Existing accounts with the same account and organization are skipped.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "相同账号和组织的已有记录会被跳过。"
+          }
+        }
+      }
+    },
+    "Import result": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入结果"
+          }
+        }
+      }
+    },
+    "Accounts used by saved Claude chats cannot be removed. Other accounts are signed out and their Tivano profile is deleted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已有保存的 Claude 对话使用的账号无法移除。其他账号会退出登录，并删除其 Tivano 配置目录。"
+          }
+        }
+      }
+    },
+    "Selected for new chats": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选为新对话账号"
+          }
+        }
+      }
+    },
+    "The account changes could not be saved. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存账号更改，请重试。"
+          }
+        }
+      }
+    },
+    "Activate this Claude account before using it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先启用此 Claude 账号。"
+          }
+        }
+      }
+    },
+    "This Claude account needs local cleanup. Remove it and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此 Claude 账号需要清理本地数据，请移除后重试。"
+          }
+        }
+      }
+    },
+    "%@ — saved; awaiting activation": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ — 已保存，待启用"
+          }
+        }
+      }
+    },
+    "Claude sign-in cleanup": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 登录待清理"
+          }
+        }
+      }
+    },
+    "Claude usage is temporarily unavailable. Use Claude normally to let the official CLI refresh its login, then check usage again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂时无法读取 Claude 用量。正常使用 Claude 时，官方 CLI 会刷新登录，之后可再次查看用量。"
+          }
+        }
+      }
+    },
+    "Claude credentials could not be read. Check this account's sign-in and macOS credential access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 Claude 凭证，请检查此账号的登录状态及 macOS 凭证访问权限。"
+          }
+        }
+      }
+    },
+    "Login replacement was interrupted. Sign in again to recover this account.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录更新中断，请重新登录以恢复此账号。"
+          }
+        }
+      }
+    },
+    "Import saves a copy without enabling it. The CSWAP backup may be outdated. macOS may ask for credential access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入仅保存副本，不会启用账号。CSWAP 备份可能已过期，macOS 可能要求授权访问凭证。"
           }
         }
       }

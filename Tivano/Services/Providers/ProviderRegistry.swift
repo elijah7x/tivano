@@ -155,6 +155,11 @@ final class ProviderRegistry {
     @ObservationIgnored private var deepSeekKeyRefresh: Task<Void, Never>?
     @ObservationIgnored private var dshCatalogTask: Task<[ModelOption]?, Never>?
     @ObservationIgnored private var dshCatalogGeneration = UUID()
+    /// The dsh configuration the last automatic reload tried, so a failing probe is not
+    /// re-spawned every time a view asks.
+    @ObservationIgnored private var dshProbedConfiguration: String?
+    /// The dsh configuration the stored catalog was listed under.
+    @ObservationIgnored private let dshCatalogConfigurationKey = "dshCatalogConfiguration"
     @ObservationIgnored private(set) var dshAuthenticationRevision = UUID()
 
     /// Visible to `ProviderRegistry+CLIUpdates`. The registry still does not see the rest of the app.
@@ -523,8 +528,22 @@ final class ProviderRegistry {
     func environment(for provider: ProviderKind, account: ProviderAccount?) -> [String: String] {
         var environment = baseEnvironment(for: provider)
         guard !DshIntegrationConfiguration.isEnabled else { return environment }
+        if provider == .claude, account?.isDefault == true {
+            environment.removeValue(forKey: "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST")
+        }
         if provider == .codex, let home = account?.home, !home.isEmpty {
             environment["CODEX_HOME"] = home
+        }
+        if provider == .claude, account?.isDefault != true {
+            let home = account?.home ?? (ProviderAccountStore.accountsRoot as NSString).appendingPathComponent("claude/unavailable")
+            for key in Array(environment.keys) where key.hasPrefix("ANTHROPIC_")
+                || key.hasPrefix("CLAUDE_CODE_OAUTH") || key.hasPrefix("CLAUDE_CODE_USE_")
+                || ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS", "CLAUDE_CODE_SESSION_ACCESS_TOKEN", "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"].contains(key) {
+                environment.removeValue(forKey: key)
+            }
+            environment["CLAUDE_CONFIG_DIR"] = home
+            environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = home
+            environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] = "1"
         }
         return environment
     }
@@ -568,6 +587,13 @@ final class ProviderRegistry {
         guard !DshIntegrationConfiguration.isEnabled else {
             return AppText.localized("DeepSeek Harness sign-in did not finish. Try again.")
         }
+        if provider == .claude {
+            guard !CaptureRun.isEnabled, let account = accounts.activeAccount(for: .claude),
+                  !account.requiresClaudeActivation, !account.requiresClaudeCleanup else {
+                return AppText.localized("The Claude account operation failed. Try again or sign in with Claude.")
+            }
+            return await accounts.signIn(account)
+        }
         guard signingIn == nil else { return nil }
         guard !provider.isAPIKeyBased, provider == .dsh || !provider.loginCommand.isEmpty else { return nil }
         signingIn = provider
@@ -605,7 +631,7 @@ final class ProviderRegistry {
 
     /// The Providers page's refresh button: checks every provider again, re-reads usage limits
     /// for each signed-in account only while the page shows them and reloads the live catalogs.
-    /// Beyond the limits, nothing on that page checks on its own, so this is the only way it hits the CLIs and APIs.
+    /// Claude keeps its seed catalog until a user-started session reports live models.
     func refreshEverything() async {
         guard !DshIntegrationConfiguration.isEnabled else { return }
         guard !isRefreshing else { return }
@@ -672,6 +698,13 @@ final class ProviderRegistry {
             return
         }
         guard !CaptureRun.isEnabled else { return }
+        if provider == .claude {
+            guard let account = accounts.activeAccount(for: .claude),
+                  !account.requiresClaudeActivation, !account.requiresClaudeCleanup else {
+                setStatus(ProviderStatus(executable: executable(for: .claude), auth: .unknown), for: .claude)
+                return
+            }
+        }
         let dshRevision = dshAuthenticationRevision
         var status = statuses[provider] ?? ProviderStatus()
         status.isChecking = true
@@ -681,11 +714,28 @@ final class ProviderRegistry {
             return
         }
         await LoginEnvironment.load()
+        if provider == .claude {
+            guard let account = accounts.activeAccount(for: .claude),
+                  !account.requiresClaudeActivation, !account.requiresClaudeCleanup else {
+                setStatus(ProviderStatus(executable: executable(for: .claude), auth: .unknown), for: .claude)
+                return
+            }
+        }
         guard let executable = executable(for: provider) else {
             setStatus(ProviderStatus(), for: provider)
             return
         }
+        let observedRevision = accounts.selectionRevision
+        let observedAccount = accounts.activeAccount(for: provider)?.id
+        if provider == .claude, let observedAccount, !ProviderAccounts.beginRead(observedAccount) { return }
+        defer { if provider == .claude, let observedAccount { ProviderAccounts.endRead(observedAccount) } }
         let environment = environment(for: provider)
+        if provider == .claude, !Self.claudeAccountAllowsProbe(environment: environment) {
+            status.isChecking = false
+            status.auth = .unknown
+            setStatus(status, for: provider)
+            return
+        }
         if provider == .zcode {
             let auth: ProviderStatus.Auth = settings.apiKey(for: .zai).isEmpty
                 ? .signedOut : .signedIn(AppText.localized("GLM Coding Plan key"))
@@ -706,6 +756,7 @@ final class ProviderRegistry {
             return
         }
         let auth = await Self.auth(provider, executable, environment)
+        guard provider != .claude || accounts.selectionRevision == observedRevision else { return }
         guard provider != .dsh || (dshRevision == dshAuthenticationRevision && !Task.isCancelled) else { return }
         let authMessage = provider == .dsh && auth == .signedOut
             ? AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings → Providers → DeepSeek.")
@@ -842,11 +893,19 @@ final class ProviderRegistry {
 
     /// The version the installed CLI reports, or nil when it cannot be read.
     func installedCLIVersion(_ provider: ProviderKind) async -> String? {
+        if provider == .claude {
+            guard !CaptureRun.isEnabled, let account = accounts.activeAccount(for: .claude),
+                  !account.requiresClaudeActivation, !account.requiresClaudeCleanup else { return nil }
+        }
         if DshIntegrationConfiguration.isEnabled {
             guard provider == .dsh, let executable = executable(for: provider) else { return nil }
             return await Self.version(executable, environment(for: provider))
         }
         await LoginEnvironment.load()
+        if provider == .claude {
+            guard let account = accounts.activeAccount(for: .claude),
+                  !account.requiresClaudeActivation, !account.requiresClaudeCleanup else { return nil }
+        }
         guard let executable = executable(for: provider) else { return nil }
         let raw = await cliCommandRunner.readVersion(executable, CLIInstallEnvironment.current)
         return Self.readableCLIVersion(raw)
@@ -854,6 +913,11 @@ final class ProviderRegistry {
 
     func loadCatalog(_ provider: ProviderKind, force: Bool = false) async {
         guard !CaptureRun.isEnabled || (DshIntegrationConfiguration.isEnabled && provider == .dsh && DshIntegrationConfiguration.paths != nil) else { return }
+        if provider == .claude {
+            // Real sessions deliver their catalog; discovery must not run user hooks or MCP.
+            if models(for: .claude).isEmpty { updateCatalog(Self.claudeSeed, for: .claude) }
+            return
+        }
         if provider == .dsh {
             await loadDshCatalog(force: force)
             return
@@ -865,9 +929,7 @@ final class ProviderRegistry {
             return
         }
         // Copilot's seed is only its Auto row, and Command Code's a handful of its seventy
-        // models, so the account's list is fetched on first use. Claude's seed is the four
-        // names its CLI has always taken, so its handshake runs every launch: the CLI's own
-        // list follows its version. An OpenCode list cached before the probe walked the
+        // models, so the account's list is fetched on first use. An OpenCode list cached before the probe walked the
         // models for their reasoning levels holds a scale for one model at most, so it is
         // probed again.
         let seeded = provider == .claude || provider == .codex || provider == .zcode
@@ -882,9 +944,13 @@ final class ProviderRegistry {
         defer { loadingCatalogs.remove(provider) }
         await LoginEnvironment.load()
         guard let executable = executable(for: provider) else { return }
+        let observedRevision = accounts.selectionRevision
+        let observedAccount = accounts.activeAccount(for: provider)?.id
+        if provider == .claude, let observedAccount, !ProviderAccounts.beginRead(observedAccount) { return }
+        defer { if provider == .claude, let observedAccount { ProviderAccounts.endRead(observedAccount) } }
         let environment = environment(for: provider)
         let raw: [ModelOption]? = switch provider {
-        case .claude: await loadClaudeCatalog(executable: executable, environment: environment)
+        case .claude: Self.claudeSeed
         case .codex: try? await CodexSession.listModels(executable: executable, environment: environment)
         case .antigravity: try? await AntigravitySession.listModels(executable: executable, environment: environment)
         case .copilot: try? await CopilotSession.listModels(executable: executable, environment: environment)
@@ -897,6 +963,10 @@ final class ProviderRegistry {
         case .cursor, .grok, .devin, .kimi, .dsh: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
         case .opencode: await openCodeCatalog(force: force, executable: executable, environment: environment)
         case .deepseek, .meta, .zai: nil
+        }
+        guard provider != .claude || accounts.selectionRevision == observedRevision else {
+            Task { await self.loadCatalog(provider, force: true) }
+            return
         }
         if let list = raw, !list.isEmpty {
             updateCatalog(list, for: provider)
@@ -931,7 +1001,12 @@ final class ProviderRegistry {
         guard !loadingCatalogs.contains(.dsh) else { return }
         let stale = catalogFetchedAt[.dsh].map { Date.now.timeIntervalSince($0) > Self.catalogFreshness } ?? true
         let seeded = models(for: .dsh) == Self.dshSeed
-        guard force || (!attemptedCatalogs.contains(.dsh) && (seeded || stale || models(for: .dsh).isEmpty)) else { return }
+        // Any change to the DeepSeek Harness configuration since the last listing makes it stale.
+        let configured = DshCLI.configurationFingerprint(environment: baseEnvironment(for: .dsh))
+        let listed = CaptureRun.isEnabled ? nil : UserDefaults.standard.string(forKey: dshCatalogConfigurationKey)
+        let reconfigured = !CaptureRun.isEnabled && configured != listed && configured != dshProbedConfiguration
+        guard force || reconfigured || (!attemptedCatalogs.contains(.dsh) && (seeded || stale || models(for: .dsh).isEmpty)) else { return }
+        dshProbedConfiguration = configured
         let generation = UUID()
         dshCatalogGeneration = generation
         loadingCatalogs.insert(.dsh)
@@ -972,6 +1047,7 @@ final class ProviderRegistry {
         catalogFetchedAt[.dsh] = .now
         storeCatalogDates()
         attemptedCatalogs.insert(.dsh)
+        if !CaptureRun.isEnabled { UserDefaults.standard.set(configured, forKey: dshCatalogConfigurationKey) }
     }
 
     /// An OpenCode list cached before the catalog probe walked the models for their
@@ -994,12 +1070,6 @@ final class ProviderRegistry {
         let list = await task.value
         if list == nil { openCodeCatalogTask = nil }
         return list
-    }
-
-    private func loadClaudeCatalog(executable: URL, environment: [String: String]) async -> [ModelOption]? {
-        // The handshake runs somewhere: the models are the same from any folder.
-        let directory = FileManager.default.temporaryDirectory
-        return try? await ClaudeSession.handshake(executable: executable, directory: directory, environment: environment).models
     }
 
     private func loadAPICatalog(_ provider: ProviderKind, force: Bool) async {
@@ -1039,6 +1109,20 @@ final class ProviderRegistry {
         UserDefaults.standard.set(data, forKey: catalogDatesKey)
     }
 
+    func invalidateClaudeAccountViews() {
+        if var status = statuses[.claude] {
+            status.auth = .unknown
+            status.authMessage = nil
+            setStatus(status, for: .claude)
+        }
+        catalogs[.claude] = Self.claudeSeed
+        catalogFetchedAt[.claude] = nil
+        attemptedCatalogs.remove(.claude)
+        commandsFetchedAt = commandsFetchedAt.filter { !$0.key.hasPrefix("claude") }
+        commands = commands.filter { !$0.key.hasPrefix("claude") }
+        commandErrors = commandErrors.filter { !$0.key.hasPrefix("claude") }
+    }
+
     /// Drops the provider's limits and any read in flight, so numbers from the previous account never land on the new one.
     func resetPlanLimits(_ provider: ProviderKind) {
         limitReadGenerations[provider] = nil
@@ -1048,14 +1132,55 @@ final class ProviderRegistry {
         loadingLimits.remove(provider)
     }
 
-    /// Reads the provider's plan limits, at most once a minute after a successful read unless forced.
-    /// The read runs on its own task, so closing the popover that asked for it cannot cancel it.
+    /// Account reads share their cache and in-flight request with the account settings UI.
+    /// This entry point does not change the globally selected account's display.
+    func refreshClaudePlanLimits(accountID: UUID, force: Bool = false) async -> PlanLimits? {
+        guard !CaptureRun.isEnabled, let account = accounts.account(id: accountID),
+              account.provider == .claude, !account.requiresClaudeActivation,
+              !account.requiresClaudeCleanup else { return nil }
+        _ = await accounts.refreshClaudeAccount(accountID, force: force)
+        guard let current = accounts.account(id: accountID), current.home == account.home,
+              !current.requiresClaudeActivation, !current.requiresClaudeCleanup else { return nil }
+        return accounts.states[accountID]?.limits
+    }
+
+    /// Claude's cache and read ownership live in ProviderAccounts, including failed reads.
+    /// Other providers retain their provider-level refresh policy.
     func refreshPlanLimits(_ provider: ProviderKind, force: Bool = false,
                            executable suppliedExecutable: URL? = nil,
                            environment suppliedEnvironment: [String: String]? = nil) {
         guard !CaptureRun.isEnabled, PlanLimitsReader.exposesLimits(provider) else { return }
+        if provider == .claude {
+            guard let account = accounts.activeAccount(for: .claude),
+                  !account.requiresClaudeActivation, !account.requiresClaudeCleanup else {
+                resetPlanLimits(.claude)
+                return
+            }
+            guard !loadingLimits.contains(.claude) else { return }
+            let generation = UUID()
+            let selection = accounts.selectionRevision
+            limitReadGenerations[.claude] = generation
+            loadingLimits.insert(.claude)
+            limitReadTasks[.claude] = Task {
+                defer {
+                    if limitReadGenerations[.claude] == generation {
+                        limitReadGenerations[.claude] = nil
+                        limitReadTasks[.claude] = nil
+                        loadingLimits.remove(.claude)
+                    }
+                }
+                let limits = await refreshClaudePlanLimits(accountID: account.id, force: force)
+                guard !Task.isCancelled, limitReadGenerations[.claude] == generation,
+                      accounts.selectionRevision == selection,
+                      accounts.activeAccount(for: .claude)?.id == account.id else { return }
+                planLimits[.claude] = limits
+                limitsFetchedAt[.claude] = accounts.states[account.id]?.fetchedAt
+            }
+            return
+        }
         guard force || !loadingLimits.contains(provider) else { return }
         if !force, let fetched = limitsFetchedAt[provider], Date.now.timeIntervalSince(fetched) < 60 { return }
+        let requestedAccount = accounts.activeAccount(for: provider)
         let generation = UUID()
         limitReadGenerations[provider] = generation
         limitReadTasks[provider]?.cancel()
@@ -1090,7 +1215,7 @@ final class ProviderRegistry {
                     return
                 }
                 limits = await PlanLimitsReader.read(provider, executable: executable,
-                                                     environment: suppliedEnvironment ?? environment(for: provider))
+                                                     environment: suppliedEnvironment ?? environment(for: provider, account: requestedAccount))
                     ?? PlanLimitsReader.failure("The provider did not return usage data. The usage request may have failed or may be unsupported.")
             }
             finishPlanLimits(provider, generation: generation, limits: limits)
@@ -1241,7 +1366,8 @@ final class ProviderRegistry {
 
     /// `force` asks again whatever the list's age: the retry after a failed load.
     func loadCommands(_ provider: ProviderKind, directory: String, force: Bool = false) async {
-        guard !CaptureRun.isEnabled, provider == .codex || provider == .claude else { return }
+        // Claude commands arrive with a user-started session, without a discovery handshake.
+        guard !CaptureRun.isEnabled, provider == .codex else { return }
         let key = Self.commandKey(provider, directory: directory)
         if let task = commandLoads[key] { await task.value; return }
         if !force, let fetched = commandsFetchedAt[key], Date.now.timeIntervalSince(fetched) < Self.commandFreshness { return }
@@ -1250,9 +1376,7 @@ final class ProviderRegistry {
         let task = Task {
             do {
                 let directoryURL = URL(fileURLWithPath: directory)
-                let list = try await provider == .codex
-                    ? CodexSession.listCommands(executable: executable, directory: directoryURL, environment: environment)
-                    : ClaudeSession.handshake(executable: executable, directory: directoryURL, environment: environment).commands
+                let list = try await CodexSession.listCommands(executable: executable, directory: directoryURL, environment: environment)
                 updateCommands(list, for: provider, directory: directory)
             } catch {
                 var updatedErrors = commandErrors
@@ -1278,6 +1402,137 @@ final class ProviderRegistry {
         return nil
     }
 
+    private static var claudeIdentityCache: [UUID: (configDirectory: String, identity: ClaudeAccountIdentity, verifiedAt: Date)] = [:]
+    private static var claudeIdentityProbes: [UUID: Task<ClaudeAccountIdentity, Error>] = [:]
+    private static let claudeIdentityReuse: TimeInterval = 300
+
+    static func forgetClaudeIdentity(_ accountID: UUID) {
+        claudeIdentityCache.removeValue(forKey: accountID)
+        claudeIdentityProbes.removeValue(forKey: accountID)
+    }
+
+    /// Claude Code owns token validation and refresh. Its auth status and profile metadata
+    /// identify the isolated login without blocking an expired token before the CLI can refresh it.
+    static func claudeIdentity(executable: URL, environment: [String: String], directory: URL, signingInAccountID: UUID? = nil, reusingFor accountID: UUID? = nil) async throws -> ClaudeAccountIdentity {
+        guard claudeAccountAllowsProbe(environment: environment, signingInAccountID: signingInAccountID) else {
+            throw ClaudeAccountValidationError.verificationFailed
+        }
+        try rejectClaudeAuthenticationOverrides(environment: environment, directory: directory)
+        guard let accountID else {
+            return try await probeClaudeIdentity(executable: executable, environment: environment, directory: directory)
+        }
+        // `claude auth status` costs a CLI launch per call. Tivano's sign-in forgets the cached
+        // answer; a login from elsewhere rewrites the profile's oauthAccount, which must still match.
+        let configDirectory = environment["CLAUDE_CONFIG_DIR"] ?? ""
+        if let cached = claudeIdentityCache[accountID], cached.configDirectory == configDirectory,
+           Date.now.timeIntervalSince(cached.verifiedAt) < claudeIdentityReuse,
+           let metadata = ProviderAccountStore.claudeIdentity(home: ProviderAccountStore.defaultClaudeHome(environment: environment),
+                                                              isDefault: environment["CLAUDE_CONFIG_DIR"].map { $0.isEmpty } ?? true),
+           metadata["accountUuid"]?.string == cached.identity.accountID,
+           metadata["organizationUuid"]?.string == cached.identity.organizationID,
+           metadata["emailAddress"]?.string?.lowercased() == cached.identity.email.lowercased() {
+            return cached.identity
+        }
+        if let task = claudeIdentityProbes[accountID] { return try await task.value }
+        let task = Task {
+            try await probeClaudeIdentity(executable: executable, environment: environment, directory: directory)
+        }
+        claudeIdentityProbes[accountID] = task
+        defer {
+            if claudeIdentityProbes[accountID] == task { claudeIdentityProbes.removeValue(forKey: accountID) }
+        }
+        let identity = try await task.value
+        if claudeIdentityProbes[accountID] == task {
+            claudeIdentityCache[accountID] = (configDirectory, identity, .now)
+        }
+        return identity
+    }
+
+    private static func probeClaudeIdentity(executable: URL, environment: [String: String], directory: URL) async throws -> ClaudeAccountIdentity {
+        let result: ShellResult
+        do {
+            result = try await Shell.run(executable, ["--setting-sources", "user,project,local", "auth", "status"],
+                                         in: directory, environment: environment, timeout: 20)
+        } catch { throw ClaudeAccountValidationError.verificationFailed }
+        guard result.succeeded, let status = JSONValue.parse(result.stdout),
+              status["loggedIn"]?.bool == true, status["authMethod"]?.string == "claude.ai" else {
+            throw ClaudeAccountValidationError.authentication
+        }
+        let configured = ProviderAccountStore.defaultClaudeHome(environment: environment)
+        guard status["configDirectory"]?.string == configured else { throw ClaudeAccountValidationError.settingsConflict }
+        let defaultMetadata = environment["CLAUDE_CONFIG_DIR"].map { $0.isEmpty } ?? true
+        guard let metadata = ProviderAccountStore.claudeIdentity(home: configured, isDefault: defaultMetadata),
+              let accountID = metadata["accountUuid"]?.string, !accountID.isEmpty,
+              let organizationID = metadata["organizationUuid"]?.string, !organizationID.isEmpty,
+              let email = status["email"]?.string, !email.isEmpty else {
+            throw ClaudeAccountValidationError.identityUnavailable
+        }
+        guard status["orgId"]?.string == organizationID,
+              metadata["emailAddress"]?.string?.lowercased() == email.lowercased() else {
+            throw ClaudeAccountValidationError.identityChanged
+        }
+        return ClaudeAccountIdentity(accountID: accountID, organizationID: organizationID, email: email)
+    }
+
+    private static func rejectClaudeAuthenticationOverrides(environment: [String: String], directory: URL) throws {
+        func conflicts(_ key: String, _ value: String) -> Bool {
+            guard !value.isEmpty else { return false }
+            if ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"].contains(key) { return value != environment[key] }
+            return ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
+                    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS",
+                    "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+                    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR"].contains(key)
+                || key.hasPrefix("CLAUDE_CODE_OAUTH") || key.hasPrefix("CLAUDE_CODE_USE_")
+        }
+        guard !environment.contains(where: { conflicts($0.key, $0.value) }) else { throw ClaudeAccountValidationError.settingsConflict }
+        var files = [URL(fileURLWithPath: ProviderAccountStore.defaultClaudeHome(environment: environment)).appendingPathComponent("settings.json")]
+        var current = directory.standardizedFileURL
+        while true {
+            files.append(current.appendingPathComponent(".claude/settings.json"))
+            files.append(current.appendingPathComponent(".claude/settings.local.json"))
+            let parent = current.deletingLastPathComponent()
+            if parent == current { break }
+            current = parent
+        }
+        let managed = URL(fileURLWithPath: "/Library/Application Support/ClaudeCode")
+        files.append(managed.appendingPathComponent("managed-settings.json"))
+        let fragments = managed.appendingPathComponent("managed-settings.d")
+        if FileManager.default.fileExists(atPath: fragments.path) {
+            guard let children = try? FileManager.default.contentsOfDirectory(at: fragments, includingPropertiesForKeys: nil) else {
+                throw ClaudeAccountValidationError.settingsConflict
+            }
+            files += children.filter { $0.pathExtension == "json" }
+        }
+        for file in Set(files) where FileManager.default.fileExists(atPath: file.path) {
+            guard let data = try? Data(contentsOf: file), let root = JSONValue.parse(data), root.object != nil else {
+                throw ClaudeAccountValidationError.settingsConflict
+            }
+            if ["apiKeyHelper", "proxyAuthHelper", "awsCredentialExport", "awsAuthRefresh", "gcpAuthRefresh"].contains(where: { root[$0]?.string?.isEmpty == false }) {
+                throw ClaudeAccountValidationError.settingsConflict
+            }
+            if let method = root["forceLoginMethod"]?.string, method != "claudeai" { throw ClaudeAccountValidationError.settingsConflict }
+            if let values = root["env"]?.object,
+               values.contains(where: { conflicts($0.key, $0.value.string ?? "") }) {
+                throw ClaudeAccountValidationError.settingsConflict
+            }
+        }
+    }
+
+    private static func claudeAccountAllowsProbe(environment: [String: String], signingInAccountID: UUID? = nil) -> Bool {
+        guard !CaptureRun.isEnabled else { return false }
+        let managed = environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1"
+        let account = ProviderAccountStore.load().accounts.first {
+            $0.provider == .claude && (managed ? $0.home == environment["CLAUDE_CONFIG_DIR"] : $0.isDefault)
+        }
+        guard !managed || account != nil else { return false }
+        if let id = signingInAccountID {
+            return managed && account?.id == id && account?.isDefault == false
+                && account?.home == environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"]
+                && ProviderAccounts.isSigningInExclusively(id)
+        }
+        return account?.requiresClaudeActivation != true && account?.requiresClaudeCleanup != true
+    }
+
     static func auth(_ provider: ProviderKind, _ executable: URL, _ environment: [String: String]) async -> ProviderStatus.Auth {
         switch provider {
         case .codex:
@@ -1289,8 +1544,13 @@ final class ProviderRegistry {
             let signedIn = text.localizedCaseInsensitiveContains("logged in") || text.localizedCaseInsensitiveContains("api key configured")
             return result.succeeded && signedIn ? .signedIn(nil) : .signedOut
         case .claude:
+            guard claudeAccountAllowsProbe(environment: environment) else { return .unknown }
             guard let result = try? await Shell.run(executable, ["auth", "status"], environment: environment, timeout: 20),
                   let json = JSONValue.parse(result.stdout) else { return .unknown }
+            if environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1" {
+                guard json["authMethod"]?.string == "claude.ai",
+                      json["configDirectory"]?.string == environment["CLAUDE_CONFIG_DIR"] else { return .signedOut }
+            }
             return json["loggedIn"]?.bool == true ? .signedIn(json["email"]?.string) : .signedOut
         case .cursor:
             guard let result = try? await Shell.run(executable, ["status"], environment: environment, timeout: 20) else {

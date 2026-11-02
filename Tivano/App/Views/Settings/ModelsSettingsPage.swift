@@ -633,10 +633,6 @@ private struct ModelGroupHeader: View {
                 .allowsHitTesting(canDrag)
                 .help(Text(verbatim: Chrome.localized("Drag to reorder groups")))
                 .accessibilityLabel(Text("Drag to reorder groups"))
-            Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                .font(Chrome.chevronFont)
-                .foregroundStyle(Chrome.secondaryText)
-                .frame(width: 24, height: 24)
             if isEditing {
                 TextField("New group", text: $draft)
                     .textFieldStyle(.plain)
@@ -660,6 +656,8 @@ private struct ModelGroupHeader: View {
                             .exclusively(before: TapGesture().onEnded { toggleCollapse() })
                     )
             }
+            DisclosureChevron(collapsed: isCollapsed, hovering: isHovering)
+                .foregroundStyle(Chrome.secondaryText)
             Text(verbatim: "\(pins.count)")
                 .font(.ui(size: 11))
                 .foregroundStyle(Chrome.secondaryText)
@@ -686,6 +684,7 @@ private struct ModelGroupHeader: View {
         .padding(.vertical, 6)
         .contentShape(.rect)
         .onTapGesture { toggleCollapse() }
+        .accessibilityValue(Text(verbatim: Chrome.localized(isCollapsed ? "Collapsed" : "Expanded")))
         .onHover { isHovering = $0 }
         .contextMenu {
             Button("Rename") { beginEditing() }
@@ -1064,6 +1063,8 @@ struct CollapsibleProviderHeader: View {
     let subject: String
     var detail: String? = nil
 
+    @State private var isHovering = false
+
     var body: some View {
         Button {
             withAnimation(Chrome.panelSlide) { isExpanded.toggle() }
@@ -1074,6 +1075,8 @@ struct CollapsibleProviderHeader: View {
                 Text(verbatim: provider.displayName)
                     .font(.ui(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
+                DisclosureChevron(collapsed: !isExpanded, hovering: isHovering)
+                    .foregroundStyle(Chrome.secondaryText)
                 Spacer(minLength: detail == nil ? 0 : 8)
                 if let detail {
                     Text(verbatim: detail)
@@ -1083,15 +1086,12 @@ struct CollapsibleProviderHeader: View {
                         .truncationMode(.tail)
                         .layoutPriority(-1)
                 }
-                Image(systemName: "chevron.right")
-                    .font(.ui(size: 11, weight: .semibold))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
             .contentShape(.rect)
         }
         .buttonStyle(ChromeQuietButtonStyle())
         .frame(height: 22)
+        .onHover { isHovering = $0 }
         .help(Text(verbatim: String(format: Chrome.localized(isExpanded ? "Hide the %@" : "Show the %@"), Chrome.localized(subject))))
         .accessibilityLabel(Text(verbatim: detail.map { provider.displayName + ", " + $0 } ?? provider.displayName))
         .accessibilityValue(Text(verbatim: Chrome.localized(isExpanded ? "Expanded" : "Collapsed")))

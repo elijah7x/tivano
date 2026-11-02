@@ -106,6 +106,9 @@ struct HydraDecisionRequest: Sendable {
 }
 
 enum HydraDecisionRequests {
+    // Increment when questions or state semantics change; group evaluations by this version.
+    static let questionVersion = 2
+
     static func capped(_ text: String, _ limit: Int) -> String {
         let trimmed = text.trimmed
         return trimmed.count > limit ? String(trimmed.prefix(max(0, limit))) + "\n[truncated]" : trimmed
@@ -128,12 +131,6 @@ enum HydraDecisionRequests {
             "notes": encodedNotes,
             "followedReportFormat": .bool(followedReportFormat),
         ]), questions: [
-            "gapUnreported": noul("The state is one coding agent's final report on a task its lead assigned. Agents are told not to build, test or verify; the lead does that, so saying a build or test was not run is expected and is no gap. Work the lead was assigned, or that belongs to files outside `ownedFiles`, is the lead's by design and is no gap either; unfinished work in the agent's own files is a gap even when the report asks the lead to finish it. `notes` holds the agent's own Deviations / Unfinished / Uncertain lines (null when it wrote none of them). Does the report text admit something else in its own task unfinished, failed, skipped, guessed or left for later that `notes` does not mention?"),
-            "completion": choice("Judging by the report alone, how far did the agent get with its own task? Not running builds or tests, and leaving work outside its own files to the lead, are expected of it and do not count against completion.", criteria: [
-                "complete": "Says the task is done and leaves nothing over.",
-                "partial": "Did part of the task; says or shows that some of the task itself is left or skipped.",
-                "blocked": "Could not do the task, or stopped on a question, an error or missing access.",
-            ]),
             "reworkLikely": noul("Will the lead most likely have to send this agent back to rework its part, judging by the report, the files it owned and the files that landed?"),
         ])
     }
@@ -152,6 +149,7 @@ enum HydraDecisionRequests {
             "linesDeleted": .int(files.reduce(0) { $0 + $1.deleted }),
         ]), questions: [
             "defectLikely": noul("The state summarises a finished multi-agent coding job just before an independent code review: the user's request, the lead's final reply, open points the agents flagged, whether a build ran, and line counts per changed file (no source). Will the review find at least one defect that would make the software behave wrongly? Judge the summary only; this is not a verdict on the code."),
+            "unrelatedChanges": noul("The state summarises a finished multi-agent coding job just before an independent code review: the user's request, the lead's final reply, open points the agents flagged, and the changed files with line counts (no source). The review will see every changed file in the checkout. Does the changed-file list include files that neither the request nor the lead's reply gives any reason to touch, so the review is likely to see changes that do not belong to this job? Judge the summary only."),
         ])
     }
 

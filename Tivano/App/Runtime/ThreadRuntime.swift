@@ -739,6 +739,7 @@ final class ThreadRuntime {
     private struct SessionSignature: Equatable {
         var provider: ProviderKind
         var codexAccount: UUID?
+        var claudeAccount: UUID?
         var directory: String
         var launchRuntimeMode: RuntimeMode?
         var launchEffort: String?
@@ -1096,6 +1097,7 @@ final class ThreadRuntime {
         guard let app else { throw ControlFailure(code: .unavailable) }
         try app.requireExternalPersistence()
         _ = try app.localControl.requireOrdinaryThread(threadID, app: app)
+        guard app.runningHydraHeads(of: threadID) == 0 else { throw ControlFailure(code: .busy) }
         guard !isReverting, providerHistoryOperation == nil, !isVoiceOrchestrator, !isHydraMerging,
               !hydraStartupPending, !hasWorkingHelpers, backgroundTasks.isEmpty, !isWaitingForLimit,
               followUps.isEmpty, pendingSend == nil, !hydraFlushScheduled, hydraPendingReports.isEmpty,
@@ -2023,11 +2025,14 @@ final class ThreadRuntime {
     /// so sending does not wait for the CLI to boot: about half a second for `claude`.
     /// Only for CLI providers without a session; a send in the meantime waits for the
     /// warm-up instead of starting a second process.
+    @ObservationIgnored private var isPreparingClaudeSignIn = false
+    @ObservationIgnored private var warmingSessionCount = 0
+
     func warmSession() {
         #if DEBUG
         if DshCaptureReplay.isEnabled { return }
         #endif
-        guard phase == .idle, session == nil, warmup == nil, !isReverting, !hydraStartupPending,
+        guard !isPreparingClaudeSignIn, phase == .idle, session == nil, warmup == nil, !isReverting, !hydraStartupPending,
               let app, let thread = app.thread(threadID), !thread.isArchived, !thread.provider.isAPIKeyBased,
               thread.hydra?.pendingProjectReference == nil,
               !app.providers.cliUpdateBlocksWarmup(thread.provider) else { return }
@@ -2035,6 +2040,8 @@ final class ThreadRuntime {
         warmupGeneration = generation
         warmup = Task { [weak self] in
             guard let self else { return }
+            warmingSessionCount += 1
+            defer { warmingSessionCount -= 1 }
             await ensureModel(thread)
             guard !Task.isCancelled, warmupGeneration == generation else { return }
             guard phase == .idle, session == nil, !hydraStartupPending,
@@ -2042,7 +2049,7 @@ final class ThreadRuntime {
                   !app.providers.cliUpdateBlocksWarmup(thread.provider) else { warmup = nil; return }
             // A start that fails is not retried on every keystroke: the send makes its own.
             do {
-                _ = try await ensureSession()
+                _ = try await ensureSession(allowNewSession: thread.provider != .claude)
                 if warmupGeneration == generation { warmup = nil }
             } catch is CancellationError {
             } catch {
@@ -2076,7 +2083,7 @@ final class ThreadRuntime {
         // Replay is history-only, including accidental UI actions during capture.
         if DshCaptureReplay.isEnabled { throw ProviderError.notRunning }
         #endif
-        guard !Task.isCancelled, let app, let thread = app.thread(threadID) else { throw ProviderError.notRunning }
+        guard !isPreparingClaudeSignIn, !Task.isCancelled, let app, let thread = app.thread(threadID) else { throw ProviderError.notRunning }
         let directory = try app.ensureExecutionDirectory(for: thread)
         if !thread.provider.isAPIKeyBased {
             await app.providers.waitWhileCLIUpdating(thread.provider)
@@ -2093,9 +2100,72 @@ final class ThreadRuntime {
             await app.providers.loadCatalog(app.hydraHeadsProvider(of: pair))
         }
         let hydra = app.hydraLaunch(for: thread)
+        var claudeAccount: ProviderAccount?
+        var claudeIdentity: ClaudeAccountIdentity?
+        if thread.provider == .claude {
+            do {
+                await LoginEnvironment.load()
+                let parent = thread.parentThreadID.flatMap { app.thread($0) }
+                if thread.claudeAccountID == nil, thread.parentThreadID != nil, parent == nil {
+                    throw ClaudeAccountValidationError.identityUnavailable
+                }
+                let inherited = parent?.provider == .claude ? parent : nil
+                let boundID = thread.claudeAccountID ?? inherited?.claudeAccountID
+                let expected = thread.claudeIdentity ?? inherited?.claudeIdentity
+                if let id = boundID {
+                    claudeAccount = app.providers.accounts.account(id: id)
+                } else if thread.claudeUsesDefaultAccount == true || inherited?.claudeUsesDefaultAccount == true || thread.hasStartedTurn || thread.providerSessionID != nil {
+                    claudeAccount = app.providers.accounts.accounts(for: .claude).first { $0.isDefault }
+                } else {
+                    claudeAccount = app.providers.accounts.activeAccount(for: .claude)
+                }
+                guard let account = claudeAccount, account.provider == .claude else {
+                    throw ProviderError.failed(AppText.localized("This chat's Claude account is unavailable. Restore the account to continue."))
+                }
+                guard !account.requiresClaudeActivation, !account.requiresClaudeCleanup else {
+                    throw ProviderError.failed(AppText.localized("Enable this imported login in account settings before using it. Accounts awaiting cleanup must be removed."))
+                }
+                guard ProviderAccounts.canStartProcess(account.id), ProviderAccounts.beginRead(account.id) else {
+                    throw ProviderError.failed(AppText.localized("This account is busy. Wait for its sessions and account checks to finish."))
+                }
+                defer { ProviderAccounts.endRead(account.id) }
+                if thread.claudeAccountID == nil {
+                    app.updateThread(threadID) {
+                        $0.claudeAccountID = account.id
+                        $0.claudeUsesDefaultAccount = account.isDefault
+                        $0.claudeIdentity = expected
+                    }
+                }
+                if !account.isDefault {
+                    guard let executable = app.providers.executable(for: .claude) else { throw ProviderError.notInstalled(.claude) }
+                    let actual = try await ProviderRegistry.claudeIdentity(executable: executable,
+                        environment: app.providers.environment(for: .claude, account: account), directory: URL(fileURLWithPath: directory),
+                        reusingFor: account.id)
+                    guard !Task.isCancelled, let current = app.thread(threadID), current.provider == .claude else { throw CancellationError() }
+                    if let expected, !expected.matches(actual) { throw ClaudeAccountValidationError.identityChanged }
+                    if let identity = current.claudeIdentity, !identity.matches(actual) { throw ClaudeAccountValidationError.identityChanged }
+                    if let id = current.claudeAccountID, id != account.id { throw ClaudeAccountValidationError.identityChanged }
+                    try app.providers.accounts.bindClaudeIdentity(actual, to: account.id)
+                    claudeIdentity = expected ?? actual
+                    // Persist before launching, including warm-up. Retry, rewind and same-provider
+                    // helpers retain this binding even when the provider session ID is cleared.
+                    app.updateThread(threadID) {
+                        $0.claudeAccountID = account.id
+                        $0.claudeUsesDefaultAccount = account.isDefault
+                        $0.claudeIdentity = expected ?? actual
+                    }
+                }
+
+            } catch {
+                if sessionSignature?.provider == .claude, (error as? ClaudeAccountValidationError) != .verificationFailed { releaseSession(stop: true) }
+                throw error
+            }
+        }
+        let launchAccount = thread.provider == .claude ? claudeAccount : app.providers.accounts.activeAccount(for: thread.provider)
         let signature = SessionSignature(
             provider: thread.provider,
-            codexAccount: thread.provider == .codex ? app.providers.accounts.activeAccount(for: .codex)?.id : nil,
+            codexAccount: thread.provider == .codex ? launchAccount?.id : nil,
+            claudeAccount: claudeAccount?.id,
             directory: directory,
             launchRuntimeMode: thread.provider == .cursor || thread.provider == .grok || thread.provider == .devin || thread.provider == .antigravity || thread.provider == .omp || thread.provider == .dsh ? thread.runtimeMode : copilotLaunchMode,
             launchEffort: thread.provider == .claude || thread.provider == .antigravity ? thread.effort : nil,
@@ -2214,7 +2284,7 @@ final class ThreadRuntime {
                 provider: thread.provider,
                 executable: executable,
                 workingDirectory: URL(fileURLWithPath: directory),
-                environment: app.providers.environment(for: thread.provider),
+                environment: app.providers.environment(for: thread.provider, account: launchAccount),
                 resumeID: resumeID,
                 resumeAt: resumeID == nil ? nil : thread.providerResumeAt,
                 model: thread.model,
@@ -2233,7 +2303,9 @@ final class ThreadRuntime {
                 voiceContext: signature.voiceContext,
                 modelCatalog: thread.provider.namesModelVariants || thread.provider == .dsh || thread.provider == .minimaxCode ? app.providers.models(for: thread.provider) : [],
                 dshMode: thread.dshMode ?? .standard,
-                dshFinalReport: signature.dshFinalReport
+                dshFinalReport: signature.dshFinalReport,
+                claudeAccountID: claudeAccount?.id,
+                claudeIdentity: claudeIdentity
             )
             let created: any ProviderSession = switch thread.provider {
             case .codex: CodexSession(configuration: configuration)
@@ -2457,7 +2529,8 @@ final class ThreadRuntime {
     /// Whether a session that would not resume the thread's conversation starts over
     /// from nothing: only when the provider confirms the conversation is gone.
     private static func startsOver(after error: Error, resuming thread: ChatThread) -> Bool {
-        guard thread.providerSessionID != nil, !(error is ACPSelectionError) else { return false }
+        guard thread.providerSessionID != nil, !(error is ACPSelectionError),
+              !(error is ClaudeAccountValidationError), !(error is ClaudeCredentialError) else { return false }
         return lostConversation(error)
     }
 
@@ -3151,6 +3224,66 @@ final class ThreadRuntime {
         }
     }
 
+    /// Resolves saved ownership only. An unsent, unbound chat must not display the
+    /// globally selected account as if it already owned a session there.
+    static func claudeAccountForChat(_ thread: ChatThread, app: AppModel) -> ProviderAccount? {
+        guard thread.provider == .claude else { return nil }
+        let parent = thread.parentThreadID.flatMap { app.thread($0) }
+        let inherited = parent?.provider == .claude ? parent : nil
+        if let id = thread.claudeAccountID ?? inherited?.claudeAccountID {
+            return app.providers.accounts.account(id: id).flatMap { $0.provider == .claude ? $0 : nil }
+        }
+        if thread.claudeUsesDefaultAccount == true || inherited?.claudeUsesDefaultAccount == true
+            || thread.hasStartedTurn || thread.providerSessionID != nil {
+            return app.providers.accounts.accounts(for: .claude).first { $0.isDefault }
+        }
+        return nil
+    }
+
+    private var canReleaseIdleClaudeSession: Bool {
+        phase == .idle && currentTurnID == nil && finishingTurnID == nil
+            && pendingSend == nil && !isStartingSession && warmingSessionCount == 0 && !isReverting
+            && approvals.isEmpty && questions.isEmpty && backgroundTasks.isEmpty
+            && followUps.isEmpty && !followUpFlushScheduled && !hydraStartupPending
+            && !hasWorkingHelpers && !isHydraMerging && hydraLanding == nil
+            && !hydraFlushScheduled && hydraPendingReports.isEmpty && !hasPendingHydraWorkForSignIn
+            && externalSubmission == nil && controlInterrupts.isEmpty && providerHistoryOperation == nil
+            && !isWaitingForLimit && !isVoiceOrchestrator
+            && (session == nil || (session as? ClaudeSession)?.canReleaseForSignIn == true)
+    }
+
+    private var hasPendingHydraWorkForSignIn: Bool { !hydraBatches.isEmpty || !hydraWaiting.isEmpty }
+
+    func releaseIdleClaudeSession(accountID: UUID) async -> Bool {
+        guard sessionSignature?.claudeAccount == accountID else { return session == nil }
+        guard canReleaseIdleClaudeSession, let claude = session as? ClaudeSession else { return false }
+        releaseSession(stop: true)
+        await claude.stopAndWait(timeout: 5)
+        await Task.yield()
+        guard claude.hasExitedForSignIn else { return false }
+        sessionsAwaitingReplacement.removeAll { $0 === claude }
+        return true
+    }
+
+    static func signInClaudeAccount(_ account: ProviderAccount, app: AppModel,
+                                    expectedIdentities: [ClaudeAccountIdentity]) async -> String? {
+        guard !(account.requiresClaudeActivation && account.requiresClaudeCleanup) else {
+            return AppText.localized("Enable this imported login in account settings before using it. Accounts awaiting cleanup must be removed.")
+        }
+        let busy = AppText.localized("This account is busy. Wait for its sessions and account checks to finish.")
+        let runtimes = app.threads.compactMap { app.existingRuntime(for: $0.id) }.filter {
+            $0.sessionSignature?.claudeAccount == account.id
+                || $0.thread.map { claudeAccountForChat($0, app: app)?.id == account.id } == true
+        }
+        guard runtimes.allSatisfy({ !$0.isPreparingClaudeSignIn && $0.canReleaseIdleClaudeSession }) else { return busy }
+        for runtime in runtimes { runtime.isPreparingClaudeSignIn = true }
+        defer { for runtime in runtimes { runtime.isPreparingClaudeSignIn = false } }
+        for runtime in runtimes {
+            guard await runtime.releaseIdleClaudeSession(accountID: account.id) else { return busy }
+        }
+        return await app.providers.accounts.signIn(account, expectedIdentities: expectedIdentities)
+    }
+
     func stopSessionAndWait(timeout: TimeInterval = 5) async {
         stopSession()
         let stopped = sessionsAwaitingReplacement
@@ -3349,9 +3482,14 @@ final class ThreadRuntime {
         case .modeChanged(let mode):
             app?.updateThread(threadID) { $0.interactionMode = mode }
         case .models(let list, _):
-            if let provider = thread?.provider { app?.providers.updateCatalog(list, for: provider) }
+            if let provider = thread?.provider,
+               provider != .claude || sessionSignature?.claudeAccount == app?.providers.accounts.activeAccount(for: .claude)?.id {
+                app?.providers.updateCatalog(list, for: provider)
+            }
         case .commands(let list):
-            if let app, let thread, let directory = try? app.executionDirectory(for: thread) {
+            if let app, let thread,
+               thread.provider != .claude || sessionSignature?.claudeAccount == app.providers.accounts.activeAccount(for: .claude)?.id,
+               let directory = try? app.executionDirectory(for: thread) {
                 app.providers.updateCommands(list, for: thread.provider, directory: directory)
             }
         case .title(let title):

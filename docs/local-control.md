@@ -81,8 +81,13 @@ model and negotiated session capabilities are checked again on a write. A model
 option must be in the App's current catalog; refresh providers in the UI if needed.
 
 Creation never inherits the selected thread's model, permissions, Hydra pair,
-selection or draft. New threads use supervised permissions and Hydra off. A
-provider that cannot operate supervised cannot be externally created. Ordinary
+selection or draft. New threads use supervised permissions and Hydra off unless
+`--hydra on` is passed (`--hydra off` explicitly disables it). Enabling Hydra
+requires the app-wide Hydra switch; otherwise creation fails with
+`unsupported` / `hydra_disabled`. It applies the provider's saved Hydra pair,
+including its lead model only when `--model` is omitted. This does not change the
+UI's default for new chats. A provider that cannot operate supervised cannot be
+externally created. Ordinary
 existing threads keep their current permissions; the CLI cannot change them.
 Missing project records are errors, never standalone tasks.
 
@@ -102,12 +107,19 @@ not replace the UI's independent terminal workflow; worktrees created through th
 CLI use the completion-observed path above.
 
 Send is text-only. Slash-command input, attachments, queue/steering, helpers,
-Hydra/head/voice targets, archived threads, reverting/busy runtimes, pending
+head/voice targets, archived threads, reverting/busy runtimes, pending
 provider-history operations, working children and unsupported targets are
 rejected. Eligibility/configuration/directory are rechecked after asynchronous
 boundaries. The external path uses the existing persistence/execution chain but
 never consumes/repopulates the UI draft or silently queues a rejected message.
 The App remains the sole runtime and Store owner.
+
+A Hydra lead accepts send/interrupt. Send is rejected as busy while any of its
+heads is working, merging or reporting. A send's operation ends with the lead's
+turn; later turns the lead takes on head reports are not tracked by that operation.
+Heads always run with full access, so a Remote MCP send to a Hydra lead fails
+with `permission` / `hydra_requires_remote_full_access` unless Remote MCP full
+access is on.
 
 ### Continuation and outcomes
 
@@ -164,6 +176,7 @@ identifiers help that reconciliation but are not a durable exactly-once ledger.
 ## Queries and pagination
 
 - Threads: default active (`!isArchived`) and normal (`!isHelper && !isHydraHead`).
+  The `hydra` field reports whether Hydra is enabled for the thread.
   Helpers exclude heads; heads take precedence over helper status. `all` is
   explicit. Affiliation is standalone only when projectID is nil; a non-nil UUID
   with no project record is `missing_project`.

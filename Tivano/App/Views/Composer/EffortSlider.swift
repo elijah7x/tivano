@@ -374,6 +374,7 @@ struct ModelList: View {
 
     @State private var query = ""
     @State private var showsOtherModels = false
+    @State private var hoveredHeading: String?
     @FocusState private var searchIsFocused: Bool
 
     /// A pair row carries two lines, like a model row with its provider under it.
@@ -505,6 +506,7 @@ struct ModelList: View {
                         case .section(let section, let hiddenCount):
                             headingRow(
                                 Text(verbatim: section.name),
+                                id: row.id,
                                 weight: .medium,
                                 style: .subheadline,
                                 collapsed: model.settings.isModelSectionCollapsed(section.id),
@@ -516,6 +518,7 @@ struct ModelList: View {
                         case .otherFold(let count):
                             headingRow(
                                 Text("Other models · New chats only"),
+                                id: row.id,
                                 weight: .bold,
                                 style: .callout,
                                 collapsed: !showsOtherModels,
@@ -653,15 +656,14 @@ struct ModelList: View {
         return entry.option.label(among: others) == entry.option.shortName ? nil : entry.option.group
     }
 
-    private func headingRow(_ title: Text, weight: Font.Weight, style: Font.TextStyle, collapsed: Bool, count: Int?, height: CGFloat, action: @escaping () -> Void) -> some View {
+    private func headingRow(_ title: Text, id: String, weight: Font.Weight, style: Font.TextStyle, collapsed: Bool, count: Int?, height: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 title
                     .lineLimit(1)
+                DisclosureChevron(collapsed: collapsed, hovering: hoveredHeading == id)
                 Spacer()
                 if let count { Text(verbatim: "\(count)") }
-                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                    .font(Chrome.chevronFont)
             }
             .font(.ui(style, weight: weight))
             .foregroundStyle(Chrome.secondaryText)
@@ -672,6 +674,8 @@ struct ModelList: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .onHover { hoveredHeading = $0 ? id : (hoveredHeading == id ? nil : hoveredHeading) }
+        .accessibilityValue(Text(verbatim: Chrome.localized(collapsed ? "Collapsed" : "Expanded")))
     }
 
     /// The line under a pair's title: the providers, and the efforts when any is set. The

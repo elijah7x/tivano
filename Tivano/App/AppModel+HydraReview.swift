@@ -109,7 +109,7 @@ extension AppModel {
         guard !patch.trimmed.isEmpty else {
             return skip(skippedNonGitChanges ? "not applicable: not a Git checkout" : "no changes")
         }
-        let fileStats = DiffStats.files(inPatch: patch)
+        let decisionPatch = hydraJobRunsDecisions(jobID, of: leadID) ? patch : nil
         if patch.count > 80_000 {
             let notice = "\n\n[Patch truncated to 80,000 characters.]"
             patch = String(patch.prefix(80_000 - notice.count)) + notice
@@ -125,7 +125,8 @@ extension AppModel {
             if let uncertain = notes.uncertain { fields.append("Uncertain \(uncertain)") }
             if !fields.isEmpty { noteLines.append("\(info.persona.name): \(fields.joined(separator: " / "))") }
         }
-        if hydraJobRunsDecisions(jobID, of: leadID) {
+        var decisionStats: Task<[DiffFileStat], Never>?
+        if let decisionPatch {
             let leadReply = runtime.entries.last(where: {
                 if case .assistant = $0.item.content { return true }
                 return false
@@ -133,16 +134,26 @@ extension AppModel {
                 guard case .assistant(let message) = entry.item.content else { return nil }
                 return message.text
             } ?? ""
-            let request = HydraDecisionRequests.preReview(
-                request: job.request,
-                leadReply: leadReply,
-                headFlags: noteLines,
-                heads: jobHeads.count,
-                leadBuilt: job.leadBuilt,
-                leadEditsAfterReports: job.leadEditsAfterReports,
-                files: fileStats
-            )
-            runHydraDecision(request, leadID: leadID, jobID: jobID)
+            let requestText = job.request
+            let headFlags = noteLines
+            let heads = jobHeads.count
+            let leadBuilt = job.leadBuilt
+            let leadEditsAfterReports = job.leadEditsAfterReports
+            decisionStats = Task.detached(priority: .utility) {
+                guard await self.hydraJobRunsDecisions(jobID, of: leadID) else { return [] }
+                let files = DiffStats.files(inPatch: decisionPatch)
+                let request = HydraDecisionRequests.preReview(
+                    request: requestText,
+                    leadReply: leadReply,
+                    headFlags: headFlags,
+                    heads: heads,
+                    leadBuilt: leadBuilt,
+                    leadEditsAfterReports: leadEditsAfterReports,
+                    files: files
+                )
+                await self.runHydraDecision(request, leadID: leadID, jobID: jobID)
+                return files
+            }
         }
         let prompt = HydraPrompts.v2ReviewPrompt(request: job.request, notes: noteLines.joined(separator: "\n"), patch: patch)
         let findings: String
@@ -159,12 +170,18 @@ extension AppModel {
             $0.reviewEngine = selected.reviewer
             $0.reviewFindings = findingCount
         }
-        if hydraJobRunsDecisions(jobID, of: leadID) {
-            recordHydraDecisionOutcome(
-                leadID: leadID, jobID: jobID, reviewer: selected.reviewer,
-                findings: findingCount,
-                findingPaths: findingCount == 0 ? [] : DiffStats.mentionedPaths(fileStats, in: findings)
-            )
+        if hydraJobRunsDecisions(jobID, of: leadID), let decisionStats {
+            Task.detached(priority: .utility) {
+                let files = await decisionStats.value
+                let findingPaths = findingCount == 0 ? [] : DiffStats.mentionedPaths(files, in: findings)
+                await MainActor.run {
+                    guard self.hydraJobRunsDecisions(jobID, of: leadID) else { return }
+                    self.recordHydraDecisionOutcome(
+                        leadID: leadID, jobID: jobID, reviewer: selected.reviewer,
+                        findings: findingCount, findingPaths: findingPaths
+                    )
+                }
+            }
         }
         guard findingCount > 0 else { return .skipped }
         let text = HydraPrompts.v2ReviewMessage(reviewer: selected.reviewer, findings: findings)

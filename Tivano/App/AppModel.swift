@@ -1992,6 +1992,20 @@ final class AppModel {
         thread.hydraEnabled = false
         thread.hydraPairID = nil
         thread.temporaryHydraPair = nil
+        if request.hydra == true {
+            guard settings.hydraEnabled else { throw ControlFailure(code: .unsupported, detail: "hydra_disabled") }
+            thread.hydraEnabled = true
+            let pair = settings.hydraPair(for: provider, model: thread.model)
+            thread.hydraPairID = pair?.id
+            if request.model == nil, let pair {
+                if let lead = pair.orchestratorModel, providers.model(lead, for: provider) != nil {
+                    thread.model = lead
+                    thread.effort = pair.orchestratorEffort ?? thread.effort
+                } else if let effort = pair.orchestratorEffort {
+                    thread.effort = effort
+                }
+            }
+        }
         thread.controlWorkspace = ControlWorkspace(mode: request.workspace, phase: request.workspace == .worktree ? .preparing : .ready)
         var library = currentLibrary()
         library.threads.append(thread)
