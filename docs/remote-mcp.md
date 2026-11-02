@@ -49,7 +49,8 @@ not list write tools, and calls to them fail.
 `get_history`, `get_operation`, `create_thread`, `send_message`, `interrupt_turn`.
 Write tools mint their ticket at call time and return it as the string
 `get_operation` accepts. All local-control semantics apply: new threads are
-supervised (unless the full-access setting below is on) with Hydra off, approvals and questions wait in the App, and "completed"
+supervised (unless the full-access setting below is on) with Hydra off. Sending to a chat with Hydra on
+requires that full-access setting, since its heads run with full access. Approvals and questions wait in the App, and "completed"
 is the provider's report, not proof that the task is correct. Failures are tool
 results with `isError` and the control failure code.
 

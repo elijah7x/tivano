@@ -9,6 +9,13 @@ struct ProviderAccount: Codable, Identifiable, Equatable, Hashable, Sendable {
     var email: String?
     var plan: String?
     var accountID: String?
+    var organizationID: String? = nil
+    var organizationName: String? = nil
+    var claudeIdentity: ClaudeAccountIdentity? = nil
+    var claudeImportPending: Bool? = nil
+    var claudeCleanupRequired: Bool? = nil
+    var requiresClaudeActivation: Bool { provider == .claude && claudeImportPending == true }
+    var requiresClaudeCleanup: Bool { provider == .claude && claudeCleanupRequired == true }
     var addedAt: Date
     var isDefault: Bool { home == nil }
 }
@@ -42,4 +49,29 @@ struct CodexIdentity: Equatable, Sendable {
     var accountID: String?
     var userID: String?
     var plan: String?
+}
+
+/// Account and organization recorded by the CLI in an isolated login profile.
+struct ClaudeAccountIdentity: Codable, Equatable, Hashable, Sendable {
+    var accountID: String
+    var organizationID: String
+    var email: String
+
+    func matches(_ other: Self) -> Bool {
+        accountID == other.accountID && organizationID == other.organizationID
+    }
+}
+
+enum ClaudeAccountValidationError: LocalizedError {
+    case authentication, identityChanged, identityUnavailable, settingsConflict, verificationFailed
+
+    nonisolated var errorDescription: String? {
+        switch self {
+        case .authentication: AppText.localized("Sign in with a Claude subscription account.")
+        case .identityChanged: AppText.localized("The Claude account or organization changed. Restore the original login to continue this chat.")
+        case .identityUnavailable: AppText.localized("Claude did not provide a verifiable account and organization identity. No message was sent.")
+        case .settingsConflict: AppText.localized("Claude authentication settings conflict with this chat's account. Remove the API key, helper, or provider override before continuing.")
+        case .verificationFailed: AppText.localized("Claude account identity could not be verified. Check your connection and sign-in, then try again. No message was sent.")
+        }
+    }
 }

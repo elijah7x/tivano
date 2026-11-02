@@ -8,6 +8,54 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.2.42] - 2026-11-02
+
+### English
+
+### New features
+
+- The local control CLI can start chats with Hydra on: `tivano create ... --hydra on` uses the provider's saved Hydra pair and needs the app-wide Hydra switch; the UI's default for new chats is unchanged. Hydra-led chats now accept `send` and `interrupt`, sends wait as busy while heads are working, and `thread` reports `hydra`. Remote MCP can send to a Hydra-led chat only with its full-access setting on, because heads run with full access.
+- Claude supports manual account management in Settings › Providers › Claude: add, rename, select and remove accounts, or choose which CSWAP accounts to import. Imported logins stay pending until explicitly enabled; importing alone does not check usage or start Claude. Copies may expire, and refreshing a copied login may require CSWAP or another Tivano instance to sign in again.
+- Claude account selection applies to new independent chats. Managed chats keep their account and organization binding through retries, rewinds and Claude child chats; selecting another account does not move existing chats. The default profile still follows the external CLI login. Claude does not rotate accounts automatically.
+- Claude usage checks read existing credentials and query the usage endpoint without starting the CLI, sending model requests or refreshing login tokens. Each bound chat shows its own account's usage; requests are cached and rate-limited. Expired tokens or HTTP 401 make usage temporarily unavailable until normal Claude use lets the official CLI refresh the login.
+
+### Bug fixes
+
+- A macOS Keychain access prompt no longer freezes Tivano. The default Claude account's usage is read through the system `security` tool again, so it does not ask for access and gives up after five seconds; importing, signing in and removing Claude accounts wait for Keychain and delete profiles in the background, and an unanswered prompt does not hold up other account work.
+- Chats on a managed Claude account no longer run `claude auth status` before every message: a verified account is reused for five minutes, shared by Hydra heads, and checked again if its login changes. A check that times out fails only that message instead of ending the running Claude session.
+- With the Alpha decision model (Jev) turned off, starting a Hydra review no longer parses the whole patch for it on the main thread; with it on, that work runs in the background. Turning it off stops calls that have not been sent yet, and at most four calls run at once.
+- Models added in DeepSeek Harness, such as Kimi through its third-party providers, now appear in Tivano's model list without waiting up to six hours: when the DeepSeek Harness profile, patch or sign-in file has changed since the last listing, opening Settings › Models reloads it.
+
+### Refinements
+
+- The Alpha decision model (Jev) asks fewer, better-supported questions: two that real Hydra jobs showed to carry no signal are gone, the report-level rework question stays unchanged, and a new pre-review question watches for changed files that do not belong to the job. Each judgment records which question set produced it.
+- Collapsible section headers in the sidebar, Settings › Models and the model picker show their arrow after the title. A collapsed section always shows it; an expanded one shows it only while the pointer is over the header, so the list stays quiet but still reads as foldable.
+
+### 简体中文
+
+### 新功能
+
+- 本地控制 CLI 可以新建开启 Hydra 的对话：`tivano create ... --hydra on` 会套用该 provider 保存的 Hydra 配对，需要先打开 App 的 Hydra 总开关，不会改变 UI 中新对话的默认设置。开启 Hydra 的对话现在可接受 `send` 和 `interrupt`；heads 仍在工作时发送会返回 busy，`thread` 会报告 `hydra`。由于 heads 以完全访问权限运行，Remote MCP 只有在打开完全访问设置后才能向开启 Hydra 的对话发送消息。
+- Claude 支持手动管理多个账号。设置 › Providers › Claude 可添加、重命名、选择和移除账号，也可选择要从 CSWAP 导入的账号。导入的登录凭据需手动启用，单纯导入不会查询额度或启动 Claude。凭据副本可能过期，刷新副本也可能导致 CSWAP 或另一 Tivano 实例需要重新登录。
+- Claude 账号选择只影响新建的独立对话。使用独立账号配置的对话会保留绑定的账号和组织，重试、回退及 Claude 子对话均沿用该绑定；选择其他账号不会迁移已有对话。默认配置仍跟随外部 CLI 登录，Claude 不会自动轮换账号。
+- Claude 额度查询只读取已有凭据并请求用量接口，不启动 CLI、不发送模型请求，也不刷新登录 token。已绑定的对话显示自身账号的额度，查询带缓存和频率限制。Token 过期或收到 HTTP 401 时，额度暂时不可用；正常使用 Claude，让官方 CLI 刷新登录后即可再次查询。
+
+### 问题修复
+
+- macOS 钥匙串授权弹窗不再冻结 Tivano。默认 Claude 账号的额度重新通过系统 `security` 工具读取，不会请求授权，五秒内没有结果就放弃；导入、登录和移除 Claude 账号时，钥匙串操作和删除账号目录都在后台进行，未处理的弹窗也不会挡住其他账号操作。
+- 使用独立 Claude 账号的对话不再在每条消息前运行 `claude auth status`：校验通过的账号五分钟内直接沿用，Hydra 各个头共享这一结果，登录发生变化时会重新校验。校验超时只让这一条消息失败，不再结束正在运行的 Claude 会话。
+- 关闭 Alpha 决策模型（Jev）时，发起 Hydra 审查不再为它在主线程解析整份补丁；开启时这部分工作改在后台进行。关闭后尚未发出的调用会停止，同时最多只有四个调用在进行。
+- 在 DeepSeek Harness 里新加的模型（例如通过第三方服务商接入的 Kimi）现在会直接出现在 Tivano 的模型列表中，不用再等最多六小时：只要 DeepSeek Harness 的配置、patch 或登录文件在上次读取后有变化，打开设置 › 模型时就会重新读取。
+
+### 优化改进
+
+- Alpha 决策模型（Jev）的题目更精简：真实 Hydra 任务中证明没有信号的两道题已删除，回报是否需要返工的题目保持不变，并新增一道审前题，观察改动中是否夹带不属于本任务的文件。每条判断会记录所用的题目版本。
+- 侧栏、设置 › 模型和模型选择器中可折叠的分区标题，折叠箭头改到标题文字之后：收起时始终显示，展开时仅在指针悬停于标题行时出现，界面更安静，同时仍能看出可以折叠。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.2.34] - 2026-10-31
 
 ### English

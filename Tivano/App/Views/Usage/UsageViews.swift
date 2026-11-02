@@ -7,13 +7,28 @@ import SwiftUI
 struct PlanLimitsView: View {
     @Environment(AppModel.self) private var model
     let provider: ProviderKind
+    var isChat = false
+    var claudeAccountID: UUID? = nil
     @State private var loginError: String?
 
     var body: some View {
         let registry = model.providers
-        let limits = registry.planLimits[provider]
-        let isLoading = registry.loadingLimits.contains(provider)
+        let scoped = provider == .claude && isChat
+        let account = claudeAccountID.flatMap { registry.accounts.account(id: $0) }
+        let eligible = account.map { !$0.requiresClaudeActivation && !$0.requiresClaudeCleanup } == true
+        let state = claudeAccountID.flatMap { registry.accounts.states[$0] }
+        let limits = scoped ? (eligible ? state?.limits : nil) : registry.planLimits[provider]
+        let isLoading = scoped ? (eligible && state?.isChecking == true) : registry.loadingLimits.contains(provider)
         VStack(alignment: .leading, spacing: 0) {
+            if scoped {
+                ChromeRow(title: account.map { registry.accounts.title(of: $0) } ?? Chrome.localized("No Claude account bound"),
+                          detail: account.map { Chrome.localized($0.requiresClaudeCleanup
+                            ? ($0.requiresClaudeActivation ? "Cleanup required. Retry removing this account." : "Login replacement was interrupted. Sign in again to recover this account.")
+                            : $0.requiresClaudeActivation ? "Saved, not activated"
+                            : $0.isDefault ? "Default profile: follows the external Claude CLI login."
+                            : "This chat uses this Claude account, regardless of the account selected for new chats.") }
+                            ?? Chrome.localized("Usage appears after this chat binds to an account."), localizesDetail: false) {}
+            }
             HStack(spacing: 8) {
                 Text(verbatim: limits?.planName.map { String(format: Chrome.localized("Plan usage limits · %@"), $0) } ?? Chrome.localized("Plan usage limits"))
                     .font(.ui(.body))
@@ -52,8 +67,13 @@ struct PlanLimitsView: View {
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
+                        if scoped, limits.problemKind == .authentication {
+                            Text("Sign in again from this account’s settings.")
+                                .font(.ui(.subheadline))
+                                .foregroundStyle(Chrome.secondaryText)
+                        }
                         HStack(spacing: 8) {
-                            if limits.problemKind == .authentication, !provider.isAPIKeyBased {
+                            if limits.problemKind == .authentication, !provider.isAPIKeyBased, !scoped {
                                 Button("Login") {
                                     loginError = nil
                                     Task { loginError = await registry.signIn(provider) }
@@ -62,9 +82,13 @@ struct PlanLimitsView: View {
                             }
                             Button("Retry") {
                                 loginError = nil
-                                registry.refreshPlanLimits(provider, force: true)
+                                if scoped, let claudeAccountID, eligible {
+                                    Task { _ = await registry.refreshClaudePlanLimits(accountID: claudeAccountID, force: true) }
+                                } else if !scoped {
+                                    registry.refreshPlanLimits(provider, force: true)
+                                }
                             }
-                            .disabled(isLoading || registry.signingIn == provider)
+                            .disabled(isLoading || registry.signingIn == provider || (scoped && !eligible))
                             if registry.signingIn == provider {
                                 ProgressView().controlSize(.mini)
                             }
@@ -74,7 +98,7 @@ struct PlanLimitsView: View {
                     }
                     .padding(.top, 14)
                 }
-            } else if !isLoading {
+            } else if !isLoading && (!scoped || eligible) {
                 Text(verbatim: String(format: Chrome.localized("%@ did not report plan limits."), provider.displayName))
                     .font(.ui(.callout))
                     .foregroundStyle(Chrome.secondaryText)
@@ -89,6 +113,10 @@ struct PlanLimitsView: View {
             }
         }
         .animation(Chrome.panelSlide, value: limits)
+        .task(id: claudeAccountID) {
+            guard scoped, eligible, let claudeAccountID else { return }
+            _ = await registry.refreshClaudePlanLimits(accountID: claudeAccountID)
+        }
     }
 }
 

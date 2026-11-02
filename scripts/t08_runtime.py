@@ -119,5 +119,143 @@ def main():
     return 0 if summary['passed'] else 1
 
 
+def claude_fixtures():
+    """Run extracted ownership/recovery code with fake accounts and usage reads.
+
+    This entry never opens the app, a provider CLI, Keychain or user storage.
+    The ordinary OMP integration above retains its existing dependencies.
+    """
+    def declaration(path, marker):
+        source = (ROOT / path).read_text()
+        start = source.index(marker)
+        opening = source.index('{', start)
+        depth, end = 1, opening + 1
+        while depth:
+            depth += (source[end] == '{') - (source[end] == '}')
+            end += 1
+        return source[start:end].replace('private ', '')
+
+    runtime = 'Tivano/App/Runtime/ThreadRuntime.swift'
+    continuation = 'Tivano/App/Runtime/AutoContinue.swift'
+    source = r'''
+import Foundation
+enum ProviderKind { case claude, codex; var isAPIKeyBased: Bool { false } }
+struct ProviderAccount { var id = UUID(); var provider = ProviderKind.claude; var isDefault = false }
+struct ChatThread {
+    var id = UUID(); var provider = ProviderKind.claude
+    var claudeAccountID: UUID?; var claudeUsesDefaultAccount: Bool?
+    var hasStartedTurn = false; var providerSessionID: String?; var parentThreadID: UUID?
+}
+final class Accounts {
+    var values: [ProviderAccount] = []
+    func account(id: UUID) -> ProviderAccount? { values.first { $0.id == id } }
+    func accounts(for provider: ProviderKind) -> [ProviderAccount] { values.filter { $0.provider == provider } }
+}
+struct PlanLimits {
+    struct Window { var percent: Double; var resetsAt: Date? }
+    var windows: [Window]
+}
+final class Registry {
+    let accounts = Accounts()
+    var limits: [UUID: PlanLimits] = [:]
+    var reads: [UUID] = []
+    func refreshClaudePlanLimits(accountID: UUID, force: Bool = false) async -> PlanLimits? {
+        reads.append(accountID); return limits[accountID]
+    }
+    func executable(for provider: ProviderKind) -> URL? { nil }
+    func environment(for provider: ProviderKind) -> [String: String] {
+        fatalError("Claude must not read the global selected account")
+    }
+}
+final class Settings { func apiKey(for provider: ProviderKind) -> String { "" } }
+final class AppModel {
+    let providers = Registry(); let settings = Settings(); var threads: [ChatThread] = []
+    func thread(_ id: UUID) -> ChatThread? { threads.first { $0.id == id } }
+}
+enum PlanLimitsReader {
+    static func exposesLimits(_ provider: ProviderKind) -> Bool { true }
+    static func read(_ provider: ProviderKind, apiKey: String) async -> PlanLimits? { nil }
+    static func read(_ provider: ProviderKind, executable: URL, environment: [String: String]) async -> PlanLimits? {
+        fatalError("Bound Claude usage must use the per-account reader")
+    }
+}
+enum UsageLimitSignal { static func supportsResetTime(_ date: Date) -> Bool { date > .now } }
+struct ACPSelectionError: Error {}
+struct ClaudeAccountValidationError: LocalizedError {
+    var errorDescription: String? { "session not found" }
+}
+struct ClaudeCredentialError: LocalizedError {
+    var errorDescription: String? { "session not found" }
+}
+struct FixtureError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+final class ThreadRuntime {
+'''
+    source += '\n'.join(declaration(runtime, marker) for marker in [
+        '    static func claudeAccountForChat(',
+        '    private static func startsOver(',
+        '    private static func lostConversation('])
+    source += '\n}\nenum UsagePanel {\n'
+    source += declaration('Tivano/App/Views/Usage/UsagePanel.swift', '    private static func claudeHeadAccountIDs(')
+    source += '\n}\nfinal class AutoContinue { var app: AppModel?; init(_ app: AppModel) { self.app = app }\n'
+    source += declaration(continuation, '    private func readResetTime(')
+    source += r'''
+}
+@main struct Checks {
+    static func main() async {
+        let app = AppModel(), a = ProviderAccount(), b = ProviderAccount()
+        let external = ProviderAccount(isDefault: true)
+        app.providers.accounts.values = [external, a, b]
+        let earlier = Date.now.addingTimeInterval(600), later = Date.now.addingTimeInterval(3600)
+        app.providers.limits[a.id] = PlanLimits(windows: [.init(percent: 100, resetsAt: later)])
+        app.providers.limits[b.id] = PlanLimits(windows: [.init(percent: 100, resetsAt: earlier)])
+        var parent = ChatThread(claudeAccountID: a.id)
+        let child = ChatThread(parentThreadID: parent.id)
+        let legacy = ChatThread(hasStartedTurn: true, providerSessionID: "old")
+        let fresh = ChatThread()
+        app.threads = [parent, child, legacy, fresh]
+        precondition(ThreadRuntime.claudeAccountForChat(child, app: app)?.id == a.id)
+        precondition(ThreadRuntime.claudeAccountForChat(legacy, app: app)?.id == external.id)
+        precondition(ThreadRuntime.claudeAccountForChat(fresh, app: app) == nil)
+        let reader = AutoContinue(app)
+        let reset = await reader.readResetTime(.claude, claudeAccountID: a.id)
+        precondition(reset == later && app.providers.reads == [a.id])
+        let unbound = await reader.readResetTime(.claude)
+        precondition(unbound == nil && app.providers.reads == [a.id])
+        let lead = ChatThread(provider: .codex)
+        let headA = ChatThread(claudeAccountID: a.id, parentThreadID: lead.id)
+        let headB = ChatThread(claudeAccountID: b.id, parentThreadID: lead.id)
+        let waiting = ChatThread(parentThreadID: lead.id)
+        app.threads += [lead, headA, headB, waiting]
+        precondition(UsagePanel.claudeHeadAccountIDs([headA, headB, headA, waiting, lead], app: app) == [a.id, b.id])
+        precondition(UsagePanel.claudeHeadAccountIDs([waiting], app: app).isEmpty)
+        app.providers.accounts.values.removeAll { $0.id == a.id }
+        precondition(UsagePanel.claudeHeadAccountIDs([headA, headB], app: app) == [b.id])
+        precondition(ThreadRuntime.claudeAccountForChat(child, app: app) == nil)
+        parent.providerSessionID = "old"
+        let missing = FixtureError(message: "No conversation found with session ID old")
+        precondition(ThreadRuntime.startsOver(after: missing, resuming: parent))
+        precondition(!ThreadRuntime.startsOver(after: missing, resuming: fresh))
+        precondition(!ThreadRuntime.startsOver(after: ClaudeAccountValidationError(), resuming: parent))
+        precondition(!ThreadRuntime.startsOver(after: ClaudeCredentialError(), resuming: parent))
+        precondition(!ThreadRuntime.startsOver(after: FixtureError(message: "connection timed out"), resuming: parent))
+        print("Claude ownership, bound reset lookup and recovery classification passed; synthetic dependencies only.")
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix='tivano-claude-runtime-') as temporary:
+        directory = Path(temporary)
+        swift = directory / 'Checks.swift'
+        binary = directory / 'checks'
+        swift.write_text(source)
+        subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-parse-as-library',
+                        str(swift), '-o', str(binary)], check=True)
+        subprocess.run([str(binary)], check=True,
+                       env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(directory)})
+    return 0
+
+
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(claude_fixtures() if '--claude-fixtures' in sys.argv else main())

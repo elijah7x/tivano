@@ -2,6 +2,8 @@
 
 状态：首批（影子模式）已实现（2026-10-28），Debug 构建通过、已打包 Dev。历史回放结果见下文"历史回放"一节。
 
+2026-11-01 起题目为第二版（账本字段 `qv=2`，缺省视为 1）。
+
 ## 目标与边界
 
 - 回答一个问题：决策模型（TypeSafe Jev）在 Hydra 2 的具体环节上，是否比现有确定性启发式判断得更准。答案要来自本机生产数据，不来自榜单或厂商自测。
@@ -14,7 +16,7 @@
 
 - Settings › Alpha › Hydra 卡片提供 `Decision model (Jev)` 开关和 `TypeSafe API key` 输入框；默认关闭，只受 Alpha 总开关与自身开关约束（`settings.isDecisionsEnabled = alphaEnabled && alphaDecisionsEnabled`）。
 - key 存在本版本的 Keychain service（Release 为 `Tivano`，Dev 为 `Tivano Dev`），account 为 `TypeSafe API Key`，与 provider key 的存法一致；不读环境变量，不写 UserDefaults。Dev 与 Release 各配各的 key。
-- 按 job 盖章：`beginHydraJob` 时把 `isDecisionsEnabled` 写入 `HydraJobRecord.decisions`。中途打开只影响下一个 job；中途关闭立即停止调用（每次调用前同时要求盖章为 true 且当前仍开启），因为关闭意味着用户不想再往外发数据。
+- 按 job 盖章：`beginHydraJob` 时把 `isDecisionsEnabled` 写入 `HydraJobRecord.decisions`。中途打开只影响下一个 job；中途关闭后，后台任务在读取 Keychain 和发送前复查当前开关与 job 盖章，不满足则退出、不写决策账本；已发出的请求不追回。
 - capture run 不运行任何决策点（Keychain 不可读，存储根目录也是 capture 的）。
 
 ## 点位
@@ -37,16 +39,13 @@ state：
 | `notes` | `{deviations, unfinished, uncertain}`，空项为 null；没写三栏时整体为 null |
 | `followedReportFormat` | 是否写了三栏 |
 
+第二版删除了 `gapUnreported` 与 `completion`：生产数据（2026-10-29 至 11-01）上，`gapUnreported` AUROC 约 0.52–0.59，且高分 15 条中 10 条误报，`completion` 低于启发式；`reworkLikely` 对「之后被续派」比最佳启发式高 0.137（job 聚类 95% 区间 0.04–0.23，前后两半一致），保留原文。
+
 题目：
 
-- `gapUnreported`（noul）："The state is one coding agent's final report on a task its lead assigned. Agents are told not to build, test or verify; the lead does that, so saying a build or test was not run is expected and is no gap. Work the lead was assigned, or that belongs to files outside `ownedFiles`, is the lead's by design and is no gap either; unfinished work in the agent's own files is a gap even when the report asks the lead to finish it. `notes` holds the agent's own Deviations / Unfinished / Uncertain lines (null when it wrote none of them). Does the report text admit something else in its own task unfinished, failed, skipped, guessed or left for later that `notes` does not mention?"
-- `completion`（choice）："Judging by the report alone, how far did the agent get with its own task? Not running builds or tests, and leaving work outside its own files to the lead, are expected of it and do not count against completion."
-  - `complete`: "Says the task is done and leaves nothing over."
-  - `partial`: "Did part of the task; says or shows that some of the task itself is left or skipped."
-  - `blocked`: "Could not do the task, or stopped on a question, an error or missing access."
 - `reworkLikely`（noul）："Will the lead most likely have to send this agent back to rework its part, judging by the report, the files it owned and the files that landed?"
 
-结果标签：该 head 的 `continuations > 0`（被 lead 用 `continue` 送回返工）为主；H2 结果里命中该 head 落地文件的审查意见为辅。启发式基线：`notes.flagsSomething`、`followedReportFormat == false`。
+结果标签：`continued_after`（同一 head 之后还有一条 `headReport` 判断）为主；H2 结果里命中该 head 落地文件的审查意见为辅。启发式基线：`notes.flagsSomething`、`followedReportFormat == false`。
 
 ### H2 `preReview`：审前风险
 
@@ -69,6 +68,9 @@ state：
 题目：
 
 - `defectLikely`（noul）："The state summarises a finished multi-agent coding job just before an independent code review: the user's request, the lead's final reply, open points the agents flagged, whether a build ran, and line counts per changed file (no source). Will the review find at least one defect that would make the software behave wrongly? Judge the summary only; this is not a verdict on the code."
+- `unrelatedChanges`（noul）："The state summarises a finished multi-agent coding job just before an independent code review: the user's request, the lead's final reply, open points the agents flagged, and the changed files with line counts (no source). The review will see every changed file in the checkout. Does the changed-file list include files that neither the request nor the lead's reply gives any reason to touch, so the review is likely to see changes that do not belong to this job? Judge the summary only."
+
+`unrelatedChanges` 用于观察审查对象归属：生产案例中部分「审查有意见」来自不属于本 job 的改动。结果只写账本，评估与 `findings_any` 和以 Jev 处置为准的 accepted 标签对照。
 
 结果：审查返回后追加一条 `outcome` 记录，含 findings 数和被意见提到的改动文件（意见文本包含相对路径；或者文件名在改动文件中唯一且出现在意见里）。另外以 job 账本的 `reviewAccepted > 0` 为辅助标签。启发式基线：总增删行数、`filesTotal`、`headFlags` 条数、`!leadBuilt`。首批还有一道 `riskiestFile`（最可能出错的文件），回放中命中率不如"改动最多的文件"，已删除。
 
@@ -91,7 +93,7 @@ state：`review`（lead 收到的审查消息，≤ 8000 字符）、`leadReply`
 
 - 每次调用一个请求、不重试，总超时 8 秒；调用放在 detached task 里，不阻塞 head 回报、审查、合并或 settle。
 - 请求体为 `{"model": "jev-latest", "state": …, "questions": {id: {"type": "noul"|"choice"|"score", "instructions": …, "criteria": …}}}`；choice 的 `criteria` 是选项键到含义的对象，score 的 `criteria` 是有序等级数组。响应读取 `answers`、`model`（实际版本，如 `jev-1.14.0`）和 `usage.input_tokens` / `usage.output_tokens`。
-- HTTP 映射：401/403 `auth_rejected`，422 `invalid_request`，429 `rate_limited`，408 或本地超时 `timeout`，其他 5xx/529 和不可读响应 `provider_error`，连不上 `network_error`；没有 key 记 `missing_key`。失败只写账本，不提示 lead，也不弹通知。
+- HTTP 映射：401/403 `auth_rejected`，422 `invalid_request`，429 `rate_limited`，408 或本地超时 `timeout`，其他 5xx/529 和不可读响应 `provider_error`，连不上 `network_error`；没有 key 记 `missing_key`。`skipped_busy` 表示进程内已有 4 个在途 Jev 请求，本次跳过发送并记录 answers 为 null。失败只写账本，不提示 lead，也不弹通知。
 
 ## 账本
 
@@ -100,7 +102,7 @@ state：`review`（lead 收到的审查消息，≤ 8000 字符）、`leadReply`
 决策记录：
 
 ```json
-{"v": 1, "kind": "decision", "id": "<uuid>", "at": "<ISO 8601>",
+{"v": 1, "qv": 2, "kind": "decision", "id": "<uuid>", "at": "<ISO 8601>",
  "point": "headReport|preReview|reviewDisposition",
  "leadID": "<uuid>", "jobID": "<uuid>", "headID": "<uuid，仅 headReport>",
  "engine": "typesafe", "model": "jev-latest", "responseModel": "jev-1.14.0",
@@ -108,6 +110,8 @@ state：`review`（lead 收到的审查消息，≤ 8000 字符）、`leadReply`
  "latencyMs": 412, "inputTokens": 1630, "outputTokens": 151,
  "state": {}, "questions": {}, "answers": {}}
 ```
+
+`qv` 是题目与 state 语义的版本，来自 `HydraDecisionRequests.questionVersion`；语义变化时递增，缺省视为 1。账本格式版本 `v` 保持 1，outcome 记录不加 `qv`。
 
 `answers` 原样保存 Jev 的 `answers` 对象；失败时为 null。保存 `state` 与 `questions` 原文，以后可以把同一批真实状态离线回放给其他引擎、便宜 LLM 的枚举输出基线或不同阈值，不必重新跑任务。
 
@@ -127,11 +131,11 @@ H1 的标签（`continuations`、状态）和 H2 的辅助标签（`reviewAccept
 
 ## 评估
 
-`python3 -I scripts/hydra_eval.py decisions --out <目录>` 只读账本和 `library.json`，按点位输出：
+`python3 -I scripts/hydra_eval.py decisions --out <目录>` 只读账本和 `library.json`，按 `qv` 分组、再按点位输出；缺省 `qv` 视为 1，不同版本不合并比较：
 
 - 覆盖：ok / failed / skipped 计数（按 error 分）、延迟 p50 / p95、token 合计。
-- H1：`gapUnreported`、`reworkLikely` 对"被送回返工"的 AUROC，以及启发式基线的 AUROC；`completion` 的分布与标签交叉表。
-- H2：`defectLikely` 对 `findings > 0` 和 `reviewAccepted > 0` 的 AUROC，以及各基线的 AUROC。
+- H1：`reworkLikely` 对 `continued_after` 的 AUROC，以及启发式基线的 AUROC；`continued_after` 定义为同一 head 之后还有一条 `headReport` 判断。第一版另统计 `gapUnreported` 和 `completion`。
+- H2：`defectLikely`、第二版的 `unrelatedChanges` 对 `findings_any`（`findings > 0`）和 `accepted_any_jev` 的 AUROC，以及各基线的 AUROC。`accepted_any_jev` 以 H3 处置为准（至少一条 accepted），正则计数仅作对照。
 - H3：各选项分布，以及每个 job 的 accepted 数与正则计数的一致率。
 - 正例或反例少于 10 个时只报计数，写"不足以判断"。
 
@@ -142,17 +146,17 @@ H1 的标签（`continuations`、状态）和 H2 的辅助标签（`reviewAccept
 `scripts/hydra_decisions_replay.py` 从 Release 库里已有的 v2 job 重建三个点位的状态，经官方接口打分，再交给 `hydra_eval.py decisions` 和当时的真实结果对照。lead 当时看不到这些判断，标签没有被污染。样本：59 个 head 回报（8 个被送回返工）、36 次审查（15 次有意见）、10 次审查处置（19 条意见）。产物在仓库外 `private-artifacts/decisions-replay/2026-10-28-release-v2-r2*`。105 次调用全部成功，延迟 p50 约 0.66 秒、p95 约 0.85 秒，输入共约 15 万 token。
 
 - **H2 审前风险**：`defectLikely` 对"审查有意见"的 AUROC 两轮分别为 0.838 / 0.864，最好的启发式（改动文件数）为 0.775，增删行数 0.565。差值的 bootstrap 95% 区间为 [-0.13, 0.26]，样本内不显著。`riskiestFile` 命中 2/9，不如"改动最多的文件"的 3/10，没有价值。
-- **H1 回报一致性**：初版题目的 `gapUnreported` 高分项全是误报，因为 head 按约定不构建、不测试，Jev 把"没跑构建"当成未申报缺口。题目补上这条约定后（当前版本），三栏为空的报告最高分降到 0.25；`completion` 判为未完成的 24 个 head 里有 7 个后来被返工，8 个返工中只漏 1 个；启发式"三栏非空"标出 46 个，覆盖全部 8 个。正例太少，只能说方向可期。题目是在同一批数据上修正的，存在过拟合风险，要用新数据复核。
+- **H1 回报一致性**：初版题目的 `gapUnreported` 高分项全是误报，因为 head 按约定不构建、不测试，Jev 把"没跑构建"当成未申报缺口。题目补上这条约定后（当时版本），三栏为空的报告最高分降到 0.25；`completion` 判为未完成的 24 个 head 里有 7 个后来被返工，8 个返工中只漏 1 个；启发式"三栏非空"标出 46 个，覆盖全部 8 个。正例太少，只能说方向可期。题目是在同一批数据上修正的，存在过拟合风险，要用新数据复核。
 - **H3 审查处置**：Jev 的 19 条判断与人工判读完全一致；现有正则在 10 个 job 中有 4 个没有记录，有记录的 6 个里错了 3 个（中文回复和不按模板写的回复都识别不了）。作为账本的测量工具价值明确。
 
-Dev 实测（2026-10-28，Codex 同模型、演示仓库）：job 正常完成，2 个 head 回报和 1 次审前判断都成功写入账本（App 内延迟 0.3–0.6 秒），审查为 Claude、0 条意见，结果记录齐全；没有意见所以 H3 未触发，它在 App 内的链路未实测。两份回报都写了"主线程需补充入口导出"，指的是本来分给 lead 的文件，`gapUnreported` 仍给出 0.84 / 0.91：留给 lead 或不归自己负责的文件的工作，也会被当成缺口，题目随后补上了这条分工说明（当前版本）。
+Dev 实测（2026-10-28，Codex 同模型、演示仓库）：job 正常完成，2 个 head 回报和 1 次审前判断都成功写入账本（App 内延迟 0.3–0.6 秒），审查为 Claude、0 条意见，结果记录齐全；没有意见所以 H3 未触发，它在 App 内的链路未实测。两份回报都写了"主线程需补充入口导出"，指的是本来分给 lead 的文件，`gapUnreported` 仍给出 0.84 / 0.91：留给 lead 或不归自己负责的文件的工作，也会被当成缺口，题目随后补上了这条分工说明（当时版本）。
 
 结论：H3 的判断比正则计数可靠，但按上面的决定两者并存；H1、H2 有信号但样本不足，继续影子积累，达到上面的门槛再考虑提示阶段；`riskiestFile` 已删除。同一批状态两次打分的 AUROC 相差约 0.03，比较时要考虑模型自身的波动。
 
 ## 以后的提示阶段（未实现）
 
 - H1：概率超过阈值时，在 v2 回报的 `Flags` 里加一行，说明报告正文可能有未申报的缺口。
-- H2：高风险时再考虑加强审查。极小改动跳过审查需要影子数据证明这类 job 的已采纳意见一直为 0。
+- H2：高风险时再考虑加强审查。任何阶段都不跳过审查（只加不减）。
 - 提示阶段同样只加不减，阈值来自本机账本，不来自厂商默认值。
 
 ## 不做的事

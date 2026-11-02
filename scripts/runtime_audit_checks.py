@@ -92,6 +92,8 @@ enum ProviderEvent {
 struct Notice { enum Level { case warning }; var level: Level; var message: String }
 enum TextCleanup { static func stripANSI(_ value: String) -> String { value } }
 enum ProviderError: Error { case notRunning, failed(String) }
+enum ClaudeAccountValidationError: Error { case identityChanged, verificationFailed }
+struct ClaudeCredentialError: Error {}
 struct RPCError: Error { var code = 0; var message = "fixture" }
 enum AppText { static func localized(_ text: String) -> String { text } }
 extension String { var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) } }
@@ -252,6 +254,7 @@ swift += r'''
         if let controlGate { return await controlGate.wait() }
         return [:]
     }
+    func validateAccountIdentity() async throws {}
     func clearBackgroundTasks() {}
     func invalidateContextUsage() {}
     func sendToolResponse(_ id: String, _ response: JSONValue) {}

@@ -815,7 +815,7 @@ private struct ContextMeter: View {
                     }
                     .padding(.top, 10)
                     .padding(.horizontal, 16)
-                    UsagePanel(usage: usage, provider: provider, headsProvider: headsProvider)
+                    UsagePanel(usage: usage, provider: provider, headsProvider: headsProvider, threadID: runtime.thread?.id)
                 }
                 .presentedChrome()
             }

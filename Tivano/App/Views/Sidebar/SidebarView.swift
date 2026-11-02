@@ -10,6 +10,7 @@ struct SidebarView: View {
     var dismiss: (() -> Void)? = nil
 
     @State private var search = ""
+    @State private var hoveredSection: SidebarSection?
     @State private var renaming: ChatThread?
     @State private var renameText = ""
     /// The thread whose delete popover is open, by id: the popover's binding compares two
@@ -571,13 +572,10 @@ struct SidebarView: View {
             }
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-                    .accessibilityHidden(true)
                 Text(verbatim: Chrome.localized(section.title))
                     .font(.ui(.callout, weight: .semibold))
                     .lineLimit(1)
+                DisclosureChevron(collapsed: collapsed, hovering: hoveredSection == section)
             }
             .foregroundStyle(Chrome.secondaryText)
             .padding(.leading, Chrome.rowHorizontalPadding)
@@ -597,6 +595,7 @@ struct SidebarView: View {
             ) { add(to: section) }
                 .padding(.trailing, Chrome.rowHorizontalPadding - (Chrome.iconSize - SidebarHeaderLayout.glyphWidth) / 2)
         }
+        .onHover { hoveredSection = $0 ? section : (hoveredSection == section ? nil : hoveredSection) }
         .modifier(SidebarHeaderLayout(
             // A later section's gap must exceed the 40pt rhythm of collapsed project rows,
             // or its header reads as part of the group above.

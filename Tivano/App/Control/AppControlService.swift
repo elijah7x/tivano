@@ -145,6 +145,11 @@ final class AppControlService {
                 // this API is deliberately text-only rather than a second command surface.
                 guard !request.text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/") else { throw ControlFailure(code: .unsupported) }
                 let thread = try requireOrdinaryThread(request.threadID, app: app)
+                // Heads always run with full access, so a supervised remote caller must not
+                // reach them through a Hydra lead; the local CLI runs as the owner already.
+                guard source != .remote || !app.hydraIsOn(thread) || app.settings.isRemoteMCPFullAccess else {
+                    throw ControlFailure(code: .permission, detail: "hydra_requires_remote_full_access")
+                }
                 try requireAvailableProvider(thread, app: app)
                 let continuation = try resolveContinuation(request.continuation, thread: thread)
                 let runtime = app.runtime(for: thread.id)
@@ -191,8 +196,8 @@ final class AppControlService {
     func requireOrdinaryThread(_ id: UUID, app: AppModel, requireReady: Bool = true) throws -> ChatThread {
         guard let thread = app.thread(id) else { throw ControlFailure(code: .notFound) }
         guard !thread.isArchived else { throw ControlFailure(code: .archived) }
-        guard !thread.isHelper, !thread.isHydraHead, !thread.isVoiceSession, !app.hydraIsOn(thread),
-              app.children(of: id).isEmpty else { throw ControlFailure(code: .unsupported) }
+        guard !thread.isHelper, !thread.isHydraHead, !thread.isVoiceSession,
+              app.children(of: id).allSatisfy(\.isHydraHead) else { throw ControlFailure(code: .unsupported) }
         if let projectID = thread.projectID, app.project(projectID) == nil { throw ControlFailure(code: .missingProject) }
         if requireReady {
             let workspace = app.controlWorkspace(for: thread)
@@ -300,7 +305,7 @@ final class AppControlService {
         return ControlThread(id: thread.id, title: String(thread.title.prefix(1_024)), projectID: thread.projectID,
                              affiliation: thread.projectID == nil ? .standalone : (app.project(thread.projectID) == nil ? .missing_project : .project),
                              role: thread.isHydraHead ? .head : (thread.isHelper ? .helper : .normal), archived: thread.isArchived,
-                             provider: thread.provider.rawValue, model: thread.model, createdAt: thread.createdAt, updatedAt: thread.updatedAt,
+                             provider: thread.provider.rawValue, model: thread.model, hydra: app.hydraIsOn(thread), createdAt: thread.createdAt, updatedAt: thread.updatedAt,
                              lastStatus: thread.lastStatus?.rawValue, activeTurnID: runtime?.controlActiveTurnID,
                              waitingForUI: runtime.map { !$0.approvals.isEmpty || !$0.questions.isEmpty } ?? false,
                              workspace: app.controlWorkspace(for: thread), executionDirectory: try? app.executionDirectory(for: thread))

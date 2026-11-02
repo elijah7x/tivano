@@ -29,6 +29,7 @@ final class AutoContinue {
         var resetsAt: Date?
         /// Whether the user chose to continue once the limit resets.
         var isWaiting = false
+        var claudeAccountID: UUID? = nil
     }
 
     /// The chats with an open offer, read by their composer tab.
@@ -71,7 +72,7 @@ final class AutoContinue {
               Self.supportedProviders.contains(thread.provider) else { return }
         let accounts = app.providers.accounts
         let usedAccount = app.existingRuntime(for: threadID)?.codexAccountInUse
-        guard ProviderAccounts.supportedProviders.contains(thread.provider),
+        guard ProviderAccounts.automaticSwitchingProviders.contains(thread.provider),
               accounts.switchMode(for: thread.provider) == .automatic,
               switchCounts[threadID, default: 0] < ProviderAccounts.maxSwitchesPerPrompt else {
             openOffer(threadID, turnID: turnID, note: note, thread: thread)
@@ -102,7 +103,7 @@ final class AutoContinue {
     /// Moves the chat to another signed-in account with usage left and continues it there.
     /// Returns false when no account can take over.
     private func switchAccount(_ threadID: UUID, turnID: UUID, provider: ProviderKind, used: UUID?, resetsAt: Date?) -> Bool {
-        guard let app else { return false }
+        guard provider == .codex, let app else { return false }
         let accounts = app.providers.accounts
         guard let active = accounts.activeAccount(for: provider) else { return false }
         let used = used ?? active.id
@@ -125,7 +126,7 @@ final class AutoContinue {
 
     private func openOffer(_ threadID: UUID, turnID: UUID, note: (turnID: UUID, resetsAt: Date?), thread: ChatThread) {
         let resetsAt = note.resetsAt.flatMap { UsageLimitSignal.supportsResetTime($0) ? $0 : nil }
-        let offer = Offer(id: UUID(), turnID: turnID, provider: thread.provider, model: thread.model, resetsAt: resetsAt)
+        let offer = Offer(id: UUID(), turnID: turnID, provider: thread.provider, model: thread.model, resetsAt: resetsAt, claudeAccountID: app.flatMap { ThreadRuntime.claudeAccountForChat(thread, app: $0)?.id })
         guard resetsAt == nil else {
             offers[threadID] = offer
             return
@@ -133,9 +134,9 @@ final class AutoContinue {
         // No time in the message: read the account's spent window before showing anything,
         // so the tab does not flash "no reset time" while the answer is on its way.
         tasks[threadID] = Task { [weak self] in
-            let reset = await self?.readResetTime(thread.provider)
+            let reset = await self?.readResetTime(thread.provider, claudeAccountID: offer.claudeAccountID)
             // Clearing the offer cancels this task, so one that is not cancelled is still current.
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled, self.applies(offer, to: threadID) else { return }
             self.tasks[threadID] = nil
             var resolved = offer
             resolved.resetsAt = reset
@@ -155,6 +156,7 @@ final class AutoContinue {
     private func applies(_ offer: Offer, to threadID: UUID) -> Bool {
         guard let thread = app?.thread(threadID) else { return false }
         return !thread.isArchived && thread.provider == offer.provider && thread.model == offer.model
+            && (offer.provider != .claude || app.flatMap { ThreadRuntime.claudeAccountForChat(thread, app: $0)?.id } == offer.claudeAccountID)
     }
 
     /// The user chose to continue once the limit resets.
@@ -220,7 +222,7 @@ final class AutoContinue {
               thread.provider == provider, let runtime = app.existingRuntime(for: threadID),
               runtime.turns.last?.id == turnID,
               // Switching turned to Manual while the chat waited to go on: leave it stopped.
-              app.providers.accounts.switchMode(for: provider) == .automatic else {
+              provider == .codex, app.providers.accounts.switchMode(for: provider) == .automatic else {
             clear(threadID)
             return
         }
@@ -264,7 +266,7 @@ final class AutoContinue {
         clear(threadID)
         // The account chosen when the wait began may have been swapped since; go on with one that has usage left.
         let accounts = app.providers.accounts
-        if accounts.switchMode(for: offer.provider) == .automatic,
+        if offer.provider == .codex, accounts.switchMode(for: offer.provider) == .automatic,
            let active = accounts.activeAccount(for: offer.provider), !accounts.isUsable(active.id),
            let next = accounts.nextAccount(for: offer.provider, after: active.id) {
             accounts.use(next)
@@ -279,10 +281,13 @@ final class AutoContinue {
     }
 
     /// The reset time of the account's most-spent window, read fresh.
-    private func readResetTime(_ provider: ProviderKind) async -> Date? {
+    private func readResetTime(_ provider: ProviderKind, claudeAccountID: UUID? = nil) async -> Date? {
         guard let app, PlanLimitsReader.exposesLimits(provider) else { return nil }
         let limits: PlanLimits?
-        if provider.isAPIKeyBased {
+        if provider == .claude {
+            guard let claudeAccountID else { return nil }
+            limits = await app.providers.refreshClaudePlanLimits(accountID: claudeAccountID, force: true)
+        } else if provider.isAPIKeyBased {
             let apiKey = app.settings.apiKey(for: provider)
             guard !apiKey.isEmpty else { return nil }
             limits = await PlanLimitsReader.read(provider, apiKey: apiKey)

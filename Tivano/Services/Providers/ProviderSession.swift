@@ -57,6 +57,8 @@ struct SessionConfiguration: Sendable {
     var modelCatalog: [ModelOption] = []
     var dshMode: DshAgentMode = .standard
     var dshFinalReport = false
+    var claudeAccountID: UUID? = nil
+    var claudeIdentity: ClaudeAccountIdentity? = nil
 }
 
 /// One exchange of a conversation, for replaying it into a session that starts over.
