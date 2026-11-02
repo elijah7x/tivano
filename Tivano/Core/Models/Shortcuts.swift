@@ -166,7 +166,7 @@ enum AppShortcut: String, CaseIterable, Identifiable {
         case .newWorktreeThread: "New thread in worktree"
         case .addProject: "Add project"
         case .stopTurn: "Stop the running turn"
-        case .queueChat: "Queue a chat"
+        case .queueChat: "Queue message"
         case .togglePlanMode: "Plan mode"
         case .previousThread: "Previous thread"
         case .nextThread: "Next thread"

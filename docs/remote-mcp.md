@@ -1,9 +1,10 @@
-# Remote MCP (Alpha)
+# Remote MCP
 
 Remote MCP lets a cloud agent (Meta Muse, xAI Grok Bot, a Claude connector, any
 MCP client with OAuth) drive this running edition of Tivano. It exposes the
 [local-control](local-control.md) commands as MCP tools over Streamable HTTP. It is
-off by default: Settings → Alpha → Remote MCP needs both Alpha and its own switch.
+off by default: its switch is at the bottom of Settings → MCP, and only its own
+switch needs to be on.
 
 ## Shape
 

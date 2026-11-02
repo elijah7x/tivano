@@ -1,6 +1,72 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "No pairs match" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的组合"
+          }
+        }
+      }
+    },
+    "All models" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部模型"
+          }
+        }
+      }
+    },
+    "All providers" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部服务商"
+          }
+        }
+      }
+    },
+    "No matching providers": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有匹配的服务商"
+          }
+        }
+      }
+    },
+    "Ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已就绪"
+          }
+        }
+      }
+    },
+    "Search providers": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索服务商"
+          }
+        }
+      }
+    },
     "Add ⌘, ⌃ or ⌥ so the shortcut works in every app.": {
       "extractionState": "manual",
       "localizations": {
@@ -29,7 +95,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "问点什么，或交给 Agent 做点什么…"
+            "value": "问点什么，或交给智能体一项任务…"
           }
         }
       }
@@ -392,7 +458,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "新一轮对话使用你选择的账号。"
+            "value": "新的轮次将使用你选择的账号。"
           }
         }
       }
@@ -447,7 +513,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "额度已用完 · %@重置"
+            "value": "额度已用完 · 将于 %@ 重置"
           }
         }
       }
@@ -777,7 +843,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已安装，但指向旧位置的 Tivano。修复后会改用当前这个。"
+            "value" : "已安装，但指向旧的 Tivano 副本。修复后将改用当前应用。"
           }
         }
       }
@@ -821,7 +887,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "heads 完成后、合并之前，由你选的模型审阅改动，并把发现发给 lead。"
+            "value" : "子智能体完成后、合并之前，由你选的模型审阅改动，并把发现发给主智能体。"
           }
         }
       }
@@ -876,7 +942,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "首选无法运行（未登录或找不到 CLI）时改用次选；两个都无法运行时跳过审查。选与 lead 不同的服务商，审查视角更独立。"
+            "value" : "首选无法运行（未登录或找不到 CLI）时改用次选；两个都无法运行时跳过审查。选与主智能体不同的服务商，审查视角更独立。"
           }
         }
       }
@@ -920,7 +986,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主智能体会收到这段说明，从而把这类工作交给 heads。例如：速度快，适合机械性修改；或前端。"
+            "value" : "主智能体会收到这段说明，从而把这类工作交给子智能体。例如：速度快，适合机械性修改；或前端。"
           }
         }
       }
@@ -964,7 +1030,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "粘贴 key"
+            "value" : "粘贴密钥"
           }
         }
       }
@@ -975,7 +1041,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "影子测试：请 TypeSafe Jev 评判 head 的回报，并在每个任务进入审查前作出判断；判断和之后的实际结果都保存在这台 Mac 上。Hydra 本身的行为不变。会发送用户请求、head 回报、lead 的回复、审查意见，以及改动文件的路径和增删行数；不发送 diff 或文件内容，但文字中可能引用代码。关闭后立即停止调用；开启后从下一次请求起生效。"
+            "value" : "影子测试：请 TypeSafe Jev 评判子智能体的汇报，并在每个任务进入审查前作出判断；判断和之后的实际结果都保存在这台 Mac 上。Hydra 本身的行为不变。会发送用户请求、子智能体汇报、主智能体的回复、审查意见，以及改动文件的路径和增删行数；不发送 diff 或文件内容，但文字中可能引用代码。关闭后立即停止调用；开启后从下一次请求起生效。"
           }
         }
       }
@@ -997,7 +1063,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "钥匙串未能保存该 key：%@"
+            "value" : "钥匙串未能保存该密钥：%@"
           }
         }
       }
@@ -1008,7 +1074,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "TypeSafe API key"
+            "value" : "TypeSafe API 密钥"
           }
         }
       }
@@ -1107,7 +1173,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "准备合并期间，checkout 已发生变化。"
+            "value" : "准备合并期间，检出目录已发生变化。"
           }
         }
       }
@@ -1118,7 +1184,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同步 checkout 时出现冲突：%@"
+            "value" : "同步检出目录时出现冲突：%@"
           }
         }
       }
@@ -1129,7 +1195,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同步 checkout 失败。恢复资料：%@\n%@"
+            "value" : "同步检出目录失败。恢复资料：%@\n%@"
           }
         }
       }
@@ -1151,7 +1217,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法读取此 checkout 的 Git 状态。"
+            "value" : "无法读取此检出目录的 Git 状态。"
           }
         }
       }
@@ -1162,7 +1228,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此 checkout 处于分离 HEAD 状态，请手动同步。"
+            "value" : "检出目录处于分离 HEAD 状态，请手动同步。"
           }
         }
       }
@@ -1173,7 +1239,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hydra 已合并工作成果，但未能同步 checkout。"
+            "value" : "Hydra 已合并工作成果，但未能同步检出目录。"
           }
         }
       }
@@ -1184,7 +1250,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法读取项目 checkout 的 Git 状态。"
+            "value" : "无法读取项目检出目录的 Git 状态。"
           }
         }
       }
@@ -1195,7 +1261,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法读取一个 head 的历史，尚未将其工作标记为完成：%@。"
+            "value" : "无法读取子智能体的历史，尚未将其工作标记为完成：%@。"
           }
         }
       }
@@ -1206,7 +1272,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "默认分支已产生分歧，checkout 已保留，请手动同步。"
+            "value" : "默认分支已产生分歧，检出目录已保留，请手动同步。"
           }
         }
       }
@@ -1217,7 +1283,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "等待回写期间，head 已发生变化，其补丁已保留。"
+            "value" : "等待回写期间，子智能体已发生变化，其补丁已保留。"
           }
         }
       }
@@ -1228,7 +1294,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法保存 head 的恢复补丁，其副本已保留。"
+            "value" : "无法保存子智能体的恢复补丁，其副本已保留。"
           }
         }
       }
@@ -1239,7 +1305,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "checkout 正在进行 rebase 或 merge，或无法读取其 Git 状态。"
+            "value" : "检出目录正在执行 rebase 或 merge，或无法读取其 Git 状态。"
           }
         }
       }
@@ -1250,7 +1316,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 尚未完成的工作已保存为恢复补丁。\n%@\n\n随后会移除副本。请先对照 checkout 检查补丁，再使用 `git apply --3way %@` 应用。"
+            "value" : "%@ 尚未完成的工作已保存为恢复补丁。\n%@\n\n其副本已移除。请先对照检出目录检查补丁，再使用 `git apply --3way %@` 应用。"
           }
         }
       }
@@ -1422,7 +1488,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "位于 %@ 的 DeepSeek Harness 无法继承桌面应用的市场配置，重试也会以同样方式失败。请使用 DeepSeek Harness 应用自带的 CLI，或在“设置 → 服务商 → DeepSeek Harness”中将其设为可执行文件路径。"
+            "value" : "位于 %@ 的 DeepSeek Harness 无法继承桌面应用的市场配置，重试也会以同样方式失败。请使用 DeepSeek Harness 应用自带的 CLI，或在“设置 › 服务商 › DeepSeek Harness”中将其设为可执行文件路径。"
           }
         }
       }
@@ -1605,7 +1671,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "设置 › 关于中列出了正在等待的任务。"
+            "value" : "可在“设置 › 关于”中查看等待项。"
           }
         }
       }
@@ -1616,7 +1682,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "最近的对话闲置超过这段时间后自动搁置项目。有对话正在运行、未读或正打开的项目不会被搁置。"
+            "value" : "最近的对话闲置超过这段时间后自动搁置项目。有对话正在运行、未读或已打开的项目不会被搁置。"
           }
         }
       }
@@ -1757,7 +1823,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "跟随最近会话"
+            "value": "跟随最近对话"
           }
         }
       }
@@ -1790,7 +1856,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "默认跟随最近会话所在位置，包括任务。此设置仅影响普通新建；从项目中明确新建的会话仍归属该项目。"
+            "value": "默认跟随最近对话所在位置，包括任务。此设置仅影响普通新建；从项目中明确新建的对话仍归属该项目。"
           }
         }
       }
@@ -2087,7 +2153,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 未响应 %@，已等待 %lld 秒"
+            "value" : "%@ 在 %lld 秒内未响应 %@"
           }
         }
       }
@@ -2098,7 +2164,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@推理强度"
+            "value" : "%@ 推理强度"
           }
         }
       }
@@ -2197,7 +2263,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导 %@，子智能体 %@"
+            "value" : "主智能体 %@，子智能体 %@"
           }
         }
       }
@@ -2428,7 +2494,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 的默认设置"
+            "value" : "%@ 默认模型"
           }
         }
       }
@@ -2587,13 +2653,13 @@
         }
       }
     },
-    "%d files changed, %d added, %d removed" : {
+    "%d files changed, %d lines added, %d lines removed" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%d 个文件已改动，新增 %d，删除 %d"
+            "value" : "%d 个文件已改动，新增 %d 行，删除 %d 行"
           }
         }
       }
@@ -2670,7 +2736,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%d 个 heads 报告了待处理事项"
+            "value" : "%d 个子智能体报告了待处理事项"
           }
         }
       }
@@ -2835,7 +2901,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 个聊天"
+            "value" : "%lld 个对话"
           }
         }
       }
@@ -2934,7 +3000,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld天"
+            "value" : "%lld 天"
           }
         }
       }
@@ -2945,7 +3011,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld小时"
+            "value" : "%lld 小时"
           }
         }
       }
@@ -2956,7 +3022,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld分钟"
+            "value" : "%lld 分钟"
           }
         }
       }
@@ -3374,7 +3440,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "谨慎的主导加上阵容庞大、行动迅速的团队：Opus 撰写任务简报，六个 Gemini Flash 子智能体飞速完成。"
+            "value" : "谨慎的主智能体加上阵容庞大、行动迅速的团队：Opus 撰写任务简报，六个 Gemini Flash 子智能体飞速完成。"
           }
         }
       }
@@ -3429,7 +3495,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "完成的子智能体会把报告交给主导模型，由主导模型检查工作并回复你。清除的子智能体会从面板移到侧边栏。"
+            "value" : "完成的子智能体会把报告交给主智能体，由主智能体检查工作并回复你。清除的子智能体会从面板移到侧边栏。"
           }
         }
       }
@@ -3440,7 +3506,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子智能体完成后将报告交给主导模型，由它检查工作并回复你。完成的子智能体会自动收起，工作报告保留在聊天里的完成卡片中。"
+            "value" : "子智能体完成后会将报告交给主智能体，由主智能体检查工作并回复你。完成的子智能体会自动收起，工作报告保留在对话里的完成卡片中。"
           }
         }
       }
@@ -3473,7 +3539,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导模型的推理强度高于“中”时，子智能体仍以同一模型的“中”强度运行；对于没有“中”档的强度范围（Z.ai），则取该范围的中间一档；组合中指定了子智能体强度的，保持不变。"
+            "value" : "主智能体的推理强度高于“中”时，子智能体仍以同一模型的“中”强度运行；对于没有“中”档的强度范围（Z.ai），则取该范围的中间一档；组合中指定了子智能体强度的，保持不变。"
           }
         }
       }
@@ -3506,7 +3572,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "组合可以由一个服务商主导，并在另一个服务商上运行子智能体。"
+            "value" : "组合可以由一个服务商运行主智能体，由另一个服务商运行子智能体。"
           }
         }
       }
@@ -3517,7 +3583,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "组合用于指定由哪个模型主导，以及由哪个模型或服务商运行子智能体：例如 Opus 主导 Sonnet，或 Claude 主导 Gemini 子智能体。未设置组合时，子智能体会以常规强度使用本对话的模型。组合可在模型选择器和“设置 › Hydra”中管理。"
+            "value" : "组合用于指定由哪个模型担任主智能体，以及由哪个模型或服务商运行子智能体：例如由 Opus 统领 Sonnet，或由 Claude 统领 Gemini 子智能体。未设置组合时，子智能体会以常规强度使用本对话的模型。组合可在模型选择器和“设置 › Hydra”中管理。"
           }
         }
       }
@@ -3528,7 +3594,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "组合用来指定由哪个模型主导、哪个模型运行子智能体。你可以在同一服务商下让擅长深度思考的模型搭配动作迅速的模型，也可以让一个服务商主导、另一个服务商运行子智能体：每次都让最强的主导搭配最快的团队。"
+            "value" : "组合用来指定由哪个模型担任主智能体、哪个模型运行子智能体。你可以在同一服务商下让擅长深度思考的模型配合动作迅速的模型，也可以让一个服务商担任主智能体、另一个服务商运行子智能体：每次都能让最强的主智能体搭配最快的团队。"
           }
         }
       }
@@ -3627,7 +3693,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "侧栏顶部挂着一只晴天娃娃，陪你等代理干活，也用天气提示对话状态：运行时随风摆动，等你处理时转阴，有新回复时放晴，出错时落雨。只在可见时才会动。"
+            "value" : "侧边栏顶部挂着一只晴天娃娃，陪你在智能体工作时打发时间，也用天气提示对话状态：运行时随风摆动，等你处理时转阴，有新回复时放晴，出错时落雨。只在可见时才会动。"
           }
         }
       }
@@ -3671,7 +3737,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "mcode 已选择 API-key 路由 · 已配置密钥，尚未验证服务端认证"
+            "value" : "mcode 已选择 API 密钥路由 · 已配置密钥，尚未验证服务端认证"
           }
         }
       }
@@ -4034,7 +4100,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "调整聊天和差异视图中代码的基础字号"
+            "value" : "调整对话和差异视图中代码的基础字号"
           }
         }
       }
@@ -4078,7 +4144,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "代理模式"
+            "value" : "智能体模式"
           }
         }
       }
@@ -4089,7 +4155,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent 输出"
+            "value" : "智能体输出"
           }
         }
       }
@@ -4122,7 +4188,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部聊天"
+            "value" : "全部对话"
           }
         }
       }
@@ -4155,7 +4221,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请前往“系统设置 → 隐私与安全性 → 麦克风”，允许 Tivano 使用麦克风。"
+            "value" : "请前往“系统设置 › 隐私与安全性 › 麦克风”，允许 Tivano 使用麦克风。"
           }
         }
       }
@@ -4243,7 +4309,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有 MCP 服务器没有响应，因此 DeepSeek Harness 未带 MCP 服务器启动。"
+            "value" : "有 MCP 服务器没有响应，因此 DeepSeek Harness 启动时没有加载你的 MCP 服务器。"
           }
         }
       }
@@ -4347,6 +4413,17 @@
         }
       }
     },
+    "Answer the pending request before switching providers" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "处理完待确认的请求后可切换服务商"
+          }
+        }
+      }
+    },
     "Answer the question to send" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4364,7 +4441,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法确认 Antigravity 的安装来源。请用官方安装器安装的 agy 运行 agy update 更新。"
+            "value" : "无法确认 Antigravity 的安装来源。请使用官方安装的 agy 执行 agy update。"
           }
         }
       }
@@ -4496,7 +4573,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "批准上方的计划，让智能体开始构建。"
+            "value" : "批准上方的计划，让智能体开始实施。"
           }
         }
       }
@@ -4551,7 +4628,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "归档已完成的子智能体会话，仍可继续对话。"
+            "value" : "归档已完成的子智能体，仍可继续对话。"
           }
         }
       }
@@ -4595,7 +4672,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法通过外部控制操作已归档的线程。"
+            "value" : "无法通过外部控制操作已归档的对话。"
           }
         }
       }
@@ -4650,7 +4727,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "作为独立对话运行，在主导模型回复结束时发起。"
+            "value" : "作为独立对话运行，在主智能体回复结束时发起。"
           }
         }
       }
@@ -4661,7 +4738,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "向 %@ 提出任何需求；主智能体决定哪些自己做，哪些交给 heads"
+            "value" : "向 %@ 提出任何需求；主智能体决定哪些自己做，哪些交给子智能体"
           }
         }
       }
@@ -4683,7 +4760,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "像平常一样提出需求。主智能体自己处理紧密关联的工作，并决定将哪些独立部分交给 heads。"
+            "value" : "像平常一样提出需求。主智能体自己处理紧密关联的工作，并决定将哪些独立部分写成简报交给子智能体。"
           }
         }
       }
@@ -4694,7 +4771,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "通过主智能体让这个 head 返工"
+            "value" : "通过主智能体让此子智能体返工"
           }
         }
       }
@@ -4760,7 +4837,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Astra 6 主导 Sol 5.6"
+            "value" : "Astra 6 主智能体，Sol 5.6 子智能体"
           }
         }
       }
@@ -4771,7 +4848,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Astra 6 主导 Spark 1.3 Contributor"
+            "value" : "Astra 6 主智能体，Spark 1.3 Contributor 子智能体"
           }
         }
       }
@@ -4782,7 +4859,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Astra 6 主导 Terra 5.6"
+            "value" : "Astra 6 主智能体，Terra 5.6 子智能体"
           }
         }
       }
@@ -5018,13 +5095,24 @@
         }
       }
     },
+    "Back to %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到 %@"
+          }
+        }
+      }
+    },
     "Back to chats · Esc" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "返回聊天 · Esc"
+            "value" : "返回对话 · Esc"
           }
         }
       }
@@ -5057,7 +5145,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "返回聊天"
+            "value" : "返回对话"
           }
         }
       }
@@ -5541,7 +5629,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "更改%@…"
+            "value" : "修改：%@…"
           }
         }
       }
@@ -5552,7 +5640,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此对话上次改动后，该文件又被修改过，因此保持不变。"
+            "value" : "自本对话上次改动后，该文件又被修改过，因此未做处理。"
           }
         }
       }
@@ -5607,7 +5695,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "聊天类型"
+            "value" : "对话类型"
           }
         }
       }
@@ -5640,7 +5728,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "聊天"
+            "value" : "对话"
           }
         }
       }
@@ -5865,7 +5953,7 @@
         }
       }
     },
-    "Choose Files…" : {
+    "Choose files…" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -6003,7 +6091,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择会话归属"
+            "value" : "选择对话归属"
           }
         }
       }
@@ -6223,7 +6311,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "点击此处重新登录"
+            "value" : "点击右侧“登录”前往终端完成登录。"
           }
         }
       }
@@ -6234,7 +6322,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "点击此处重新登录。"
+            "value" : "点击右侧“登录”前往终端完成登录。"
           }
         }
       }
@@ -6333,7 +6421,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex 无法恢复原 head 的历史记录。"
+            "value" : "Codex 无法恢复原子智能体的历史记录。"
           }
         }
       }
@@ -6355,7 +6443,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex 未确认已恢复原 head。"
+            "value" : "Codex 未确认已恢复原子智能体。"
           }
         }
       }
@@ -6366,7 +6454,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex 未确认此 head 已归档。后续消息发送前将核对其状态。"
+            "value" : "Codex 未确认此子智能体已归档。后续消息发送前将核对其状态。"
           }
         }
       }
@@ -6377,7 +6465,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex 未返回已归档的会话。此 head 的历史记录已保留。"
+            "value" : "Codex 未返回已归档的会话。此子智能体的历史记录已保留。"
           }
         }
       }
@@ -6421,7 +6509,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此 head 仍在活动，或无法确认其空闲状态，因此 Codex 历史仍保持可见。"
+            "value" : "此子智能体仍在活动，或无法确认其空闲状态，因此 Codex 历史仍保持可见。"
           }
         }
       }
@@ -6432,7 +6520,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此 head 有派生会话，或无法确认其状态，因此 Codex 历史仍保持可见。"
+            "value" : "此子智能体有派生会话，或无法确认其状态，因此 Codex 历史仍保持可见。"
           }
         }
       }
@@ -6773,7 +6861,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在压缩会话…"
+            "value" : "正在压缩对话…"
           }
         }
       }
@@ -6839,7 +6927,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "使用 mcode provider set-minimax-key 在 MiniMax Code 中配置 API key。BYOK 无需运行 mcode login。已配置不代表认证有效。"
+            "value" : "使用 mcode provider set-minimax-key 在 MiniMax Code 中配置 API 密钥。BYOK 无需运行 mcode login。已配置不代表认证有效。"
           }
         }
       }
@@ -7075,6 +7163,17 @@
         }
       }
     },
+    "Continued with %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以下由 %@ 接力"
+          }
+        }
+      }
+    },
     "Continues at %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7125,7 +7224,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "会话已压缩"
+            "value" : "对话已压缩"
           }
         }
       }
@@ -7185,17 +7284,6 @@
         }
       }
     },
-    "Copy Link" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制链接"
-          }
-        }
-      }
-    },
     "Copy code" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7213,7 +7301,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "拷贝命令"
+            "value" : "复制命令"
           }
         }
       }
@@ -7257,7 +7345,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制%@"
+            "value" : "复制：%@"
           }
         }
       }
@@ -7301,7 +7389,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法更改会话归属"
+            "value" : "无法更改对话归属"
           }
         }
       }
@@ -7334,7 +7422,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法创建会话"
+            "value" : "无法创建对话"
           }
         }
       }
@@ -7565,7 +7653,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "创意模式"
+            "value" : "创造模式"
           }
         }
       }
@@ -7928,7 +8016,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已拒绝：OMP 子代理仅可在 Hydra 关闭且具有完全访问权限时运行。"
+            "value" : "已拒绝：OMP 子智能体仅可在 Hydra 关闭且具有完全访问权限时运行。"
           }
         }
       }
@@ -7961,7 +8049,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已拒绝：此会话禁用了子代理，Hydra 头不在 omp 内运行。"
+            "value" : "已拒绝：本对话禁用了子智能体，Hydra 未在 omp 内运行子智能体。"
           }
         }
       }
@@ -8126,7 +8214,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "DeepSeek Harness 需要已登录的 DeepSeek 账号或 DeepSeek API 密钥。请在 DeepSeek Harness 应用中登录，或在“设置 → 服务商 → DeepSeek”中添加密钥。"
+            "value" : "DeepSeek Harness 需要已登录的 DeepSeek 账号或 DeepSeek API 密钥。请在 DeepSeek Harness 应用中登录，或在“设置 › 服务商 › DeepSeek”中添加密钥。"
           }
         }
       }
@@ -8379,7 +8467,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "删除匹配的已归档聊天"
+            "value" : "删除匹配的已归档对话"
           }
         }
       }
@@ -8390,7 +8478,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "删除匹配的已归档聊天？"
+            "value" : "删除匹配的已归档对话？"
           }
         }
       }
@@ -8533,7 +8621,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "偏离要求：%@"
+            "value" : "方案调整：%@"
           }
         }
       }
@@ -8632,7 +8720,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已禁用。Codex 的删除操作还会删除其后代会话，且没有针对新近活跃工作的原子性保护。Claude Code 和 Antigravity 对这些已连接的会话没有经过验证的删除操作。"
+            "value" : "已禁用。Codex 的删除操作还会删除其派生会话，且没有针对新近活跃工作的原子性保护。Claude Code 和 Antigravity 对这些已连接的会话没有经过验证的删除操作。"
           }
         }
       }
@@ -8885,7 +8973,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "除第一个外，每个子智能体在空间允许时都会在对话旁获得独立面板，先左后右，直到两侧排满。"
+            "value" : "空间允许时，后续每个子智能体也会在对话两侧各自展开独立面板，先左后右，排满为止。"
           }
         }
       }
@@ -8907,7 +8995,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "每个子智能体获得一份任务说明，并在聊天旁拥有独立面板，同时开展工作。子智能体使用所选模型执行任务，再把工作报告交回主会话。"
+            "value" : "每个子智能体各领一份任务简报，在对话旁拥有自己的面板，并同时工作。子智能体使用所选模型执行任务，再把工作报告交回主对话。"
           }
         }
       }
@@ -9138,7 +9226,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "搭配方案中指定的推理强度不受影响。未指定推理强度、且子智能体与主智能体使用同一服务商时，子智能体使用常规推理强度（通常为“中”）；若主智能体使用更低的推理强度，子智能体则沿用。"
+            "value" : "组合中指定的推理强度不受影响。未指定推理强度、且子智能体与主智能体使用同一服务商时，子智能体保持常规推理强度（通常为“中”）；若主智能体使用更低的推理强度，子智能体则沿用。"
           }
         }
       }
@@ -9176,13 +9264,13 @@
         }
       }
     },
-    "Empty. Right-click a model and choose Move to Group." : {
+    "Empty. Right-click a model and choose Move to group." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "空分组。右键点击模型，选择「移到分组」。"
+            "value" : "空分组。右键点击模型，选择“移到分组”。"
           }
         }
       }
@@ -9248,7 +9336,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "输入%@"
+            "value" : "输入 %@"
           }
         }
       }
@@ -9259,7 +9347,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 GitHub 上输入此代码"
+            "value" : "在 GitHub 上输入此验证码"
           }
         }
       }
@@ -9292,7 +9380,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "查看全部%@"
+            "value" : "查看全部 %@"
           }
         }
       }
@@ -9424,7 +9512,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@到期"
+            "value" : "将于 %@ 到期"
           }
         }
       }
@@ -9468,7 +9556,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fable 5.1 主导 Composer 2.5"
+            "value" : "Fable 5.1 主智能体，Composer 2.5 子智能体"
           }
         }
       }
@@ -9479,7 +9567,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fable 5.1 主导 Opus 5.5"
+            "value" : "Fable 5.1 主智能体，Opus 5.5 子智能体"
           }
         }
       }
@@ -9589,7 +9677,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此处功能尚处早期阶段，可能不稳定。关闭 Alpha 会结束当前语音通话并停用本地控制；各功能的选择会保留。"
+            "value" : "此处功能尚处早期阶段，可能不稳定。关闭实验室会结束当前语音通话并停用本地控制；各功能的选择会保留。"
           }
         }
       }
@@ -9600,7 +9688,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这里的功能尚处于早期阶段，可能不稳定。关闭 Alpha 会结束当前语音通话，停用本地控制和远程 MCP，并让新的 Hydra 请求回到现行 Hydra。各功能的选择会保留。"
+            "value" : "这里的功能尚处于早期阶段，可能不稳定。关闭实验室会结束当前语音通话，停用本地控制和远程 MCP，并让新的 Hydra 请求回到现行 Hydra。各功能的选择会保留。"
           }
         }
       }
@@ -9809,7 +9897,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仅用于 Token Plan。Global 账户请在终端运行 mcode login --region global。使用 API key 时无需登录。"
+            "value" : "仅用于 Token Plan。Global 账号请在终端运行 mcode login --region global。使用 API 密钥时无需登录。"
           }
         }
       }
@@ -9831,7 +9919,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "适用于由 Tivano 运行、新委派的 Codex 子智能体，在成功完成之后生效。已归档的会话保留其 ID，并在下一条消息时恢复。主导对话、较早的会话，以及收到用户后续消息的子智能体仍保持可见。"
+            "value" : "适用于由 Tivano 运行、新委派的 Codex 子智能体，在成功完成之后生效。已归档的会话保留其 ID，并在下一条消息时恢复。主对话、较早的会话，以及收到用户后续消息的子智能体仍保持可见。"
           }
         }
       }
@@ -9842,7 +9930,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "面向最困难、最耗时的任务：每个席位都用最强的模型，主导用“高”强度，子智能体用“中”强度。"
+            "value" : "面向最困难、最耗时的任务：每个席位都用最强的模型，主智能体用“高”强度，子智能体用“中”强度。"
           }
         }
       }
@@ -9897,7 +9985,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "完整工具集:文件、Shell、搜索与网页。"
+            "value" : "完整工具集：文件、Shell、搜索与网页。"
           }
         }
       }
@@ -10161,7 +10249,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "赠予你，随我们同行，一起探索未来代理协作的工作方式。"
+            "value" : "赠予你，与我们同行，一起探索未来人与智能体协作的方式。"
           }
         }
       }
@@ -10183,7 +10271,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "前往“Settings › General”，展开“Permissions and group features”"
+            "value" : "前往“设置 › 通用”，展开“Permissions and group features”"
           }
         }
       }
@@ -10337,7 +10425,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子智能体正在工作：你的消息会等待主导模型"
+            "value" : "子智能体正在工作，消息将在主智能体接手后发送"
           }
         }
       }
@@ -10447,7 +10535,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "能写清楚的部分几乎都交给 heads，主智能体负责规划、集成和检查。主模型的工作量最少；heads 使用较弱的模型时，质量可能略有下降。"
+            "value" : "能写清楚的部分几乎都交给子智能体，主智能体负责规划、集成和检查。主模型的工作量最少；子智能体使用较弱的模型时，质量可能略有下降。"
           }
         }
       }
@@ -10595,17 +10683,6 @@
         }
       }
     },
-    "Hide the %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "隐藏%@"
-          }
-        }
-      }
-    },
     "Hide the API key" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10744,7 +10821,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "heads 承担多少工作"
+            "value" : "子智能体承担多少工作"
           }
         }
       }
@@ -10887,7 +10964,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hydra 已开启。当前聊天负责统筹，将独立部分交给一组 heads 分工完成。"
+            "value" : "Hydra 已开启。当前对话负责统筹，将独立部分交给一组子智能体分工完成，而不是全部自己处理。"
           }
         }
       }
@@ -10898,7 +10975,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hydra：无法读取 %@ 的 checkout，因此未启动。"
+            "value" : "Hydra：无法读取 %@ 的检出目录，因此未启动。"
           }
         }
       }
@@ -10920,7 +10997,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hydra：%@ 不是 Tivano 可读取的 Git checkout，因此 %@ 未启动。"
+            "value" : "Hydra：%@ 不是 Tivano 可读取的 Git 检出目录，因此 %@ 未启动。"
           }
         }
       }
@@ -10942,7 +11019,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hydra：侧栏中没有名为 %@ 的项目，因此 %@ 未启动。"
+            "value" : "Hydra：侧边栏中没有名为 %@ 的项目，因此 %@ 未启动。"
           }
         }
       }
@@ -11030,7 +11107,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在服务商自己的会话中，通过主导模型自带的智能体工具运行。"
+            "value" : "在服务商自己的会话中，通过主智能体自带的智能体工具运行。"
           }
         }
       }
@@ -11096,7 +11173,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请在 Providers 中安装并启用 Codex，以使用语音。"
+            "value" : "请在“设置 › 服务商”中安装并启用 Codex 后再使用语音。"
           }
         }
       }
@@ -11261,7 +11338,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跨仓库的 Issue、拉取请求 和代码"
+            "value" : "跨仓库的 Issue、拉取请求和代码"
           }
         }
       }
@@ -11569,7 +11646,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导 %@ 强度"
+            "value" : "主智能体 %@ 强度"
           }
         }
       }
@@ -11580,7 +11657,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导 %@，子智能体 %@ 强度"
+            "value" : "主智能体 %@ 强度，子智能体 %@ 强度"
           }
         }
       }
@@ -11591,7 +11668,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导模型检查子智能体的工作"
+            "value" : "主智能体检查子智能体的工作"
           }
         }
       }
@@ -11624,7 +11701,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允许命令行客户端控制当前运行的这个 Tivano 版本。同一账户中的其他进程也能使用此权限。审批仍在 Tivano 中进行，不开放网络监听，也不会自动启动应用。"
+            "value" : "允许命令行客户端控制当前运行的这个 Tivano 版本。同一账号中的其他进程也能使用此权限。审批仍在 Tivano 中进行，不开放网络监听，也不会自动启动应用。"
           }
         }
       }
@@ -11635,7 +11712,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "让 Agent 推送代码并打开拉取请求。"
+            "value" : "允许智能体推送代码并打开拉取请求。"
           }
         }
       }
@@ -11756,7 +11833,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仅监听当前账户的连接"
+            "value" : "仅监听当前账号的连接"
           }
         }
       }
@@ -12086,7 +12163,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "发酵中"
+            "value" : "酝酿中"
           }
         }
       }
@@ -12262,7 +12339,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未安装 ZCode。请安装 ZCode 应用，然后刷新 Providers。"
+            "value" : "未安装 ZCode。请安装 ZCode 应用，然后刷新服务商列表。"
           }
         }
       }
@@ -12273,7 +12350,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ZCode 使用你的 GLM Coding Plan key 登录。请在 设置 → Providers → Z.ai 中添加。"
+            "value" : "ZCode 使用你的 GLM Coding Plan 密钥登录。请在“设置 › 服务商 › Z.ai”中添加。"
           }
         }
       }
@@ -12295,7 +12372,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法读取 ZCode 内置的 provider 配置。"
+            "value" : "无法读取 ZCode 内置的服务商配置。"
           }
         }
       }
@@ -12306,7 +12383,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ZCode 未接受账户配置。"
+            "value" : "ZCode 未接受账号配置。"
           }
         }
       }
@@ -12350,7 +12427,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ZCode 需要你的 GLM Coding Plan key。请在 设置 → Providers → Z.ai 中添加。"
+            "value" : "ZCode 需要你的 GLM Coding Plan 密钥。请在“设置 › 服务商 › Z.ai”中添加。"
           }
         }
       }
@@ -12427,7 +12504,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MiniMax Code 未能完成此操作。该错误不能证明当前未登录，请查看 CLI 诊断了解原因。"
+            "value" : "MiniMax Code 未能完成此操作。这不代表登录已失效，请查看 CLI 诊断了解详情。"
           }
         }
       }
@@ -12570,7 +12647,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MiniMax Code 需要已配置的 API key 或 Token Plan 登录。请使用 mcode provider set-minimax-key 配置密钥，或运行 mcode login。"
+            "value" : "MiniMax Code 需要已配置的 API 密钥或 Token Plan 登录。请使用 mcode provider set-minimax-key 配置密钥，或运行 mcode login。"
           }
         }
       }
@@ -12581,7 +12658,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MiniMax Code 当前所选认证路由需要认证。请在设置中查看 MiniMax Code 的认证状态。"
+            "value" : "MiniMax Code 当前所选接入方式需要认证，请在“设置”中查看其认证状态。"
           }
         }
       }
@@ -12691,12 +12768,12 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "多"
+            "value" : "更多"
           }
         }
       }
     },
-    "Move Down" : {
+    "Move down" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -12707,7 +12784,7 @@
         }
       }
     },
-    "Move Up" : {
+    "Move up" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -12729,7 +12806,7 @@
         }
       }
     },
-    "Move to Group" : {
+    "Move to group" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -12801,7 +12878,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "首次命名：根据第一条消息为会话起名。持续更新：工作方向变化时每隔几个回合重新命名。你自己设置的标题不会被改动。"
+            "value" : "首次命名：根据第一条消息为对话起名。持续更新：工作方向变化时每隔几个回合重新命名。你自己设置的标题不会被改动。"
           }
         }
       }
@@ -12834,7 +12911,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "所需内容"
+            "value" : "所需配置"
           }
         }
       }
@@ -12911,7 +12988,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新对话优先使用项目指定的 Hydra 搭配；否则继承当前对话的模型和推理设置，或使用已保存的默认值。"
+            "value" : "新对话优先使用项目指定的 Hydra 组合；否则继承当前对话的模型和推理设置，或使用已保存的默认值。"
           }
         }
       }
@@ -13092,6 +13169,17 @@
         }
       }
     },
+    "Switching providers may lose some context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "注意：切换服务商接力可能有损耗"
+          }
+        }
+      }
+    },
     "Next thread" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13120,12 +13208,12 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "尚未配置 API key。"
+            "value" : "尚未配置 API 密钥。"
           }
         }
       }
     },
-    "No Group" : {
+    "No group" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -13186,7 +13274,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此次合并中没有它自己的文件"
+            "value" : "本次合并中无独立文件改动"
           }
         }
       }
@@ -13197,7 +13285,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "还没有派出 heads。提出需求后，主智能体会决定哪些自己做、哪些交出去。每个 head 都有自己的面板。"
+            "value" : "还没有派出子智能体。提出需求后，主智能体会决定哪些自己做、哪些交出去。每个子智能体都有自己的面板。"
           }
         }
       }
@@ -13230,7 +13318,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "没有匹配的聊天"
+            "value" : "没有匹配的对话"
           }
         }
       }
@@ -13395,7 +13483,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "没有提供恢复时间"
+            "value" : "未提供重置时间"
           }
         }
       }
@@ -13681,7 +13769,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无需任何内容，点击“连接”即可。"
+            "value" : "无需额外配置，直接点击“连接”即可。"
           }
         }
       }
@@ -13736,7 +13824,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此聊天的较早部分无法读取。Tivano 已将文件保存在 %@。"
+            "value" : "此对话的较早部分无法读取。Tivano 已将文件保存在 %@。"
           }
         }
       }
@@ -13780,7 +13868,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一个聊天由主智能体带领一组 heads，并决定委派哪些工作。"
+            "value" : "一个对话由主智能体带领一组子智能体，并决定委派哪些工作。"
           }
         }
       }
@@ -13791,7 +13879,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一个聊天统筹一组 heads，由主智能体负责判断，将独立工作交给 heads。"
+            "value" : "一个对话统筹一组子智能体，由主智能体负责判断，将独立工作交给子智能体。"
           }
         }
       }
@@ -13879,7 +13967,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只有一个持久的 Shell,没有其他工具。"
+            "value" : "只有一个持久的 Shell，没有其他工具。"
           }
         }
       }
@@ -13890,7 +13978,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仅新派发且由 Tivano 管理的 Codex 子智能体会在成功完成后归档。主会话、较早会话，以及收到用户后续消息、有后代会话或尚未确认空闲的子智能体会话，均保持可见。"
+            "value" : "仅新派发且由 Tivano 管理的 Codex 子智能体会在成功完成后归档。主对话、较早的会话，以及收到用户后续消息、有派生会话或尚未确认空闲的子智能体会话，均保持可见。"
           }
         }
       }
@@ -13956,7 +14044,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "打开“设置 > 服务商”"
+            "value" : "打开“设置 › 服务商”"
           }
         }
       }
@@ -14066,7 +14154,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "点开可查看每一枚的描述"
+            "value" : "点开查看背后的故事"
           }
         }
       }
@@ -14099,7 +14187,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请自行打开正确版本的 Tivano，并在设置 > Alpha 中启用本地控制。使用 --help 查看语法。连接中断后，切勿直接重试写操作。"
+            "value" : "请自行打开对应的 Tivano（正式版或 Dev 版），并在“设置 › 实验室”中启用本地控制。使用 --help 查看语法。连接中断后，切勿盲目重试写操作。"
           }
         }
       }
@@ -14275,7 +14363,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Opus 5.5 主导 DeepSeek V4.1"
+            "value" : "Opus 5.5 主智能体，DeepSeek V4.1 子智能体"
           }
         }
       }
@@ -14286,7 +14374,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Opus 5.5 主导 GLM-5.3 Flash"
+            "value" : "Opus 5.5 主智能体，GLM-5.3 Flash 子智能体"
           }
         }
       }
@@ -14297,7 +14385,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Opus 5.5 主导 Gemini 3.8 Flash"
+            "value" : "Opus 5.5 主智能体，Gemini 3.8 Flash 子智能体"
           }
         }
       }
@@ -14385,7 +14473,18 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "其他模型 · 仅新会话"
+            "value" : "其他模型 · 仅新对话"
+          }
+        }
+      }
+    },
+    "Other models · Switch with handoff" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他模型 · 接力切换"
           }
         }
       }
@@ -14440,7 +14539,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "PTC、极简模式和 Hydra 需要 DeepSeek Harness 0.2.0 或 0.2.1。请安装其中一个版本,或改用标准模式。"
+            "value" : "PTC、极简模式和 Hydra 需要 DeepSeek Harness 0.2.0 或 0.2.1。请安装其中一个版本，或改用标准模式。"
           }
         }
       }
@@ -14467,13 +14566,13 @@
         }
       }
     },
-    "Pairs sit at the top of the model picker: a tap puts the chat in one. A pair can use lead and head models from different providers. Right-click a project in the sidebar to start each of its new chats on one pair." : {
+    "Pairs sit at the top of the model picker: a click puts the chat in one. A pair can use lead and head models from different providers. Right-click a project in the sidebar to start each of its new chats on one pair." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "搭配方案位于模型选择器顶部，点击即可用于当前对话。主智能体和子智能体可以使用不同服务商的模型。在侧边栏右键点击项目，可为该项目的新对话设置默认搭配方案。"
+            "value" : "组合位于模型选择器顶部，点击即可用于当前对话。组合中的主智能体和子智能体可使用不同服务商的模型。在侧边栏右键点击项目，可让该项目的新对话默认使用某个组合。"
           }
         }
       }
@@ -14522,7 +14621,7 @@
         }
       }
     },
-    "Performance Mode" : {
+    "Performance mode" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -14627,7 +14726,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在下方各服务商卡片中显示套餐额度与余额。聊天中的用量圆环仍会显示。"
+            "value" : "在下方各服务商卡片中显示套餐额度与余额。对话中的用量圆环仍会显示。"
           }
         }
       }
@@ -14792,7 +14891,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在准备分工。整段分工内容准备好后才会派出 heads。"
+            "value" : "正在准备分工。整段分工内容准备好后才会派出子智能体。"
           }
         }
       }
@@ -14880,7 +14979,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "积极"
+            "value" : "主动"
           }
         }
       }
@@ -15023,7 +15122,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "更改提供方历史需要可持久保存的资料库。"
+            "value" : "更改服务商历史需要可持久保存的资料库。"
           }
         }
       }
@@ -15127,7 +15226,7 @@
         }
       }
     },
-    "Queue a chat" : {
+    "Queue message" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -15155,7 +15254,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请退出所有 Tivano 和 Droppy Code 应用，然后在 Tivano 源码目录运行 scripts/separate_data.py，分离旧的共享资料库。修改前会先备份你的数据。"
+            "value" : "请退出所有 Tivano 和 Droppy Code 应用，然后在 Tivano 源码检出目录中运行 scripts/separate_data.py，分离旧的共享资料库。修改前会先备份你的数据。"
           }
         }
       }
@@ -15804,7 +15903,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "向主导模型汇报"
+            "value" : "向主智能体汇报"
           }
         }
       }
@@ -15815,7 +15914,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "汇报回来，由主导模型收尾"
+            "value" : "汇报回来，由主智能体收尾"
           }
         }
       }
@@ -15837,7 +15936,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重置 %lld"
+            "value" : "第 %lld 次重置"
           }
         }
       }
@@ -15881,7 +15980,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@重置"
+            "value" : "重置时间：%@"
           }
         }
       }
@@ -15980,7 +16079,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "回车引导"
+            "value" : "按回车中途引导"
           }
         }
       }
@@ -16431,7 +16530,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "搜索已归档的聊天"
+            "value" : "搜索已归档的对话"
           }
         }
       }
@@ -16497,7 +16596,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一行内容超过了 1 MiB，搜索已停止。结果不完整。"
+            "value" : "遇到超过 1 MiB 的单行内容，搜索已中止，结果不完整。"
           }
         }
       }
@@ -16794,7 +16893,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在派出 %d 个新 heads，并发送 %d 项返工任务"
+            "value" : "正在派出 %d 个新子智能体，并发送 %d 项返工任务"
           }
         }
       }
@@ -16937,7 +17036,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你自己的服务器：在这台 Mac 上运行的命令，或远程地址，以及它们所需的变量。"
+            "value" : "自定义服务器：填写本机命令或远程地址，并配置所需环境变量。"
           }
         }
       }
@@ -16948,7 +17047,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "设置此模型的默认推理强度和快速模式。新对话也可能优先继承当前对话或 Hydra 搭配的设置。右键可将模型移到其他分组。"
+            "value" : "设置此模型的默认推理强度和快速模式。新对话也可能优先继承当前对话或 Hydra 组合的设置。右键可将模型移到其他分组。"
           }
         }
       }
@@ -17404,17 +17503,6 @@
         }
       }
     },
-    "Show the %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示%@"
-          }
-        }
-      }
-    },
     "Show the API key" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -17664,17 +17752,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "使用 Liquid Glass，让桌面透出得更清楚。窗口内容变化时会占用更多 GPU；关闭后改用更轻量的系统模糊。"
-          }
-        }
-      }
-    },
-    "Shows or hides the %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示或隐藏%@"
           }
         }
       }
@@ -17949,7 +18026,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sol 5.6 主导 Luna 5.6"
+            "value" : "Sol 5.6 主智能体，Luna 5.6 子智能体"
           }
         }
       }
@@ -18092,7 +18169,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "点击侧边栏的“开始语音”发起通话。Codex 会聆听、用语音回答，并在独立会话中完成工作。需要使用 ChatGPT 登录 Codex。"
+            "value" : "点击侧边栏的“开始语音”发起通话。Codex 会聆听、用语音回答，并在独立对话中完成工作。需要使用 ChatGPT 登录 Codex。"
           }
         }
       }
@@ -18136,7 +18213,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在此会话中开始语音"
+            "value" : "在此对话中开始语音"
           }
         }
       }
@@ -18400,7 +18477,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子代理"
+            "value" : "子智能体"
           }
         }
       }
@@ -18581,13 +18658,35 @@
         }
       }
     },
+    "Switch providers after the Hydra heads finish" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra heads 完成后可切换服务商"
+          }
+        }
+      }
+    },
+    "Switch providers after this turn finishes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前回合结束后可切换服务商"
+          }
+        }
+      }
+    },
     "Switched to %@: %@ does not support %@ permissions." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已切换为%@：%@ 不支持%@权限。"
+            "value" : "已切换为 %@：%@ 不支持 %@ 权限。"
           }
         }
       }
@@ -18620,7 +18719,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "标记与沟通"
+            "value" : "符号与沟通"
           }
         }
       }
@@ -18675,7 +18774,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "直接用语音和 Codex 对话。可从侧边栏的“开始语音”发起通话，也可在任意 Codex 会话中点击波形按钮，用语音继续该会话。Codex 会倾听、回答，并在会话中完成工作。需要 Codex 0.159 或更高版本，并使用 ChatGPT 登录。"
+            "value" : "直接用语音和 Codex 对话。可从侧边栏的“开始语音”发起通话，也可点击任意 Codex 对话中的波形按钮，用语音继续该对话。Codex 会聆听、回答，并在对话中完成工作。需要 Codex 0.159 或更高版本，并使用 ChatGPT 登录。"
           }
         }
       }
@@ -18686,7 +18785,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "与 Codex 语音交流。从侧边栏的“开始语音”发起通话，或点击任意 Codex 对话中的波形按钮，通过语音继续该对话。Codex 会聆听、回答，并在对话中完成工作。需要 Codex 0.159 或更高版本，并使用 ChatGPT 登录。关闭后会结束当前通话。"
+            "value" : "直接用语音和 Codex 对话。可从侧边栏的“开始语音”发起通话，也可点击任意 Codex 对话中的波形按钮，用语音继续该对话。Codex 会聆听、回答，并在对话中完成工作。需要 Codex 0.159 或更高版本，并使用 ChatGPT 登录。关闭后会结束当前通话。"
           }
         }
       }
@@ -18829,7 +18928,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "找不到该仓库，或你的账户无权查看。"
+            "value" : "找不到该仓库，或你的账号无权查看。"
           }
         }
       }
@@ -18895,7 +18994,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "CLI 已更新，但无法刷新提供方状态。"
+            "value" : "CLI 已更新，但无法刷新服务商状态。"
           }
         }
       }
@@ -19038,7 +19137,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent 已退出，状态码为 %d。"
+            "value" : "智能体已退出，状态码为 %d。"
           }
         }
       }
@@ -19071,7 +19170,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent 进程已退出。"
+            "value" : "智能体进程已退出。"
           }
         }
       }
@@ -19082,7 +19181,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent 进程未在运行。"
+            "value" : "智能体进程未在运行。"
           }
         }
       }
@@ -19104,7 +19203,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent 发送了无效的 JSON-RPC 消息。"
+            "value" : "智能体发送了无效的 JSON-RPC 消息。"
           }
         }
       }
@@ -19115,7 +19214,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent 在协议输出中发送了无效的 JSON。"
+            "value" : "智能体在协议输出中发送了无效的 JSON。"
           }
         }
       }
@@ -19170,7 +19269,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "代码已过期，请重试。"
+            "value" : "验证码已过期，请重试。"
           }
         }
       }
@@ -19192,7 +19291,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "最深入的主导搭配最强的执行者：Fable 负责规划与检查，Opus 子智能体负责构建。两侧的推理强度由你自行设定。"
+            "value" : "最深谋远虑的主智能体搭配最强的执行者：Fable 负责规划与检查，Opus 子智能体负责构建。两侧的推理强度由你自行设定。"
           }
         }
       }
@@ -19236,7 +19335,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此 head 已不符合归档条件。"
+            "value" : "此子智能体已不符合归档条件。"
           }
         }
       }
@@ -19258,7 +19357,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法保全这个 head 尚未完成的工作。已保留其副本，便于重试。"
+            "value" : "无法保全此子智能体尚未完成的工作。已保留其副本，便于重试。"
           }
         }
       }
@@ -19291,7 +19390,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将删除这 %lld 个匹配聊天的历史记录。项目中的文件保持不变。"
+            "value" : "将删除这 %lld 个匹配对话的历史记录。项目中的文件保持不变。"
           }
         }
       }
@@ -19412,7 +19511,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导模型会检查它们的工作、修复问题并回复你。它们的改动会合并为一次合入。"
+            "value" : "主智能体会检查结果、修正问题并回复你，所有改动将一次性合入。"
           }
         }
       }
@@ -19423,7 +19522,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主智能体自己完成大部分工作，只把一个上下文装不下的部分交给 heads：审计、大范围调研、可并行的多个部分。质量最稳，主模型承担的工作最多。"
+            "value" : "主智能体自己完成大部分工作，只把一个上下文装不下的部分交给子智能体：审计、大范围调研、可并行的多个部分。质量最稳，主模型承担的工作最多。"
           }
         }
       }
@@ -19434,7 +19533,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主智能体把需要几步以上、能单独写清的部分交给 heads，简短或需要判断的工作自己做。在质量和主模型的工作量之间取平衡。"
+            "value" : "主智能体把需要几步以上、能单独写清的部分交给子智能体，简短或需要判断的工作自己做。在质量和主模型的工作量之间取平衡。"
           }
         }
       }
@@ -19445,7 +19544,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导模型只接收汇报。"
+            "value" : "主智能体只接收汇报。"
           }
         }
       }
@@ -19456,7 +19555,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导模型强度 · 子智能体沿用各自强度"
+            "value" : "主智能体强度 · 子智能体沿用各自强度"
           }
         }
       }
@@ -19467,7 +19566,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导模型强度 · 子智能体以 %@ 强度运行"
+            "value" : "主智能体强度 · 子智能体以 %@ 强度运行"
           }
         }
       }
@@ -19478,7 +19577,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主导模型的推理强度"
+            "value" : "主智能体的推理强度"
           }
         }
       }
@@ -19577,7 +19676,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "模型每一步编写一段 TypeScript 程序,并在程序中调用各个工具。"
+            "value" : "模型每一步编写一段 TypeScript 程序，并在程序中调用各个工具。"
           }
         }
       }
@@ -19588,7 +19687,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "操作内容或线程配置已改变。"
+            "value" : "操作内容或对话配置已改变。"
           }
         }
       }
@@ -19610,7 +19709,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "原来的 omp 会话不可用。"
+            "value" : "原来的 omp 对话不可用。"
           }
         }
       }
@@ -19665,7 +19764,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Provider 报告失败。请在 Tivano 中查看此线程。"
+            "value" : "服务商报告失败。请在 Tivano 中查看此对话。"
           }
         }
       }
@@ -19808,7 +19907,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未找到所请求的线程或操作。"
+            "value" : "未找到所请求的对话或操作。"
           }
         }
       }
@@ -19819,7 +19918,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "当前 API-key 路由未配置密钥。请使用 mcode provider set-minimax-key 配置；mcode login 用于另一条 Token Plan 登录路由。"
+            "value" : "当前 API 密钥路由未配置密钥。请使用 mcode provider set-minimax-key 配置；mcode login 用于另一条 Token Plan 登录路由。"
           }
         }
       }
@@ -19830,7 +19929,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "当前 Token Plan 路由需要登录。请运行 mcode login；Global 账户使用 mcode login --region global。"
+            "value" : "当前 Token Plan 路由需要登录。请运行 mcode login；Global 账号使用 mcode login --region global。"
           }
         }
       }
@@ -19995,7 +20094,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此线程的执行目录不可用。"
+            "value" : "此对话的执行目录不可用。"
           }
         }
       }
@@ -20050,7 +20149,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "更新命令结束于 %1$@，低于目标版本 %2$@。"
+            "value" : "更新后版本为 %1$@，低于目标版本 %2$@。"
           }
         }
       }
@@ -20226,7 +20325,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这些设置影响 Codex 本地 CLI/应用的会话历史，与 Tivano 的侧边栏相互独立。它们不会管理服务商网站上的对话。有后代会话或空闲状态未得到确认的子智能体不会被归档。更改此设置不会清理已有的历史记录。"
+            "value" : "这些设置影响 Codex 本地 CLI/应用的会话历史，与 Tivano 的侧边栏相互独立。它们不会管理服务商网站上的对话。有派生会话或空闲状态未得到确认的子智能体不会被归档。更改此设置不会清理已有的历史记录。"
           }
         }
       }
@@ -20347,7 +20446,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此聊天的历史记录无法读取。Tivano 已将文件保存在 %@。"
+            "value" : "此对话的历史记录无法读取。Tivano 已将文件保存在 %@。"
           }
         }
       }
@@ -20358,7 +20457,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此 head 的 Codex 会话历史已归档。Tivano 聊天记录仍保留；后续消息会恢复同一个 Codex 会话。"
+            "value" : "此子智能体的 Codex 会话历史已归档。Tivano 对话记录仍保留；后续消息会恢复同一个 Codex 会话。"
           }
         }
       }
@@ -20391,7 +20490,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这条消息及其之后的所有内容会从对话中移除，你的提示词会回到输入框。"
+            "value" : "这条消息及之后的内容将从对话中移除，原消息会放回输入框。"
           }
         }
       }
@@ -20446,7 +20545,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这将永久删除 %lld 个对话，包括关联到其他项目的 head 和助手。项目源文件不会被删除。"
+            "value" : "这将永久删除 %lld 个对话，包括关联到其他项目的子智能体和助手。项目源文件不会被删除。"
           }
         }
       }
@@ -20479,7 +20578,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本地控制不支持此线程或操作。"
+            "value" : "本地控制不支持此对话或操作。"
           }
         }
       }
@@ -20490,7 +20589,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此线程或本地控制服务正在忙碌。"
+            "value" : "此对话或本地控制服务正在忙碌。"
           }
         }
       }
@@ -20501,7 +20600,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此线程已保存的历史记录缺失或无法读取。"
+            "value" : "此对话已保存的历史记录缺失或无法读取。"
           }
         }
       }
@@ -20512,7 +20611,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此会话所属的项目不可用。"
+            "value" : "此对话所属的项目不可用。"
           }
         }
       }
@@ -20600,7 +20699,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只能在发送第一条消息前更改会话归属。"
+            "value" : "只能在发送第一条消息前更改对话归属。"
           }
         }
       }
@@ -20633,7 +20732,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "会话标题"
+            "value" : "对话标题"
           }
         }
       }
@@ -20809,7 +20908,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 已修复损坏的工作区记录，所有会话均已保留。异常工作区已禁止执行。原文件保存在 %@，损坏的原始记录保存在 %@。"
+            "value" : "Tivano 已修复损坏的工作区记录，所有对话均已保留。异常工作区已禁止执行。原文件保存在 %@，损坏的原始记录保存在 %@。"
           }
         }
       }
@@ -20842,7 +20941,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 无法读取资料库（%@）。原文件和会话文档已保留。请修复资料库后重启 Tivano。退出时，新建会话会另存至 %@。"
+            "value" : "Tivano 无法读取资料库（%@）。原文件和对话文档已保留。请修复资料库后重启 Tivano。退出时，新建对话会另存至 %@。"
           }
         }
       }
@@ -20853,7 +20952,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 无法将此聊天保存到磁盘（%@）。将继续重试。"
+            "value" : "Tivano 无法将此对话保存到磁盘（%@）。将继续重试。"
           }
         }
       }
@@ -20864,7 +20963,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 无法将更改保存到磁盘。会话仍保留在内存中，保存会继续重试。退出前请释放磁盘空间或检查文件夹权限。"
+            "value" : "Tivano 无法将更改保存到磁盘。对话仍保留在内存中，保存会继续重试。退出前请释放磁盘空间或检查文件夹权限。"
           }
         }
       }
@@ -20875,7 +20974,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 无法保存会话，更新尚未安装。请解决磁盘错误后重试。"
+            "value" : "Tivano 无法保存对话，更新尚未安装。请解决磁盘错误后重试。"
           }
         }
       }
@@ -20952,7 +21051,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 本地控制（应用必须已运行，并在设置 > Alpha 中手动启用）。\n命令：info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\n列表选项：--limit N --cursor TOKEN\n线程选项：--archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\n写操作：--operation INSTANCE/UUID/TIMESTAMP 仅在同一应用实例中复用已有操作凭据。\n请保存发送前打印的操作凭据。断开连接不代表失败；应查询凭据，而非重复执行写操作。\nJSON 输出表示操作已接受，不代表任务成功。过期或重启后的结果为 unknown。不会自动重试或启动应用。"
+            "value" : "Tivano 本地控制（应用必须已运行，并在“设置 › 实验室”中手动启用）。\n命令：info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\n列表选项：--limit N --cursor TOKEN\n对话选项：--archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\n写操作：--operation INSTANCE/UUID/TIMESTAMP 仅在同一应用实例中复用已有操作凭据。\n请保存发送前打印的操作凭据。断开连接不代表失败；应查询凭据，而非重复执行写操作。\nJSON 输出表示操作已接受，不代表任务成功。过期或重启后的结果为 unknown。不会自动重试或启动应用。"
           }
         }
       }
@@ -20963,7 +21062,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 沿用 mcode 已选择的认证路由：Token Plan 使用现有 mcode 登录态，API-key 路由使用已配置的密钥。本地检查和模型列表不代表服务端认证成功。"
+            "value" : "Tivano 沿用 mcode 已选择的认证路由：Token Plan 使用现有 mcode 登录态，API 密钥路由使用已配置的密钥。本地检查和模型列表不代表服务端认证成功。"
           }
         }
       }
@@ -20974,7 +21073,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 仅在你发起语音会话时使用麦克风。音频会通过你自己使用 ChatGPT 登录的 Codex 发送给 OpenAI。"
+            "value" : "Tivano 仅在你发起语音通话时使用麦克风。音频将经由你已登录 ChatGPT 的 Codex 发送至 OpenAI。"
           }
         }
       }
@@ -20996,7 +21095,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 的资料库文件已损坏，因此加载了上次启动时保存的副本。此后创建的会话可能不会出现在侧栏中，但会话文档仍保存在磁盘上。损坏的文件保存在 %@。"
+            "value" : "Tivano 的资料库文件已损坏，因此加载了上次启动时保存的副本。此后创建的对话可能不会出现在侧边栏中，但对话文档仍保存在磁盘上。损坏的文件保存在 %@。"
           }
         }
       }
@@ -21018,7 +21117,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "今日聚焦"
+            "value" : "今日"
           }
         }
       }
@@ -21084,7 +21183,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Token Plan 或 API key"
+            "value" : "Token Plan 或 API 密钥"
           }
         }
       }
@@ -21359,7 +21458,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请在“设置 > 源代码管理”中开启文本生成"
+            "value" : "请在“设置 › 源代码管理”中开启文本生成"
           }
         }
       }
@@ -21397,7 +21496,7 @@
         }
       }
     },
-    "Unavailable in Performance Mode" : {
+    "Unavailable in Performance mode" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -21437,6 +21536,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在“MCP client access”下勾选“Allow connection to GitLab”并保存"
+          }
+        }
+      }
+    },
+    "Undo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销"
           }
         }
       }
@@ -21881,7 +21991,7 @@
         }
       }
     },
-    "Use as Wallpaper" : {
+    "Use as wallpaper" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
@@ -21898,7 +22008,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Token Plan 使用 mcode login 登录，Global 账户使用 mcode login --region global。已登录时请刷新服务商；API-key 用户无需此步骤。"
+            "value" : "Token Plan 使用 mcode login 登录，Global 账号使用 mcode login --region global。已登录时请刷新服务商；使用 API 密钥的用户无需此步骤。"
           }
         }
       }
@@ -21931,7 +22041,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仅用于此会话，不会保存到设置 › Hydra。"
+            "value" : "仅用于此对话，且不会保存到“设置 › Hydra”。"
           }
         }
       }
@@ -22107,7 +22217,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "语音正在另一个会话中进行"
+            "value" : "语音正在另一个对话中进行"
           }
         }
       }
@@ -22415,7 +22525,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "heads 擅长什么"
+            "value" : "子智能体擅长什么"
           }
         }
       }
@@ -22503,7 +22613,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "任务运行期间，Mac 不会自己睡着。「保持唤醒」时屏幕仍会自行熄灭；「保持唤醒并亮屏」会让屏幕也一直亮着，适合 agent 需要盯着前端界面测试的时候。手动休眠和合盖仍然有效。"
+            "value" : "任务运行期间，Mac 不会自己睡着。“保持唤醒”时屏幕仍会自行熄灭；“保持唤醒并亮屏”会让屏幕一直亮着，适合智能体需要查看前端界面时使用。手动休眠和合盖仍然有效。"
           }
         }
       }
@@ -22558,7 +22668,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "办公"
+            "value" : "工作协作"
           }
         }
       }
@@ -22723,7 +22833,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worktree 与 拉取请求"
+            "value" : "Worktree 与拉取请求"
           }
         }
       }
@@ -22844,7 +22954,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你提问，对话主导"
+            "value" : "你提需求，主对话统筹"
           }
         }
       }
@@ -22899,7 +23009,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你的回答未能送达 %@。请求可能已失效，或 provider 无法接受该回答。请重试，或发送消息继续。"
+            "value" : "你的回答未能送达 %@。请求可能已失效，或服务商无法接受该回答。请重试，或发送消息继续。"
           }
         }
       }
@@ -22954,7 +23064,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Z.ai 拒绝了此 API 密钥。请在设置 → 提供商 → Z.ai 中检查 GLM Coding Plan 密钥。套餐可能已到期；此入口不支持 Standard API 密钥。"
+            "value" : "Z.ai 拒绝了此 API 密钥。请在“设置 › 服务商 › Z.ai”中检查 GLM Coding Plan 密钥。套餐可能已到期；此入口不支持 Standard API 密钥。"
           }
         }
       }
@@ -22998,7 +23108,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "账户"
+            "value" : "账号"
           }
         }
       }
@@ -23542,17 +23652,6 @@
         }
       }
     },
-    "model list" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "模型列表"
-          }
-        }
-      }
-    },
     "notifications" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -23614,7 +23713,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omp 无法压缩会话。"
+            "value" : "omp 无法压缩对话。"
           }
         }
       }
@@ -23625,7 +23724,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omp 无法压缩会话。%@"
+            "value" : "omp 无法压缩对话。%@"
           }
         }
       }
@@ -23669,7 +23768,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omp 无法回退会话。会话已保留。"
+            "value" : "omp 无法回退对话。对话已保留。"
           }
         }
       }
@@ -23746,7 +23845,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omp 中没有与回退目标匹配的消息。会话已保留。"
+            "value" : "omp 中没有与回退目标匹配的消息。对话已保留。"
           }
         }
       }
@@ -23757,7 +23856,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omp 中的消息比界面显示的少，无法确定回退位置。会话已保留。"
+            "value" : "omp 中的消息比界面显示的少，无法确定回退位置。对话已保留。"
           }
         }
       }
@@ -23812,7 +23911,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omp 中已不存在此会话；将开始新会话。"
+            "value" : "omp 中已不存在此对话；将开始新对话。"
           }
         }
       }
@@ -23845,7 +23944,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omp 已回退会话，但未返回后续会话的位置。"
+            "value" : "omp 已回退对话，但未返回后续对话的位置。"
           }
         }
       }
@@ -23878,7 +23977,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "搭配"
+            "value" : "组合"
           }
         }
       }
@@ -23945,17 +24044,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "进程输出已关闭"
-          }
-        }
-      }
-    },
-    "provider settings" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "服务商设置"
           }
         }
       }
@@ -24164,7 +24252,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "提供方"
+            "value" : "服务商"
           }
         }
       }
@@ -24384,7 +24472,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已归档的聊天"
+            "value" : "已归档的对话"
           }
         }
       }
@@ -24406,7 +24494,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未被任何聊天使用"
+            "value" : "未被任何对话使用"
           }
         }
       }
@@ -24461,7 +24549,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此 Mac"
+            "value" : "这台 Mac"
           }
         }
       }
@@ -24472,7 +24560,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "聊天、附件，以及 Tivano 为你的项目创建的 worktree。"
+            "value" : "对话、附件，以及 Tivano 为你的项目创建的 worktree。"
           }
         }
       }
@@ -24516,7 +24604,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "每个 worktree 都是项目的一份独立副本，让聊天可以工作而不影响你的主目录。占用的空间大多来自依赖和构建产物。"
+            "value" : "每个 worktree 都是项目的一份独立副本，让对话可以工作而不影响你的检出目录。占用的空间大多来自依赖和构建产物。"
           }
         }
       }
@@ -24571,7 +24659,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已归档的聊天“%@”在用"
+            "value" : "已归档的对话“%@”在用"
           }
         }
       }
@@ -24582,7 +24670,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "聊天“%@”在用"
+            "value" : "对话“%@”在用"
           }
         }
       }
@@ -24615,7 +24703,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仍有聊天在使用它。删除那个聊天时可一并删除它的 worktree。"
+            "value" : "仍有对话在使用它。删除那个对话时可一并删除它的 worktree。"
           }
         }
       }
@@ -24703,7 +24791,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "归档的聊天会从侧边栏移到这里。目前还没有归档的聊天。"
+            "value" : "归档的对话会从侧边栏移到这里。目前还没有归档的对话。"
           }
         }
       }
@@ -24714,7 +24802,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "可以把聊天恢复到侧边栏，或永久删除。删除时可一并删除它的 worktree。"
+            "value" : "可以把对话恢复到侧边栏，或永久删除。删除时可一并删除它的 worktree。"
           }
         }
       }
@@ -24725,7 +24813,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worktree %@"
+            "value" : "Worktree %@"
           }
         }
       }
@@ -24840,13 +24928,13 @@
         }
       }
     },
-    "Features here are early versions and may be unstable. Turning Alpha off disables local control and remote MCP. Individual feature choices are kept." : {
+    "Features here are early versions and may be unstable. Turning Alpha off disables them. Individual feature choices are kept." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这里的功能尚处早期，可能不稳定。关闭 Alpha 会停用本地控制和远程 MCP。各项功能的开关选择会保留。"
+            "value" : "这里的功能尚处早期，可能不稳定。关闭实验室会停用这些功能。各项功能的开关选择会保留。"
           }
         }
       }
@@ -24879,7 +24967,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允许 Muse 或 Grok Bot 等云端代理通过你运行的隧道，以 MCP 控制当前版本的 Tivano。每个代理都需要先在这里获得你的批准。对话中的审批和问题仍需你在 Tivano 中处理。"
+            "value" : "允许 Muse 或 Grok Bot 等云端智能体通过你运行的隧道，以 MCP 控制当前版本的 Tivano。每个智能体都需要先在这里获得你的批准。对话中的审批和问题仍需你在 Tivano 中处理。"
           }
         }
       }
@@ -24999,7 +25087,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请从代理重新发起连接。"
+            "value" : "请从智能体重新发起连接。"
           }
         }
       }
@@ -25021,7 +25109,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此页面会自动刷新。代理提示已连接后，你可以关闭此页面。"
+            "value" : "此页面会自动刷新。智能体提示已连接后，你可以关闭此页面。"
           }
         }
       }
@@ -25031,7 +25119,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "云端代理新建的对话以“完全访问”权限启动：命令和文件修改无需询问即可执行。关闭此项期间创建的对话以及你自己的对话保持原有权限。问题仍需你在 Tivano 中回答。"
+            "value" : "云端智能体新建的对话以“完全访问”权限启动：命令和文件修改无需询问即可执行。关闭此项期间创建的对话以及你自己的对话保持原有权限。问题仍需你在 Tivano 中回答。"
           }
         }
       }
@@ -25360,7 +25448,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Claude 认证设置与此对话的账号冲突，请移除 API key、认证辅助脚本或 provider 覆盖设置后继续。"
+            "value": "Claude 认证设置与此对话的账号冲突，请移除 API 密钥、认证辅助脚本或服务商覆盖设置后继续。"
           }
         }
       }
@@ -25779,6 +25867,3548 @@
           "stringUnit": {
             "state": "translated",
             "value": "导入仅保存副本，不会启用账号。CSWAP 备份可能已过期，macOS 可能要求授权访问凭证。"
+          }
+        }
+      }
+    },
+    "%@ is starting to cook…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 开始动手了…"
+          }
+        }
+      }
+    },
+    "%@ no longer has this conversation. It starts a new one here, without the messages above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已经没有这个对话了。它会在这里开始一个新对话，不带上方的消息。"
+          }
+        }
+      }
+    },
+    "%@ still hold conflict markers from a head's landing. Resolve them and the merge goes out by itself." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 里还有子智能体落地时留下的冲突标记。解决它们，合并就会自动发出。"
+          }
+        }
+      }
+    },
+    "%@ still holds conflict markers from a head's landing. Resolve them and the merge goes out by itself." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 里还有子智能体落地时留下的冲突标记。解决它们，合并就会自动发出。"
+          }
+        }
+      }
+    },
+    "%@ stopped unexpectedly." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 意外停止了。"
+          }
+        }
+      }
+    },
+    "%@'s brief" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的简报"
+          }
+        }
+      }
+    },
+    "%@'s work did not land and was kept as a patch.\n%@\n\n%@Apply it with `git apply --3way %@` and settle what conflicts." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的工作没有落地，已保存为补丁。\n%@\n\n%@用 `git apply --3way %@` 应用它，并处理冲突。"
+          }
+        }
+      }
+    },
+    "%@'s work landed; the lead is settling a conflict in %d files.\n%@\n\nThe checkout had moved on where %@ was working, so the merge was three-way and left markers in these files. The lead resolves them before the work goes out; nothing to do on your side." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的工作已落地；主智能体正在处理 %d 个文件里的冲突。\n%@\n\n%@ 工作时检出目录已经往前走了，所以这次合并是三方合并，在这些文件里留下了标记。主智能体会在工作成果发出前解决它们，你这边无需操作。"
+          }
+        }
+      }
+    },
+    "%@'s work landed; the lead is settling a conflict in 1 file.\n%@\n\nThe checkout had moved on where %@ was working, so the merge was three-way and left markers in this file. The lead resolves them before the work goes out; nothing to do on your side." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的工作已落地；主智能体正在处理 1 个文件里的冲突。\n%@\n\n%@ 工作时检出目录已经往前走了，所以这次合并是三方合并，在这个文件里留下了标记。主智能体会在工作成果发出前解决它们，你这边无需操作。"
+          }
+        }
+      }
+    },
+    "%@, and %d more" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，以及另外 %d 个"
+          }
+        }
+      }
+    },
+    "%@: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@：%@"
+          }
+        }
+      }
+    },
+    "%d files were changed outside every project: %@. Add the folder that holds them to the sidebar and ask for the merge again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %d 个文件的改动发生在所有项目之外：%@。请把存放它们的文件夹加入边栏，然后再次请求合并。"
+          }
+        }
+      }
+    },
+    "1 file was changed outside every project: %@. Add the folder that holds them to the sidebar and ask for the merge again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 1 个文件的改动发生在所有项目之外：%@。请把存放它的文件夹加入边栏，然后再次请求合并。"
+          }
+        }
+      }
+    },
+    "Add a script…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加脚本…"
+          }
+        }
+      }
+    },
+    "Already on main: nothing to merge." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已经在 main 上：没有需要合并的内容。"
+          }
+        }
+      }
+    },
+    "Asked for heads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已请求子智能体。"
+          }
+        }
+      }
+    },
+    "Asking for heads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在请求子智能体。"
+          }
+        }
+      }
+    },
+    "Asking for more heads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在请求更多子智能体。"
+          }
+        }
+      }
+    },
+    "Claude has no resume point before this message. The conversation was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 在这条消息之前没有可恢复的续接点。对话已保留。"
+          }
+        }
+      }
+    },
+    "Commits kept landing on `%@` while the team's work was prepared. The work is in the checkout and goes out on the next try." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在准备团队工作成果期间，不断有提交落到 `%@` 上。工作成果在检出目录里，下一次尝试会把它发出。"
+          }
+        }
+      }
+    },
+    "Commit…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交…"
+          }
+        }
+      }
+    },
+    "Continued: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "续：%@"
+          }
+        }
+      }
+    },
+    "Conversation reverted, but files could not be restored: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话已撤回，但文件无法恢复：%@"
+          }
+        }
+      }
+    },
+    "Copy path" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制路径"
+          }
+        }
+      }
+    },
+    "Create pull request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建拉取请求"
+          }
+        }
+      }
+    },
+    "Done, with no heads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成，没有派出子智能体。"
+          }
+        }
+      }
+    },
+    "Edit scripts…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑脚本…"
+          }
+        }
+      }
+    },
+    "Every change from this chat is on main already, taken along by an earlier merge request (this chat's or another's) or committed by hand. Nothing was sent and no new merge request was opened." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话的所有改动都已经在 main 上：它们随更早的合并请求（本对话或其他对话的）一并带上，或者是手工提交的。没有发送任何内容，也没有创建新的合并请求。"
+          }
+        }
+      }
+    },
+    "Finished." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成。"
+          }
+        }
+      }
+    },
+    "GitLab refused the login (401 Unauthorized) for %@: the token glab signs in with is missing or expired.\n\n%@\n\nSign back in with `glab auth login --hostname %@` (or export a valid GITLAB_TOKEN), then ask for the merge again. The branch `%@` is already pushed, so the team's work is safe." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitLab 拒绝了对 %@ 的登录（401 Unauthorized）：glab 用来登录的 token 缺失或已过期。\n\n%@\n\n请用 `glab auth login --hostname %@` 重新登录（或导出一个有效的 GITLAB_TOKEN），然后再次请求合并。分支 `%@` 已经推送，团队的工作成果是安全的。"
+          }
+        }
+      }
+    },
+    "Hydra could not merge the team's work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 无法合并团队的工作成果。"
+          }
+        }
+      }
+    },
+    "Hydra did not merge: `%@` changed the same lines." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 未合并：`%@` 改动了同样的行。"
+          }
+        }
+      }
+    },
+    "Hydra did not merge: conflict markers in %d files." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 未合并：%d 个文件里还有冲突标记。"
+          }
+        }
+      }
+    },
+    "Hydra did not merge: conflict markers in a file." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 未合并：一个文件里还有冲突标记。"
+          }
+        }
+      }
+    },
+    "Hydra did not merge: no remote." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 未合并：没有远程仓库。"
+          }
+        }
+      }
+    },
+    "Hydra did not merge: the checkout kept moving." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 未合并：检出目录一直在变动。"
+          }
+        }
+      }
+    },
+    "Hydra did not merge: the team's files are outside every project." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 未合并：团队的文件都在所有项目之外。"
+          }
+        }
+      }
+    },
+    "Hydra left %d files outside every project." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 把 %d 个文件留在了所有项目之外。"
+          }
+        }
+      }
+    },
+    "Hydra left a file outside every project." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 把一个文件留在了所有项目之外。"
+          }
+        }
+      }
+    },
+    "Hydra merged %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 已合并 %@"
+          }
+        }
+      }
+    },
+    "Hydra opened %@ but could not merge it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 已创建 %@，但没能合并它。"
+          }
+        }
+      }
+    },
+    "Hydra pushed %@ but could not open a merge request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 已推送 %@，但没能创建合并请求。"
+          }
+        }
+      }
+    },
+    "Hydra sent no heads: the turn failed before they could go out. Ask again to send them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 没有派出子智能体：这一轮在派出之前就失败了。再请求一次即可派出。"
+          }
+        }
+      }
+    },
+    "Hydra sent no heads: the turn was stopped before they could go out. Ask again to send them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra 没有派出子智能体：这一轮在派出之前就被停止了。再请求一次即可派出。"
+          }
+        }
+      }
+    },
+    "Hydra: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra：%@"
+          }
+        }
+      }
+    },
+    "Implement the plan." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按计划实现。"
+          }
+        }
+      }
+    },
+    "Its continuation was refused, and it had been told so already." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它的续派请求被拒绝，而且已经告知过它。"
+          }
+        }
+      }
+    },
+    "Its delegation block could not be read, and it had been told so already." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它的委派内容无法读取，而且已经告知过它。"
+          }
+        }
+      }
+    },
+    "New branch…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建分支…"
+          }
+        }
+      }
+    },
+    "No changes yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无改动"
+          }
+        }
+      }
+    },
+    "No file checkpoint is available for this message. You can still keep the file changes." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息没有可用的文件检查点。你仍可以选择保留文件改动。"
+          }
+        }
+      }
+    },
+    "No heads went out\n%@ The block was dropped from the reply." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有派出子智能体\n%@ 这段委派已从回复中移除。"
+          }
+        }
+      }
+    },
+    "No heads went out: the lead did this itself." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有派出子智能体：主智能体自己完成了。"
+          }
+        }
+      }
+    },
+    "Not every task went out\n%d of the %d tasks in that block went to heads. The last %d did not: ask for them again once these report back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是所有任务都派出去了\n那个区块里有 %d 个任务（共 %d 个）交给了子智能体。最后 %d 个没有派出去：等这些回报后再请求一次。"
+          }
+        }
+      }
+    },
+    "Open repository" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开仓库"
+          }
+        }
+      }
+    },
+    "Partial output before the failure:\n\n%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败前的部分输出：\n\n%@"
+          }
+        }
+      }
+    },
+    "Preview: nothing was sent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预览：没有发送任何内容。"
+          }
+        }
+      }
+    },
+    "Push" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送"
+          }
+        }
+      }
+    },
+    "Retry loading commands" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新加载命令"
+          }
+        }
+      }
+    },
+    "Sent out heads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已派出子智能体。"
+          }
+        }
+      }
+    },
+    "Stalled: no edits for 10 minutes; stopped by Tivano. Resend with a sharper brief." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "卡住了：10 分钟没有任何编辑，已由 Tivano 停止。请用更明确的简报重新发送。"
+          }
+        }
+      }
+    },
+    "Stop the running subagents before reverting this conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回此对话前，请先停止正在运行的子智能体。"
+          }
+        }
+      }
+    },
+    "Stopped with an error." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出错停止。"
+          }
+        }
+      }
+    },
+    "Stopped." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止。"
+          }
+        }
+      }
+    },
+    "The forge did not say where the request is. The next try opens it again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码托管平台没有说明这个请求在哪里。下一次尝试会重新创建它。"
+          }
+        }
+      }
+    },
+    "The head" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体"
+          }
+        }
+      }
+    },
+    "The next try brings the request up to date with `%@` and merges it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一次尝试会把该请求与 `%@` 同步到最新，然后合并它。"
+          }
+        }
+      }
+    },
+    "The original Codex conversation is unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原始的 Codex 对话不可用。"
+          }
+        }
+      }
+    },
+    "The original Copilot conversation is unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原始的 Copilot 对话不可用。"
+          }
+        }
+      }
+    },
+    "The pair's heads run on %@ for now: %@ is not installed on this Mac." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "组合的子智能体暂时运行在 %@ 上：这台 Mac 没有安装 %@。"
+          }
+        }
+      }
+    },
+    "The pair's heads run on %@ for now: %@ is switched off in Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "组合的子智能体暂时运行在 %@ 上：%@ 已在“设置 › 服务商”中关闭。"
+          }
+        }
+      }
+    },
+    "The remote changed a file the team changed too, in the same places. The work is in the checkout: bring `%@` in (`git pull`), settle the overlap, and the merge goes out by itself." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程也改动了一个团队同样改过的文件，而且改在同样的位置。工作成果在检出目录里：先把 `%@` 合进来（`git pull`），处理重叠的部分，合并就会自动发出。"
+          }
+        }
+      }
+    },
+    "The remote changed files the team changed too, in the same places. The work is in the checkout: bring `%@` in (`git pull`), settle the overlap, and the merge goes out by itself." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程也改动了一些团队同样改过的文件，而且改在同样的位置。工作成果在检出目录里：先把 `%@` 合进来（`git pull`），处理重叠的部分，合并就会自动发出。"
+          }
+        }
+      }
+    },
+    "The selected message has no Codex turn ID, so its history cannot be safely reverted." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选消息没有 Codex 轮次 ID，因此无法安全地撤回其历史。"
+          }
+        }
+      }
+    },
+    "The stopped message was kept: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "被停止的消息已保留：%@"
+          }
+        }
+      }
+    },
+    "The team's work is in the checkout; there is no origin to push it to." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "团队的工作成果在检出目录里；但没有 origin 可以推送过去。"
+          }
+        }
+      }
+    },
+    "The turn failed without a recorded error." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这一轮失败了，但没有记录下错误。"
+          }
+        }
+      }
+    },
+    "The work is in the checkout and on `%@`; the next try opens the request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作成果在检出目录里，也在 `%@` 上；下一次尝试会创建这个请求。"
+          }
+        }
+      }
+    },
+    "The work is in the checkout; the next try sends it again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作成果在检出目录里；下一次尝试会重新发送。"
+          }
+        }
+      }
+    },
+    "Thinking for %lld min…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已思考 %lld 分钟…"
+          }
+        }
+      }
+    },
+    "This message is no longer in the thread." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息已经不在对话中了。"
+          }
+        }
+      }
+    },
+    "This request has had all %d of its rounds of heads, and the lead had been told so already." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个请求的子智能体轮次已经用完 %d 轮，主智能体也已被告知。"
+          }
+        }
+      }
+    },
+    "This turn has no file checkpoint. Choose to keep the file changes instead." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这一轮没有文件检查点。请改为选择保留文件改动。"
+          }
+        }
+      }
+    },
+    "Tool" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具"
+          }
+        }
+      }
+    },
+    "Use a new worktree for this thread" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为此对话使用新的 worktree"
+          }
+        }
+      }
+    },
+    "Wait for the running turn to finish first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先等待正在运行的一轮结束。"
+          }
+        }
+      }
+    },
+    "Waiting for your decision." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待你的决定。"
+          }
+        }
+      }
+    },
+    "Why it did not land: %@.\n\n" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有落地的原因：%@。\n\n"
+          }
+        }
+      }
+    },
+    "glab is not signed in to this GitLab host." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "glab 尚未登录这个 GitLab 主机。"
+          }
+        }
+      }
+    },
+    "goes to %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发往 %@"
+          }
+        }
+      }
+    },
+    "%@ needs an API key. Add one in Settings › Providers › %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 需要 API 密钥。请在“设置 › 服务商 › %@”中添加。"
+          }
+        }
+      }
+    },
+    "%@ rejected the API key. Check it in Settings › Providers › %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 拒绝了此 API 密钥。请在“设置 › 服务商 › %@”中检查。"
+          }
+        }
+      }
+    },
+    "Allow Tivano to use the microphone in System Settings › Privacy & Security › Microphone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在“系统设置 › 隐私与安全性 › 麦克风”中允许 Tivano 使用麦克风。"
+          }
+        }
+      }
+    },
+    "Click Login on the right to sign in." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点击右侧的“登录”按钮登录。"
+          }
+        }
+      }
+    },
+    "Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings › Providers › Command Code." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 尚未登录。请在终端运行 `cmd login`，或在“设置 › 服务商 › Command Code”中添加 Studio API 密钥。"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness at %@ cannot inherit the desktop app's marketplace profile, and retrying will fail the same way. Use the CLI bundled with the DeepSeek Harness app, or set it as the Binary path in Settings › Providers › DeepSeek Harness." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "位于 %@ 的 DeepSeek Harness 无法继承桌面应用的市场配置，重试也会以同样方式失败。请使用 DeepSeek Harness 应用自带的 CLI，或在“设置 › 服务商 › DeepSeek Harness”中将其设为可执行文件路径。"
+          }
+        }
+      }
+    },
+    "DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings › Providers › DeepSeek." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek Harness 需要已登录的 DeepSeek 账号或 DeepSeek API 密钥。请在 DeepSeek Harness 应用中登录，或在“设置 › 服务商 › DeepSeek”中添加密钥。"
+          }
+        }
+      }
+    },
+    "Gatekeeper did not accept the downloaded app. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gatekeeper 未通过下载的应用。%@"
+          }
+        }
+      }
+    },
+    "Install and enable Codex in Settings › Providers to use voice." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在“设置 › 服务商”中安装并启用 Codex，以使用语音。"
+          }
+        }
+      }
+    },
+    "Meta rejected the API key. Check it in Settings › Providers › Meta (MODEL_API_KEY from dev.meta.ai)." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meta 拒绝了此 API 密钥。请在“设置 › 服务商 › Meta”中检查（MODEL_API_KEY 来自 dev.meta.ai）。"
+          }
+        }
+      }
+    },
+    "Open Settings › Providers" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开“设置 › 服务商”"
+          }
+        }
+      }
+    },
+    "Open the correct edition of Tivano yourself and enable Local control in Settings › Alpha. Use --help for syntax. Never blindly retry a write after a disconnect." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请自行打开正确版本的 Tivano，并在设置 › Alpha 中启用本地控制。使用 --help 查看语法。连接中断后，切勿直接重试写操作。"
+          }
+        }
+      }
+    },
+    "The agent sent a message over 16 MB." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体发送的消息超过 16 MB。"
+          }
+        }
+      }
+    },
+    "The disk image holds no app." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "磁盘映像中没有应用。"
+          }
+        }
+      }
+    },
+    "The downloaded app is not signed for Tivano. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载的应用未使用 Tivano 的签名。%@"
+          }
+        }
+      }
+    },
+    "The downloaded app is not signed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载的应用未签名。"
+          }
+        }
+      }
+    },
+    "The downloaded app is version %@, not %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载的应用版本为 %@，不是 %@。"
+          }
+        }
+      }
+    },
+    "The downloaded disk image could not be opened. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开下载的磁盘映像。%@"
+          }
+        }
+      }
+    },
+    "The signature requirement could not be built." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法构建签名要求。"
+          }
+        }
+      }
+    },
+    "The update could not be copied. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法复制更新包。%@"
+          }
+        }
+      }
+    },
+    "Tivano cannot replace itself in %@. Move it to your Applications folder and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 无法在 %@ 中替换自身。请将其移到“应用程序”文件夹后重试。"
+          }
+        }
+      }
+    },
+    "Tivano local control (the app must already be running and manually enabled in Settings › Alpha).\nCommands: info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\nList flags: --limit N --cursor TOKEN\nThread flags: --archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\nWrites: --operation INSTANCE/UUID/TIMESTAMP reuses an existing ticket in that instance only.\nSave the ticket printed before delivery. A disconnect is not failure; query the ticket instead of repeating the write.\nJSON output reports acceptance, not task success. Expired/restarted outcomes are unknown. No automatic retries or app launch." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 本地控制（应用必须已运行，并在“设置 › 实验室”中手动启用）。\n命令：info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\n列表选项：--limit N --cursor TOKEN\n线程选项：--archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\n写操作：--operation INSTANCE/UUID/TIMESTAMP 仅在同一应用实例中复用已有操作凭据。\n请保存发送前打印的操作凭据。断开连接不代表失败；应查询凭据，而非重复执行写操作。\nJSON 输出表示操作已接受，不代表任务成功。过期或重启后的结果为 unknown。不会自动重试或启动应用。"
+          }
+        }
+      }
+    },
+    "Today's focus" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日聚焦"
+          }
+        }
+      }
+    },
+    "Turn on text generation in Settings › Source control" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在“设置 › 源代码管理”中开启文本生成"
+          }
+        }
+      }
+    },
+    "Update failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新失败"
+          }
+        }
+      }
+    },
+    "Variable name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "变量名"
+          }
+        }
+      }
+    },
+    "Z.ai rejected the API key. Check your GLM Coding Plan key in Settings › Providers › Z.ai. Your plan may have expired; a Standard API key will not work here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Z.ai 拒绝了此 API 密钥。请在“设置 › 服务商 › Z.ai”中检查 GLM Coding Plan 密钥。套餐可能已到期；此入口不支持 Standard API 密钥。"
+          }
+        }
+      }
+    },
+    "ZCode needs your GLM Coding Plan key. Add it in Settings › Providers › Z.ai." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 需要你的 GLM Coding Plan 密钥。请在“设置 › 服务商 › Z.ai”中添加。"
+          }
+        }
+      }
+    },
+    "ZCode signs in with your GLM Coding Plan key. Add it in Settings › Providers › Z.ai." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ZCode 使用你的 GLM Coding Plan 密钥登录。请在“设置 › 服务商 › Z.ai”中添加。"
+          }
+        }
+      }
+    },
+    "Antigravity did not answer. Is `agy` signed in? Run `agy` once in Terminal." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 没有响应。`agy` 是否已登录？请在终端运行一次 `agy`。"
+          }
+        }
+      }
+    },
+    "Antigravity manages its own context." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 自行管理上下文。"
+          }
+        }
+      }
+    },
+    "The tool failed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具执行失败。"
+          }
+        }
+      }
+    },
+    "Antigravity held back %@ without prompting. Use Full access or add an allow rule in the CLI's settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 未经询问就拦下了 %@。请使用完全访问，或在 CLI 设置中添加允许规则。"
+          }
+        }
+      }
+    },
+    "Antigravity held back %@ waiting for a permission it could not ask for. Use Full access for this chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 拦下了 %@，等待一个它无法询问的权限。请为此对话开启完全访问。"
+          }
+        }
+      }
+    },
+    "Antigravity stopped before finishing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 未完成即停止。"
+          }
+        }
+      }
+    },
+    "Antigravity exited." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 已退出。"
+          }
+        }
+      }
+    },
+    "Antigravity is not signed in. Run `agy` once in Terminal to sign in." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 尚未登录。请在终端运行一次 `agy` 以登录。"
+          }
+        }
+      }
+    },
+    "`agy models` produced no output." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "`agy models` 没有输出。"
+          }
+        }
+      }
+    },
+    "`agy models` listed no models." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "`agy models` 未列出任何模型。"
+          }
+        }
+      }
+    },
+    "AI credits · %d remaining" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 额度 · 剩余 %d"
+          }
+        }
+      }
+    },
+    "%@ did not start a session." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 未能启动会话。"
+          }
+        }
+      }
+    },
+    "%@ compacts its own context." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 自行压缩上下文。"
+          }
+        }
+      }
+    },
+    "The agent declined this request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体拒绝了此请求。"
+          }
+        }
+      }
+    },
+    "The agent exited." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体已退出。"
+          }
+        }
+      }
+    },
+    "Run command" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行命令"
+          }
+        }
+      }
+    },
+    "Read file" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取文件"
+          }
+        }
+      }
+    },
+    "Edit file" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑文件"
+          }
+        }
+      }
+    },
+    "Fetch" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抓取"
+          }
+        }
+      }
+    },
+    "Agent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体"
+          }
+        }
+      }
+    },
+    "DeepSeek has no balance left. Top up at platform.deepseek.com, then try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek 余额已用尽。请在 platform.deepseek.com 充值后重试。"
+          }
+        }
+      }
+    },
+    "DeepSeek is rate-limited right now. Wait a moment and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek 当前触发速率限制。请稍等片刻再试。"
+          }
+        }
+      }
+    },
+    "The conversation no longer fits DeepSeek's context window. Start a new thread or compact first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这段对话已超出 DeepSeek 的上下文窗口。请新建对话或先压缩上下文。"
+          }
+        }
+      }
+    },
+    "DeepSeek no longer offers that model. Pick V4 Pro or V4.1 Flash in the model picker." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek 已不再提供该模型。请在模型选择器中选择 V4 Pro 或 V4.1 Flash。"
+          }
+        }
+      }
+    },
+    "DeepSeek stopped before finishing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek 未完成即停止。"
+          }
+        }
+      }
+    },
+    "Claude could not load its commands." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 无法加载其命令。"
+          }
+        }
+      }
+    },
+    "Claude's command discovery did not finish. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 的命令扫描未完成。请重试。"
+          }
+        }
+      }
+    },
+    "Claude exited." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 已退出。"
+          }
+        }
+      }
+    },
+    "Claude rejected the request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 拒绝了该请求。"
+          }
+        }
+      }
+    },
+    "Claude hit a usage limit." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 已达到用量上限。"
+          }
+        }
+      }
+    },
+    "Claude hit a usage limit. It resets at %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 已达到用量上限。%@ 重置。"
+          }
+        }
+      }
+    },
+    "Claude stopped before finishing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 未完成即停止。"
+          }
+        }
+      }
+    },
+    "Shell command" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shell 命令"
+          }
+        }
+      }
+    },
+    "Write file" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写入文件"
+          }
+        }
+      }
+    },
+    "Edit notebook" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑 Notebook"
+          }
+        }
+      }
+    },
+    "Find files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找文件"
+          }
+        }
+      }
+    },
+    "List files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出文件"
+          }
+        }
+      }
+    },
+    "Fetch page" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抓取页面"
+          }
+        }
+      }
+    },
+    "Search the web" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索网络"
+          }
+        }
+      }
+    },
+    "Subagent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体"
+          }
+        }
+      }
+    },
+    "Skill · %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技能 · %@"
+          }
+        }
+      }
+    },
+    "Command Code no longer has this conversation; starting a new one." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 已没有这段对话，将开始新的对话。"
+          }
+        }
+      }
+    },
+    "Command Code is still on the last turn." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 仍在上一轮中。"
+          }
+        }
+      }
+    },
+    "Command Code could not start: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 无法启动：%@"
+          }
+        }
+      }
+    },
+    "Command Code compacts its context on its own." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 自行压缩上下文。"
+          }
+        }
+      }
+    },
+    "Declined." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已拒绝。"
+          }
+        }
+      }
+    },
+    "Command Code stopped before finishing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 未完成即停止。"
+          }
+        }
+      }
+    },
+    "Command Code was denied permission." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 的权限请求被拒绝。"
+          }
+        }
+      }
+    },
+    "Command Code is rate limited. Wait for the window to reset, or buy on-demand credits, which are never throttled." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 触发了速率限制。请等待额度窗口重置，或购买按需额度，按需额度不受限流影响。"
+          }
+        }
+      }
+    },
+    "Could not reach Command Code. Check the connection and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接 Command Code。请检查网络后重试。"
+          }
+        }
+      }
+    },
+    "Command Code's API returned a server error. Try again in a moment." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 的 API 返回服务器错误。请稍后重试。"
+          }
+        }
+      }
+    },
+    "The model produced no response." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型没有返回任何内容。"
+          }
+        }
+      }
+    },
+    "Command Code exited with code %d." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 以代码 %d 退出。"
+          }
+        }
+      }
+    },
+    "Command Code stopped at its cap of %d round trips for one message. Send another to carry on." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 已达单条消息 %d 轮往返的上限。再发一条消息即可继续。"
+          }
+        }
+      }
+    },
+    "in the background" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台运行"
+          }
+        }
+      }
+    },
+    "Monitor command" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "监视命令"
+          }
+        }
+      }
+    },
+    "lines %d–%d" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %d–%d 行"
+          }
+        }
+      }
+    },
+    "Sub-agent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子智能体"
+          }
+        }
+      }
+    },
+    "Command · %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令 · %@"
+          }
+        }
+      }
+    },
+    "Copilot has no rewind point for that turn." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copilot 没有该轮对话的回退点。"
+          }
+        }
+      }
+    },
+    "%@× premium requests" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@× 高级请求"
+          }
+        }
+      }
+    },
+    "Enable it in your GitHub Copilot settings first" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先在 GitHub Copilot 设置中启用"
+          }
+        }
+      }
+    },
+    "%@ · no Copilot access" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 无 Copilot 访问权限"
+          }
+        }
+      }
+    },
+    "Premium requests" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高级请求"
+          }
+        }
+      }
+    },
+    "Chat messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话消息"
+          }
+        }
+      }
+    },
+    "Code completions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码补全"
+          }
+        }
+      }
+    },
+    "This `copilot` does not speak the SDK protocol. Update it with `copilot update`." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 `copilot` 不支持 SDK 协议。请用 `copilot update` 更新。"
+          }
+        }
+      }
+    },
+    "Check that your GitHub account has Copilot access, or sign in again with `copilot login`." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请确认你的 GitHub 账号已开通 Copilot 权限，或用 `copilot login` 重新登录。"
+          }
+        }
+      }
+    },
+    "Runs outside the sandbox." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在沙盒之外运行。"
+          }
+        }
+      }
+    },
+    "Redirected from %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重定向自 %@"
+          }
+        }
+      }
+    },
+    "Read %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取 %@"
+          }
+        }
+      }
+    },
+    "a URL" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个 URL"
+          }
+        }
+      }
+    },
+    "tool" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具"
+          }
+        }
+      }
+    },
+    "something about this project" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于此项目的一件事"
+          }
+        }
+      }
+    },
+    "Remember: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记住：%@"
+          }
+        }
+      }
+    },
+    "Create file" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建文件"
+          }
+        }
+      }
+    },
+    "SQL query" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SQL 查询"
+          }
+        }
+      }
+    },
+    "from line %d" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从第 %d 行起"
+          }
+        }
+      }
+    },
+    "a file" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个文件"
+          }
+        }
+      }
+    },
+    "Codex could not resume the original conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 无法恢复原对话。"
+          }
+        }
+      }
+    },
+    "Codex did not start a thread." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 未能启动对话。"
+          }
+        }
+      }
+    },
+    "Codex did not return its conversation history." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 未返回其对话历史。"
+          }
+        }
+      }
+    },
+    "Codex could not page its conversation history." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 无法继续翻取对话历史。"
+          }
+        }
+      }
+    },
+    "Codex could not find the selected turn. The conversation was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 找不到所选轮次。对话已保留。"
+          }
+        }
+      }
+    },
+    "Codex did not confirm the requested conversation rollback." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 未确认所请求的对话回退。"
+          }
+        }
+      }
+    },
+    "Codex did not create a conversation at the revert point." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 未在回退点创建对话。"
+          }
+        }
+      }
+    },
+    "Codex did not confirm the reverted conversation history." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 未确认回退后的对话历史。"
+          }
+        }
+      }
+    },
+    "Codex reported no usage windows for this account." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 未报告该账号的用量窗口。"
+          }
+        }
+      }
+    },
+    "Codex's stored login has expired. Run `codex login` in a terminal, then check again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 保存的登录已过期。请在终端运行 `codex login`，然后重新检查。"
+          }
+        }
+      }
+    },
+    "Codex could not be asked for its usage." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法向 Codex 查询用量。"
+          }
+        }
+      }
+    },
+    "Edit %d files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑 %d 个文件"
+          }
+        }
+      }
+    },
+    "Web search" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络搜索"
+          }
+        }
+      }
+    },
+    "Send out a head" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "派出子智能体"
+          }
+        }
+      }
+    },
+    "Brief a head" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向子智能体交代任务"
+          }
+        }
+      }
+    },
+    "Wait for heads" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待子智能体"
+          }
+        }
+      }
+    },
+    "Recall a head" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "召回子智能体"
+          }
+        }
+      }
+    },
+    "Resume a head" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复子智能体"
+          }
+        }
+      }
+    },
+    "List heads" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出子智能体"
+          }
+        }
+      }
+    },
+    "An MCP server" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "某个 MCP 服务器"
+          }
+        }
+      }
+    },
+    "%@ asked for input, which Tivano cannot show yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 请求输入，Tivano 目前无法显示。"
+          }
+        }
+      }
+    },
+    "Write to %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写入 %@"
+          }
+        }
+      }
+    },
+    "Network access" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络访问"
+          }
+        }
+      }
+    },
+    "Additional permissions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他权限"
+          }
+        }
+      }
+    },
+    "Codex reported an error." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 报告了错误。"
+          }
+        }
+      }
+    },
+    "Command Code listed no models." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command Code 未列出任何模型。"
+          }
+        }
+      }
+    },
+    "Fetch %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抓取 %@"
+          }
+        }
+      }
+    },
+    "Monthly" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每月"
+          }
+        }
+      }
+    },
+    "Usage was reset." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用量已重置。"
+          }
+        }
+      }
+    },
+    "There was no active usage to reset." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前没有可重置的用量。"
+          }
+        }
+      }
+    },
+    "No banked resets are left." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已存的重置次数已用完。"
+          }
+        }
+      }
+    },
+    "That reset was already used." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这次重置已经用过了。"
+          }
+        }
+      }
+    },
+    "%lld-day limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 天额度"
+          }
+        }
+      }
+    },
+    "%lld-hour limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 小时额度"
+          }
+        }
+      }
+    },
+    "Meta no longer offers that model. Pick Muse Spark 1.3 in the model picker." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meta 已不再提供该模型。请在模型选择器中选用 Muse Spark 1.3。"
+          }
+        }
+      }
+    },
+    "Meta is rate-limited right now. Wait a moment and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meta 当前触发了速率限制。请稍等片刻再重试。"
+          }
+        }
+      }
+    },
+    "Meta timed out before finishing. Try again; long generations already stream." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meta 在完成前超时了。请重试；长内容本身就是流式输出。"
+          }
+        }
+      }
+    },
+    "Muse Spark always reasons; \"none\" is rejected. Pick Minimal or higher in the model picker." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muse Spark 始终会推理，不接受“none”。请在模型选择器中选择 Minimal 或更高等级。"
+          }
+        }
+      }
+    },
+    "Meta reported a billing/quota problem. Check your Model API balance at dev.meta.ai, then try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meta 报告了账单或配额问题。请在 dev.meta.ai 检查 Model API 余额后重试。"
+          }
+        }
+      }
+    },
+    "The conversation no longer fits Meta's 1M-token context window. Start a new thread or compact first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话已超出 Meta 的 100 万 token 上下文窗口。请新建对话或先压缩上下文。"
+          }
+        }
+      }
+    },
+    "Meta stopped before finishing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meta 未能完成就已停止。"
+          }
+        }
+      }
+    },
+    "Pi could not start: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 无法启动：%@"
+          }
+        }
+      }
+    },
+    "Pi listed no models." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 未列出任何模型。"
+          }
+        }
+      }
+    },
+    "Pi no longer has this conversation; starting a new one." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 中已不存在此对话；将开始新对话。"
+          }
+        }
+      }
+    },
+    "Pi is still on the last turn." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 仍在处理上一轮。"
+          }
+        }
+      }
+    },
+    "Pi reported an error." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 报告了一个错误。"
+          }
+        }
+      }
+    },
+    "Pi is retrying." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 正在重试。"
+          }
+        }
+      }
+    },
+    "Pi reported an extension error." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 报告了扩展错误。"
+          }
+        }
+      }
+    },
+    "Pi sent a notification." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 发来了一条通知。"
+          }
+        }
+      }
+    },
+    "Pi exited with status %d%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 已退出，状态码为 %d%@"
+          }
+        }
+      }
+    },
+    "The conversation no longer fits GLM-5.3's context window. Start a new thread or compact first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话已超出 GLM-5.3 的上下文窗口。请新建对话或先压缩上下文。"
+          }
+        }
+      }
+    },
+    "Your Z.ai Coding Plan does not include %@. Pick GLM-5.3 or GLM-5.3 Flash for the model, or move up a plan tier." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 Z.ai Coding Plan 不含 %@。请把模型换成 GLM-5.3 或 GLM-5.3 Flash，或升级套餐。"
+          }
+        }
+      }
+    },
+    "Z.ai is throttling requests right now — its plans cap how many run at once. Wait a moment and send again; fewer at a time get through." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Z.ai 正在限制请求频率——套餐对同时进行的请求有上限。请稍等再发送；同时发出的请求少一些更容易通过。"
+          }
+        }
+      }
+    },
+    "Z.ai is overloaded right now, which says nothing about your plan. Send the message again in a moment." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Z.ai 当前负载过高，这与你的套餐无关。请稍后再发送一次。"
+          }
+        }
+      }
+    },
+    "Z.ai has paused this account's requests under its Fair Usage Policy. It lifts on its own; details at z.ai/devpack/usage-policy." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按公平使用政策，Z.ai 已暂停此账号的请求。限制会自行解除；详情见 z.ai/devpack/usage-policy。"
+          }
+        }
+      }
+    },
+    "This Z.ai key belongs to an enterprise coding package. Use the personal Coding Plan key from z.ai/manage-apikey/subscription." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Z.ai 密钥属于企业编程套餐。请改用 z.ai/manage-apikey/subscription 中的个人 Coding Plan 密钥。"
+          }
+        }
+      }
+    },
+    "Your GLM Coding Plan usage limit is reached for this window. It refreshes on its own; the usage ring shows when. Details at z.ai/manage-apikey/subscription." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 GLM Coding Plan 在本周期内的用量额度已用完。额度会自行恢复，用量环上显示恢复时间。详情见 z.ai/manage-apikey/subscription。"
+          }
+        }
+      }
+    },
+    "Z.ai does not offer that model. Pick GLM-5.3 or GLM-5.3 Flash in the model picker." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Z.ai 不提供该模型。请在模型选择器中选用 GLM-5.3 或 GLM-5.3 Flash。"
+          }
+        }
+      }
+    },
+    "Z.ai stopped before finishing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Z.ai 未能完成就已停止。"
+          }
+        }
+      }
+    },
+    "that model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该模型"
+          }
+        }
+      }
+    },
+    "%@ of %@ credits" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已用 %@，共 %@ 额度"
+          }
+        }
+      }
+    },
+    "%@ of %@ calls" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已用 %@，共 %@ 次调用"
+          }
+        }
+      }
+    },
+    "Z.ai declined the reset." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Z.ai 拒绝了这次重置。"
+          }
+        }
+      }
+    },
+    "Monthly · MCP tools" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每月 · MCP 工具"
+          }
+        }
+      }
+    },
+    "Resets the 5-hour limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置 5 小时额度"
+          }
+        }
+      }
+    },
+    "Resets the weekly limit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置每周额度"
+          }
+        }
+      }
+    },
+    "%@ did not finish signing in." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 未完成登录。"
+          }
+        }
+      }
+    },
+    "%@ is not installed. Install it and sign in with `%@`." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未安装 %@。请安装后用 `%@` 登录。"
+          }
+        }
+      }
+    },
+    "The agent session is not running." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体会话未在运行。"
+          }
+        }
+      }
+    },
+    "tomorrow at %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "明天 %@"
+          }
+        }
+      }
+    },
+    "%@ at %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ %@"
+          }
+        }
+      }
+    },
+    "Monthly %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每月 %@"
+          }
+        }
+      }
+    },
+    "Topped up %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "充值 %@"
+          }
+        }
+      }
+    },
+    "Granted %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "赠送 %@"
+          }
+        }
+      }
+    },
+    "%@ paused after %lld rounds of tool calls in one turn. Say “continue” to pick up where it left off." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 一轮内连续调用了 %lld 轮工具后暂停。回复“继续”，它就会接着做。"
+          }
+        }
+      }
+    },
+    "%@ lost the connection while answering. That reply was cut off, and this response is restarting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 在回答时断开了连接。那条回复已中断，这次回答会重新开始。"
+          }
+        }
+      }
+    },
+    "%@ could not reach the network after %lld attempts. Check the connection, then try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 尝试 %lld 次后仍连不上网络。请检查网络后重试。"
+          }
+        }
+      }
+    },
+    "The server sent a stream line larger than 16 MB." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回的流数据单行超过 16 MB。"
+          }
+        }
+      }
+    },
+    "%@ returned status %lld." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 返回了状态码 %lld。"
+          }
+        }
+      }
+    },
+    "%@ stopped before finishing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 未能完成就已停止。"
+          }
+        }
+      }
+    },
+    "Call %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调用 %@ %@"
+          }
+        }
+      }
+    },
+    "Search for “%@”" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索“%@”"
+          }
+        }
+      }
+    },
+    "Write %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写入 %@"
+          }
+        }
+      }
+    },
+    "Edit %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑 %@"
+          }
+        }
+      }
+    },
+    "Claude Code's recommended model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code 推荐的模型"
+          }
+        }
+      }
+    },
+    "Fable 5.1 · Most capable for your hardest and longest-running tasks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fable 5.1 · 处理最难、耗时最长的任务时最强大"
+          }
+        }
+      }
+    },
+    "Copilot picks the model for each request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copilot 会为每次请求自行选择模型"
+          }
+        }
+      }
+    },
+    "The model pi itself is set to" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pi 当前配置的模型"
+          }
+        }
+      }
+    },
+    "Latest Muse Spark · best agentic coding · 1M context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新 Muse Spark · 最适合智能体编程 · 100 万上下文"
+          }
+        }
+      }
+    },
+    "Cheaper 1.3 · Meta may train on your chats · no max effort" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更便宜的 1.3 · Meta 可能用你的对话训练 · 不支持 max 强度"
+          }
+        }
+      }
+    },
+    "Previous checkpoint · Standard tier · 1M context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一代版本 · 标准档 · 100 万上下文"
+          }
+        }
+      }
+    },
+    "Cheaper 1.2 · Meta may train on your chats" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更便宜的 1.2 · Meta 可能用你的对话训练"
+          }
+        }
+      }
+    },
+    "Original checkpoint · Standard tier · 1M context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最初版本 · 标准档 · 100 万上下文"
+          }
+        }
+      }
+    },
+    "Best reasoning and coding · 1M context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推理与编程能力最强 · 100 万上下文"
+          }
+        }
+      }
+    },
+    "Fast, reads images · 1M context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速度快，能读图片 · 100 万上下文"
+          }
+        }
+      }
+    },
+    "Codex CLI not found." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未找到 Codex CLI。"
+          }
+        }
+      }
+    },
+    "Codex returned an unknown reset result." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 返回了无法识别的重置结果。"
+          }
+        }
+      }
+    },
+    "Skill" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技能"
+          }
+        }
+      }
+    },
+    "Rule" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规则"
+          }
+        }
+      }
+    },
+    "Creating a pull request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在创建拉取请求"
+          }
+        }
+      }
+    },
+    "Created a pull request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已创建拉取请求"
+          }
+        }
+      }
+    },
+    "Generating an image" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在生成图片"
+          }
+        }
+      }
+    },
+    "Generated an image" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已生成图片"
+          }
+        }
+      }
+    },
+    "Running a SQL query" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在运行 SQL 查询"
+          }
+        }
+      }
+    },
+    "Ran a SQL query" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已运行 SQL 查询"
+          }
+        }
+      }
+    },
+    "Stopping the shell task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在停止 Shell 任务"
+          }
+        }
+      }
+    },
+    "Stopped the shell task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止 Shell 任务"
+          }
+        }
+      }
+    },
+    "Monitoring the command" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在监控命令"
+          }
+        }
+      }
+    },
+    "Monitored the command" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已监控命令"
+          }
+        }
+      }
+    },
+    "Reviewing the change" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在审查改动"
+          }
+        }
+      }
+    },
+    "Reviewed the change" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已审查改动"
+          }
+        }
+      }
+    },
+    "Anthropic · best combo of speed & intelligence" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anthropic · 速度与智能的最佳平衡"
+          }
+        }
+      }
+    },
+    "Anthropic · most capable for demanding reasoning & long-horizon agents" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anthropic · 应对高强度推理与长程智能体任务最强"
+          }
+        }
+      }
+    },
+    "Anthropic · the newest Opus, for everyday complex work and coding" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anthropic · 最新的 Opus，适合日常复杂工作与编码"
+          }
+        }
+      }
+    },
+    "Anthropic · most intelligent Opus for agents and coding" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anthropic · 最智能的 Opus，适合智能体与编码"
+          }
+        }
+      }
+    },
+    "OpenAI · most capable OpenAI model for demanding reasoning & agents" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI · 最强的 OpenAI 模型，适合高强度推理与智能体任务"
+          }
+        }
+      }
+    },
+    "OpenAI · latest frontier model for general complex work" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI · 最新前沿模型，适合通用复杂工作"
+          }
+        }
+      }
+    },
+    "OpenAI · fast and efficient model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI · 快速、高效的模型"
+          }
+        }
+      }
+    },
+    "Google · newest Gemini Flash, improved core reasoning" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google · 最新的 Gemini Flash，核心推理能力提升"
+          }
+        }
+      }
+    },
+    "Open Source · fast hybrid-attention reasoning" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开源 · 快速的混合注意力推理"
+          }
+        }
+      }
+    },
+    "Open Source · long-horizon coding & knowledge work with 1M context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开源 · 1M 上下文下的长程编码与知识工作"
+          }
+        }
+      }
+    },
+    "Open Source · frontier coding with emergent cyber capabilities" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开源 · 前沿编码，具备新兴的网络安全能力"
+          }
+        }
+      }
+    },
+    "Best reasoning and coding quality" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推理与编码质量最佳"
+          }
+        }
+      }
+    },
+    "Newest, fast, reads images" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新、快速，可读取图片"
           }
         }
       }

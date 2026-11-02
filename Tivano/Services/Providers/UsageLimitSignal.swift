@@ -142,9 +142,9 @@ enum UsageLimitSignal {
         let calendar = Calendar.current
         let time = date.formatted(date: .omitted, time: .shortened)
         if calendar.isDateInToday(date) { return time }
-        if calendar.isDateInTomorrow(date) { return "tomorrow at \(time)" }
+        if calendar.isDateInTomorrow(date) { return String(format: String(localized: "tomorrow at %@"), time) }
         if let week = calendar.date(byAdding: .day, value: 6, to: .now), date < week {
-            return "\(date.formatted(.dateTime.weekday(.wide))) at \(time)"
+            return String(format: String(localized: "%@ at %@"), date.formatted(.dateTime.weekday(.wide)), time)
         }
         return date.formatted(date: .abbreviated, time: .shortened)
     }

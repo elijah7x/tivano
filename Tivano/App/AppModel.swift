@@ -1142,7 +1142,7 @@ final class AppModel {
             document: sourceRuntime.snapshotForPersistence()
         )
         var thread = makeThread(in: project, carrying: resolved)
-        thread.title = "Continued: " + resolved.title
+        thread.title = String(format: Chrome.localized("Continued: %@"), resolved.title)
         thread.hasCustomTitle = true
         threads.append(thread)
         if let project { updateProject(project.id) { $0.isExpanded = true } }
@@ -1852,7 +1852,7 @@ final class AppModel {
         if NSApp?.isActive == true && isOnScreen(thread) {
             return
         }
-        notify(threadID: id, title: thread.title, body: "Waiting for your decision.")
+        notify(threadID: id, title: thread.title, body: Chrome.localized("Waiting for your decision."))
         NSApp?.requestUserAttention(.informationalRequest)
     }
 
@@ -1896,9 +1896,9 @@ final class AppModel {
         if chimed { FinishChime.play() }
         guard !isVisible, settings.notifyWhenFinished, let thread = thread(id) else { return }
         let body = switch status {
-        case .completed: "Finished."
-        case .interrupted: "Stopped."
-        case .failed: "Stopped with an error."
+        case .completed: Chrome.localized("Finished.")
+        case .interrupted: Chrome.localized("Stopped.")
+        case .failed: Chrome.localized("Stopped with an error.")
         case .running: ""
         }
         notify(threadID: id, title: thread.title, body: body, sound: chimed ? nil : .default)

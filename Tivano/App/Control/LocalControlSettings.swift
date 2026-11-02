@@ -25,8 +25,7 @@ struct LocalControlSettingsRows: View {
     }
 }
 
-/// Installation is deliberately outside the disabled Alpha feature group: the owner
-/// can install/remove a command without opening either external-control gate.
+/// Installing the command never turns local control on.
 struct CLIInstallationSettings: View {
     @Environment(AppModel.self) private var model
     private var edition: ControlEdition { model.localControl.edition }

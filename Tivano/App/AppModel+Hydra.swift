@@ -167,7 +167,8 @@ private enum HydraWatchdog {
     static var labelled: Set<UUID> = []
     static var stalledHeadIDs: Set<UUID> = []
 
-    static let stalledNote = "Stalled: no edits for 10 minutes; stopped by Tivano. Resend with a sharper brief."
+    /// Said in a head's report when the watchdog stopped it for sitting still.
+    static var stalledNote: String { Chrome.localized("Stalled: no edits for 10 minutes; stopped by Tivano. Resend with a sharper brief.") }
 }
 
 extension AppModel {
@@ -210,8 +211,11 @@ extension AppModel {
     /// once per job rather than never (the fallback used to be silent).
     func hydraHeadsFallbackNote(of pair: HydraPair) -> String? {
         guard let provider = pair.workerProvider, provider != pair.provider, hydraHeadsProvider(of: pair) == pair.provider else { return nil }
-        let reason = providers.status(provider).isInstalled ? "is switched off in Settings" : "is not installed on this Mac"
-        return "The pair's heads run on \(pair.provider.displayName) for now: \(provider.displayName) \(reason)."
+        // Two whole sentences, so a translation is never a verb stitched onto a fragment.
+        guard providers.status(provider).isInstalled else {
+            return String(format: Chrome.localized("The pair's heads run on %@ for now: %@ is not installed on this Mac."), pair.provider.displayName, provider.displayName)
+        }
+        return String(format: Chrome.localized("The pair's heads run on %@ for now: %@ is switched off in Settings."), pair.provider.displayName, provider.displayName)
     }
 
     /// The effort heads inherit from a lead when the pair leaves it open: a working
@@ -486,7 +490,7 @@ extension AppModel {
     /// lead's project and work in place at that path.
     private func routeHydraHead(_ id: UUID, reference: String) async -> Bool {
         guard hydraHeadCanStart(id), let head = thread(id), let parentID = head.parentThreadID, let lead = thread(parentID) else { return false }
-        let name = head.hydra?.persona.name ?? "The head"
+        let name = head.hydra?.persona.name ?? Chrome.localized("The head")
         let expanded = (reference as NSString).expandingTildeInPath
         guard expanded.hasPrefix("/") else {
             return failHydraRoute(id, String(format: Chrome.localized("Hydra: no project named %@ is in the sidebar, so %@ did not start."), reference, name))
@@ -1014,9 +1018,9 @@ extension AppModel {
     /// anything the head managed to say. Its prose is named as partial output rather than
     /// passed off as the finished report, and a turn that recorded no error says so.
     private static func failedTurnReport(error: String?, partial: String) -> String {
-        var parts = [error ?? "The turn failed without a recorded error."]
+        var parts = [error ?? Chrome.localized("The turn failed without a recorded error.")]
         let partial = partial.trimmed
-        if !partial.isEmpty { parts.append("Partial output before the failure:\n\n\(partial)") }
+        if !partial.isEmpty { parts.append(String(format: Chrome.localized("Partial output before the failure:\n\n%@"), partial)) }
         return parts.joined(separator: "\n\n")
     }
 
@@ -1248,21 +1252,14 @@ extension AppModel {
             let files = landing.conflicts.map { "`\($0)`" }.joined(separator: ", ")
             // Worded as what happens next, not as damage: the lead settles the markers
             // before anything goes out, so the reader has nothing to do.
-            leadRuntime.appendHydraNote("""
-            \(name)'s work landed; the lead is settling a conflict in \(landing.conflicts.count == 1 ? "1 file" : "\(landing.conflicts.count) files").
-            \(files)
-
-            The checkout had moved on where \(name) was working, so the merge was three-way and left markers in \(landing.conflicts.count == 1 ? "this file" : "these files"). The lead resolves them before the work goes out; nothing to do on your side.
-            """)
+            leadRuntime.appendHydraNote(landing.conflicts.count == 1
+                ? String(format: Chrome.localized("%@'s work landed; the lead is settling a conflict in 1 file.\n%@\n\nThe checkout had moved on where %@ was working, so the merge was three-way and left markers in this file. The lead resolves them before the work goes out; nothing to do on your side."), name, files, name)
+                : String(format: Chrome.localized("%@'s work landed; the lead is settling a conflict in %d files.\n%@\n\nThe checkout had moved on where %@ was working, so the merge was three-way and left markers in these files. The lead resolves them before the work goes out; nothing to do on your side."), name, landing.conflicts.count, files, name))
         }
         if let path = landing.patchPath {
             let files = landing.files.map { "`\($0.path)`" }.joined(separator: ", ")
-            leadRuntime.appendHydraNote("""
-            \(name)'s work did not land and was kept as a patch.
-            \(files)
-
-            \(landing.error.map { "Why it did not land: \($0).\n\n" } ?? "")Apply it with `git apply --3way \(path)` and settle what conflicts.
-            """)
+            let why = landing.error.map { String(format: Chrome.localized("Why it did not land: %@.\n\n"), $0) } ?? ""
+            leadRuntime.appendHydraNote(String(format: Chrome.localized("%@'s work did not land and was kept as a patch.\n%@\n\n%@Apply it with `git apply --3way %@` and settle what conflicts."), name, files, why, path))
         }
     }
 
@@ -1438,8 +1435,9 @@ extension AppModel {
                 return false
             }
             if hasRunningTool {
-                if HydraWatchdog.labelled.remove(head.id) != nil, headRuntime.hydraActivity?.hasPrefix("Thinking for ") == true {
+                if HydraWatchdog.labelled.remove(head.id) != nil, headRuntime.hydraThinking {
                     headRuntime.hydraActivity = nil
+                    headRuntime.hydraThinkingLabel = nil
                 }
                 continue
             }
@@ -1451,12 +1449,15 @@ extension AppModel {
             }
             if idle >= HydraWatchdog.thinkingAfter {
                 // Written only when the minute changes, so the row is not redrawn each look.
-                let label = "Thinking for \(Int(idle / 60)) min…"
+                let label = String(format: Chrome.localized("Thinking for %lld min…"), Int64(idle / 60))
                 if headRuntime.hydraActivity != label { headRuntime.hydraActivity = label }
+                // Remembered, not matched by its words: they are localized (see `hydraThinkingLabel`).
+                headRuntime.hydraThinkingLabel = label
                 HydraWatchdog.labelled.insert(head.id)
-            } else if HydraWatchdog.labelled.remove(head.id) != nil, headRuntime.hydraActivity?.hasPrefix("Thinking for ") == true {
+            } else if HydraWatchdog.labelled.remove(head.id) != nil, headRuntime.hydraThinking {
                 // Back at work: the label comes off, and the row says "working" again.
                 headRuntime.hydraActivity = nil
+                headRuntime.hydraThinkingLabel = nil
             }
         }
         HydraWatchdog.toolCounts = toolCounts

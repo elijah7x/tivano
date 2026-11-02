@@ -1,8 +1,9 @@
-# Local-control CLI (Alpha, protocol v1)
+# Local-control CLI (protocol v1)
 
 Local control controls **an already-running Tivano**. It is off by default. In
-Settings → Alpha, turn on both Alpha and Local control yourself. Closing either
-gate stops listening and shuts down existing connections. It does not cancel
+Settings → General, in the Local control section above Power, turn on Local control
+yourself; only its own switch needs to be on. Turning it off stops listening and
+shuts down existing connections. It does not cancel
 already-accepted turns or worktree preparation. Approvals and questions remain in
 the App; clients can observe waiting but cannot approve, answer, log in or grant
 permissions.
@@ -11,14 +12,15 @@ This is a **same-account capability**, not protection against malicious processe
 with your UID. Other processes in your account can read exposed conversation
 history and perform the allowed actions while it is enabled. Local control
 itself has no TCP listener, background daemon, automatic App launch or direct CLI
-access to library files. [Remote MCP](remote-mcp.md) is a separate Alpha gate that
+access to library files. [Remote MCP](remote-mcp.md) is a separate switch that
 serves the same commands to cloud agents over a loopback HTTP listener.
 
 ## Install, repair and remove the PATH entry
 
 The native `tivano-control` helper ships inside each signed App's
 `Contents/Helpers`, using the App's Developer ID team and hardened runtime.
-Settings → Alpha → Install or repair CLI creates a symlink in `~/.local/bin`:
+Settings → General → Local control (above Power) → Install or repair CLI creates
+a symlink in `~/.local/bin`:
 
 - Release: `tivano`
 - Dev: `tivano-dev`

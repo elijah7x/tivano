@@ -90,6 +90,9 @@ struct MCPSettingsPage: View {
             Text("Connected servers reach every provider when a thread starts: the CLIs at launch, the API models through Tivano itself.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
+            if query.trimmed.isEmpty || "Remote MCP".localizedCaseInsensitiveContains(query.trimmed) || Chrome.localized("Remote MCP").localizedCaseInsensitiveContains(query.trimmed) {
+                ChromeSection(title: "Remote MCP") { ChromeCard { RemoteMCPSettingsRows() } }
+            }
         }
         .onChange(of: model.mcp.states) { previous, current in
             guard !reduceMotion else { return }
@@ -842,7 +845,7 @@ private struct MCPCustomEditor: View {
         field(title) {
             ForEach($variables) { $variable in
                 HStack(spacing: 6) {
-                    editorField("KEY", text: $variable.key)
+                    editorField("Variable name", text: $variable.key)
                     if variable.isSecret {
                         secureEditorField("value", text: $variable.value)
                     } else {

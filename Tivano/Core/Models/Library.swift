@@ -142,6 +142,22 @@ enum NewThreadAffiliation: Sendable {
     case current
 }
 
+struct ProviderSwitchOrigin: Codable, Hashable, Sendable {
+    var provider: ProviderKind
+    var model: String?
+    var effort: String?
+    var fastMode: Bool
+    var dshMode: DshAgentMode?
+    var runtimeMode: RuntimeMode
+    var interactionMode: InteractionMode
+    var hydraEnabled: Bool
+    var hydraEnabledIsExplicit: Bool
+    var hydraPairID: UUID?
+    var temporaryHydraPair: HydraPair?
+    var providerSessionID: String?
+    var providerResumeAt: String?
+}
+
 struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     static let untitled = "New thread"
 
@@ -155,7 +171,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var updatedAt: Date
     var provider: ProviderKind {
         didSet {
-            runtimeMode = Self.supportedMode(runtimeMode, on: provider)
+            runtimeMode = pendingProviderSwitch == nil ? Self.supportedMode(runtimeMode, on: provider) : provider.supported(runtimeMode)
             if provider != oldValue { dshMode = nil }
         }
     }
@@ -227,6 +243,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// A pair made for this chat alone in the model picker, never saved to Settings › Hydra.
     /// It leads while `hydraPairID` names it.
     var temporaryHydraPair: HydraPair?
+    var pendingProviderSwitch: ProviderSwitchOrigin? = nil
     /// How many heads this chat has sent out so far: the next one's place in the roster.
     var hydraSpawnCount = 0
     /// Set on a head: the thread is one of its parent's team.
@@ -367,6 +384,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         hydraEnabledIsExplicit = true
         hydraPairID = container.value(.hydraPairID, default: nil)
         temporaryHydraPair = container.value(.temporaryHydraPair, default: nil)
+        pendingProviderSwitch = container.value(.pendingProviderSwitch, default: nil)
         hydraSpawnCount = container.value(.hydraSpawnCount, default: 0)
         hydra = container.value(.hydra, default: nil)
         hydraJobs = container.value(.hydraJobs, default: [])

@@ -490,12 +490,28 @@ final class ThreadRuntime {
     /// pill's place under the same identity and the pill morphs into the merged report
     /// rather than being replaced (see `DisplayBlock.merging`).
     var hydraMergeNoteID: String?
+    /// Whether the merge note that landed said the work reached the remote. The note's own
+    /// words are localized, so the pill reads this instead of its title (see
+    /// `HydraMergeRow`). Live only: after a restart the track rests unlit.
+    var hydraMergeSucceeded: Bool?
+
+    /// Every merge outcome note is drawn with an id carrying this prefix, so its row is
+    /// recognized without reading words that a translation may have changed (see
+    /// `TimelineBlock.isMergeOutcome`).
+    static let hydraMergeNotePrefix = "hydra-merge-"
+
+    static func newHydraMergeNoteID() -> String { hydraMergeNotePrefix + UUID().uuidString }
     /// A head's progress while it runs (its last tool, its tool count, its spend), kept
     /// here rather than on the thread record: the provider reports it many
     /// times a second, and a write to a thread re-renders everything that lists threads.
     /// Only the panel row that shows this head follows these; they land on the record
     /// once the head finishes (see `AppModel.finishHydraHead`).
     var hydraActivity: String?
+    /// The watchdog's last "Thinking for …" label. It is localized, so the watchdog clears
+    /// `hydraActivity` only while it still equals this, never a tool's later activity
+    /// (see `AppModel.startHydraWatchdog`).
+    var hydraThinkingLabel: String?
+    var hydraThinking: Bool { hydraActivity != nil && hydraActivity == hydraThinkingLabel }
     var hydraToolCalls = 0
     var hydraTokens = 0
     /// When the head last did anything (a tool, a word of its reply or its reasoning),
@@ -606,6 +622,7 @@ final class ThreadRuntime {
     /// session; a restarted, retried or explicitly compacted session takes it again
     /// (see `releaseSession`, `compact`).
     @ObservationIgnored private var continuationSent = false
+    @ObservationIgnored private var switchCapturedContinuation = false
     /// Which session the runtime is listening to. Every session made carries the count it
     /// was made under, and its events are dropped once the count has moved on: a CLI that
     /// closes long after it was let go used to end the turn that replaced it, take down
@@ -875,7 +892,7 @@ final class ThreadRuntime {
             guard case .assistant(var message) = entry.item.content, HydraPrompts.hasSentDelegationBlock(in: message.text) else { continue }
             recovered = true
             message.text = HydraPrompts.withoutDelegationBlock(message.text)
-            if message.text.isEmpty { message.text = "Sent out heads." }
+            if message.text.isEmpty { message.text = Chrome.localized("Sent out heads.") }
             entry.item.content = .assistant(message)
         }
         for index in turns.indices where turns[index].status == .running {
@@ -981,6 +998,20 @@ final class ThreadRuntime {
     var isRunning: Bool { phase != .idle }
     var isCLIStarting: Bool { isStartingSession }
 
+    var providerSwitchBlocker: String? {
+        if isRunning || isCLIStarting || isReverting || isWaitingForLimit
+            || externalSubmission != nil || !controlInterrupts.isEmpty {
+            return Chrome.localized("Switch providers after this turn finishes")
+        }
+        if !approvals.isEmpty || !questions.isEmpty {
+            return Chrome.localized("Answer the pending request before switching providers")
+        }
+        if hasWorkingHeads || isHydraMerging || hasWorkingHelpers {
+            return Chrome.localized("Switch providers after the Hydra heads finish")
+        }
+        return nil
+    }
+
     var thread: ChatThread? { app?.thread(threadID) }
 
     /// Whether any head of this lead is still at work. A turn with heads at work is never
@@ -1029,7 +1060,7 @@ final class ThreadRuntime {
             do {
                 try await revert(to: turnID, restoreFiles: false)
             } catch {
-                appendNotice(.error, "The stopped message was kept: \(error.localizedDescription)")
+                appendNotice(.error, String(format: Chrome.localized("The stopped message was kept: %@"), error.localizedDescription))
                 return
             }
             draft.text = message.text
@@ -1134,13 +1165,15 @@ final class ThreadRuntime {
 
     private static func controlFailure(_ error: Error) -> ControlFailure {
         if let failure = error as? ControlFailure { return failure }
+        // Provider errors are localized, so the Chinese wording is matched as well.
         let text = error.localizedDescription.lowercased()
+        func has(_ words: String...) -> Bool { words.contains { text.contains($0) } }
         let category: String
-        if text.contains("auth") || text.contains("sign in") || text.contains("api key") { category = "authentication" }
-        else if text.contains("resume") || text.contains("conversation") || text.contains("session") && text.contains("not found") { category = "continuation" }
-        else if text.contains("limit") || text.contains("quota") { category = "usage_limit" }
-        else if text.contains("install") { category = "not_installed" }
-        else if text.contains("permission") || text.contains("denied") { category = "permission" }
+        if has("auth", "sign in", "api key", "认证", "登录", "密钥") { category = "authentication" }
+        else if has("resume", "conversation") || (has("session", "会话", "对话") && has("not found", "找不到", "未找到", "无法继续")) { category = "continuation" }
+        else if has("limit", "quota", "额度", "用量", "上限") { category = "usage_limit" }
+        else if has("install", "安装") { category = "not_installed" }
+        else if has("permission", "denied", "权限", "拒绝") { category = "permission" }
         else { category = "provider_or_transport" }
         return ControlFailure(code: category == "continuation" ? .continuationUnavailable : .providerFailure, detail: category)
     }
@@ -1569,7 +1602,7 @@ final class ThreadRuntime {
         entry.item.content = .plan(plan)
         saveRevision += 1
         app?.updateThread(threadID) { $0.interactionMode = .build }
-        Task { await ensureLoaded(); await startTurn(text: "Implement the plan.", attachments: []) }
+        Task { await ensureLoaded(); await startTurn(text: Chrome.localized("Implement the plan."), attachments: []) }
     }
 
     func dismissPlan(_ entryID: String) {
@@ -1612,7 +1645,7 @@ final class ThreadRuntime {
         #if DEBUG
         // The usage-limit preview shows the tab's buttons; none of them may reach a provider.
         if UsageLimitPreview.isRequested {
-            appendNotice(.info, "Preview: nothing was sent.")
+            appendNotice(.info, Chrome.localized("Preview: nothing was sent."))
             return
         }
         #endif
@@ -1696,6 +1729,14 @@ final class ThreadRuntime {
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)) }
             else { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             return
+        }
+        if let thread, thread.pendingProviderSwitch != nil, continuation == nil,
+           !thread.provider.restoresFromTextTranscript {
+            continuation = ThreadContinuation.capture(
+                sourceID: threadID, title: thread.title, document: snapshotForPersistence()
+            )
+            continuationSent = false
+            switchCapturedContinuation = true
         }
         let turnIndex = (turns.map(\.index).max() ?? -1) + 1
         var turn = TurnRecord(index: turnIndex)
@@ -1951,6 +1992,14 @@ final class ThreadRuntime {
             }
             if injectedContinuation, sessionEpoch == continuationEpoch {
                 continuationSent = true
+                // A provider switch's snapshot is consumed once the new session has it; a
+                // forwarded chat keeps its continuation for later session replacements.
+                if switchCapturedContinuation {
+                    switchCapturedContinuation = false
+                    self.continuation = nil
+                    saveRevision += 1
+                    saveNow()
+                }
             }
             // The session has a conversation the provider can resume from here on.
             if let unsentSessionID {
@@ -2034,6 +2083,8 @@ final class ThreadRuntime {
         #endif
         guard !isPreparingClaudeSignIn, phase == .idle, session == nil, warmup == nil, !isReverting, !hydraStartupPending,
               let app, let thread = app.thread(threadID), !thread.isArchived, !thread.provider.isAPIKeyBased,
+              // A staged provider switch keeps the old session until the send commits it.
+              thread.pendingProviderSwitch == nil,
               thread.hydra?.pendingProjectReference == nil,
               !app.providers.cliUpdateBlocksWarmup(thread.provider) else { return }
         let generation = UUID()
@@ -2045,6 +2096,7 @@ final class ThreadRuntime {
             await ensureModel(thread)
             guard !Task.isCancelled, warmupGeneration == generation else { return }
             guard phase == .idle, session == nil, !hydraStartupPending,
+                  app.thread(threadID)?.pendingProviderSwitch == nil,
                   app.thread(threadID)?.hydra?.pendingProjectReference == nil,
                   !app.providers.cliUpdateBlocksWarmup(thread.provider) else { warmup = nil; return }
             // A start that fails is not retried on every keystroke: the send makes its own.
@@ -2271,6 +2323,7 @@ final class ThreadRuntime {
             guard session === candidate, !Task.isCancelled else { throw CancellationError() }
             started = true
             app.updateThread(threadID) { $0.providerSessionID = sessionID }
+            completePendingProviderSwitch()
             return candidate
         }
 
@@ -2356,7 +2409,7 @@ final class ThreadRuntime {
             try await waitForReplacedSessions()
             app.updateThread(threadID) { $0.providerResumeAt = nil }
             if currentTurnID != nil {
-                appendNotice(.warning, "\(thread.provider.displayName) no longer has this conversation. It starts a new one here, without the messages above.")
+                appendNotice(.warning, String(format: Chrome.localized("%@ no longer has this conversation. It starts a new one here, without the messages above."), thread.provider.displayName))
             }
             candidate = makeSession(resumeID: nil)
             session = candidate
@@ -2371,6 +2424,7 @@ final class ThreadRuntime {
         }
         started = true
         recordSessionID(sessionID)
+        completePendingProviderSwitch()
         if let codex = candidate as? CodexSession { recoverCrashedCodexTurn(using: codex) }
         if thread.provider == .codex, thread.hydra?.kind == .tivano,
            thread.hydra?.tracksProviderHistory == true {
@@ -2544,6 +2598,22 @@ final class ThreadRuntime {
                 text.range(of: "\(subject)(?: id)?[^\n.:]{0,120}(?:not found|does not exist)", options: [.regularExpression, .caseInsensitive]) != nil
                     || text.localizedCaseInsensitiveContains("no \(subject) found")
             }
+    }
+
+    private func completePendingProviderSwitch() {
+        guard let app, let thread, thread.pendingProviderSwitch != nil else { return }
+        app.completeProviderSwitch(threadID)
+        appendNotice(.info, String(format: Chrome.localized("Continued with %@"),
+                                   app.modelLabel(provider: thread.provider, model: thread.model)))
+    }
+
+    /// Drops the history snapshot a staged provider switch captured for a send that
+    /// never started its session, so undoing the switch does not replay it to the old provider.
+    func discardProviderSwitchContinuation() {
+        guard switchCapturedContinuation, !continuationSent else { return }
+        switchCapturedContinuation = false
+        continuation = nil
+        saveRevision += 1
     }
 
     /// The conversation before the current turn as plain exchanges, for an API session
@@ -2771,10 +2841,10 @@ final class ThreadRuntime {
     func compact() {
         guard phase == .idle else { return }
         guard let session, session.isRunning else {
-            appendNotice(.info, "Nothing to compact yet.")
+            appendNotice(.info, Chrome.localized("Nothing to compact yet."))
             return
         }
-        appendNotice(.info, "Compacting context.")
+        appendNotice(.info, Chrome.localized("Compacting context."))
         Task {
             do {
                 try await session.compact()
@@ -2837,7 +2907,7 @@ final class ThreadRuntime {
     private func previewRevert(to turnID: UUID) async throws -> RevertPreview {
         guard let app, let thread,
               let index = turns.firstIndex(where: { $0.id == turnID }), let base = turns[index].baseCheckpoint else {
-            throw ProviderError.failed("No file checkpoint is available for this message. You can still keep the file changes.")
+            throw ProviderError.failed(Chrome.localized("No file checkpoint is available for this message. You can still keep the file changes."))
         }
         let removed = turns[index...]
         let paths = Set(removed.flatMap { $0.touchedPaths ?? [] }).sorted()
@@ -2871,13 +2941,13 @@ final class ThreadRuntime {
         // Rewind restores/resumes and mutates the provider's same history. Acquire its
         // idle turn only after a prior archive has finished, just as a new send does.
         await waitForProviderHistory()
-        guard phase == .idle, !isReverting else { throw ProviderError.failed("Wait for the running turn to finish first.") }
+        guard phase == .idle, !isReverting else { throw ProviderError.failed(Chrome.localized("Wait for the running turn to finish first.")) }
         guard let app, let thread = app.thread(threadID),
               let index = turns.firstIndex(where: { $0.id == turnID }) else {
-            throw ProviderError.failed("This message is no longer in the thread.")
+            throw ProviderError.failed(Chrome.localized("This message is no longer in the thread."))
         }
         guard app.runningTivanoHeads(of: threadID) == 0 else {
-            throw ProviderError.failed("Stop the running agents before reverting this conversation.")
+            throw ProviderError.failed(Chrome.localized("Stop the running subagents before reverting this conversation."))
         }
         let removed = Array(turns[index...])
         let directory = try app.ensureExecutionDirectory(for: thread)
@@ -2886,7 +2956,7 @@ final class ThreadRuntime {
         defer { isReverting = false }
         if restoreFiles {
             guard let base = removed.first?.baseCheckpoint else {
-                throw ProviderError.failed("This turn has no file checkpoint. Choose to keep the file changes instead.")
+                throw ProviderError.failed(Chrome.localized("This turn has no file checkpoint. Choose to keep the file changes instead."))
             }
             _ = try await Git(directory).output(["rev-parse", "--verify", base])
         }
@@ -2895,18 +2965,18 @@ final class ThreadRuntime {
             if let targetID = removed.lazy.compactMap(\.providerTurnID).first {
                 guard thread.providerSessionID != nil,
                       let codex = try await ensureSession(allowNewSession: false) as? CodexSession else {
-                    throw ProviderError.failed("The original Codex conversation is unavailable.")
+                    throw ProviderError.failed(Chrome.localized("The original Codex conversation is unavailable."))
                 }
                 let sessionID = try await codex.rollback(from: targetID)
                 app.updateThread(threadID) { $0.providerSessionID = sessionID }
             } else if thread.providerSessionID != nil || removed.contains(where: { $0.status != .failed }) {
-                throw ProviderError.failed("The selected message has no Codex turn ID, so its history cannot be safely reverted.")
+                throw ProviderError.failed(Chrome.localized("The selected message has no Codex turn ID, so its history cannot be safely reverted."))
             }
             stopSession()
         case .copilot:
             guard thread.providerSessionID != nil,
                   let copilot = try await ensureSession(allowNewSession: false) as? CopilotSession else {
-                throw ProviderError.failed("The original Copilot conversation is unavailable.")
+                throw ProviderError.failed(Chrome.localized("The original Copilot conversation is unavailable."))
             }
             try await copilot.rollback(turns: removed.count)
             stopSession()
@@ -2920,7 +2990,7 @@ final class ThreadRuntime {
                 }
             } else {
                 guard thread.providerSessionID != nil, let anchor = turns[index - 1].providerAnchor else {
-                    throw ProviderError.failed("Claude has no resume point before this message. The conversation was kept.")
+                    throw ProviderError.failed(Chrome.localized("Claude has no resume point before this message. The conversation was kept."))
                 }
                 stopSession()
                 app.updateThread(threadID) { $0.providerResumeAt = anchor }
@@ -2960,7 +3030,7 @@ final class ThreadRuntime {
                 let preview = try await previewRevert(to: turnID)
                 try await Git(directory).restore(preview.restorable.map(\.path), from: base)
             } catch {
-                fileError = "Conversation reverted, but files could not be restored: \(error.localizedDescription)"
+                fileError = String(format: Chrome.localized("Conversation reverted, but files could not be restored: %@"), error.localizedDescription)
             }
         }
 
@@ -3522,10 +3592,10 @@ final class ThreadRuntime {
             approvals.removeAll()
             questions.removeAll()
             if currentTurnID != nil {
-                let name = thread?.provider.displayName ?? "The agent"
+                let name = thread?.provider.displayName ?? Chrome.localized("The agent")
                 let turnID = currentTurnID
                 if let error, finishTurnWithCLIUpdateHint(error, turnID: turnID) { break }
-                appendNotice(.error, error ?? "\(name) stopped unexpectedly.")
+                appendNotice(.error, error ?? String(format: Chrome.localized("%@ stopped unexpectedly."), name))
                 Task { await finishTurn(status: .failed, turnID: turnID) }
             }
         case .tokenSpend(let spend):
@@ -4064,11 +4134,13 @@ final class ThreadRuntime {
         guard let entry = entries.last(where: { $0.turnID == turnID && $0.kind == .assistant && Self.holdsDelegationBlock($0) }),
               case .assistant(var message) = entry.item.content else { return }
         message.text = HydraPrompts.withoutDelegationBlock(message.text)
-        if message.text.isEmpty { message.text = "Asked for heads." }
+        if message.text.isEmpty { message.text = Chrome.localized("Asked for heads.") }
         entry.item.content = .assistant(message)
         saveRevision += 1
         scheduleSave()
-        appendHydraNote("Hydra sent no heads: the turn \(status == .interrupted ? "was stopped" : "failed") before they could go out. Ask again to send them.")
+        appendHydraNote(status == .interrupted
+            ? Chrome.localized("Hydra sent no heads: the turn was stopped before they could go out. Ask again to send them.")
+            : Chrome.localized("Hydra sent no heads: the turn failed before they could go out. Ask again to send them."))
         // The timeline note is for the UI; the lead hears it too, on its next turn.
         hydraBudget.noteDropped(HydraPrompts.interruptedBlockMessage(stopped: status == .interrupted))
     }
@@ -4093,31 +4165,31 @@ final class ThreadRuntime {
         guard let delegations = HydraPrompts.delegations(in: message.text) else {
             guard HydraPrompts.hasDelegationBlock(in: message.text) else { return .none }
             message.text = HydraPrompts.withoutDelegationBlock(message.text)
-            if message.text.isEmpty { message.text = "Asking for heads." }
+            if message.text.isEmpty { message.text = Chrome.localized("Asking for heads.") }
             entry.item.content = .assistant(message)
             saveRevision += 1
             scheduleSave()
-            return refuseBlock(HydraPrompts.unreadableBlockMessage(reason: nil), dropped: "Its delegation block could not be read, and it had been told so already.")
+            return refuseBlock(HydraPrompts.unreadableBlockMessage(reason: nil), dropped: Chrome.localized("Its delegation block could not be read, and it had been told so already."))
         }
         let stripped = HydraPrompts.withoutDelegationBlock(message.text)
         // An empty block is the lead saying it did the work itself: the block leaves the
         // reply, a one-line note says no heads went out, and no turn is spent on it.
         if delegations.isEmpty {
-            message.text = stripped.isEmpty ? "Done, with no heads." : stripped
+            message.text = stripped.isEmpty ? Chrome.localized("Done, with no heads.") : stripped
             entry.item.content = .assistant(message)
             saveRevision += 1
             scheduleSave()
-            appendHydraNote("No heads went out: the lead did this itself.")
+            appendHydraNote(Chrome.localized("No heads went out: the lead did this itself."))
             return .none
         }
         // One request gets so many rounds of heads; past that the lead hears why none went
         // out and finishes by itself, so no request chains heads without end.
         guard hydraBudget.canDelegate else {
-            message.text = stripped.isEmpty ? "Asking for more heads." : stripped
+            message.text = stripped.isEmpty ? Chrome.localized("Asking for more heads.") : stripped
             entry.item.content = .assistant(message)
             saveRevision += 1
             scheduleSave()
-            return refuseBlock(HydraPrompts.heldBackMessage(count: delegations.count), dropped: "This request has had all \(HydraPrompts.maxDelegationRounds) of its rounds of heads, and the lead had been told so already.")
+            return refuseBlock(HydraPrompts.heldBackMessage(count: delegations.count), dropped: String(format: Chrome.localized("This request has had all %d of its rounds of heads, and the lead had been told so already."), HydraPrompts.maxDelegationRounds))
         }
         return spawnV2DelegatedHeads(app: app, thread: thread, launch: launch, entry: entry, message: message, stripped: stripped, delegations: delegations)
     }
@@ -4265,10 +4337,7 @@ final class ThreadRuntime {
         hydraWaiting += admitted.map { (delegation: $0.delegation, batchID: batchID, queuedAt: Date.now, continueHeadID: $0.continueHeadID) }
         if delegations.count > Self.maxDelegatedTasks {
             let dropped = delegations.count - Self.maxDelegatedTasks
-            appendHydraNote("""
-                Not every task went out
-                \(Self.maxDelegatedTasks) of the \(delegations.count) tasks in that block went to heads. The last \(dropped) did not: ask for them again once these report back.
-                """)
+            appendHydraNote(String(format: Chrome.localized("Not every task went out\n%d of the %d tasks in that block went to heads. The last %d did not: ask for them again once these report back."), Self.maxDelegatedTasks, delegations.count, dropped))
         }
         spawnWaitingHeads(launch: launch)
 
@@ -4276,11 +4345,11 @@ final class ThreadRuntime {
         let hasWaiting = hydraWaiting.contains { $0.batchID == batchID }
         if !refusals.isEmpty, !hasPending, !hasWaiting {
             hydraBatches[batchID] = nil
-            message.text = stripped.isEmpty ? "Asking for more heads." : stripped
+            message.text = stripped.isEmpty ? Chrome.localized("Asking for more heads.") : stripped
             entry.item.content = .assistant(message)
             saveRevision += 1
             scheduleSave()
-            return refuseBlock(refusals.joined(separator: "\n\n"), dropped: "Its continuation was refused, and it had been told so already.")
+            return refuseBlock(refusals.joined(separator: "\n\n"), dropped: Chrome.localized("Its continuation was refused, and it had been told so already."))
         }
         holdSentDelegationBlock(entry.id)
         settleBatches()
@@ -4358,7 +4427,7 @@ final class ThreadRuntime {
             guard case .assistant(var faded) = entry.item.content,
                   HydraPrompts.hasSentDelegationBlock(in: faded.text) else { return }
             faded.text = HydraPrompts.withoutDelegationBlock(faded.text)
-            if faded.text.isEmpty { faded.text = "Sent out heads." }
+            if faded.text.isEmpty { faded.text = Chrome.localized("Sent out heads.") }
             withAnimation(Chrome.panelSlide) { entry.item.content = .assistant(faded) }
             self.saveRevision += 1
             self.scheduleSave()
@@ -4374,7 +4443,7 @@ final class ThreadRuntime {
     /// the front of the lead's next turn, so a drop is never quieter than a refusal.
     private func refuseBlock(_ message: String, dropped: String) -> DelegationOutcome {
         guard hydraBudget.refuse(message) else {
-            appendHydraNote("No heads went out\n\(dropped) The block was dropped from the reply.")
+            appendHydraNote(String(format: Chrome.localized("No heads went out\n%@ The block was dropped from the reply."), dropped))
             return .none
         }
         Task { await ensureLoaded(); await startTurn(text: message, attachments: [], hydraHeads: []) }
@@ -4393,7 +4462,7 @@ final class ThreadRuntime {
         // per job, in the lead's timeline, rather than never.
         if let pair = app.hydraPair(for: thread), let note = app.hydraHeadsFallbackNote(of: pair), hydraFallbackNoted != pair.id {
             hydraFallbackNoted = pair.id
-            appendHydraNote("Hydra: \(note)")
+            appendHydraNote(String(format: Chrome.localized("Hydra: %@"), note))
         }
         while !hydraWaiting.isEmpty, launch?.hasRoom(running: runningHeads()) ?? true {
             let next = hydraWaiting.removeFirst()
@@ -4748,7 +4817,7 @@ final class ThreadRuntime {
         if let edits = update.edits { recordCurrentTurnEdits(edits) }
         noteToolMayWrite(update.kind)
         if entryIndex[id] == nil {
-            append(TimelineItem(id: id, turnID: turnIDForNewRows, content: .tool(ToolCall(kind: update.kind ?? .other, title: update.title ?? "Tool"))))
+            append(TimelineItem(id: id, turnID: turnIDForNewRows, content: .tool(ToolCall(kind: update.kind ?? .other, title: update.title ?? Chrome.localized("Tool")))))
         }
         guard let entry = entryIndex[id], case .tool(var call) = entry.item.content else { return }
         if let title = update.title, !title.isEmpty { call.title = title }

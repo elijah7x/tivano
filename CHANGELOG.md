@@ -8,6 +8,42 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-02
+
+### English
+
+### New features
+
+- Local control and Remote MCP are out of Alpha and no longer need its switch. Local control, with Install or repair CLI, now sits in Settings › General above Power; Remote MCP sits at the bottom of Settings › MCP. Each keeps the state it had in effect: a feature that was off because Alpha was off stays off.
+- A chat that has already started can switch to another provider's model or Hydra pair. The switch waits for the next message: until then a one-line note above the chat box says the handoff may lose context, and Undo restores the previous model, effort and Hydra choice with its session intact. When the message is sent, the new provider starts its own session with the recent conversation as text, and the chat marks where it took over. Switching is unavailable while a turn, a pending request or Hydra heads are still running.
+
+### Refinements
+
+- Provider errors, approval prompts, usage and reset details, tool-call rows in the timeline and model descriptions now appear in Chinese when the app is set to Chinese.
+- Interface wording is clearer and consistent in both languages. Chinese now uses one name per concept (子智能体, 主智能体, 对话, 服务商, 组合) and fixes mistranslations such as the “More” button and Creator mode, settings paths read “Settings › …” everywhere, and menus, notifications, update errors and Hydra merge notes that were still English in Chinese are translated.
+- Settings › Providers lists providers in a column with a status dot (ready, needs attention, not installed) and shows the selected provider's settings beside it, instead of stacking every provider down the page. An All providers entry at the top of the list shows every provider's settings at once. A search field in the title bar filters the list, and the provider's name and route now head its first card.
+- Settings › Models lists providers beside their catalogues, with the number of models chosen from each. Pick one provider to see only its models, or All models to choose across every provider at once. Each catalogue's provider heads its card; catalogues no longer fold.
+- With Hydra on, the composer's model picker shows pairs and models side by side, each column scrolling on its own, with the recent pair and recent model at the top of their columns. Search filters both, now including pairs by name, and rows are slightly more compact. Without pairs the picker stays a single column.
+
+### 简体中文
+
+### 新功能
+
+- 本地控制和远程 MCP 已移出实验室，不再受实验室总开关约束。本地控制（含“安装或修复 CLI”）移到设置 › 通用中“电源”上方，远程 MCP 移到设置 › MCP 最底部。各功能保持升级前实际生效的状态：此前因实验室关闭而未生效的功能仍保持关闭。
+- 已开始的对话可以改用其他服务商的模型或 Hydra 组合。切换会等到下一条消息才生效：在此之前，输入框上方会显示一行提示，说明接力可能有损耗，点“撤销”即可恢复原来的模型、思考强度和 Hydra 选择，原会话不受影响。消息发出后，新服务商会开启自己的会话，并以文字形式带上近期对话，对话中会标出从哪里开始接力。回合进行中、有待处理的请求或 Hydra heads 仍在运行时不能切换。
+
+### 优化改进
+
+- 中文界面下，各服务商的报错、审批提示、用量与重置明细、时间线里的工具调用行和模型简介也都显示为中文。
+- 界面文案更清晰、统一：中文每个概念只用一种叫法（子智能体、主智能体、对话、服务商、组合），修正“更多”按钮、创造模式等错译，设置路径统一写作“设置 › …”；中文界面下仍显示英文的菜单、通知、更新报错和 Hydra 合并提示均已翻译。
+- 设置 › 服务商改为左右两栏：左侧列出服务商并以状态点标示（已就绪、需要处理、未安装），右侧只显示所选服务商的设置，不再把所有服务商从上到下堆在一页。列表顶部的“全部服务商”可一次查看所有服务商的设置。标题栏的搜索框可筛选列表，服务商名称和接入方式移到第一张卡片的顶部。
+- 设置 › 模型改为左右两栏：左侧列出服务商及各自已选的模型数，选某个服务商只看它的模型，选“全部模型”可跨服务商一次挑选。每个模型目录的服务商名称放在卡片顶部，目录不再折叠。
+- Hydra 开启时，输入框的模型选择器改为左右两栏：左侧组合、右侧模型，各自滚动，最近用过的组合和模型分别置于各栏顶部。搜索同时筛选两栏，组合也可按名称搜索，行距略为紧凑。没有组合时仍为单栏。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.2.42] - 2026-11-02
 
 ### English

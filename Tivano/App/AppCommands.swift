@@ -83,7 +83,7 @@ struct AppCommands: Commands {
             // the queue would swallow the chord the card is asking for. On with nothing to
             // queue behind: the draft then just goes out (see `queueDraftAsFollowUp`),
             // rather than the chord doing nothing at all.
-            Button("Queue a chat") { runtime?.queueDraftAsFollowUp() }
+            Button("Queue message") { runtime?.queueDraftAsFollowUp() }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .queueChat))
                 .disabled(chatIsCovered || (runtime?.draftIsEmpty ?? true)
                     || !(runtime?.approvals.isEmpty ?? true))

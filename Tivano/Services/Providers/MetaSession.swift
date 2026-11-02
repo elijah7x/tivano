@@ -2,7 +2,7 @@ import Foundation
 
 /// Native Meta agent (Muse Spark): talks to https://api.meta.ai/v1/chat/completions
 /// directly (OpenAI-compatible Chat Completions) and executes coding tools locally,
-/// so no CLI install is needed — just a MODEL_API_KEY in Settings → Providers → Meta.
+/// so no CLI install is needed — just a MODEL_API_KEY in Settings › Providers › Meta.
 ///
 /// API reference: https://dev.meta.ai/docs/api-reference/
 /// Auth is `Authorization: Bearer $MODEL_API_KEY`. Models are the Muse Spark
@@ -51,26 +51,26 @@ final class MetaSession: OpenAICompatibleSession {
     override func friendlyError(_ message: String, statusCode: Int) -> String {
         let lower = message.lowercased()
         if statusCode == 401 || (lower.contains("invalid") && lower.contains("key")) || lower.contains("invalid_api_key") || lower.contains("authentication_error") {
-            return "Meta rejected the API key. Check it in Settings → Providers → Meta (MODEL_API_KEY from dev.meta.ai)."
+            return AppText.localized("Meta rejected the API key. Check it in Settings › Providers › Meta (MODEL_API_KEY from dev.meta.ai).")
         }
         if statusCode == 404 || lower.contains("model_not_found") || (lower.contains("model") && lower.contains("not exist")) {
-            return "Meta no longer offers that model. Pick Muse Spark 1.3 in the model picker."
+            return AppText.localized("Meta no longer offers that model. Pick Muse Spark 1.3 in the model picker.")
         }
         if statusCode == 429 || lower.contains("rate limit") || lower.contains("rate_limit_exceeded") {
-            return "Meta is rate-limited right now. Wait a moment and try again."
+            return AppText.localized("Meta is rate-limited right now. Wait a moment and try again.")
         }
         if statusCode == 504 || lower.contains("gateway_timeout") {
-            return "Meta timed out before finishing. Try again; long generations already stream."
+            return AppText.localized("Meta timed out before finishing. Try again; long generations already stream.")
         }
         if lower.contains("reasoning_effort") && lower.contains("none") {
-            return "Muse Spark always reasons; \"none\" is rejected. Pick Minimal or higher in the model picker."
+            return AppText.localized("Muse Spark always reasons; \"none\" is rejected. Pick Minimal or higher in the model picker.")
         }
         if lower.contains("balance") || lower.contains("insufficient") || lower.contains("quota") || lower.contains("billing") {
-            return "Meta reported a billing/quota problem. Check your Model API balance at dev.meta.ai, then try again."
+            return AppText.localized("Meta reported a billing/quota problem. Check your Model API balance at dev.meta.ai, then try again.")
         }
         if lower.contains("context") && (lower.contains("length") || lower.contains("window") || lower.contains("token")) {
-            return "The conversation no longer fits Meta's 1M-token context window. Start a new thread or compact first."
+            return AppText.localized("The conversation no longer fits Meta's 1M-token context window. Start a new thread or compact first.")
         }
-        return message.isEmpty ? "Meta stopped before finishing." : message
+        return message.isEmpty ? AppText.localized("Meta stopped before finishing.") : message
     }
 }

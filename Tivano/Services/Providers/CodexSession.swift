@@ -131,7 +131,7 @@ final class CodexSession: ProviderSession {
             resume["excludeTurns"] = true
             let result = try await requestThread(connection, "thread/resume", resume)
             guard let id = result["thread"]?["id"]?.string, id == resumeID else {
-                throw ProviderError.failed("Codex could not resume the original conversation.")
+                throw ProviderError.failed(AppText.localized("Codex could not resume the original conversation."))
             }
             threadID = id
             historyDirectory = workingDirectory
@@ -141,7 +141,7 @@ final class CodexSession: ProviderSession {
         }
         let result = try await requestThread(connection, "thread/start", params)
         guard let id = result["thread"]?["id"]?.string else {
-            throw ProviderError.failed("Codex did not start a thread.")
+            throw ProviderError.failed(AppText.localized("Codex did not start a thread."))
         }
         threadID = id
         activeModel = result["model"]?.string
@@ -236,7 +236,7 @@ final class CodexSession: ProviderSession {
                 "limit": 100, "sortDirection": "desc", "itemsView": "notLoaded",
             ])
             guard let turns = page["data"]?.array else {
-                throw ProviderError.failed("Codex did not return its conversation history.")
+                throw ProviderError.failed(AppText.localized("Codex did not return its conversation history."))
             }
             for turn in turns {
                 guard let id = turn["id"]?.string else { throw ProviderError.failed("Codex returned a turn without an ID.") }
@@ -245,10 +245,10 @@ final class CodexSession: ProviderSession {
                 if id == targetID { found = true }
             }
             let next = page["nextCursor"]?.string
-            guard next == nil || next != cursor else { throw ProviderError.failed("Codex could not page its conversation history.") }
+            guard next == nil || next != cursor else { throw ProviderError.failed(AppText.localized("Codex could not page its conversation history.")) }
             cursor = next
         } while cursor != nil && previousID == nil
-        guard found else { throw ProviderError.failed("Codex could not find the selected turn. The conversation was kept.") }
+        guard found else { throw ProviderError.failed(AppText.localized("Codex could not find the selected turn. The conversation was kept.")) }
         let result: JSONValue
         do {
             result = try await Self.deadlineRequest(connection, "thread/rollback", [
@@ -262,7 +262,7 @@ final class CodexSession: ProviderSession {
               let remaining = result["thread"]?["turns"]?.array,
               !remaining.contains(where: { $0["id"]?.string == targetID }),
               remaining.last?["id"]?.string == previousID else {
-            throw ProviderError.failed("Codex did not confirm the requested conversation rollback.")
+            throw ProviderError.failed(AppText.localized("Codex did not confirm the requested conversation rollback."))
         }
         turnID = nil
         return threadID
@@ -322,7 +322,7 @@ final class CodexSession: ProviderSession {
         params["excludeTurns"] = true
         let result = try await Self.deadlineRequest(connection, "thread/fork", .object(params))
         guard let id = result["thread"]?["id"]?.string, id != originalID else {
-            throw ProviderError.failed("Codex did not create a conversation at the revert point.")
+            throw ProviderError.failed(AppText.localized("Codex did not create a conversation at the revert point."))
         }
         do {
             let page = try await Self.deadlineRequest(connection, "thread/turns/list", [
@@ -331,7 +331,7 @@ final class CodexSession: ProviderSession {
             guard let turns = page["data"]?.array,
                   turns.first?["id"]?.string == previousID,
                   turns.first?["id"]?.string != targetID else {
-                throw ProviderError.failed("Codex did not confirm the reverted conversation history.")
+                throw ProviderError.failed(AppText.localized("Codex did not confirm the reverted conversation history."))
             }
             _ = try await Self.deadlineRequest(connection, "thread/archive", ["threadId": .string(originalID)])
         } catch {
@@ -649,7 +649,7 @@ final class CodexSession: ProviderSession {
                 planName: PlanLimitsReader.codexPlanName(plan),
                 windows: [],
                 resetCredits: resetCredits,
-                problem: "Codex reported no usage windows for this account.",
+                problem: "Codex reported no usage windows for this account.", // PlanLimits matches these words
                 problemKind: .noWindows
             )
         }
@@ -659,9 +659,9 @@ final class CodexSession: ProviderSession {
     private static func plainProblem(_ error: Error) -> String {
         let text = TextCleanup.singleLine(error.localizedDescription, limit: 300)
         if text.contains("token_expired") || text.contains("401") {
-            return "Codex's stored login has expired. Run `codex login` in a terminal, then check again."
+            return AppText.localized("Codex's stored login has expired. Run `codex login` in a terminal, then check again.")
         }
-        return text.isEmpty ? "Codex could not be asked for its usage." : text
+        return text.isEmpty ? AppText.localized("Codex could not be asked for its usage.") : text
     }
 
     /// The banked resets in a rate-limits answer: a count, plus the credits it described that are still spendable.
@@ -912,7 +912,7 @@ final class CodexSession: ProviderSession {
                 onEvent?(.requestResolved(id: id.key))
             }
         case "thread/compacted":
-            sink(.notice(Notice(level: .info, message: "Context compacted.")))
+            sink(.notice(Notice(level: .info, message: AppText.localized("Context compacted."))))
         default:
             break
         }
@@ -1114,26 +1114,26 @@ final class CodexSession: ProviderSession {
             return ToolCall(kind: .command, title: command)
         case "fileChange":
             let paths = (item["changes"]?.array ?? []).compactMap { $0["path"]?.string }
-            let title = paths.count == 1 ? ToolTitles.relativePath(paths[0], to: workingDirectory) : "Edit \(paths.count) files"
+            let title = paths.count == 1 ? ToolTitles.relativePath(paths[0], to: workingDirectory) : String(format: AppText.localized("Edit %d files"), paths.count)
             return ToolCall(kind: .edit, title: title)
         case "mcpToolCall":
             let server = item["server"]?.string ?? "MCP"
-            let tool = item["tool"]?.string ?? "tool"
+            let tool = item["tool"]?.string ?? AppText.localized("tool")
             let arguments = item["arguments"].map(\.compactString)
             return ToolCall(kind: .mcp, title: "\(server) · \(tool)", detail: arguments == "null" ? nil : arguments)
         case "dynamicToolCall":
-            return ToolCall(kind: .other, title: item["tool"]?.string ?? "Tool")
+            return ToolCall(kind: .other, title: item["tool"]?.string ?? AppText.localized("Tool"))
         case "webSearch":
-            return ToolCall(kind: .web, title: item["query"]?.string ?? "Web search")
+            return ToolCall(kind: .web, title: item["query"]?.string ?? AppText.localized("Web search"))
         case "collabAgentToolCall":
             let verb = switch item["tool"]?.string {
-            case "spawnAgent": "Send out a head"
-            case "sendInput", "sendMessage", "followupTask": "Brief a head"
-            case "wait": "Wait for heads"
-            case "closeAgent", "interruptAgent": "Recall a head"
-            case "resumeAgent": "Resume a head"
-            case "listAgents": "List heads"
-            default: "Agent"
+            case "spawnAgent": AppText.localized("Send out a head")
+            case "sendInput", "sendMessage", "followupTask": AppText.localized("Brief a head")
+            case "wait": AppText.localized("Wait for heads")
+            case "closeAgent", "interruptAgent": AppText.localized("Recall a head")
+            case "resumeAgent": AppText.localized("Resume a head")
+            case "listAgents": AppText.localized("List heads")
+            default: AppText.localized("Agent")
             }
             let brief = item["prompt"]?.string.map { TextCleanup.singleLine($0, limit: 90) }
             return ToolCall(kind: .agent, title: brief ?? verb, detail: brief == nil ? nil : verb)
@@ -1210,7 +1210,7 @@ final class CodexSession: ProviderSession {
     }
 
     static func errorMessage(_ error: JSONValue?) -> String {
-        guard let error else { return "Codex reported an error." }
+        guard let error else { return AppText.localized("Codex reported an error.") }
         let raw = error["message"]?.string ?? error.displayText
         if let nested = JSONValue.parse(raw),
            let message = nested["error"]?["message"]?.string ?? nested["message"]?.string {
@@ -1283,8 +1283,8 @@ final class CodexSession: ProviderSession {
             onEvent?(.question(QuestionRequest(id: id.key, questions: questions)))
         case "mcpServer/elicitation/request":
             connection?.respond(to: id, result: ["action": "decline"])
-            let server = params["serverName"]?.string ?? "An MCP server"
-            onEvent?(.notice(Notice(level: .warning, message: "\(server) asked for input, which Tivano cannot show yet.")))
+            let server = params["serverName"]?.string ?? AppText.localized("An MCP server")
+            onEvent?(.notice(Notice(level: .warning, message: String(format: AppText.localized("%@ asked for input, which Tivano cannot show yet."), server))))
         default:
             connection?.respond(to: id, errorCode: -32601, message: "Tivano does not support \(method).")
         }
@@ -1320,15 +1320,15 @@ final class CodexSession: ProviderSession {
     private static func describePermissions(_ permissions: JSONValue) -> String {
         var parts: [String] = []
         if let write = permissions["fileSystem"]?["write"]?.array, !write.isEmpty {
-            parts.append("Write to " + write.compactMap(\.string).joined(separator: ", "))
+            parts.append(String(format: AppText.localized("Write to %@"), write.compactMap(\.string).joined(separator: ", ")))
         }
         if let read = permissions["fileSystem"]?["read"]?.array, !read.isEmpty {
-            parts.append("Read " + read.compactMap(\.string).joined(separator: ", "))
+            parts.append(String(format: AppText.localized("Read %@"), read.compactMap(\.string).joined(separator: ", ")))
         }
         if permissions["network"]?["enabled"]?.bool == true {
-            parts.append("Network access")
+            parts.append(AppText.localized("Network access"))
         }
-        return parts.isEmpty ? "Additional permissions" : parts.joined(separator: " · ")
+        return parts.isEmpty ? AppText.localized("Additional permissions") : parts.joined(separator: " · ")
     }
 
     private func handleClose(_ tail: String) {

@@ -23,9 +23,9 @@ struct ProviderCredits: Sendable, Equatable {
     /// "Topped up $10.00 · Granted $2.34", or nil when the provider reports one number.
     var breakdownText: String? {
         var parts: [String] = []
-        if let monthly, monthly > 0 { parts.append("Monthly \(Self.money(monthly, currency: currency))") }
-        if let toppedUp, toppedUp > 0 { parts.append("Topped up \(Self.money(toppedUp, currency: currency))") }
-        if let granted, granted > 0 { parts.append("Granted \(Self.money(granted, currency: currency))") }
+        if let monthly, monthly > 0 { parts.append(String(format: String(localized: "Monthly %@"), Self.money(monthly, currency: currency))) }
+        if let toppedUp, toppedUp > 0 { parts.append(String(format: String(localized: "Topped up %@"), Self.money(toppedUp, currency: currency))) }
+        if let granted, granted > 0 { parts.append(String(format: String(localized: "Granted %@"), Self.money(granted, currency: currency))) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 

@@ -19,9 +19,7 @@ struct ModelsSettingsPage: View {
     /// The live grip reorder of a whole group card among the groups.
     @State private var groupDrag = RowDrag<UUID>()
     @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    /// Each provider section's expansion, keyed on the page so typing in the search
-    /// field — which rebuilds the sections — doesn't reset it. Absent means expanded.
-    @State private var providerExpansion: [ProviderKind: Bool] = [:]
+    @State private var catalogueSelection: ProviderKind? = nil
 
     /// The stack of model cards, which drag locations and drop frames are measured in.
     static let cardsSpace = "modelCards"
@@ -51,6 +49,7 @@ struct ModelsSettingsPage: View {
             }
         )
         let providers = searchQuery.isEmpty ? availableProviders : availableProviders.filter { matchingCatalogues[$0] != nil }
+        let selected = catalogueSelection.flatMap { providers.contains($0) ? $0 : nil }
         // Filtering is instant with no transitions: animating dozens of rows with blur on every
         // keystroke (and all of them again when clearing) is what made entries overlap and jump.
         // Lazy all the way down: expanded catalogues run to hundreds of rows, and the
@@ -130,7 +129,7 @@ struct ModelsSettingsPage: View {
                                             ChromeRowDivider()
                                             if block.pins.isEmpty {
                                                 HStack {
-                                                    Text("Empty. Right-click a model and choose Move to Group.")
+                                                    Text("Empty. Right-click a model and choose Move to group.")
                                                         .font(.ui(size: 11))
                                                         .foregroundStyle(Chrome.secondaryText)
                                                     Spacer(minLength: 8)
@@ -171,18 +170,35 @@ struct ModelsSettingsPage: View {
                 }
             }
 
-            // The provider catalogues are units of one list, not separate sections.
-            LazyVStack(alignment: .leading, spacing: Chrome.unitSpacing) {
-                ForEach(providers) { provider in
-                    ProviderModelsSection(
-                        provider: provider,
-                        query: trimmed,
-                        matchingCatalogue: matchingCatalogues[provider],
-                        isExpanded: Binding(
-                            get: { providerExpansion[provider] ?? true },
-                            set: { providerExpansion[provider] = $0 }
-                        )
-                    )
+            if !providers.isEmpty {
+                HStack(alignment: .modelCardTop, spacing: Chrome.sectionSpacing) {
+                    ModelProviderListColumn(providers: providers, selected: selected, pins: pins) {
+                        catalogueSelection = $0
+                    }
+                    .frame(width: 200)
+                    Group {
+                        if let selected {
+                            ProviderModelsSection(
+                                provider: selected,
+                                query: trimmed,
+                                matchingCatalogue: matchingCatalogues[selected],
+                                alignsCardTop: true
+                            )
+                            .id(selected)
+                        } else {
+                            // The first section sits outside the lazy stack so its card's
+                            // alignment guide reaches the two-column row.
+                            VStack(alignment: .leading, spacing: Chrome.unitSpacing) {
+                                catalogueSection(providers[0], query: trimmed, matches: matchingCatalogues[providers[0]], alignsCardTop: true)
+                                LazyVStack(alignment: .leading, spacing: Chrome.unitSpacing) {
+                                    ForEach(providers.dropFirst()) { provider in
+                                        catalogueSection(provider, query: trimmed, matches: matchingCatalogues[provider], alignsCardTop: false)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
@@ -203,6 +219,15 @@ struct ModelsSettingsPage: View {
             }, uniquingKeysWith: { first, _ in first })
             if rowHeights != updatedHeights { rowHeights = updatedHeights }
         }
+    }
+
+    private func catalogueSection(_ provider: ProviderKind, query: String, matches: [ModelOption]?, alignsCardTop: Bool) -> some View {
+        ProviderModelsSection(
+            provider: provider,
+            query: query,
+            matchingCatalogue: matches,
+            alignsCardTop: alignsCardTop
+        )
     }
 
     // MARK: - Reorder
@@ -553,9 +578,9 @@ private struct PinnedModelRow: View {
         .padding(.trailing, Chrome.rowControlTrailingPadding)
         .padding(.vertical, 6)
         .contextMenu {
-            Menu("Move to Group") {
+            Menu("Move to group") {
                 if sectionID != nil {
-                    Button("No Group") {
+                    Button("No group") {
                         withAnimation(Chrome.panelSlide) { settings.moveModel(pin, toSection: nil) }
                     }
                 }
@@ -688,11 +713,11 @@ private struct ModelGroupHeader: View {
         .onHover { isHovering = $0 }
         .contextMenu {
             Button("Rename") { beginEditing() }
-            Button("Move Up") {
+            Button("Move up") {
                 withAnimation(Chrome.panelSlide) { model.settings.moveModelSection(section.id, by: -1) }
             }
             .disabled(!canMoveUp)
-            Button("Move Down") {
+            Button("Move down") {
                 withAnimation(Chrome.panelSlide) { model.settings.moveModelSection(section.id, by: 1) }
             }
             .disabled(!canMoveDown)
@@ -760,15 +785,71 @@ private struct RowControl: View {
     }
 }
 
+private extension VerticalAlignment {
+    enum ModelCardTop: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat { context[.top] }
+    }
+
+    static let modelCardTop = VerticalAlignment(ModelCardTop.self)
+}
+
+private struct ModelCardTopAlignment: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.alignmentGuide(.modelCardTop) { $0[.top] }
+        } else {
+            content
+        }
+    }
+}
+
+private struct ModelProviderListColumn: View {
+    let providers: [ProviderKind]
+    let selected: ProviderKind?
+    let pins: [ModelPin]
+    let select: (ProviderKind?) -> Void
+
+    var body: some View {
+        ChromeCard {
+            VStack(spacing: 0) {
+                SidebarRow(title: "All models", isSelected: selected == nil,
+                           accessoryWidth: 24, action: { select(nil) }) {
+                    SidebarSymbol("square.grid.2x2")
+                } accessory: { _ in
+                    count(pins.count)
+                }
+                ForEach(providers) { provider in
+                    SidebarRow(title: provider.displayName, titleIsVerbatim: true,
+                               isSelected: selected == provider, accessoryWidth: 24,
+                               action: { select(provider) }) {
+                        ProviderIcon(provider: provider, size: Chrome.symbolSize)
+                    } accessory: { _ in
+                        count(pins.filter { $0.provider == provider }.count)
+                    }
+                }
+            }
+            .padding(Chrome.listInset)
+        }
+        .alignmentGuide(.modelCardTop) { $0[.top] }
+    }
+
+    @ViewBuilder private func count(_ value: Int) -> some View {
+        if value > 0 {
+            Text(verbatim: "\(value)")
+                .font(.ui(size: 11))
+                .foregroundStyle(Chrome.secondaryText)
+        }
+    }
+}
+
 private struct ProviderModelsSection: View {
     @Environment(AppModel.self) private var model
     let provider: ProviderKind
     var query = ""
     var matchingCatalogue: [ModelOption]?
-
-    /// Lives on the page (`providerExpansion`), so typing in the search field — which
-    /// rebuilds this section — doesn't reset it. Absent there means expanded.
-    @Binding var isExpanded: Bool
+    var alignsCardTop = false
 
     /// The lines showing their earlier versions, and whether the free and preview models show.
     @State private var openLineages: Set<String> = []
@@ -809,76 +890,79 @@ private struct ProviderModelsSection: View {
         let isFull = modelList.count >= AppSettings.modelListLimit
         let pinned = Set(modelList)
         let rows = rows(catalogue, pinned: pinned, isFiltering: isFiltering)
-        // Collapsed with nothing chosen closes the card outright.
-        let cardVisible = isExpanded || isFiltering || !rows.isEmpty
-        VStack(alignment: .leading, spacing: Chrome.unitHeaderSpacing) {
-            CollapsibleProviderHeader(provider: provider, isExpanded: $isExpanded, subject: "model list")
-            // Lazy, so only the rows on screen are built. Same fill and shape as ChromeCard.
-            LazyVStack(spacing: 0) {
-                if fullCatalogue.isEmpty {
-                    // The loading/empty row is the expanded state; collapsed closes it.
-                    ChromeReveal(isExpanded: cardVisible) {
-                        ChromeRow(title: registry.loadingCatalogs.contains(provider) ? "Loading models…" : "No models loaded") {
-                            Button("Load models") {
-                                Task { await registry.loadCatalog(provider, force: true) }
-                            }
-                            .buttonStyle(.glass)
-                            .disabled(registry.loadingCatalogs.contains(provider))
-                        }
+        // Lazy, so only the rows on screen are built. Same fill and shape as ChromeCard.
+        LazyVStack(spacing: 0) {
+            HStack(spacing: 12) {
+                ProviderIcon(provider: provider, size: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: provider.displayName)
+                        .font(.ui(.title3, weight: .semibold))
+                        .foregroundStyle(Chrome.primaryText)
+                        .accessibilityAddTraits(.isHeader)
+                    if !provider.routeSummary.isEmpty {
+                        Text(verbatim: provider.routeSummary)
+                            .font(.ui(.subheadline))
+                            .foregroundStyle(Chrome.secondaryText)
                     }
-                    .clipped()
-                    .disabled(!cardVisible)
-                    .allowsHitTesting(cardVisible)
-                    .accessibilityHidden(!cardVisible)
-                } else {
-                    // Only visible rows are built: catalogues run to hundreds of models, and
-                    // mounting every hidden one (each with its own tooltip tracking area)
-                    // made the page re-measure them all on every hover, keystroke and resize.
-                    ForEach(rows) { row in
-                        if row.id != rows.first?.id, !isGroupHeading(row) {
-                            ChromeRowDivider()
-                        }
-                        switch row {
-                        case .group(let name):
-                            Text(verbatim: name)
-                                .font(.ui(.subheadline, weight: .semibold))
-                                .foregroundStyle(Chrome.secondaryText)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 16)
-                                .padding(.top, row.id == rows.first?.id ? 12 : 16)
-                                .padding(.bottom, 2)
-                                .accessibilityAddTraits(.isHeader)
-                        case .model(let option, let earlier, let lineage):
-                            modelRow(option, earlier: earlier, lineage: lineage, pinned: pinned, isFull: isFull, isFiltering: isFiltering)
-                        case .trials(let count):
-                            ChromeRow(title: "Free and preview models", detail: String(format: Chrome.localized("%lld models"), count)) {
-                                disclosure(isOpen: showsTrials, label: nil, show: "Show free and preview models", hide: "Hide free and preview models") {
-                                    showsTrials.toggle()
-                                }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            ChromeRowDivider()
+            if fullCatalogue.isEmpty {
+                ChromeRow(title: registry.loadingCatalogs.contains(provider) ? "Loading models…" : "No models loaded") {
+                    Button("Load models") {
+                        Task { await registry.loadCatalog(provider, force: true) }
+                    }
+                    .buttonStyle(.glass)
+                    .disabled(registry.loadingCatalogs.contains(provider))
+                }
+            } else {
+                // Only visible rows are built: catalogues run to hundreds of models, and
+                // mounting every hidden one (each with its own tooltip tracking area)
+                // made the page re-measure them all on every hover, keystroke and resize.
+                ForEach(rows) { row in
+                    if row.id != rows.first?.id, !isGroupHeading(row) {
+                        ChromeRowDivider()
+                    }
+                    switch row {
+                    case .group(let name):
+                        Text(verbatim: name)
+                            .font(.ui(.subheadline, weight: .semibold))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.top, row.id == rows.first?.id ? 12 : 16)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                    case .model(let option, let earlier, let lineage):
+                        modelRow(option, earlier: earlier, lineage: lineage, pinned: pinned, isFull: isFull, isFiltering: isFiltering)
+                    case .trials(let count):
+                        ChromeRow(title: "Free and preview models", detail: String(format: Chrome.localized("%lld models"), count)) {
+                            disclosure(isOpen: showsTrials, label: nil, show: "Show free and preview models", hide: "Hide free and preview models") {
+                                showsTrials.toggle()
                             }
-                        case .fusion(let count):
-                            ChromeRow(title: "Fusion pairings", detail: String(format: Chrome.localized("%lld pairings"), count)) {
-                                disclosure(isOpen: showsFusion, label: nil, show: "Show Fusion pairings", hide: "Hide Fusion pairings") {
-                                    showsFusion.toggle()
-                                }
+                        }
+                    case .fusion(let count):
+                        ChromeRow(title: "Fusion pairings", detail: String(format: Chrome.localized("%lld pairings"), count)) {
+                            disclosure(isOpen: showsFusion, label: nil, show: "Show Fusion pairings", hide: "Hide Fusion pairings") {
+                                showsFusion.toggle()
                             }
                         }
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
-                    .fill(Chrome.overlay(0.03))
-            )
-            .clipShape(RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous))
-            // Search re-filters instantly, typing and clearing alike; header toggles
-            // still animate (their transaction never touches `query`).
-            .animation(nil, value: query)
-            // Collapsed rows are neither tappable nor in the accessibility tree.
-            .allowsHitTesting(cardVisible)
-            .accessibilityHidden(!cardVisible)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
+                .fill(Chrome.overlay(0.03))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous))
+        // Search re-filters instantly, typing and clearing alike.
+        .animation(nil, value: query)
+        .modifier(ModelCardTopAlignment(enabled: alignsCardTop))
         .task { await registry.loadCatalog(provider) }
     }
 
@@ -921,7 +1005,6 @@ private struct ProviderModelsSection: View {
         if isFiltering {
             return catalogue.map { .model($0) }
         }
-        guard isExpanded else { return catalogue.filter(isPinned).map { .model($0) } }
         guard catalogue.count > Self.foldingThreshold else { return catalogue.map { .model($0) } }
         // Fusion pairings fold into one row of their own; a pinned one stays a normal row.
         let fusion = catalogue.filter { Self.isFusion($0) && !isPinned($0) }
@@ -1052,50 +1135,5 @@ private final class LineageCache {
             cached = ModelFamilies.lineages(catalogue)
         }
         return cached
-    }
-}
-
-/// The disclosure header over one provider's settings or model card.
-struct CollapsibleProviderHeader: View {
-    let provider: ProviderKind
-    @Binding var isExpanded: Bool
-    /// What the disclosure shows, named in the help and the accessibility hint.
-    let subject: String
-    var detail: String? = nil
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button {
-            withAnimation(Chrome.panelSlide) { isExpanded.toggle() }
-        } label: {
-            HStack(spacing: 8) {
-                ProviderIcon(provider: provider, size: 16)
-                    .foregroundStyle(Chrome.primaryText)
-                Text(verbatim: provider.displayName)
-                    .font(.ui(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                DisclosureChevron(collapsed: !isExpanded, hovering: isHovering)
-                    .foregroundStyle(Chrome.secondaryText)
-                Spacer(minLength: detail == nil ? 0 : 8)
-                if let detail {
-                    Text(verbatim: detail)
-                        .font(.ui(size: 11))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .layoutPriority(-1)
-                }
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(ChromeQuietButtonStyle())
-        .frame(height: 22)
-        .onHover { isHovering = $0 }
-        .help(Text(verbatim: String(format: Chrome.localized(isExpanded ? "Hide the %@" : "Show the %@"), Chrome.localized(subject))))
-        .accessibilityLabel(Text(verbatim: detail.map { provider.displayName + ", " + $0 } ?? provider.displayName))
-        .accessibilityValue(Text(verbatim: Chrome.localized(isExpanded ? "Expanded" : "Collapsed")))
-        .accessibilityHint(Text(verbatim: String(format: Chrome.localized("Shows or hides the %@"), Chrome.localized(subject))))
-        .accessibilityAddTraits(.isHeader)
     }
 }

@@ -658,7 +658,9 @@ struct HydraBriefRow: View {
             entry.turnID != nil && runtime.entries.contains { $0.turnID == entry.turnID && $0.id != entry.id }
         }
         let cooking = !hasOutput && runtime.isRunning
-        let title = cooking ? "\(persona.name) is starting to cook…" : "\(persona.name)'s brief"
+        let title = cooking
+            ? String(format: Chrome.localized("%@ is starting to cook…"), persona.name)
+            : String(format: Chrome.localized("%@'s brief"), persona.name)
         VStack(alignment: .trailing, spacing: 6) {
             if !message.attachments.isEmpty {
                 AttachmentStrip(attachments: message.attachments)
@@ -862,7 +864,8 @@ struct HydraDelegationBlock: View {
                 .foregroundStyle(Chrome.secondaryText)
                 .lineLimit(1)
                 .padding(.leading, 2)
-                .accessibilityLabel(Text("in \(project)"))
+                // Its own key: "in %@" already means a duration elsewhere in the catalog.
+                .accessibilityLabel(Text("goes to \(project)"))
             }
         }
         .transition(.opacity)
@@ -1155,7 +1158,9 @@ struct HydraMergeRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: outcome?.title ?? String(format: Chrome.localized("Merging the team's work: %@"), stage)))
         .onChange(of: isMerging) { wasMerging, merging in
-            guard wasMerging, !merging, let outcome, outcome.title.contains("Hydra merged") else { return }
+            // Whether the work reached the remote is kept beside the note (its words are
+            // localized), so the track lights on the outcome, not on its title.
+            guard wasMerging, !merging, outcome != nil, runtime.hydraMergeSucceeded == true else { return }
             flourish = true
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(1100))
@@ -2237,6 +2242,39 @@ private enum DiffDetailCache {
 }
 
 enum ToolPresentation {
+    /// Titles a provider gives a call that carries no subject of its own, only the
+    /// tool's own name ("Read file", "Run command", "Search the web"). The row's verb
+    /// already says what happened, in the user's language, so the title goes instead of
+    /// standing beside it in English. Matched whole, never on the word inside a path, a
+    /// command or a search pattern. Bare nouns ("output", "page") stay out: a call on a
+    /// file of that name would lose its subject.
+    private static let restatingTitles: Set<String> = [
+        "read", "read file", "read files", "read image", "view file",
+        "file info", "get file info", "cat", "edit", "edit file", "edit files", "write",
+        "write file", "write files", "create", "create file", "edit notebook", "apply patch",
+        "patch", "multiedit", "search", "search files", "find files", "list files",
+        "list directory", "list folder", "glob", "grep", "find", "fetch", "fetch page",
+        "fetch url", "search the web", "web search", "browse", "browse page", "webfetch",
+        "run command", "run shell command", "execute command", "shell command", "bash",
+        "shell", "execute", "subagent", "agent", "task", "delegate",
+        "use tool",
+    ]
+
+    /// Titles whose own action the row's kind has no verb for ("Monitor command",
+    /// "Create pull request"): said whole, rather than after "Used".
+    private static let actionTitles: [String: (running: String, done: String)] = [
+        "create pull request": ("Creating a pull request", "Created a pull request"),
+        "generate image": ("Generating an image", "Generated an image"),
+        "sql query": ("Running a SQL query", "Ran a SQL query"),
+        "stop shell": ("Stopping the shell task", "Stopped the shell task"),
+        "monitor command": ("Monitoring the command", "Monitored the command"),
+        "review": ("Reviewing the change", "Reviewed the change"),
+    ]
+
+    /// Titles the agent's own code already wrote in the user's language ("Shell tasks",
+    /// "Stop shell", "Agent output"): said as they are, never behind another verb.
+    private static let writtenTitles = ["Shell output", "Shell tasks", "Stop shell", "Agent output", "Image"]
+
     /// The row's text run: verb plus subject. Agents that title a call with the
     /// tool's own name ("Edit file", "Write file") would read "Edited Edit file" or
     /// "Editing Write file" — a leading word that only restates the kind goes, so it
@@ -2252,12 +2290,36 @@ enum ToolPresentation {
         case .agent: ["delegate", "agent", "task"]
         case .other: ["use"]
         }
-        var subject = call.title
-        let words = call.title.split(separator: " ", maxSplits: 1)
+        let title = call.title.trimmed
+        guard !title.isEmpty else { return verb(for: call) }
+        let lowered = title.lowercased()
+        if restatingTitles.contains(lowered) { return verb(for: call) }
+        if let action = actionTitles[lowered] {
+            return Chrome.localized(call.status == .running ? action.running : action.done)
+        }
+        if writtenTitles.contains(where: { Chrome.localized($0) == title }) { return title }
+        // "Skill · brainstorming": the leading word names what kind of tool it was, in
+        // the user's language; the name after it stays as the provider wrote it.
+        if let range = title.range(of: " · ") {
+            let prefix = String(title[..<range.lowerBound]).trimmed
+            let rest = String(title[range.upperBound...]).trimmed
+            if !rest.isEmpty, ["Skill", "Rule", "Command"].contains(prefix) { return Chrome.localized(prefix) + " · " + rest }
+        }
+        var subject = title
+        let words = title.split(separator: " ", maxSplits: 1)
         if let first = words.first?.lowercased(), roots.contains(first) {
             subject = words.count > 1 ? String(words[1]) : ""
         }
+        if let counted = countedFiles(subject) { subject = counted }
         return [verb(for: call), subject].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// "3 files" left after the tool's own name ("Edit 3 files"): the count, from the
+    /// same key the turn's card counts files with.
+    private static func countedFiles(_ subject: String) -> String? {
+        let words = subject.split(separator: " ")
+        guard words.count == 2, let count = Int(words[0]), ["file", "files"].contains(words[1].lowercased()) else { return nil }
+        return count == 1 ? Chrome.localized("1 file") : String(format: Chrome.localized("%d files"), count)
     }
 
     static func verb(for call: ToolCall) -> String {

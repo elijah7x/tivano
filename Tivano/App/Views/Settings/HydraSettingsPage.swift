@@ -137,7 +137,7 @@ struct HydraSettingsPage: View {
                         drag = RowDrag()
                     }
                 }
-                Text("Pairs sit at the top of the model picker: a tap puts the chat in one. A pair can use lead and head models from different providers. Right-click a project in the sidebar to start each of its new chats on one pair.")
+                Text("Pairs sit at the top of the model picker: a click puts the chat in one. A pair can use lead and head models from different providers. Right-click a project in the sidebar to start each of its new chats on one pair.")
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
                     .padding(.horizontal, 4)

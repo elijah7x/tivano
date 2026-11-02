@@ -297,7 +297,7 @@ final class ACPSession: ProviderSession {
             )
         }
         guard let sessionID else {
-            throw ProviderError.failed("\(configuration.provider.displayName) did not start a session.")
+            throw ProviderError.failed(String(format: AppText.localized("%@ did not start a session."), configuration.provider.displayName))
         }
         try Task.checkCancellation()
         guard !isStopping, !connection.isClosed else { throw ProviderError.notRunning }
@@ -432,7 +432,7 @@ final class ACPSession: ProviderSession {
     }
 
     func compact() async throws {
-        throw ProviderError.failed("\(configuration.provider.displayName) compacts its own context.")
+        throw ProviderError.failed(String(format: AppText.localized("%@ compacts its own context."), configuration.provider.displayName))
     }
 
     func resolveApproval(_ requestID: String, optionID: String) {
@@ -545,7 +545,7 @@ final class ACPSession: ProviderSession {
     }
 
     private static var dshAPIKeyRequired: ProviderError {
-        .failed(AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings → Providers → DeepSeek."))
+        .failed(AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings › Providers › DeepSeek."))
     }
 
     private static var miniMaxAuthenticationRequired: ProviderError {
@@ -1458,7 +1458,7 @@ final class ACPSession: ProviderSession {
             }
             onEvent?(.turnCompleted(status: .failed, error: detail))
         } else if stopReason == "refusal" {
-            onEvent?(.turnCompleted(status: .failed, error: "The agent declined this request."))
+            onEvent?(.turnCompleted(status: .failed, error: AppText.localized("The agent declined this request.")))
         } else if configuration.provider == .minimaxCode, stopReason != "end_turn" {
             let message = stopReason == "max_tokens" || stopReason == "max_turn_requests"
                 ? "MiniMax Code stopped at a limit before completing the turn."
@@ -1495,7 +1495,7 @@ final class ACPSession: ProviderSession {
             return
         }
         if promptActive {
-            finishPrompt(nil, error: ProviderError.failed(TextCleanup.lastLines(tail) ?? "The agent exited."))
+            finishPrompt(nil, error: ProviderError.failed(TextCleanup.lastLines(tail) ?? AppText.localized("The agent exited.")))
         }
         guard !isStopping else { return }
         onEvent?(.exited(error: TextCleanup.lastLines(tail)))
@@ -1802,14 +1802,14 @@ final class ACPSession: ProviderSession {
 
     private static func fallbackTitle(_ kind: ToolCall.Kind) -> String {
         switch kind {
-        case .command: "Run command"
-        case .read: "Read file"
-        case .edit: "Edit file"
-        case .search: "Search"
-        case .web: "Fetch"
-        case .mcp: "Tool"
-        case .agent: "Agent"
-        case .other: "Tool"
+        case .command: AppText.localized("Run command")
+        case .read: AppText.localized("Read file")
+        case .edit: AppText.localized("Edit file")
+        case .search: AppText.localized("Search")
+        case .web: AppText.localized("Fetch")
+        case .mcp: AppText.localized("Tool")
+        case .agent: AppText.localized("Agent")
+        case .other: AppText.localized("Tool")
         }
     }
 

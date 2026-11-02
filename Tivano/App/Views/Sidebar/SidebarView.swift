@@ -485,7 +485,7 @@ struct SidebarView: View {
             sectionHeader(section, isFirstInList: section == .projects)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { rowHeights.note(item.id, $0) }
         case .todayHeader:
-            Text(verbatim: Chrome.localized("Today"))
+            Text(verbatim: Chrome.localized("Today's focus"))
                 .font(.ui(.callout, weight: .semibold))
                 .foregroundStyle(Chrome.secondaryText)
                 .padding(.horizontal, Chrome.rowHorizontalPadding)

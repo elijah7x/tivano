@@ -18,6 +18,6 @@ struct HydraPairMark: View {
                 .foregroundStyle(Chrome.primaryText.opacity(0.8))
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("\(lead.displayName) lead, \(heads.displayName) heads"))
+        .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("%@ lead, %@ heads"), lead.displayName, heads.displayName)))
     }
 }

@@ -195,6 +195,7 @@ final class AppSettings {
         static let alphaDecisionsEnabled = "alphaDecisionsEnabled"
         static let externalControlEnabled = "externalControlEnabled"
         static let remoteMCPEnabled = "remoteMCPEnabled"
+        static let controlLeftAlpha = "controlLeftAlpha"
         static let remoteMCPPublicURL = "remoteMCPPublicURL"
         static let remoteMCPPort = "remoteMCPPort"
         static let remoteMCPFullAccess = "remoteMCPFullAccess"
@@ -422,7 +423,6 @@ final class AppSettings {
     var alphaEnabled: Bool {
         didSet {
             defaults.set(alphaEnabled, forKey: Key.alphaEnabled)
-            onExternalControlChanged?()
         }
     }
 
@@ -450,7 +450,7 @@ final class AppSettings {
             onExternalControlChanged?()
         }
     }
-    var isExternalControlEnabled: Bool { alphaEnabled && externalControlEnabled }
+    var isExternalControlEnabled: Bool { externalControlEnabled }
 
     var remoteMCPEnabled: Bool {
         didSet {
@@ -465,7 +465,7 @@ final class AppSettings {
     var remoteMCPPort: Int {
         didSet { defaults.set(remoteMCPPort, forKey: Key.remoteMCPPort) }
     }
-    var isRemoteMCPEnabled: Bool { alphaEnabled && remoteMCPEnabled }
+    var isRemoteMCPEnabled: Bool { remoteMCPEnabled }
     /// Default false. Only threads Remote MCP creates while it is on start in Full access;
     /// existing threads keep their permissions.
     var remoteMCPFullAccess: Bool {
@@ -1015,8 +1015,18 @@ final class AppSettings {
             voiceEnabled = defaults.bool(forKey: Key.voiceEnabled)
         }
         alphaDecisionsEnabled = defaults.bool(forKey: Key.alphaDecisionsEnabled)
-        externalControlEnabled = defaults.bool(forKey: Key.externalControlEnabled)
-        remoteMCPEnabled = defaults.bool(forKey: Key.remoteMCPEnabled)
+        // Local control and Remote MCP used to need Alpha too; keep what was in effect.
+        var storedExternalControl = defaults.bool(forKey: Key.externalControlEnabled)
+        var storedRemoteMCP = defaults.bool(forKey: Key.remoteMCPEnabled)
+        if !defaults.bool(forKey: Key.controlLeftAlpha) {
+            storedExternalControl = storedAlphaEnabled && storedExternalControl
+            storedRemoteMCP = storedAlphaEnabled && storedRemoteMCP
+            defaults.set(storedExternalControl, forKey: Key.externalControlEnabled)
+            defaults.set(storedRemoteMCP, forKey: Key.remoteMCPEnabled)
+            defaults.set(true, forKey: Key.controlLeftAlpha)
+        }
+        externalControlEnabled = storedExternalControl
+        remoteMCPEnabled = storedRemoteMCP
         remoteMCPPublicURL = defaults.string(forKey: Key.remoteMCPPublicURL) ?? ""
         remoteMCPPort = defaults.integer(forKey: Key.remoteMCPPort)
         remoteMCPFullAccess = defaults.bool(forKey: Key.remoteMCPFullAccess)

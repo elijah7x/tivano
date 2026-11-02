@@ -215,6 +215,8 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 
     /// API-key providers talk to their cloud API directly instead of a local CLI.
+    var restoresFromTextTranscript: Bool { isAPIKeyBased }
+
     var isAPIKeyBased: Bool { self == .deepseek || self == .meta || self == .zai }
 
     /// Driven over the Agent Client Protocol by `ACPSession`.

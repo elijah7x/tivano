@@ -95,7 +95,7 @@ struct WallpaperCard: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.message = Chrome.localized("Choose a picture for the window")
-        panel.prompt = Chrome.localized("Use as Wallpaper")
+        panel.prompt = Chrome.localized("Use as wallpaper")
         if let window = NSApp.keyWindow {
             panel.beginSheetModal(for: window) { response in
                 if response == .OK, let url = panel.url {

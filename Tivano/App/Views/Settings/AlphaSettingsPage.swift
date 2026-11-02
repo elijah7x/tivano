@@ -28,7 +28,7 @@ struct AlphaSettingsPage: View {
                         Text("Alpha")
                             .font(.ui(.title3, weight: .semibold))
                             .foregroundStyle(Chrome.primaryText)
-                        Text(verbatim: Chrome.localized("Features here are early versions and may be unstable. Turning Alpha off disables local control and remote MCP. Individual feature choices are kept."))
+                        Text(verbatim: Chrome.localized("Features here are early versions and may be unstable. Turning Alpha off disables them. Individual feature choices are kept."))
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -60,21 +60,6 @@ struct AlphaSettingsPage: View {
                     ChromeRowDivider()
                     DecisionLedgerRow()
                 }
-            }
-        }
-        .modifier(AlphaGated(isOn: settings.alphaEnabled))
-        ChromeSection(title: "Local control") {
-            ChromeCard {
-                LocalControlSettingsRows()
-            }
-            .modifier(AlphaGated(isOn: settings.alphaEnabled))
-            // The command can be installed or removed with Alpha off: installing it never
-            // turns local control on.
-            CLIInstallationSettings()
-        }
-        ChromeSection(title: "Remote MCP") {
-            ChromeCard {
-                RemoteMCPSettingsRows()
             }
         }
         .modifier(AlphaGated(isOn: settings.alphaEnabled))

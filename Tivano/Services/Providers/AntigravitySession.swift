@@ -145,7 +145,7 @@ final class AntigravitySession: ProviderSession {
         guard let continuation = initContinuation else { return }
         initContinuation = nil
         process?.terminate()
-        continuation.resume(throwing: ProviderError.failed("Antigravity did not answer. Is `agy` signed in? Run `agy` once in Terminal."))
+        continuation.resume(throwing: ProviderError.failed(AppText.localized("Antigravity did not answer. Is `agy` signed in? Run `agy` once in Terminal.")))
     }
 
     func send(_ input: TurnInput) async throws {
@@ -178,7 +178,7 @@ final class AntigravitySession: ProviderSession {
     }
 
     func compact() async throws {
-        throw ProviderError.failed("Antigravity manages its own context.")
+        throw ProviderError.failed(AppText.localized("Antigravity manages its own context."))
     }
 
     func resolveApproval(_ requestID: String, optionID: String) {}
@@ -237,7 +237,7 @@ final class AntigravitySession: ProviderSession {
             // Errors ride on the `error` field (the documented shape) as well
             // as an `ERROR` state, so either ends the call as a failure.
             if state == "ERROR" || (state == "DONE" && error != nil) {
-                let message = error ?? "The tool failed."
+                let message = error ?? AppText.localized("The tool failed.")
                 let status: ToolCall.Status = Self.isDenied(message) ? .declined : .failed
                 onEvent?(.toolUpdated(id: id, update: ToolUpdate(output: message, status: status, edits: finishEdit(id, parameters: parameters))))
             } else if state == "DONE" {
@@ -321,7 +321,7 @@ final class AntigravitySession: ProviderSession {
             let names = denied.joined(separator: ", ")
             onEvent?(.notice(Notice(
                 level: .warning,
-                message: "Antigravity held back \(names) without prompting. Use Full access or add an allow rule in the CLI's settings."
+                message: String(format: AppText.localized("Antigravity held back %@ without prompting. Use Full access or add an allow rule in the CLI's settings."), names)
             )))
         }
         if let id = result["conversation_id"]?.string, !id.isEmpty {
@@ -336,7 +336,7 @@ final class AntigravitySession: ProviderSession {
                 // Stopped for a permission nobody could grant headless, with actions held
                 // back: reported as a failure so a head's lead hears it was starved of
                 // permissions rather than reading a clean completion.
-                onEvent?(.turnCompleted(status: .failed, error: "Antigravity held back \(denied.joined(separator: ", ")) waiting for a permission it could not ask for. Use Full access for this chat."))
+                onEvent?(.turnCompleted(status: .failed, error: String(format: AppText.localized("Antigravity held back %@ waiting for a permission it could not ask for. Use Full access for this chat."), denied.joined(separator: ", "))))
             case "SUCCESS", "WAITING":
                 // WAITING: the agent stopped to ask something it cannot ask
                 // headless; the turn is over and the reply says what it needs.
@@ -345,7 +345,7 @@ final class AntigravitySession: ProviderSession {
                 onEvent?(.turnCompleted(status: .interrupted, error: nil))
             default:
                 let error = result["error"]?.string
-                onEvent?(.turnCompleted(status: .failed, error: (error?.isEmpty == false ? error : "Antigravity stopped before finishing.")))
+                onEvent?(.turnCompleted(status: .failed, error: (error?.isEmpty == false ? error : AppText.localized("Antigravity stopped before finishing."))))
             }
         }
         interruptRequested = false
@@ -355,7 +355,7 @@ final class AntigravitySession: ProviderSession {
         if let continuation = initContinuation {
             initContinuation = nil
             let tail = process?.errorTail ?? ""
-            continuation.resume(throwing: ProviderError.failed(authHint(in: tail) ?? (TextCleanup.lastLines(tail) ?? "Antigravity exited.")))
+            continuation.resume(throwing: ProviderError.failed(authHint(in: tail) ?? (TextCleanup.lastLines(tail) ?? AppText.localized("Antigravity exited."))))
         }
         if turnActive {
             turnActive = false
@@ -363,7 +363,7 @@ final class AntigravitySession: ProviderSession {
                 onEvent?(.turnCompleted(status: .interrupted, error: nil))
             } else {
                 let tail = process?.errorTail ?? ""
-                onEvent?(.turnCompleted(status: .failed, error: authHint(in: tail) ?? TextCleanup.lastLines(tail) ?? "Antigravity exited."))
+                onEvent?(.turnCompleted(status: .failed, error: authHint(in: tail) ?? TextCleanup.lastLines(tail) ?? AppText.localized("Antigravity exited.")))
             }
             interruptRequested = false
         }
@@ -375,7 +375,7 @@ final class AntigravitySession: ProviderSession {
         let lowered = text.lowercased()
         guard lowered.contains("authentication required") || lowered.contains("not signed in")
             || lowered.contains("unauthenticated") || (lowered.contains("login") && lowered.contains("agy")) else { return nil }
-        return "Antigravity is not signed in. Run `agy` once in Terminal to sign in."
+        return AppText.localized("Antigravity is not signed in. Run `agy` once in Terminal to sign in.")
     }
 
     // MARK: - Model and Effort Normalization
@@ -449,7 +449,7 @@ final class AntigravitySession: ProviderSession {
             currentID = json["command"]?["data"]?["id"]?.string
         }
         guard let output = models?.stdout, let text = String(data: output, encoding: .utf8) else {
-            throw ShellError("`agy models` produced no output.")
+            throw ShellError(AppText.localized("`agy models` produced no output."))
         }
 
         var grouped: [String: (name: String, efforts: [String], isDefault: Bool)] = [:]
@@ -496,7 +496,7 @@ final class AntigravitySession: ProviderSession {
             ))
         }
 
-        guard !list.isEmpty else { throw ShellError("`agy models` listed no models.") }
+        guard !list.isEmpty else { throw ShellError(AppText.localized("`agy models` listed no models.")) }
         if !list.contains(where: \.isDefault), let first = list.first {
             list[list.startIndex] = ModelOption(
                 id: first.id, name: first.name, detail: first.detail,
@@ -601,7 +601,7 @@ final class AntigravitySession: ProviderSession {
         if let remaining = data?["remaining_credits"]?.int {
             return PlanLimits.Window(
                 id: "ai-credits",
-                title: "AI credits · \(remaining) remaining",
+                title: String(format: AppText.localized("AI credits · %d remaining"), remaining),
                 percent: remaining > 0 ? 0 : 100,
                 resetsAt: nil
             )
@@ -613,7 +613,7 @@ final class AntigravitySession: ProviderSession {
                   let remaining = Int(parts[1]) else { continue }
             return PlanLimits.Window(
                 id: "ai-credits",
-                title: "AI credits · \(remaining) remaining",
+                title: String(format: AppText.localized("AI credits · %d remaining"), remaining),
                 percent: remaining > 0 ? 0 : 100,
                 resetsAt: nil
             )

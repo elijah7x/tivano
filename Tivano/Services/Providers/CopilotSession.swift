@@ -290,7 +290,7 @@ final class CopilotSession: ProviderSession {
         let points = listed["points"]?.array ?? []
         // One point per user message; rewinding to a point drops that message and everything after it.
         guard points.count >= turns, let eventID = points[points.count - turns]["eventId"]?.string else {
-            throw ProviderError.failed("Copilot has no rewind point for that turn.")
+            throw ProviderError.failed(AppText.localized("Copilot has no rewind point for that turn."))
         }
         let result = try await Self.deadlineRequest(connection, "session.history.rewind", [
             "sessionId": .string(sessionID),
@@ -457,10 +457,11 @@ final class CopilotSession: ProviderSession {
             guard let id = model["id"]?.string, model["policy"]?["state"]?.string != "disabled" else { continue }
             var details: [String] = []
             if let multiplier = model["billing"]?["multiplier"]?.double {
-                details.append(multiplier == multiplier.rounded() ? "\(Int(multiplier))× premium requests" : "\(multiplier)× premium requests")
+                let amount = multiplier == multiplier.rounded() ? String(Int(multiplier)) : String(multiplier)
+                details.append(String(format: AppText.localized("%@× premium requests"), amount))
             }
             if model["policy"]?["state"]?.string == "unconfigured" {
-                details.append("Enable it in your GitHub Copilot settings first")
+                details.append(AppText.localized("Enable it in your GitHub Copilot settings first"))
             }
             models.append(ModelOption(
                 id: id,
@@ -484,7 +485,7 @@ final class CopilotSession: ProviderSession {
         var account = auth["login"]?.string
         // Signed in to GitHub without a Copilot plan: the turn would fail with HTTP 403.
         if auth["copilotUser"]?["access_type_sku"]?.string == "no_access" {
-            account = (account ?? "GitHub") + " · no Copilot access"
+            account = String(format: AppText.localized("%@ · no Copilot access"), account ?? "GitHub")
         }
         return .signedIn(account)
     }
@@ -494,7 +495,7 @@ final class CopilotSession: ProviderSession {
         let connection = try await connect(executable: executable, directory: FileManager.default.temporaryDirectory, environment: environment) { _ in }
         defer { connection.close() }
         let quota = try await deadlineRequest(connection, "account.getQuota", [:])
-        let titles = [("premium_interactions", "Premium requests"), ("chat", "Chat messages"), ("completions", "Code completions")]
+        let titles = [("premium_interactions", AppText.localized("Premium requests")), ("chat", AppText.localized("Chat messages")), ("completions", AppText.localized("Code completions"))]
         var windows: [PlanLimits.Window] = []
         for (key, title) in titles {
             guard let snapshot = quota["quotaSnapshots"]?[key], !snapshot.isNull,
@@ -543,7 +544,7 @@ final class CopilotSession: ProviderSession {
         let pong = try await deadlineRequest(connection, "ping", ["message": "tivano"])
         guard pong["protocolVersion"]?.int != nil else {
             connection.close()
-            throw ProviderError.failed("This `copilot` does not speak the SDK protocol. Update it with `copilot update`.")
+            throw ProviderError.failed(AppText.localized("This `copilot` does not speak the SDK protocol. Update it with `copilot update`."))
         }
         return connection
     }
@@ -677,7 +678,7 @@ final class CopilotSession: ProviderSession {
             if let message = data["message"]?.string { onEvent?(.notice(Notice(level: .warning, message: message))) }
         case "session.compaction_complete":
             if data["success"]?.bool == true {
-                onEvent?(.notice(Notice(level: .info, message: "Context compacted.")))
+                onEvent?(.notice(Notice(level: .info, message: AppText.localized("Context compacted."))))
             } else if let error = data["error"]?.string {
                 onEvent?(.notice(Notice(level: .warning, message: error)))
             }
@@ -779,7 +780,7 @@ final class CopilotSession: ProviderSession {
         }
         if data["statusCode"]?.int == 403 || data["remediation"]?.string == "sign_in"
             || message.localizedCaseInsensitiveContains("not authorized to use this Copilot feature") {
-            message += " Check that your GitHub account has Copilot access, or sign in again with `copilot login`."
+            message += " " + AppText.localized("Check that your GitHub account has Copilot access, or sign in again with `copilot login`.")
         }
         return message
     }
@@ -888,32 +889,32 @@ final class CopilotSession: ProviderSession {
                 details.append(ToolTitles.relativePath(directory, to: workingDirectory))
             }
             if request["requestSandboxBypass"]?.bool == true {
-                details.append(request["requestSandboxBypassReason"]?.string ?? "Runs outside the sandbox.")
+                details.append(request["requestSandboxBypassReason"]?.string ?? AppText.localized("Runs outside the sandbox."))
             }
             return ApprovalRequest(id: "", kind: .command, title: command, detail: details.isEmpty ? nil : details.joined(separator: " · "), reason: intention, options: [])
         case "write":
             let path = request["resolvedPath"]?.string ?? request["fileName"]?.string ?? "file"
             return ApprovalRequest(id: "", kind: .fileChange, title: ToolTitles.relativePath(path, to: workingDirectory), reason: intention, options: [])
         case "read":
-            let path = request["resolvedPath"]?.string ?? request["path"]?.string ?? "file"
-            return ApprovalRequest(id: "", kind: .permissions, title: "Read \(ToolTitles.relativePath(path, to: workingDirectory))", reason: intention, options: [])
+            let path = request["resolvedPath"]?.string ?? request["path"]?.string ?? AppText.localized("a file")
+            return ApprovalRequest(id: "", kind: .permissions, title: String(format: AppText.localized("Read %@"), ToolTitles.relativePath(path, to: workingDirectory)), reason: intention, options: [])
         case "url":
-            let url = request["url"]?.string ?? "a URL"
-            let detail = request["redirectedFrom"]?.string.map { "Redirected from \($0)" }
-            return ApprovalRequest(id: "", kind: .permissions, title: "Fetch \(url)", detail: detail, reason: intention, options: [])
+            let url = request["url"]?.string ?? AppText.localized("a URL")
+            let detail = request["redirectedFrom"]?.string.map { String(format: AppText.localized("Redirected from %@"), $0) }
+            return ApprovalRequest(id: "", kind: .permissions, title: String(format: AppText.localized("Fetch %@"), url), detail: detail, reason: intention, options: [])
         case "mcp":
             let server = request["serverName"]?.string ?? "MCP"
-            let tool = request["toolTitle"]?.string ?? request["toolName"]?.string ?? "tool"
+            let tool = request["toolTitle"]?.string ?? request["toolName"]?.string ?? AppText.localized("tool")
             let arguments = request["args"].map(\.compactString)
             return ApprovalRequest(id: "", kind: .tool, title: "\(server) · \(tool)", detail: arguments == "null" ? nil : arguments, options: [])
         case "memory":
-            let fact = request["fact"]?.string ?? "something about this project"
-            return ApprovalRequest(id: "", kind: .tool, title: "Remember: \(fact)", reason: request["reason"]?.string, options: [])
+            let fact = request["fact"]?.string ?? AppText.localized("something about this project")
+            return ApprovalRequest(id: "", kind: .tool, title: String(format: AppText.localized("Remember: %@"), fact), reason: request["reason"]?.string, options: [])
         case "custom-tool":
-            let tool = request["toolName"]?.string ?? "Tool"
+            let tool = request["toolName"]?.string ?? AppText.localized("Tool")
             return ApprovalRequest(id: "", kind: .tool, title: tool, detail: request["toolDescription"]?.string, options: [])
         case "hook":
-            let tool = request["toolName"]?.string ?? "Tool"
+            let tool = request["toolName"]?.string ?? AppText.localized("Tool")
             return ApprovalRequest(id: "", kind: .tool, title: request["hookMessage"]?.string ?? tool, detail: request["hookMessage"] == nil ? nil : tool, options: [])
         case "extension-management":
             let operation = request["operation"]?.string ?? "manage"
@@ -1013,15 +1014,15 @@ final class CopilotSession: ProviderSession {
         case "read_bash", "write_bash", "stop_bash", "list_bash":
             return ToolCall(kind: .command, title: Self.humanize(name), detail: arguments["shellId"]?.string)
         case "view":
-            return ToolCall(kind: .read, title: path("path") ?? "Read file", detail: Self.lineRange(arguments["view_range"]))
+            return ToolCall(kind: .read, title: path("path") ?? AppText.localized("Read file"), detail: Self.lineRange(arguments["view_range"]))
         case "create":
-            var call = ToolCall(kind: .edit, title: path("path") ?? "Create file")
+            var call = ToolCall(kind: .edit, title: path("path") ?? AppText.localized("Create file"))
             if let file = path("path") {
                 call.edits = [FileEdit(path: file, old: "", new: arguments["file_text"]?.string ?? "")]
             }
             return call
         case "edit":
-            var call = ToolCall(kind: .edit, title: path("path") ?? "Edit file")
+            var call = ToolCall(kind: .edit, title: path("path") ?? AppText.localized("Edit file"))
             if let file = path("path") {
                 call.edits = [FileEdit(path: file, old: arguments["old_str"]?.string ?? "", new: arguments["new_str"]?.string ?? "")]
             }
@@ -1029,21 +1030,21 @@ final class CopilotSession: ProviderSession {
         case "str_replace_editor":
             switch arguments["command"]?.string {
             case "view":
-                return ToolCall(kind: .read, title: path("path") ?? "Read file", detail: Self.lineRange(arguments["view_range"]))
+                return ToolCall(kind: .read, title: path("path") ?? AppText.localized("Read file"), detail: Self.lineRange(arguments["view_range"]))
             case "create":
-                var call = ToolCall(kind: .edit, title: path("path") ?? "Create file")
+                var call = ToolCall(kind: .edit, title: path("path") ?? AppText.localized("Create file"))
                 if let file = path("path") {
                     call.edits = [FileEdit(path: file, old: "", new: arguments["file_text"]?.string ?? "")]
                 }
                 return call
             case "insert":
-                var call = ToolCall(kind: .edit, title: path("path") ?? "Edit file")
+                var call = ToolCall(kind: .edit, title: path("path") ?? AppText.localized("Edit file"))
                 if let file = path("path") {
                     call.edits = [FileEdit(path: file, old: "", new: arguments["new_str"]?.string ?? "")]
                 }
                 return call
             default:
-                var call = ToolCall(kind: .edit, title: path("path") ?? "Edit file")
+                var call = ToolCall(kind: .edit, title: path("path") ?? AppText.localized("Edit file"))
                 if let file = path("path") {
                     call.edits = [FileEdit(path: file, old: arguments["old_str"]?.string ?? "", new: arguments["new_str"]?.string ?? "")]
                 }
@@ -1057,25 +1058,25 @@ final class CopilotSession: ProviderSession {
             return call
         case "grep":
             let paths = (arguments["paths"]?.array ?? []).compactMap(\.string).map { ToolTitles.relativePath($0, to: workingDirectory) }
-            return ToolCall(kind: .search, title: arguments["pattern"]?.string ?? "Search", detail: paths.isEmpty ? nil : paths.joined(separator: ", "))
+            return ToolCall(kind: .search, title: arguments["pattern"]?.string ?? AppText.localized("Search"), detail: paths.isEmpty ? nil : paths.joined(separator: ", "))
         case "glob":
             let paths = (arguments["paths"]?.array ?? []).compactMap(\.string).map { ToolTitles.relativePath($0, to: workingDirectory) }
-            return ToolCall(kind: .search, title: arguments["pattern"]?.string ?? "Find files", detail: paths.isEmpty ? nil : paths.joined(separator: ", "))
+            return ToolCall(kind: .search, title: arguments["pattern"]?.string ?? AppText.localized("Find files"), detail: paths.isEmpty ? nil : paths.joined(separator: ", "))
         case "web_fetch":
-            return ToolCall(kind: .web, title: arguments["url"]?.string ?? "Fetch page")
+            return ToolCall(kind: .web, title: arguments["url"]?.string ?? AppText.localized("Fetch page"))
         case "web_search":
-            return ToolCall(kind: .web, title: arguments["query"]?.string ?? "Search the web")
+            return ToolCall(kind: .web, title: arguments["query"]?.string ?? AppText.localized("Search the web"))
         case "task":
             let detail = [arguments["name"]?.string, arguments["agent_type"]?.string].compactMap { $0 }.joined(separator: " · ")
-            return ToolCall(kind: .agent, title: arguments["description"]?.string ?? "Subagent", detail: detail.isEmpty ? nil : detail)
+            return ToolCall(kind: .agent, title: arguments["description"]?.string ?? AppText.localized("Subagent"), detail: detail.isEmpty ? nil : detail)
         case "read_agent", "write_agent", "list_agents":
             return ToolCall(kind: .agent, title: Self.humanize(name), detail: arguments["agent_id"]?.string ?? arguments["message"]?.string)
         case "skill":
-            return ToolCall(kind: .other, title: "Skill · \(arguments["skill"]?.string ?? "")")
+            return ToolCall(kind: .other, title: String(format: AppText.localized("Skill · %@"), arguments["skill"]?.string ?? ""))
         case "sql":
-            return ToolCall(kind: .other, title: arguments["description"]?.string ?? "SQL query", detail: arguments["query"]?.string)
+            return ToolCall(kind: .other, title: arguments["description"]?.string ?? AppText.localized("SQL query"), detail: arguments["query"]?.string)
         case "create_pull_request":
-            return ToolCall(kind: .other, title: arguments["title"]?.string ?? "Create pull request")
+            return ToolCall(kind: .other, title: arguments["title"]?.string ?? AppText.localized("Create pull request"))
         default:
             return ToolCall(kind: .other, title: Self.humanize(name), detail: arguments.isNull ? nil : TextCleanup.singleLine(arguments.compactString))
         }
@@ -1083,7 +1084,7 @@ final class CopilotSession: ProviderSession {
 
     private static func lineRange(_ value: JSONValue?) -> String? {
         guard let range = value?.array?.compactMap(\.int), range.count == 2 else { return nil }
-        return range[1] < 0 ? "from line \(range[0])" : "lines \(range[0])–\(range[1])"
+        return range[1] < 0 ? String(format: AppText.localized("from line %d"), range[0]) : String(format: AppText.localized("lines %d–%d"), range[0], range[1])
     }
 
     /// The files an `apply_patch` envelope touches: its `*** Update|Add|Delete File:` headers.
