@@ -58,10 +58,24 @@ extension AppModel {
         let provider = pair.provider
         let switchesProvider = provider != thread.provider
         let lead = hydraLead(of: pair, for: thread)
+        if (thread.hasStartedTurn && switchesProvider) || thread.pendingProviderSwitch != nil {
+            stageProviderSwitch(threadID) { thread in
+                thread.provider = provider
+                thread.model = lead.model
+                thread.effort = lead.effort
+                thread.fastMode = lead.fastMode
+                thread.dshMode = lead.dshMode
+                thread.hydraPairID = pair.id
+                thread.temporaryHydraPair = temporary ? pair : nil
+                thread.hydraEnabled = true
+            }
+            return
+        }
         updateThread(threadID) { thread in
             if switchesProvider {
                 thread.provider = provider
                 thread.providerSessionID = nil
+                thread.providerResumeAt = nil
             }
             thread.model = lead.model
             thread.effort = lead.effort

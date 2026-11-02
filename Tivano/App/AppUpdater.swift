@@ -1075,7 +1075,7 @@ final class AppUpdater {
                 progress.fail()
                 await MainActor.run {
                     let alert = NSAlert()
-                    alert.messageText = "Update Failed"
+                    alert.messageText = Chrome.localized("Update failed")
                     alert.informativeText = error.localizedDescription
                     alert.alertStyle = .warning
                     alert.runModal()
@@ -1129,7 +1129,7 @@ final class AppUpdater {
             background: background, timeout: 120
         )
         guard attach.succeeded else {
-            throw UpdateInstallError("The downloaded disk image could not be opened. \(attach.failureMessage)")
+            throw UpdateInstallError(String(format: Chrome.localized("The downloaded disk image could not be opened. %@"), attach.failureMessage))
         }
         // The copy is what gets checked and installed; the image is let go as soon as it is made.
         let staged = staging.appending(path: Bundle.main.bundleURL.lastPathComponent, directoryHint: .isDirectory)
@@ -1137,7 +1137,7 @@ final class AppUpdater {
         do {
             let contents = (try? FileManager.default.contentsOfDirectory(at: mount, includingPropertiesForKeys: nil)) ?? []
             guard let source = contents.first(where: { $0.pathExtension == "app" }) else {
-                throw UpdateInstallError("The disk image holds no app.")
+                throw UpdateInstallError(Chrome.localized("The disk image holds no app."))
             }
             copy = try await runStagingTool(URL(filePath: "/usr/bin/ditto"), [source.path, staged.path], background: background, timeout: 300)
             _ = try? await runStagingTool(URL(filePath: "/usr/bin/hdiutil"), ["detach", mount.path, "-force"], background: background, timeout: 60)
@@ -1148,7 +1148,7 @@ final class AppUpdater {
             throw error
         }
         guard copy.succeeded else {
-            throw UpdateInstallError("The update could not be copied. \(copy.failureMessage)")
+            throw UpdateInstallError(String(format: Chrome.localized("The update could not be copied. %@"), copy.failureMessage))
         }
         try await Task.detached(priority: background ? .background : .userInitiated) {
             try Self.verifySignature(of: staged)
@@ -1156,11 +1156,11 @@ final class AppUpdater {
         let bundle = Bundle(url: staged)
         let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         guard let version, let actual = AppVersion(version), let expected = AppVersion(expectedVersion), actual == expected else {
-            throw UpdateInstallError("The downloaded app is version \(version ?? "unknown"), not \(expectedVersion).")
+            throw UpdateInstallError(String(format: Chrome.localized("The downloaded app is version %@, not %@."), version ?? Chrome.localized("unknown"), expectedVersion))
         }
         let gatekeeper = try await runStagingTool(URL(filePath: "/usr/sbin/spctl"), ["--assess", "--type", "execute", staged.path], background: background, timeout: 120)
         guard gatekeeper.succeeded else {
-            throw UpdateInstallError("Gatekeeper did not accept the downloaded app. \(gatekeeper.failureMessage)")
+            throw UpdateInstallError(String(format: Chrome.localized("Gatekeeper did not accept the downloaded app. %@"), gatekeeper.failureMessage))
         }
         completed = true
         return staged
@@ -1189,19 +1189,19 @@ final class AppUpdater {
     nonisolated static func verifySignature(of appURL: URL) throws {
         var staticCode: SecStaticCode?
         guard SecStaticCodeCreateWithPath(appURL as CFURL, [], &staticCode) == errSecSuccess, let code = staticCode else {
-            throw UpdateInstallError("The downloaded app is not signed.")
+            throw UpdateInstallError(Chrome.localized("The downloaded app is not signed."))
         }
         let text = signatureRequirement
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement else {
-            throw UpdateInstallError("The signature requirement could not be built.")
+            throw UpdateInstallError(Chrome.localized("The signature requirement could not be built."))
         }
         var error: Unmanaged<CFError>?
         let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate)
         let status = SecStaticCodeCheckValidityWithErrors(code, flags, requirement, &error)
         guard status == errSecSuccess else {
             let reason = error?.takeRetainedValue().localizedDescription ?? "OSStatus \(status)"
-            throw UpdateInstallError("The downloaded app is not signed for Tivano. \(reason)")
+            throw UpdateInstallError(String(format: Chrome.localized("The downloaded app is not signed for Tivano. %@"), reason))
         }
     }
 
@@ -1216,7 +1216,7 @@ final class AppUpdater {
         let destination = Bundle.main.bundleURL
         let parent = destination.deletingLastPathComponent()
         guard FileManager.default.isWritableFile(atPath: parent.path) else {
-            throw UpdateInstallError("Tivano cannot replace itself in \(parent.path). Move it to your Applications folder and try again.")
+            throw UpdateInstallError(String(format: Chrome.localized("Tivano cannot replace itself in %@. Move it to your Applications folder and try again."), parent.path))
         }
         let script = staged.deletingLastPathComponent().appending(path: "install.sh")
         try Self.installerScript.write(to: script, atomically: true, encoding: .utf8)

@@ -199,12 +199,12 @@ enum ProviderError: LocalizedError {
             } else if provider == .zcode {
                 AppText.localized("ZCode is not installed. Install the ZCode app, then refresh Providers.")
             } else if provider.isAPIKeyBased {
-                "\(provider.displayName) needs an API key. Add one in Settings → Providers → \(provider.displayName)."
+                String(format: AppText.localized("%@ needs an API key. Add one in Settings › Providers › %@."), provider.displayName, provider.displayName)
             } else {
-                "\(provider.displayName) is not installed. Install it and sign in with `\(provider.loginCommand)`."
+                String(format: AppText.localized("%@ is not installed. Install it and sign in with `%@`."), provider.displayName, provider.loginCommand)
             }
         case .notRunning:
-            "The agent session is not running."
+            AppText.localized("The agent session is not running.")
         case .failed(let message):
             message
         }

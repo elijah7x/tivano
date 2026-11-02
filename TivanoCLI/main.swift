@@ -13,7 +13,7 @@ private enum CLIText {
     }()
     static func localized(_ key: String) -> String { bundle.localizedString(forKey: key, value: key, table: "Localizable") }
     static let usage = """
-    Tivano local control (the app must already be running and manually enabled in Settings > Alpha).
+    Tivano local control (the app must already be running and manually enabled in Settings › Alpha).
     Commands: info | providers | projects | threads | thread UUID | history UUID
       create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]
       send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]
@@ -118,7 +118,7 @@ private enum CLI {
             if let data = try? LocalControl.encoder().encode(ControlResponse(error: failure)) {
                 FileHandle.standardError.write(data + Data([10]))
             }
-            FileHandle.standardError.write(Data((CLIText.localized("Open the correct edition of Tivano yourself and enable Local control in Settings > Alpha. Use --help for syntax. Never blindly retry a write after a disconnect.") + "\n").utf8))
+            FileHandle.standardError.write(Data((CLIText.localized("Open the correct edition of Tivano yourself and enable Local control in Settings › Alpha. Use --help for syntax. Never blindly retry a write after a disconnect.") + "\n").utf8))
             return 2
         }
     }

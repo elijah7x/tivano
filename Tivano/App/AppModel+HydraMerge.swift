@@ -193,7 +193,7 @@ extension AppModel {
         queued.isHydraMergeQueued = false
         runtime.isHydraMerging = true
         runtime.hydraMergeStartedAt = .now
-        runtime.hydraMergeNoteID = UUID().uuidString
+        runtime.hydraMergeNoteID = ThreadRuntime.newHydraMergeNoteID()
         runtime.hydraMergeStage = HydraMergeStage.gathering.words
         runtime.hydraMergeStep = .gathering
         defer {
@@ -258,8 +258,12 @@ extension AppModel {
                 && !explicitCheckouts.contains { TouchedPaths.relative(path, root: $0) != nil }
         }
         func strayBody(_ paths: [String]) -> String {
-            let shown = paths.prefix(6).map { "`\($0)`" }.joined(separator: ", ") + (paths.count > 6 ? " and \(paths.count - 6) more" : "")
-            return "\(paths.count == 1 ? "1 file was" : "\(paths.count) files were") changed outside every project: \(shown). Add the folder that holds them to the sidebar and ask for the merge again."
+            let listed = paths.prefix(6).map { "`\($0)`" }.joined(separator: ", ")
+            let shown = paths.count > 6 ? String(format: Chrome.localized("%@, and %d more"), listed, paths.count - 6) : listed
+            guard paths.count > 1 else {
+                return String(format: Chrome.localized("1 file was changed outside every project: %@. Add the folder that holds them to the sidebar and ask for the merge again."), shown)
+            }
+            return String(format: Chrome.localized("%d files were changed outside every project: %@. Add the folder that holds them to the sidebar and ask for the merge again."), paths.count, shown)
         }
         // Heads whose checkout had nothing to send are marked with the job, not ahead of
         // a checkout that still has files. A failed group returns before either mark.
@@ -291,7 +295,7 @@ extension AppModel {
                 return
             }
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
-            note(leadID, "Hydra did not merge: the team's files are outside every project.", strayBody(stray), status: .failed)
+            note(leadID, Chrome.localized("Hydra did not merge: the team's files are outside every project."), strayBody(stray), status: .failed)
             recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
             return
         }
@@ -323,7 +327,9 @@ extension AppModel {
         // The projects' shares went out; only what no project holds stayed behind.
         if !stray.isEmpty {
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
-            note(leadID, "Hydra left \(stray.count == 1 ? "a file" : "\(stray.count) files") outside every project.", strayBody(stray))
+            note(leadID, stray.count == 1
+                ? Chrome.localized("Hydra left a file outside every project.")
+                : String(format: Chrome.localized("Hydra left %d files outside every project."), stray.count), strayBody(stray))
         } else if !hasNonGitGroup, outcomes.allSatisfy({ $0 == .alreadyOnMain }) {
             recordHydraSettlement(leadID: leadID, runtime: runtime)
         }
@@ -365,11 +371,11 @@ extension AppModel {
     /// request - is retried quietly instead of posted.
     private func mergeHydraProject(of leadID: UUID, lead: ChatThread, project: Project, checkout: String, work: HydraWork, runtime: ThreadRuntime, several: Bool, syncsProjectCheckout: Bool, jobID: UUID?) async -> HydraProjectMerge {
         func stage(_ name: String) -> String { several ? "\(project.name): \(name)" : name }
-        func title(_ name: String) -> String { several ? "\(project.name): \(name)" : name }
+        func title(_ name: String) -> String { several ? String(format: Chrome.localized("%@: %@"), project.name, name) : name }
         // The words carry the project's name with several projects, the step is the dot on the pill's track.
         func advance(_ step: HydraMergeStage) { runtime.hydraMergeStage = stage(step.words); runtime.hydraMergeStep = step }
         func fail(_ headline: String, _ body: String, label: String? = nil, url: URL? = nil, retryable: Bool = false) -> HydraProjectMerge {
-            let detail = title(headline) + ": " + body
+            let detail = String(format: Chrome.localized("%@: %@"), title(headline), body)
             let owner = ObjectIdentifier(self)
             if retryable {
                 HydraMergeActivity.retryBudgets[owner]?[leadID]?.failures += 1
@@ -380,7 +386,7 @@ extension AppModel {
                 && (budget?.failures ?? 0) > 0 && budget?.notified != true
             if saysExhausted {
                 HydraMergeActivity.retryBudgets[owner]?[leadID]?.notified = true
-                note(leadID, title(AppText.localized("Stopped") + ": " + headline), body, status: .failed)
+                note(leadID, title(String(format: Chrome.localized("%@: %@"), Chrome.localized("Stopped"), headline)), body, status: .failed)
             }
             // The same failure again (the sweep retries every job it can) is not news.
             if let last = runtime.hydraMerges.last, last.outcome == .failed, last.detail == detail { return .failed }
@@ -400,7 +406,7 @@ extension AppModel {
         }
         defer { withExtendedLifetime(repoLease) {} }
         guard let remote = await git.remoteURL() else {
-            return fail("Hydra did not merge: no remote.", "The team's work is in the checkout; there is no origin to push it to.")
+            return fail(Chrome.localized("Hydra did not merge: no remote."), Chrome.localized("The team's work is in the checkout; there is no origin to push it to."))
         }
         let target = await git.defaultBranch()
         if let head = try? await git.commitHash() {
@@ -422,8 +428,13 @@ extension AppModel {
         let conflicted = await Self.pathsWithConflictMarkers(sorted, in: checkout)
         guard conflicted.isEmpty else {
             let files = conflicted.map { "`\($0)`" }.joined(separator: ", ")
-            let headline = "Hydra did not merge: conflict markers in \(conflicted.count == 1 ? "a file" : "\(conflicted.count) files")."
-            return fail(headline, "\(files) still \(conflicted.count == 1 ? "holds" : "hold") conflict markers from a head's landing. Resolve them and the merge goes out by itself.")
+            let headline = conflicted.count == 1
+                ? Chrome.localized("Hydra did not merge: conflict markers in a file.")
+                : String(format: Chrome.localized("Hydra did not merge: conflict markers in %d files."), conflicted.count)
+            let body = conflicted.count == 1
+                ? String(format: Chrome.localized("%@ still holds conflict markers from a head's landing. Resolve them and the merge goes out by itself."), files)
+                : String(format: Chrome.localized("%@ still hold conflict markers from a head's landing. Resolve them and the merge goes out by itself."), files)
+            return fail(headline, body)
         }
 
         do {
@@ -459,8 +470,11 @@ extension AppModel {
                    let remote = try? await git.commitHash(of: "origin/\(target)"), remote != head,
                    (spent ? true : await git.isAncestor(head, of: remote)) {
                     guard let rebased = try await git.captureTree(paths: sorted, onto: remote, from: head) else {
-                        let files = sorted.count == 1 ? "a file" : "files"
-                        return fail("Hydra did not merge: `\(target)` changed the same lines.", "The remote changed \(files) the team changed too, in the same places. The work is in the checkout: bring `\(target)` in (`git pull`), settle the overlap, and the merge goes out by itself.")
+                        let headline = String(format: Chrome.localized("Hydra did not merge: `%@` changed the same lines."), target)
+                        let body = sorted.count == 1
+                            ? String(format: Chrome.localized("The remote changed a file the team changed too, in the same places. The work is in the checkout: bring `%@` in (`git pull`), settle the overlap, and the merge goes out by itself."), target)
+                            : String(format: Chrome.localized("The remote changed files the team changed too, in the same places. The work is in the checkout: bring `%@` in (`git pull`), settle the overlap, and the merge goes out by itself."), target)
+                        return fail(headline, body)
                     }
                     parent = remote
                     tree = rebased.tree
@@ -518,7 +532,7 @@ extension AppModel {
                 break
             }
             guard let prepared else {
-                return fail("Hydra did not merge: the checkout kept moving.", "Commits kept landing on `\(current ?? target)` while the team's work was prepared. The work is in the checkout and goes out on the next try.", retryable: true)
+                return fail(Chrome.localized("Hydra did not merge: the checkout kept moving."), String(format: Chrome.localized("Commits kept landing on `%@` while the team's work was prepared. The work is in the checkout and goes out on the next try."), current ?? target), retryable: true)
             }
             let head = prepared.head
             let files = prepared.files
@@ -543,37 +557,45 @@ extension AppModel {
 
             let body = mergeRequestBody(for: lead, files: files, through: Set(work.turnIDs), runtime: runtime)
             advance(.opening)
+            // The same refusal whichever call failed: the branch is out, the request is not.
+            let requestFailed = String(format: Chrome.localized("Hydra pushed %@ but could not open a merge request."), branch)
+            let requestStays = String(format: Chrome.localized("The work is in the checkout and on `%@`; the next try opens the request."), branch)
             let requestURL: URL?
             do {
                 requestURL = try await hydraCreateMergeRequest(git: git, title: subject, body: body, source: branch, target: target)
             } catch GitError.cursorOriginSetup {
-                return fail("Hydra pushed \(branch) but could not open a merge request.", GitError.cursorOriginSetup.localizedDescription)
+                return fail(requestFailed, GitError.cursorOriginSetup.localizedDescription)
             } catch let error as HydraMergeRequestError {
                 if case .gitLabAuth = error {
-                    return fail("Hydra pushed \(branch) but could not open a merge request.", error.localizedDescription)
+                    return fail(requestFailed, error.localizedDescription)
                 }
-                return fail("Hydra pushed \(branch) but could not open a merge request.", "\(error.localizedDescription)\n\nThe work is in the checkout and on `\(branch)`; the next try opens the request.", retryable: true)
+                return fail(requestFailed, "\(error.localizedDescription)\n\n\(requestStays)", retryable: true)
             } catch {
-                return fail("Hydra pushed \(branch) but could not open a merge request.", "\(error.localizedDescription)\n\nThe work is in the checkout and on `\(branch)`; the next try opens the request.", retryable: true)
+                return fail(requestFailed, "\(error.localizedDescription)\n\n\(requestStays)", retryable: true)
             }
             guard let url = requestURL,
                   let link = MergeRequestLink(url: url) else {
-                return fail("Hydra pushed \(branch) but could not open a merge request.", "The forge did not say where the request is. The next try opens it again.", retryable: true)
+                return fail(requestFailed, Chrome.localized("The forge did not say where the request is. The next try opens it again."), retryable: true)
             }
             advance(.merging)
+            let mergeFailed = String(format: Chrome.localized("Hydra opened %@ but could not merge it."), link.label)
             do {
                 try await git.mergePullRequest(link)
             } catch GitError.cursorOriginSetup {
-                return fail("Hydra opened \(link.label) but could not merge it.", "\(url.absoluteString)\n\n\(GitError.cursorOriginSetup.localizedDescription)", label: link.label, url: url)
+                return fail(mergeFailed, "\(url.absoluteString)\n\n\(GitError.cursorOriginSetup.localizedDescription)", label: link.label, url: url)
             } catch {
-                return fail("Hydra opened \(link.label) but could not merge it.", "\(url.absoluteString)\n\n\(error.localizedDescription)\n\nThe next try brings the request up to date with `\(target)` and merges it.", label: link.label, url: url, retryable: true)
+                let next = String(format: Chrome.localized("The next try brings the request up to date with `%@` and merges it."), target)
+                return fail(mergeFailed, "\(url.absoluteString)\n\n\(error.localizedDescription)\n\n\(next)", label: link.label, url: url, retryable: true)
             }
 
             if !ownBranch {
                 try? await git.updateRef("refs/tivano/merged/\(branch)", to: prepared.commit)
             }
 
-            var lines = ["\(url.absoluteString)", "", Self.filesLine(files) + " landed on `\(target)` from `\(branch)`."]
+            // The note's body is the merge's record, not prose the UI draws: `HydraMergeNote`
+            // parses these lines (see `HydraMergePopover`) and the card re-renders them with
+            // its own localized labels, so the format stays fixed English here.
+            var lines = [url.absoluteString, "", Self.filesLine(files) + " landed on `\(target)` from `\(branch)`."]
             if !work.heads.isEmpty {
                 lines.append("")
                 lines.append("Heads")
@@ -600,6 +622,7 @@ extension AppModel {
                     if let synchronizedHead = try? await git.commitHash() {
                         HydraMergeActivity.retryBudgets[ObjectIdentifier(self)]?[leadID]?.inputs[checkout]?.head = synchronizedHead
                     }
+                    // Parsed, not shown: the card reads this line as the checkout's own standing.
                     lines.append("The checkout is up to date.")
                 } catch {
                     // The forge succeeded. Do not describe this as an unpushed job or
@@ -626,11 +649,12 @@ extension AppModel {
                 }
             }
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .merged, project: project.name, label: link.label, url: url, files: files.count, detail: nil))
-            note(leadID, title("Hydra merged \(link.label)"), lines.joined(separator: "\n"))
+            note(leadID, title(String(format: Chrome.localized("Hydra merged %@"), link.label)), lines.joined(separator: "\n"), merged: true)
             existingRuntime(for: leadID)?.noteDiffChanged()
             return .merged
         } catch {
-            return fail("Hydra could not merge the team's work.", "\(error.localizedDescription)\n\nThe work is in the checkout; the next try sends it again.", retryable: true)
+            let next = Chrome.localized("The work is in the checkout; the next try sends it again.")
+            return fail(Chrome.localized("Hydra could not merge the team's work."), "\(error.localizedDescription)\n\n\(next)", retryable: true)
         }
     }
 
@@ -766,7 +790,7 @@ extension AppModel {
         guard let status = try? await Shell.run(tool: "glab", ["auth", "status"], in: directory, timeout: 30) else { return nil }
         if status.succeeded { return nil }
         let message = status.failureMessage
-        return message.isEmpty ? "glab is not signed in to this GitLab host." : message
+        return message.isEmpty ? Chrome.localized("glab is not signed in to this GitLab host.") : message
     }
 
     /// Whether glab's output is an authentication refusal: the 401 the merge used to fail with.
@@ -1256,7 +1280,7 @@ extension AppModel {
     private func recordHydraSettlement(leadID: UUID, runtime: ThreadRuntime) {
         guard hydraUnmergedFileCount(of: leadID) == 0 else { return }
         runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .settled, project: nil, label: nil, url: nil, files: 0, detail: nil))
-        note(leadID, "Already on main: nothing to merge.", "Every change from this chat is on main already, taken along by an earlier merge request (this chat's or another's) or committed by hand. Nothing was sent and no new merge request was opened.")
+        note(leadID, Chrome.localized("Already on main: nothing to merge."), Chrome.localized("Every change from this chat is on main already, taken along by an earlier merge request (this chat's or another's) or committed by hand. Nothing was sent and no new merge request was opened."))
     }
 
     private func recordHydraJobMerge(_ outcome: HydraJobRecord.MergeOutcome, of leadID: UUID, jobID: UUID?) {
@@ -1276,14 +1300,20 @@ extension AppModel {
     }
 
     /// A note from Hydra in the lead's timeline, and word of it when the chat is out of view.
-    private func note(_ leadID: UUID, _ title: String, _ body: String, status: TurnStatus = .completed) {
+    ///
+    /// The note's words are localized here, as they are written. Its row is found again by
+    /// the id the merging pill was drawn with (see `ThreadRuntime.hydraMergeNotePrefix`), and
+    /// whether the work reached the remote is kept on the runtime, so nothing reads the note's
+    /// text back once it is stored.
+    private func note(_ leadID: UUID, _ title: String, _ body: String, status: TurnStatus = .completed, merged: Bool = false) {
         // The note lands under the id the merging pill has been drawn with, so the timeline
         // keeps one row from the first stage to the outcome; the id is spent here, so a
         // second note in the same run would get one of its own.
         let runtime = existingRuntime(for: leadID)
         let id = runtime?.hydraMergeNoteID
         runtime?.hydraMergeNoteID = nil
-        runtime?.appendHydraNote(title + "\n" + body, id: id)
+        runtime?.hydraMergeSucceeded = merged
+        runtime?.appendHydraNote(title + "\n" + body, id: id ?? ThreadRuntime.newHydraMergeNoteID())
         clearDeferredResult(leadID)
         updateThread(leadID) {
             $0.pendingResultTurnID = nil
@@ -1308,7 +1338,7 @@ private enum HydraMergeRequestError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .gitLabAuth(let host, let branch, let detail):
-            return "GitLab refused the login (401 Unauthorized) for \(host): the token glab signs in with is missing or expired.\n\n\(detail)\n\nSign back in with `glab auth login --hostname \(host)` (or export a valid GITLAB_TOKEN), then ask for the merge again. The branch `\(branch)` is already pushed, so the team's work is safe."
+            return String(format: Chrome.localized("GitLab refused the login (401 Unauthorized) for %@: the token glab signs in with is missing or expired.\n\n%@\n\nSign back in with `glab auth login --hostname %@` (or export a valid GITLAB_TOKEN), then ask for the merge again. The branch `%@` is already pushed, so the team's work is safe."), host, detail, host, branch)
         case .creationFailed(let message):
             return message
         }

@@ -41,7 +41,7 @@ struct ThreadChangesTab: View {
         }
         .fixedSize()
         .help(Text(verbatim: String(format: Chrome.localized("Show this thread's changes%@"), ShortcutStore.hint(for: .toggleChanges))))
-        .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("%d files changed, %d added, %d removed"), stats.files.count, stats.additions, stats.deletions)))
+        .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("%d files changed, %d lines added, %d lines removed"), stats.files.count, stats.additions, stats.deletions)))
     }
 }
 

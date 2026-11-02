@@ -73,12 +73,12 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var keywords: [String] {
         switch self {
-        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "usage", "limits", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "语音", "麦克风", "通话"]
+        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "usage", "limits", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "语音", "麦克风", "通话", "local control", "control", "cli", "本地控制"]
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
         case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "zcode", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
-        case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting"]
+        case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting", "remote mcp", "remote", "远程"]
         case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
         case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "实验室", "实验", "jev", "typesafe", "decision", "决策"]
         case .shortcuts: ["keyboard", "keys"]
@@ -368,6 +368,7 @@ private struct SettingsPageScroll: View {
     let page: SettingsPage
     let fullWindow: Bool
     @State private var modelSearch = ""
+    @State private var providerSearch = ""
     @State private var mcpSearch = ""
     @State private var archiveFilter = ArchiveFilter()
     @State private var scrollChrome = ChromeScrollModel()
@@ -379,6 +380,7 @@ private struct SettingsPageScroll: View {
         .onChange(of: page, initial: true) {
             scrollChrome.update(travel: 0)
             modelSearch = ""
+            providerSearch = ""
             mcpSearch = ""
             archiveFilter = ArchiveFilter()
         }
@@ -430,6 +432,7 @@ private struct SettingsPageScroll: View {
                 page: page,
                 scrollChrome: scrollChrome,
                 modelSearch: $modelSearch,
+                providerSearch: $providerSearch,
                 mcpSearch: $mcpSearch
             )
             .opacity(keepsakeOverlayShown ? 0 : 1)
@@ -446,7 +449,7 @@ private struct SettingsPageScroll: View {
         switch page {
         case .general: GeneralSettingsPage()
         case .appearance: AppearanceSettingsPage()
-        case .providers: ProvidersSettingsPage()
+        case .providers: ProvidersSettingsPage(query: providerSearch)
         case .mcp: MCPSettingsPage(query: mcpSearch)
         case .models:
             ModelsSettingsPage(query: modelSearch)
@@ -469,6 +472,7 @@ private struct SettingsPageChrome: View {
     let page: SettingsPage
     let scrollChrome: ChromeScrollModel
     @Binding var modelSearch: String
+    @Binding var providerSearch: String
     @Binding var mcpSearch: String
 
     var body: some View {
@@ -481,6 +485,7 @@ private struct SettingsPageChrome: View {
                 ChromeSearchField(query: $mcpSearch, prompt: "Search servers")
             }
             if page == .providers {
+                ChromeSearchField(query: $providerSearch, prompt: "Search providers")
                 ProvidersRefreshButton()
             }
             if page == .about {
@@ -624,6 +629,10 @@ private struct GeneralSettingsPage: View {
                     }
                 }
             }
+        }
+        ChromeSection(title: "Local control") {
+            ChromeCard { LocalControlSettingsRows() }
+            CLIInstallationSettings()
         }
         ChromeSection(title: "Power") {
             ChromeCard {
@@ -944,7 +953,7 @@ private struct AppearanceSettingsPage: View {
                 ChromeRow(
                     title: "Clearer glass",
                     detail: performanceMode
-                        ? "Unavailable in Performance Mode"
+                        ? "Unavailable in Performance mode"
                         : clearerUnavailable
                             ? "Unavailable while a wallpaper is set"
                             : "Shows more of the desktop through the window with Liquid Glass. Uses more GPU while the window's content changes; off uses a lighter system blur."
@@ -954,11 +963,11 @@ private struct AppearanceSettingsPage: View {
                 .disabled(clearerUnavailable)
                 .opacity(clearerUnavailable ? 0.5 : 1)
                 ChromeRowDivider()
-                ChromeRow(title: "Performance Mode", detail: "Disable window transparency, blurs, glows and background effects for lowest GPU usage") {
+                ChromeRow(title: "Performance mode", detail: "Disable window transparency, blurs, glows and background effects for lowest GPU usage") {
                     SettingsSwitch(isOn: $settings.performanceMode)
                 }
                 ChromeRowDivider()
-                ChromeRow(title: "Skylight", detail: performanceMode ? "Unavailable in Performance Mode" : "A teru teru bozu at the top of the sidebar keeps you company while agents work, and its weather shows how your threads are doing: it sways in the wind while they run, turns overcast when one needs you, brightens when a reply lands and rains when one fails. It animates only while visible.") {
+                ChromeRow(title: "Skylight", detail: performanceMode ? "Unavailable in Performance mode" : "A teru teru bozu at the top of the sidebar keeps you company while agents work, and its weather shows how your threads are doing: it sways in the wind while they run, turns overcast when one needs you, brightens when a reply lands and rains when one fails. It animates only while visible.") {
                     SettingsSwitch(isOn: $settings.showsSkylight)
                 }
                 .disabled(performanceMode)
@@ -1100,32 +1109,32 @@ private struct ProvidersRefreshButton: View {
 /// throttles to once a minute, so the numbers are on screen without a trip through a chat.
 private struct ProvidersSettingsPage: View {
     @Environment(AppModel.self) private var model
-    /// Manual expansion overrides per provider, kept for the page's lifetime. With no
-    /// override the auth default rules — signed-in expands, anything else collapses —
-    /// so a provider whose check resolves to signed-in opens on its own until touched.
-    @State private var providerExpansion: [ProviderKind: Bool] = [:]
+    let query: String
+    @State private var selection: ProviderKind?
 
     var body: some View {
         let settings = model.settings
-        // Eager on purpose: a handful of sections, and lazy ones were rebuilt while scrolling,
-        // which reset their fields and re-ran every check they started on appear.
+        let enabled = ProviderGroup.allCases.flatMap(\.providers).filter { settings.isEnabled($0) }
+        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visible = enabled.filter { search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search) }
+        let selected = selection.flatMap { visible.contains($0) ? $0 : nil }
         VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
             ProviderSelectionSection(settings: settings)
-            ForEach(ProviderGroup.allCases) { group in
-                let providers = group.providers.filter { settings.isEnabled($0) }
-                if !providers.isEmpty {
-                    ChromeSection(title: group.title) {
+            if !enabled.isEmpty {
+                HStack(alignment: .providerCardTop, spacing: Chrome.sectionSpacing) {
+                    ProviderListColumn(providers: visible, selected: selected) { selection = $0 }
+                        .frame(width: 200)
+                    if let selected {
+                        ProviderSettingsSection(provider: selected, alignsCardTop: true)
+                            .id(selected)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if !visible.isEmpty {
                         VStack(alignment: .leading, spacing: Chrome.unitSpacing) {
-                            ForEach(providers) { provider in
-                                ProviderSettingsSection(
-                                    provider: provider,
-                                    expansionOverride: Binding(
-                                        get: { providerExpansion[provider] },
-                                        set: { providerExpansion[provider] = $0 }
-                                    )
-                                )
+                            ForEach(visible) { provider in
+                                ProviderSettingsSection(provider: provider, alignsCardTop: provider == visible.first)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
@@ -1136,11 +1145,125 @@ private struct ProvidersSettingsPage: View {
     }
 }
 
+private enum ProviderListStatus {
+    case ready, attention, notInstalled
+
+    var title: String {
+        switch self {
+        case .ready: "Ready"
+        case .attention: "Needs attention"
+        case .notInstalled: "Not installed"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .ready: Chrome.success
+        case .attention: Chrome.warning
+        case .notInstalled: Chrome.secondaryText.opacity(0.5)
+        }
+    }
+}
+
+private extension VerticalAlignment {
+    /// The top of each column's first card, so the provider list and its detail start level.
+    enum ProviderCardTop: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat { context[.top] }
+    }
+
+    static let providerCardTop = VerticalAlignment(ProviderCardTop.self)
+}
+
+private struct ProviderListColumn: View {
+    @Environment(AppModel.self) private var model
+    let providers: [ProviderKind]
+    let selected: ProviderKind?
+    let select: (ProviderKind?) -> Void
+
+    var body: some View {
+        // One card: All, then each group under a small in-card label.
+        ChromeCard {
+            VStack(alignment: .leading, spacing: 0) {
+                SidebarRow(title: "All providers", isSelected: selected == nil,
+                           action: { select(nil) }) {
+                    SidebarSymbol("square.grid.2x2")
+                } accessory: { _ in
+                    EmptyView()
+                }
+                if providers.isEmpty {
+                    Text("No matching providers")
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .padding(.horizontal, Chrome.rowHorizontalPadding)
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
+                } else {
+                    ForEach(ProviderGroup.allCases) { group in
+                        let grouped = group.providers.filter { providers.contains($0) }
+                        if !grouped.isEmpty {
+                            Text(verbatim: Chrome.localized(group.title))
+                                .font(.ui(.subheadline, weight: .semibold))
+                                .foregroundStyle(Chrome.secondaryText)
+                                .padding(.horizontal, Chrome.rowHorizontalPadding)
+                                .padding(.top, 12)
+                                .padding(.bottom, 4)
+                                .accessibilityAddTraits(.isHeader)
+                            ForEach(grouped) { provider in
+                                row(provider)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(Chrome.listInset)
+        }
+        .alignmentGuide(.providerCardTop) { $0[.top] }
+    }
+
+    private func row(_ provider: ProviderKind) -> some View {
+        SidebarRow(title: provider.displayName, titleIsVerbatim: true,
+                   isSelected: selected == provider, accessoryWidth: 14,
+                   action: { select(provider) }) {
+            ProviderIcon(provider: provider, size: Chrome.symbolSize)
+        } accessory: { _ in
+            if !model.providers.status(provider).isChecking {
+                let status = listStatus(provider)
+                Circle()
+                    .fill(status.color)
+                    .frame(width: 6, height: 6)
+                    .accessibilityLabel(Text(verbatim: Chrome.localized(status.title)))
+            }
+        }
+    }
+
+    private func listStatus(_ provider: ProviderKind) -> ProviderListStatus {
+        let status = model.providers.status(provider)
+        guard status.isInstalled else { return .notInstalled }
+        if !provider.isAPIKeyBased && status.auth == .signedOut { return .attention }
+        switch model.providers.cliUpdates[provider]?.phase {
+        case .available, .failed: return .attention
+        default: return .ready
+        }
+    }
+}
+
+private struct ProviderCardTopAlignment: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.alignmentGuide(.providerCardTop) { $0[.top] }
+        } else {
+            content
+        }
+    }
+}
+
 private struct ProviderSettingsSection: View {
     @Environment(AppModel.self) private var model
     let provider: ProviderKind
-    /// Nil follows the auth default; an explicit override lasts for the page's lifetime.
-    @Binding var expansionOverride: Bool?
+    var alignsCardTop = false
 
     @State private var binaryPath = ""
     @State private var apiKey = ""
@@ -1178,17 +1301,11 @@ private struct ProviderSettingsSection: View {
             if case .signedIn = status.auth { return true }
             return false
         }()
-        let isExpanded = expansionOverride ?? isSignedIn
-        let expansion = Binding(
-            get: { expansionOverride ?? isSignedIn },
-            set: { expansionOverride = $0 }
-        )
         let showsUsage = settings.showsProviderUsage
             && (PlanLimitsReader.exposesLimits(provider) || CreditsReader.exposesCredits(provider))
             && status.isInstalled && status.auth != .signedOut
-        VStack(alignment: .leading, spacing: Chrome.unitHeaderSpacing) {
-            CollapsibleProviderHeader(provider: provider, isExpanded: expansion, subject: "provider settings", detail: provider.routeSummary)
-            ChromeReveal(isExpanded: isExpanded) {
+        VStack(alignment: .leading, spacing: Chrome.pageSectionHeaderSpacing) {
+            Group {
                 let showsSignIn = !status.isChecking && !isSignedIn && !provider.loginCommand.isEmpty
                 let updateState: ProviderUpdateViewState? = provider.isAPIKeyBased ? nil : {
                     let update = registry.cliUpdates[provider]
@@ -1217,9 +1334,24 @@ private struct ProviderSettingsSection: View {
                 }()
                 ChromeCard {
                     HStack(spacing: 12) {
-                        ProviderIcon(provider: provider, size: 18)
-                            .foregroundStyle(Chrome.primaryText)
-                            .frame(width: 22)
+                        ProviderIcon(provider: provider, size: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: provider.displayName)
+                                .font(.ui(.title3, weight: .semibold))
+                                .foregroundStyle(Chrome.primaryText)
+                                .accessibilityAddTraits(.isHeader)
+                            if !provider.routeSummary.isEmpty {
+                                Text(verbatim: provider.routeSummary)
+                                    .font(.ui(.subheadline))
+                                    .foregroundStyle(Chrome.secondaryText)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    ChromeRowDivider()
+                    HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(verbatim: Chrome.localized(status.isChecking ? "Checking…" : status.summary))
                                 .font(.ui(size: 13))
@@ -1367,7 +1499,7 @@ private struct ProviderSettingsSection: View {
                                     : signInError ?? (FileManager.default.fileExists(atPath: "/Applications/DeepSeek Harness.app")
                                         ? "Opens DeepSeek Harness to sign in to your DeepSeek account."
                                         : "Opens your browser to sign in to your DeepSeek account."))
-                                : signInError ?? "Click here to login again."
+                                : signInError ?? "Click Login on the right to sign in."
                             ChromeRow(title: provider == .minimaxCode ? "Token Plan sign-in" : "Sign in", detail: provider == .minimaxCode
                                 ? "Use mcode login for Token Plan, or mcode login --region global for Global accounts. If already signed in, refresh the provider. API-key users do not need this step."
                                 : signInDetail) {
@@ -1407,13 +1539,8 @@ private struct ProviderSettingsSection: View {
                         ProviderAccountsSection(provider: provider)
                     }
                 }
+                .modifier(ProviderCardTopAlignment(enabled: alignsCardTop))
             }
-            // Collapsed content is neither focusable, tappable nor in the accessibility
-            // tree; the clip reveals it top-anchored as the fraction slides.
-            .clipped()
-            .disabled(!isExpanded)
-            .allowsHitTesting(isExpanded)
-            .accessibilityHidden(!isExpanded)
         }
         .onDisappear { signInTask?.cancel() }
         .onAppear {

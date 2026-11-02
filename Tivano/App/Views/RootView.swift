@@ -592,7 +592,7 @@ private struct OpenProvidersSettingsButton: View {
             WindowManager.shared.showSettings(page: .providers)
         }
         .buttonStyle(.glass)
-        .help(Text(verbatim: Chrome.localized("Open Settings > Providers")))
+        .help(Text(verbatim: Chrome.localized("Open Settings › Providers")))
     }
 }
 

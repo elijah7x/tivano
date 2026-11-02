@@ -109,7 +109,7 @@ enum ZaiAPI {
                     title: title,
                     percent: percent,
                     resetsAt: resetsAt,
-                    detail: "\(formatCount(current)) of \(formatCount(usage)) credits"
+                    detail: String(format: AppText.localized("%@ of %@ credits"), formatCount(current), formatCount(usage))
                 ))
                 creditIndex += 1
             case "TIME_LIMIT":
@@ -118,7 +118,7 @@ enum ZaiAPI {
                     title: "Monthly · MCP tools",
                     percent: percent,
                     resetsAt: resetsAt,
-                    detail: "\(formatCount(current)) of \(formatCount(usage)) calls"
+                    detail: String(format: AppText.localized("%@ of %@ calls"), formatCount(current), formatCount(usage))
                 ))
                 toolsIndex += 1
             default:
@@ -173,7 +173,7 @@ enum ZaiAPI {
         let (data, _) = try await URLSession.shared.data(for: request)
         guard let json = JSONValue.parse(data) else { throw ResetCreditError.unknownOutcome }
         guard json["code"]?.int == 200, json["success"]?.bool == true else {
-            throw ResetCreditError.rejected(json["msg"]?.string ?? "Z.ai declined the reset.")
+            throw ResetCreditError.rejected(json["msg"]?.string ?? AppText.localized("Z.ai declined the reset."))
         }
         // The meters lag the reset by a moment; the dashboard waits the same two seconds.
         try? await Task.sleep(for: .seconds(2))

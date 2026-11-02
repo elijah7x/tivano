@@ -104,7 +104,7 @@ struct ThreadDirectoryError: View {
     }
 }
 
-/// The tab above the pill: a usage-limit offer while one is open, else the queue while
+/// The tab above the pill: a pending provider switch, else a usage-limit offer, else the queue while
 /// any follow-ups are queued, else the changes tab. The agent's questions are badges in the conversation now.
 /// Reading them here keeps stats refreshes and question arrivals off the area,
 /// whose body watches approvals alone.
@@ -121,9 +121,13 @@ private struct TabSlot: View {
         // The slot exists only while a tab does, or the stack's overlap would
         // pull an empty slot's box up by that much.
         let limitOffer = model.autoContinue.offer(for: runtime.threadID)
-        if limitOffer != nil || !runtime.followUps.isEmpty || (showsChanges && runtime.changeStats != nil) {
+        let hasPendingProviderSwitch = model.thread(runtime.threadID)?.pendingProviderSwitch != nil
+        if hasPendingProviderSwitch || limitOffer != nil || !runtime.followUps.isEmpty || (showsChanges && runtime.changeStats != nil) {
             ZStack(alignment: .bottom) {
-                if let limitOffer {
+                if hasPendingProviderSwitch {
+                    ProviderSwitchTab(threadID: runtime.threadID)
+                        .transition(.softAppear)
+                } else if let limitOffer {
                     // A spent limit asks for a decision, so it takes the slot over the queue.
                     UsageLimitTab(threadID: runtime.threadID, offer: limitOffer)
                         .transition(.softAppear)

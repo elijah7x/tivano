@@ -210,7 +210,7 @@ private struct ModelEffortPanel: View {
                         .transition(.opacity)
                 }
             }
-            .frame(width: page == .temporaryPair ? 360 : 330)
+            .frame(width: page == .models ? nil : (page == .temporaryPair ? 360 : 330))
             .animation(.easeOut(duration: 0.12), value: page)
             .onChange(of: thread.temporaryHydraPair == nil) { _, isMissing in
                 if isMissing, page == .temporaryPair { page = .models }
@@ -219,7 +219,7 @@ private struct ModelEffortPanel: View {
     }
 
     private func modelList(for thread: ChatThread) -> some View {
-        ModelList(thread: thread, hasHistory: hasHistory) { entry in
+        ModelList(thread: thread, hasHistory: hasHistory, allowsPairColumns: true) { entry in
             choose(entry, for: thread)
             page = .slider
         } onEnterPair: { pair in
@@ -343,6 +343,17 @@ private struct ModelEffortPanel: View {
         let switchesProvider = provider != thread.provider
         let preference = model.settings.preference(for: provider, model: option.id)
         let effort = preference.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
+        if (hasHistory && switchesProvider) || thread.pendingProviderSwitch != nil {
+            model.stageProviderSwitch(thread.id) { thread in
+                thread.provider = provider
+                thread.model = option.id
+                thread.effort = effort
+                thread.fastMode = option.supportsFast && preference.fastMode
+                thread.hydraPairID = nil
+                thread.temporaryHydraPair = nil
+            }
+            return
+        }
         model.updateThread(thread.id) { thread in
             if switchesProvider {
                 thread.provider = provider
@@ -365,6 +376,7 @@ struct ModelList: View {
     @Environment(AppModel.self) private var model
     let thread: ChatThread
     let hasHistory: Bool
+    var allowsPairColumns = false
     let onChoose: (ModelCatalog.Entry) -> Void
     /// Left out where the list is only shown, as in the website captures.
     var onEnterPair: (HydraPair) -> Void = { _ in }
@@ -378,7 +390,7 @@ struct ModelList: View {
     @FocusState private var searchIsFocused: Bool
 
     /// A pair row carries two lines, like a model row with its provider under it.
-    private static let pairRowHeight: CGFloat = 46
+    private static let pairRowHeight: CGFloat = 42
     /// What a group title takes: an 11 pt line with its own padding above and below.
     private static let sectionHeaderHeight: CGFloat = 22
     /// The same for Recent, Pairs and Models, which read one size larger than the groups under them.
@@ -392,6 +404,7 @@ struct ModelList: View {
         case section(ModelSection, hiddenCount: Int)
         case otherFold(Int)
         case empty(searching: Bool)
+        case noPairsMatch
 
         var id: String {
             switch self {
@@ -402,6 +415,7 @@ struct ModelList: View {
             case .section(let section, _): "section/\(section.id)"
             case .otherFold: "other-fold"
             case .empty: "empty"
+            case .noPairsMatch: "no-pairs-match"
             }
         }
 
@@ -411,7 +425,7 @@ struct ModelList: View {
             case .section: ModelList.sectionHeaderHeight
             case .pair, .newTemporaryPair: ModelList.pairRowHeight
             case .otherFold: 34
-            case .entry, .empty: modelRowHeight
+            case .entry, .empty, .noPairsMatch: modelRowHeight
             }
         }
     }
@@ -428,9 +442,15 @@ struct ModelList: View {
         let leadsWithPair = leadsWithTemporaryPair || pairs.contains { model.leadsWithHydraPair($0, thread: thread) }
         let showsProviders = Set(entries.map(\.provider)).count > 1
         // Fixed row heights let the popover size itself in one pass instead of measuring and resizing.
-        let rowHeight: CGFloat = showsProviders || (hasHistory && entries.contains { $0.provider != thread.provider }) ? 46 : 34
-        let rows = displayRows(entries: entries, searchEntries: searchEntries, pairs: pairs, query: searchQuery)
-        let contentHeight = rows.reduce(CGFloat.zero) { $0 + $1.height(modelRowHeight: rowHeight) + 1 }
+        let rowHeight: CGFloat = showsProviders || (hasHistory && entries.contains { $0.provider != thread.provider }) ? 42 : 32
+        let showsPairs = !pairs.isEmpty || (!hasHistory && model.hydraIsOn(thread))
+        let twoColumns = allowsPairColumns && showsPairs
+        let leftRows = pairRows(pairs: pairs, query: searchQuery)
+        let rows = modelColumnRows(entries: entries, searchEntries: searchEntries, query: searchQuery)
+        let singleRows = displayRows(entries: entries, searchEntries: searchEntries, pairs: pairs, query: searchQuery)
+        let contentHeight = twoColumns
+            ? max(contentHeight(leftRows, rowHeight: rowHeight), contentHeight(rows, rowHeight: rowHeight))
+            : contentHeight(singleRows, rowHeight: rowHeight)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Button(action: onBack) {
@@ -461,86 +481,24 @@ struct ModelList: View {
             .padding(.top, 8)
             .padding(.bottom, 4)
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(rows) { row in
-                        switch row {
-                        case .header(let title):
-                            PopoverSectionHeader(title, weight: .bold, style: .callout)
-                                .frame(height: Self.topHeaderHeight)
-                        case .pair(let pair, let temporary, let recent):
-                            let locked = hasHistory && pair.provider != thread.provider
-                            HydraPairListRow(
-                                pair: pair,
-                                title: HydraPairSummary.title(pair, registry: model.providers),
-                                detail: locked ? "New chats only" : detail(for: pair, temporary: temporary),
-                                rowHeight: Self.pairRowHeight,
-                                isSelected: temporary ? (!recent || model.leadsWithHydraPair(pair, thread: thread)) : (!leadsWithTemporaryPair && model.leadsWithHydraPair(pair, thread: thread)),
-                                isEnabled: !locked
-                            ) {
-                                if temporary {
-                                    if recent { onEnterTemporaryPair(pair) }
-                                    else { onEditTemporaryPair() }
-                                } else {
-                                    onEnterPair(pair)
-                                }
-                            }
-                        case .newTemporaryPair:
-                            NewTemporaryPairListRow(rowHeight: Self.pairRowHeight) {
-                                model.startTemporaryHydraPair(for: thread.id)
-                                onEditTemporaryPair()
-                            }
-                        case .entry(let entry, _):
-                            let locked = isLocked(entry)
-                            ModelListRow(
-                                entry: entry,
-                                // A model listed on two routes here says which route under its name.
-                                detail: locked ? "New chats only" : ([showsProviders ? entry.provider.displayName : nil, routeShown(entry, in: rows)].compactMap { $0 }.joined(separator: " · ").nilIfEmpty),
-                                showsIcon: showsProviders,
-                                rowHeight: rowHeight,
-                                isSelected: !leadsWithPair && entry.provider == thread.provider && entry.option.id == thread.model,
-                                isEnabled: !locked
-                            ) {
-                                onChoose(entry)
-                            }
-                        case .section(let section, let hiddenCount):
-                            headingRow(
-                                Text(verbatim: section.name),
-                                id: row.id,
-                                weight: .medium,
-                                style: .subheadline,
-                                collapsed: model.settings.isModelSectionCollapsed(section.id),
-                                count: hiddenCount > 0 ? hiddenCount : nil,
-                                height: Self.sectionHeaderHeight
-                            ) {
-                                model.settings.toggleModelSectionCollapsed(section.id)
-                            }
-                        case .otherFold(let count):
-                            headingRow(
-                                Text("Other models · New chats only"),
-                                id: row.id,
-                                weight: .bold,
-                                style: .callout,
-                                collapsed: !showsOtherModels,
-                                count: count,
-                                height: 34
-                            ) {
-                                showsOtherModels.toggle()
-                            }
-                        case .empty(let searching):
-                            Text(verbatim: Chrome.localized(searching ? "No models match" : "Loading models…"))
-                                .font(.ui(.body))
-                                .foregroundStyle(Chrome.secondaryText)
-                                .padding(10)
-                                .frame(height: rowHeight)
-                        }
-                    }
+            if twoColumns {
+                HStack(alignment: .top, spacing: 0) {
+                    column(leftRows, label: "Pairs", rowHeight: rowHeight, showsProviders: showsProviders, leadsWithPair: leadsWithPair, leadsWithTemporaryPair: leadsWithTemporaryPair)
+                        .frame(width: 250)
+                    Divider()
+                        .frame(width: 1)
+                        .padding(.vertical, 6)
+                    column(rows, label: "Models", rowHeight: rowHeight, showsProviders: showsProviders, leadsWithPair: leadsWithPair, leadsWithTemporaryPair: leadsWithTemporaryPair)
+                        .frame(maxWidth: .infinity)
                 }
+                .frame(height: min(contentHeight, 440))
+            } else {
+                column(singleRows, label: "Models", rowHeight: rowHeight, showsProviders: showsProviders, leadsWithPair: leadsWithPair, leadsWithTemporaryPair: leadsWithTemporaryPair, horizontalPadding: 0)
+                    .frame(height: min(contentHeight, 440))
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(contentHeight, 440))
         }
         .padding(6)
+        .frame(width: twoColumns ? 580 : 330)
         .onAppear { searchIsFocused = true }
         .task {
             // A pair on another provider, or with its heads on one, names its models from
@@ -551,14 +509,169 @@ struct ModelList: View {
         }
     }
 
+    private func contentHeight(_ rows: [DisplayRow], rowHeight: CGFloat) -> CGFloat {
+        rows.reduce(CGFloat.zero) { $0 + $1.height(modelRowHeight: rowHeight) + 1 }
+    }
+
+    private func column(_ rows: [DisplayRow], label: String, rowHeight: CGFloat, showsProviders: Bool, leadsWithPair: Bool, leadsWithTemporaryPair: Bool, horizontalPadding: CGFloat = 4) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 1) {
+                ForEach(rows) { row in
+                    rowView(row, rows: rows, rowHeight: rowHeight, showsProviders: showsProviders, leadsWithPair: leadsWithPair, leadsWithTemporaryPair: leadsWithTemporaryPair)
+                }
+            }
+            .padding(.horizontal, horizontalPadding)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .accessibilityLabel(Text(verbatim: Chrome.localized(label)))
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: DisplayRow, rows: [DisplayRow], rowHeight: CGFloat, showsProviders: Bool, leadsWithPair: Bool, leadsWithTemporaryPair: Bool) -> some View {
+        switch row {
+        case .header(let title):
+            PopoverSectionHeader(title, weight: .bold, style: .callout)
+                .frame(height: Self.topHeaderHeight)
+        case .pair(let pair, let temporary, let recent):
+            let locked = hasHistory && pair.provider != thread.provider && switchBlocker != nil
+            HydraPairListRow(
+                pair: pair,
+                title: HydraPairSummary.title(pair, registry: model.providers),
+                detail: locked ? (switchBlocker ?? "") : detail(for: pair, temporary: temporary),
+                rowHeight: Self.pairRowHeight,
+                isSelected: temporary ? (!recent || model.leadsWithHydraPair(pair, thread: thread)) : (!leadsWithTemporaryPair && model.leadsWithHydraPair(pair, thread: thread)),
+                isEnabled: !locked
+            ) {
+                if temporary {
+                    if recent { onEnterTemporaryPair(pair) }
+                    else { onEditTemporaryPair() }
+                } else {
+                    onEnterPair(pair)
+                }
+            }
+            .help(locked ? (switchBlocker ?? "") : "")
+        case .newTemporaryPair:
+            NewTemporaryPairListRow(rowHeight: Self.pairRowHeight) {
+                model.startTemporaryHydraPair(for: thread.id)
+                onEditTemporaryPair()
+            }
+        case .entry(let entry, _):
+            let locked = isLocked(entry)
+            ModelListRow(
+                entry: entry,
+                // A model listed on two routes here says which route under its name.
+                detail: locked ? switchBlocker : ([showsProviders ? entry.provider.displayName : nil, routeShown(entry, in: rows)].compactMap { $0 }.joined(separator: " · ").nilIfEmpty),
+                showsIcon: showsProviders,
+                rowHeight: rowHeight,
+                isSelected: !leadsWithPair && entry.provider == thread.provider && entry.option.id == thread.model,
+                isEnabled: !locked
+            ) {
+                onChoose(entry)
+            }
+            .help(locked ? (switchBlocker ?? "") : "")
+        case .section(let section, let hiddenCount):
+            headingRow(
+                Text(verbatim: section.name),
+                id: row.id,
+                weight: .medium,
+                style: .subheadline,
+                collapsed: model.settings.isModelSectionCollapsed(section.id),
+                count: hiddenCount > 0 ? hiddenCount : nil,
+                height: Self.sectionHeaderHeight
+            ) {
+                model.settings.toggleModelSectionCollapsed(section.id)
+            }
+        case .otherFold(let count):
+            headingRow(
+                Text(verbatim: Chrome.localized(hasHistory ? "Other models · Switch with handoff" : "Other models · New chats only")),
+                id: row.id,
+                weight: .bold,
+                style: .callout,
+                collapsed: !showsOtherModels,
+                count: count,
+                height: 34
+            ) {
+                showsOtherModels.toggle()
+            }
+        case .noPairsMatch:
+            Text(verbatim: Chrome.localized("No pairs match"))
+                .font(.ui(.body))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(10)
+                .frame(height: rowHeight)
+        case .empty(let searching):
+            Text(verbatim: Chrome.localized(searching ? "No models match" : "Loading models…"))
+                .font(.ui(.body))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(10)
+                .frame(height: rowHeight)
+        }
+    }
+
+    private func pairRows(pairs: [HydraPair], query: String) -> [DisplayRow] {
+        let rows = displayRows(entries: [], searchEntries: [], pairs: pairs, query: "").filter {
+            switch $0 {
+            case .pair, .newTemporaryPair: return true
+            default: return false
+            }
+        }
+        if !query.isEmpty {
+            // A recent pair also listed under Pairs shows once; one only in Recent stays.
+            let listed = Set(rows.compactMap { row -> UUID? in
+                if case .pair(let pair, _, false) = row { return pair.id }
+                return nil
+            })
+            let matches = rows.filter {
+                guard case .pair(let pair, let temporary, let recent) = $0,
+                      !(recent && listed.contains(pair.id)) else { return false }
+                return HydraPairSummary.title(pair, registry: model.providers).localizedCaseInsensitiveContains(query)
+                    || detail(for: pair, temporary: temporary).localizedCaseInsensitiveContains(query)
+            }
+            return matches.isEmpty ? [.noPairsMatch] : matches
+        }
+        var result: [DisplayRow] = []
+        for row in rows {
+            if case .pair(_, _, true) = row {
+                result.append(.header("Recent"))
+                result.append(row)
+            }
+        }
+        result.append(.header("Pairs"))
+        result.append(contentsOf: rows.filter {
+            if case .pair(_, _, true) = $0 { return false }
+            return true
+        })
+        return result
+    }
+
+    private func modelColumnRows(entries: [ModelCatalog.Entry], searchEntries: [ModelCatalog.Entry], query: String) -> [DisplayRow] {
+        displayRows(entries: entries, searchEntries: searchEntries, pairs: [], query: query).filter {
+            switch $0 {
+            case .pair, .newTemporaryPair: return false
+            case .header(let title):
+                if title == "Pairs" { return false }
+                let hasRecentModel = !hasHistory && entries.contains {
+                    !isLocked($0) && $0.provider == model.settings.lastNewChatModel?.provider
+                        && $0.option.id == model.settings.lastNewChatModel?.modelID
+                }
+                return hasRecentModel
+            default: return true
+            }
+        }
+    }
+
+    private var switchBlocker: String? {
+        model.existingRuntime(for: thread.id)?.providerSwitchBlocker
+    }
+
     private func isLocked(_ entry: ModelCatalog.Entry) -> Bool {
-        hasHistory && entry.provider != thread.provider
+        hasHistory && entry.provider != thread.provider && switchBlocker != nil
     }
 
     private func displayRows(entries: [ModelCatalog.Entry], searchEntries: [ModelCatalog.Entry], pairs: [HydraPair], query: String) -> [DisplayRow] {
         let displayedEntries = query.isEmpty ? entries : searchEntries
-        let selectable = displayedEntries.filter { !isLocked($0) }
-        let locked = displayedEntries.filter { isLocked($0) }
+        let selectable = displayedEntries.filter { !hasHistory || $0.provider == thread.provider }
+        let locked = displayedEntries.filter { hasHistory && $0.provider != thread.provider }
         if !query.isEmpty {
             let matches = (selectable + locked).filter {
                 ModelsSettingsPage.matches($0.option, id: $0.option.id, provider: $0.provider, query: query)
@@ -699,9 +812,9 @@ private struct NewTemporaryPairListRow: View {
             HStack(spacing: 10) {
                 Image(systemName: "plus")
                     .font(.ui(.body))
-                    .frame(width: 18)
+                    .frame(width: 16)
                 Text("New temporary pair")
-                    .font(.ui(size: 14))
+                    .font(.ui(size: 13))
                     .lineLimit(1)
                 Spacer(minLength: 12)
             }
@@ -738,21 +851,21 @@ private struct HydraPairListRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                HydraFusedPairIcon(lead: pair.provider, heads: pair.headsProvider, size: 16, animates: false)
-                    .frame(width: 18)
+                HydraFusedPairIcon(lead: pair.provider, heads: pair.headsProvider, size: 15, animates: false)
+                    .frame(width: 16)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: title)
-                        .font(.ui(size: 14))
+                        .font(.ui(size: 13))
                         .foregroundStyle(Chrome.primaryText)
                         .lineLimit(1)
                     Text(verbatim: Chrome.localized(detail))
-                        .font(.ui(.callout))
+                        .font(.ui(.subheadline))
                         .foregroundStyle(Chrome.secondaryText)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 12)
                 Image(systemName: "checkmark")
-                    .font(.ui(.body, weight: .semibold))
+                    .font(.ui(.callout, weight: .semibold))
                     .foregroundStyle(Chrome.primaryText)
                     .opacity(isSelected ? 1 : 0)
             }
@@ -788,17 +901,17 @@ private struct ModelListRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 if showsIcon {
-                    ProviderIcon(provider: entry.provider, size: 14)
+                    ProviderIcon(provider: entry.provider, size: 13)
                         .foregroundStyle(Chrome.secondaryText)
-                        .frame(width: 18)
+                        .frame(width: 16)
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: entry.option.shortName)
-                        .font(.ui(size: 14))
+                        .font(.ui(size: 13))
                         .foregroundStyle(Chrome.primaryText)
                     if let detail {
                         Text(verbatim: detail)
-                            .font(.ui(.callout))
+                            .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                     }
                 }
@@ -809,7 +922,7 @@ private struct ModelListRow: View {
                         .foregroundStyle(Chrome.secondaryText)
                 }
                 Image(systemName: "checkmark")
-                    .font(.ui(.body, weight: .semibold))
+                    .font(.ui(.callout, weight: .semibold))
                     .foregroundStyle(Chrome.primaryText)
                     .opacity(isSelected ? 1 : 0)
             }

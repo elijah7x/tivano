@@ -614,7 +614,7 @@ final class ProviderRegistry {
                 if !result.succeeded {
                     let output = TextCleanup.stripANSI(result.output + result.errorOutput)
                     guard let lastLine = output.split(separator: "\n", omittingEmptySubsequences: true).last, !lastLine.isEmpty else {
-                        return "\(provider.displayName) did not finish signing in."
+                        return String(format: AppText.localized("%@ did not finish signing in."), provider.displayName)
                     }
                     return String(lastLine)
                 }
@@ -740,7 +740,7 @@ final class ProviderRegistry {
             let auth: ProviderStatus.Auth = settings.apiKey(for: .zai).isEmpty
                 ? .signedOut : .signedIn(AppText.localized("GLM Coding Plan key"))
             let authMessage = auth == .signedOut
-                ? AppText.localized("ZCode signs in with your GLM Coding Plan key. Add it in Settings → Providers → Z.ai.") : nil
+                ? AppText.localized("ZCode signs in with your GLM Coding Plan key. Add it in Settings › Providers › Z.ai.") : nil
             setStatus(ProviderStatus(executable: executable, version: ZCodeCLI.version(entry: executable), auth: auth,
                                      authMessage: authMessage, catalogError: statuses[provider]?.catalogError), for: provider)
             return
@@ -759,7 +759,7 @@ final class ProviderRegistry {
         guard provider != .claude || accounts.selectionRevision == observedRevision else { return }
         guard provider != .dsh || (dshRevision == dshAuthenticationRevision && !Task.isCancelled) else { return }
         let authMessage = provider == .dsh && auth == .signedOut
-            ? AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings → Providers → DeepSeek.")
+            ? AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings › Providers › DeepSeek.")
             : nil
         setStatus(ProviderStatus(executable: executable, version: version, auth: auth, authMessage: authMessage, catalogError: statuses[provider]?.catalogError), for: provider)
     }

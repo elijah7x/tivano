@@ -135,7 +135,7 @@ struct DownloadsPopover: View {
                     NSWorkspace.shared.open(directory)
                 }
             }
-            PopoverItem("Choose Files…", symbol: "doc.on.doc") {
+            PopoverItem("Choose files…", symbol: "doc.on.doc") {
                 chooseOther()
             }
         }

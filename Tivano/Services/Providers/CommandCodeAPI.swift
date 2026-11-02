@@ -84,7 +84,7 @@ enum CommandCodeAPI {
         guard let credits else { return nil }
         var windows: [PlanLimits.Window] = []
         let limits = credits["windowLimits"] ?? .null
-        for (key, title) in [("fiveHour", "5-hour limit"), ("weekly", "Weekly")] {
+        for (key, title) in [("fiveHour", AppText.localized("5-hour limit")), ("weekly", AppText.localized("Weekly"))] {
             guard let window = limits[key], !window.isNull, let cap = window["cap"]?.double, cap > 0 else { continue }
             let used = window["used"]?.double ?? 0
             let resetAt = window["resetAt"]?.double.flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0 / 1_000) : nil }
@@ -186,7 +186,7 @@ enum CommandCodeAPI {
         let configured = userConfig(environment: environment)
         let list = parseModels(text, configuredModel: configured?["model"]?.string, configuredEfforts: configured?["reasoningEffort"])
         guard !list.isEmpty else {
-            throw ProviderError.failed(TextCleanup.lastLines(result.errorOutput + result.output) ?? "Command Code listed no models.")
+            throw ProviderError.failed(TextCleanup.lastLines(result.errorOutput + result.output) ?? AppText.localized("Command Code listed no models."))
         }
         return list
     }

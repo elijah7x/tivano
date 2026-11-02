@@ -98,7 +98,7 @@ final class CommandCodeSession: ProviderSession {
     func start() async throws -> String {
         guard configuration.executable != nil else { throw ProviderError.notInstalled(configuration.provider) }
         if let sessionID, !Self.transcriptExists(sessionID, environment: configuration.environment) {
-            throw ProviderError.failed("Command Code no longer has this conversation; starting a new one.")
+            throw ProviderError.failed(AppText.localized("Command Code no longer has this conversation; starting a new one."))
         }
         modURL = try CommandCodeAPI.installMod()
         let directory = CommandCodeAPI.supportDirectory
@@ -125,7 +125,7 @@ final class CommandCodeSession: ProviderSession {
 
     func send(_ input: TurnInput) async throws {
         guard isRunning, let executable = configuration.executable else { throw ProviderError.notRunning }
-        guard !turnActive else { throw ProviderError.failed("Command Code is still on the last turn.") }
+        guard !turnActive else { throw ProviderError.failed(AppText.localized("Command Code is still on the last turn.")) }
         runtimeMode = input.runtimeMode
         interactionMode = input.interactionMode
         if let model = input.model, !model.isEmpty { self.model = model }
@@ -189,7 +189,7 @@ final class CommandCodeSession: ProviderSession {
             try process.start()
         } catch {
             turnActive = false
-            throw ProviderError.failed("Command Code could not start: \(error.localizedDescription)")
+            throw ProviderError.failed(String(format: AppText.localized("Command Code could not start: %@"), error.localizedDescription))
         }
         process.write(Data(Self.prompt(for: input).utf8))
         process.closeInput()
@@ -235,7 +235,7 @@ final class CommandCodeSession: ProviderSession {
     }
 
     func compact() async throws {
-        throw ProviderError.failed("Command Code compacts its context on its own.")
+        throw ProviderError.failed(AppText.localized("Command Code compacts its context on its own."))
     }
 
     func resolveApproval(_ requestID: String, optionID: String) {
@@ -367,11 +367,11 @@ final class CommandCodeSession: ProviderSession {
             onEvent?(.toolUpdated(id: id, update: update))
         case "tool_errored":
             guard let id = event["toolCallId"]?.string, toolNames[id] != "todo_write" else { return }
-            let error = Self.errorText(event["error"]) ?? "The tool failed."
+            let error = Self.errorText(event["error"]) ?? AppText.localized("The tool failed.")
             onEvent?(.toolUpdated(id: id, update: ToolUpdate(output: error, status: .failed, edits: finishEdit(id))))
         case "tool_hook_blocked", "tool_denied":
             guard let id = event["toolCallId"]?.string, toolNames[id] != "todo_write" else { return }
-            let reason = event["hookOutput"]?.string ?? event["denyMessage"]?.string ?? "Declined."
+            let reason = event["hookOutput"]?.string ?? event["denyMessage"]?.string ?? AppText.localized("Declined.")
             editSnapshots.discard(id)
             onEvent?(.toolUpdated(id: id, update: ToolUpdate(output: reason, status: .declined)))
             if pendingApprovals.removeValue(forKey: id) != nil { onEvent?(.requestResolved(id: id)) }
@@ -438,7 +438,7 @@ final class CommandCodeSession: ProviderSession {
                 noteTurnCap()
                 onEvent?(.turnCompleted(status: .completed, error: nil))
             default:
-                let error = runResult.error ?? runError ?? TextCleanup.lastLines(process.errorTail) ?? "Command Code stopped before finishing."
+                let error = runResult.error ?? runError ?? TextCleanup.lastLines(process.errorTail) ?? AppText.localized("Command Code stopped before finishing.")
                 if Self.isRateLimit(error) { onEvent?(.usageLimit(resetsAt: nil)) }
                 onEvent?(.turnCompleted(status: .failed, error: Self.friendlyError(error)))
             }
@@ -450,33 +450,33 @@ final class CommandCodeSession: ProviderSession {
         case 0:
             onEvent?(.turnCompleted(status: .completed, error: nil))
         case 3:
-            onEvent?(.turnCompleted(status: .failed, error: "Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings → Providers → Command Code."))
+            onEvent?(.turnCompleted(status: .failed, error: AppText.localized("Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings › Providers › Command Code.")))
         case 4:
-            onEvent?(.turnCompleted(status: .failed, error: tail ?? "Command Code was denied permission."))
+            onEvent?(.turnCompleted(status: .failed, error: tail ?? AppText.localized("Command Code was denied permission.")))
         case 5:
             onEvent?(.usageLimit(resetsAt: nil))
-            onEvent?(.turnCompleted(status: .failed, error: tail ?? "Command Code is rate limited. Wait for the window to reset, or buy on-demand credits, which are never throttled."))
+            onEvent?(.turnCompleted(status: .failed, error: tail ?? AppText.localized("Command Code is rate limited. Wait for the window to reset, or buy on-demand credits, which are never throttled.")))
         case 6:
-            onEvent?(.turnCompleted(status: .failed, error: "Could not reach Command Code. Check the connection and try again."))
+            onEvent?(.turnCompleted(status: .failed, error: AppText.localized("Could not reach Command Code. Check the connection and try again.")))
         case 7:
-            onEvent?(.turnCompleted(status: .failed, error: tail ?? "Command Code's API returned a server error. Try again in a moment."))
+            onEvent?(.turnCompleted(status: .failed, error: tail ?? AppText.localized("Command Code's API returned a server error. Try again in a moment.")))
         case 8:
             noteTurnCap()
             onEvent?(.turnCompleted(status: .completed, error: nil))
         case 9:
-            onEvent?(.turnCompleted(status: .failed, error: "The model produced no response."))
+            onEvent?(.turnCompleted(status: .failed, error: AppText.localized("The model produced no response.")))
         case 10:
             let error = [runError, tail].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .first { !$0.isEmpty } ?? "Command Code reported a credit error. Check your billing status at commandcode.ai/billing."
+                .first { !$0.isEmpty } ?? AppText.localized("Command Code reported a credit error. Check your billing status at commandcode.ai/billing.")
             onEvent?(.turnCompleted(status: .failed, error: error))
         default:
-            onEvent?(.turnCompleted(status: .failed, error: runError ?? tail ?? "Command Code exited with code \(status)."))
+            onEvent?(.turnCompleted(status: .failed, error: runError ?? tail ?? String(format: AppText.localized("Command Code exited with code %d."), status)))
         }
     }
 
     private func noteTurnCap() {
         guard !isFinalReport else { return }
-        onEvent?(.notice(Notice(level: .warning, message: "Command Code stopped at its cap of \(Self.maxTurns) round trips for one message. Send another to carry on.")))
+        onEvent?(.notice(Notice(level: .warning, message: String(format: AppText.localized("Command Code stopped at its cap of %d round trips for one message. Send another to carry on."), Self.maxTurns))))
     }
 
     private static func isRateLimit(_ text: String) -> Bool {
@@ -488,7 +488,7 @@ final class CommandCodeSession: ProviderSession {
     private static func friendlyError(_ text: String) -> String {
         let lowered = text.lowercased()
         if lowered.contains("not authenticated") || lowered.contains("unauthorized") || lowered.contains("session expired") {
-            return "Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings → Providers → Command Code."
+            return AppText.localized("Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings › Providers › Command Code.")
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -521,12 +521,12 @@ final class CommandCodeSession: ProviderSession {
         }
         switch name {
         case "shell_command", "powershell":
-            let command = input["command"]?.string.map(ToolTitles.unwrapShell) ?? "Shell command"
+            let command = input["command"]?.string.map(ToolTitles.unwrapShell) ?? AppText.localized("Shell command")
             var call = ToolCall(kind: .command, title: command, detail: input["description"]?.string)
-            if input["run_in_background"]?.bool == true { call.detail = [call.detail, "in the background"].compactMap { $0 }.joined(separator: " · ") }
+            if input["run_in_background"]?.bool == true { call.detail = [call.detail, AppText.localized("in the background")].compactMap { $0 }.joined(separator: " · ") }
             return call
         case "monitor_command":
-            return ToolCall(kind: .command, title: input["command"]?.string.map(ToolTitles.unwrapShell) ?? "Monitor command")
+            return ToolCall(kind: .command, title: input["command"]?.string.map(ToolTitles.unwrapShell) ?? AppText.localized("Monitor command"))
         case "shell_output":
             return ToolCall(kind: .command, title: AppText.localized("Shell output"), detail: input["id"]?.string ?? input["task_id"]?.string)
         case "shell_tasks":
@@ -534,21 +534,21 @@ final class CommandCodeSession: ProviderSession {
         case "kill_shell":
             return ToolCall(kind: .command, title: AppText.localized("Stop shell"), detail: input["id"]?.string ?? input["task_id"]?.string ?? input["pid"]?.int.map(String.init))
         case "read_file":
-            var call = ToolCall(kind: .read, title: path("file_path") ?? path("path") ?? "Read file")
+            var call = ToolCall(kind: .read, title: path("file_path") ?? path("path") ?? AppText.localized("Read file"))
             if let offset = input["offset"]?.int, let limit = input["limit"]?.int {
-                call.detail = "lines \(offset)–\(offset + limit)"
+                call.detail = String(format: AppText.localized("lines %d–%d"), offset, offset + limit)
             }
             return call
         case "read_directory":
-            return ToolCall(kind: .search, title: path("path") ?? "List files")
+            return ToolCall(kind: .search, title: path("path") ?? AppText.localized("List files"))
         case "write_file":
-            var call = ToolCall(kind: .edit, title: path("file_path") ?? "Write file")
+            var call = ToolCall(kind: .edit, title: path("file_path") ?? AppText.localized("Write file"))
             if let file = path("file_path"), let content = input["content"]?.string {
                 call.edits = [FileEdit(path: file, old: snapshot ?? "", new: content)]
             }
             return call
         case "edit_file":
-            var call = ToolCall(kind: .edit, title: path("file_path") ?? path("path") ?? "Edit file")
+            var call = ToolCall(kind: .edit, title: path("file_path") ?? path("path") ?? AppText.localized("Edit file"))
             if let file = path("file_path") ?? path("path") {
                 let old = input["old_string"]?.string ?? input["old_text"]?.string ?? input["old"]?.string ?? ""
                 let new = input["new_string"]?.string ?? input["new_text"]?.string ?? input["new"]?.string ?? ""
@@ -556,25 +556,25 @@ final class CommandCodeSession: ProviderSession {
             }
             return call
         case "glob":
-            return ToolCall(kind: .search, title: input["pattern"]?.string ?? "Find files", detail: path("path"))
+            return ToolCall(kind: .search, title: input["pattern"]?.string ?? AppText.localized("Find files"), detail: path("path"))
         case "grep":
             let scope = [path("path"), input["glob"]?.string].compactMap { $0 }.joined(separator: " · ")
-            return ToolCall(kind: .search, title: input["pattern"]?.string ?? "Search", detail: scope.isEmpty ? nil : scope)
+            return ToolCall(kind: .search, title: input["pattern"]?.string ?? AppText.localized("Search"), detail: scope.isEmpty ? nil : scope)
         case "web_fetch":
-            return ToolCall(kind: .web, title: input["url"]?.string ?? "Fetch page")
+            return ToolCall(kind: .web, title: input["url"]?.string ?? AppText.localized("Fetch page"))
         case "web_search":
-            return ToolCall(kind: .web, title: input["query"]?.string ?? "Search the web")
+            return ToolCall(kind: .web, title: input["query"]?.string ?? AppText.localized("Search the web"))
         case "agent":
-            let description = input["description"]?.string ?? input["prompt"]?.string.map { TextCleanup.singleLine($0, limit: 96) } ?? "Sub-agent"
+            let description = input["description"]?.string ?? input["prompt"]?.string.map { TextCleanup.singleLine($0, limit: 96) } ?? AppText.localized("Sub-agent")
             return ToolCall(kind: .agent, title: description, detail: input["subagent_type"]?.string)
         case "agent_output":
             return ToolCall(kind: .agent, title: AppText.localized("Agent output"), detail: input["agent_id"]?.string)
         case "activate_skill":
-            return ToolCall(kind: .other, title: "Skill · \(input["name"]?.string ?? "")")
+            return ToolCall(kind: .other, title: String(format: AppText.localized("Skill · %@"), input["name"]?.string ?? ""))
         case "enter_worktree", "exit_worktree":
             return ToolCall(kind: .other, title: Self.humanize(name), detail: input["name"]?.string)
         case "run_command":
-            return ToolCall(kind: .other, title: "Command · \(input["command"]?.string ?? input["name"]?.string ?? "")")
+            return ToolCall(kind: .other, title: String(format: AppText.localized("Command · %@"), input["command"]?.string ?? input["name"]?.string ?? ""))
         default:
             if name.hasPrefix("mcp__") {
                 let parts = name.split(separator: "__", omittingEmptySubsequences: true)

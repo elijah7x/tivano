@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The popover a link in the chat opens on a right-click, in place of the system's text menu:
 /// the house rows, under the link. A merge or pull request link gets "Merge" first, wearing
-/// the forge's favicon; every link gets Open Link and Copy Link. One popover serves every
+/// the forge's favicon; every link gets Open Link and Copy link. One popover serves every
 /// link paragraph; opening it on another link moves it there.
 @MainActor
 final class LinkPopover: NSObject, NSPopoverDelegate {
@@ -88,7 +88,7 @@ private struct LinkPopoverContent: View {
             PopoverItem("Open Link", symbol: "safari") {
                 MarkdownLinkOpener.open(url)
             }
-            PopoverItem("Copy Link", symbol: "link") {
+            PopoverItem("Copy link", symbol: "link") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(url.absoluteString, forType: .string)
             }

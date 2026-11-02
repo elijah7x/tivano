@@ -177,7 +177,7 @@ final class ZCodeSession: ProviderSession {
             if let key = configuration.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
                 connection?.respond(to: id, result: ["headersApplied": true, "requestAuth": ["apiKey": .string(key)]])
             } else {
-                connection?.respond(to: id, result: ["headersApplied": false, "errorMessage": .string(AppText.localized("ZCode needs your GLM Coding Plan key. Add it in Settings → Providers → Z.ai."))])
+                connection?.respond(to: id, result: ["headersApplied": false, "errorMessage": .string(AppText.localized("ZCode needs your GLM Coding Plan key. Add it in Settings › Providers › Z.ai."))])
             }
         case "interaction/requestPermission":
             let name = params["toolName"]?.string ?? AppText.localized("Tool")

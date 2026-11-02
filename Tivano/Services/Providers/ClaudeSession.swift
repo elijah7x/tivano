@@ -208,11 +208,11 @@ final class ClaudeSession: ProviderSession {
                 guard message["type"]?.string == "control_response",
                       message["response"]?["request_id"]?.string == "handshake" else { continue }
                 guard let response = message["response"]?["response"], let commands = response["commands"]?.array else {
-                    throw ProviderError.failed("Claude could not load its commands.")
+                    throw ProviderError.failed(AppText.localized("Claude could not load its commands."))
                 }
                 return (models(in: response), SlashCommand.claudeCommands(commands))
             }
-            throw ProviderError.failed("Claude's command discovery did not finish. Try again.")
+            throw ProviderError.failed(AppText.localized("Claude's command discovery did not finish. Try again."))
         } onCancel: {
             process.terminate()
         }
@@ -399,7 +399,7 @@ final class ClaudeSession: ProviderSession {
 
     private func control(_ request: JSONValue) async throws -> JSONValue {
         guard let process else { throw ProviderError.notRunning }
-        if hasClosed { throw ProviderError.failed(launchError ?? "Claude exited.") }
+        if hasClosed { throw ProviderError.failed(launchError ?? AppText.localized("Claude exited.")) }
         controlCounter += 1
         let requestID = "tivano-\(controlCounter)"
         return try await pendingControl.register(requestID, timeout: .seconds(request["subtype"]?.string == "interrupt" ? 10 : 30)) {
@@ -473,9 +473,9 @@ final class ClaudeSession: ProviderSession {
             case "success":
                 pendingControl.resolve(requestID, response["response"] ?? .null)
             case "error":
-                pendingControl.fail(requestID, ProviderError.failed(response["error"]?.string ?? "Claude rejected the request."))
+                pendingControl.fail(requestID, ProviderError.failed(response["error"]?.string ?? AppText.localized("Claude rejected the request.")))
             default:
-                pendingControl.fail(requestID, ProviderError.failed("Claude rejected the request."))
+                pendingControl.fail(requestID, ProviderError.failed(AppText.localized("Claude rejected the request.")))
             }
         case "control_request":
             handleControlRequest(message)
@@ -512,8 +512,9 @@ final class ClaudeSession: ProviderSession {
             let info = message["rate_limit_info"] ?? .null
             if info["status"]?.string == "rejected" {
                 let resetsAt = (info["resetsAt"]?.double ?? info["resetsAtSeconds"]?.double).map { Date(timeIntervalSince1970: $0) }
-                let when = resetsAt.map { " It resets at \(UsageLimitSignal.format($0))." } ?? ""
-                onEvent?(.notice(Notice(level: .warning, message: "Claude hit a usage limit.\(when)")))
+                let limited = resetsAt.map { String(format: AppText.localized("Claude hit a usage limit. It resets at %@."), UsageLimitSignal.format($0)) }
+                    ?? AppText.localized("Claude hit a usage limit.")
+                onEvent?(.notice(Notice(level: .warning, message: limited)))
                 onEvent?(.usageLimit(resetsAt: resetsAt))
             }
         default:
@@ -530,7 +531,7 @@ final class ClaudeSession: ProviderSession {
             }
         case "compact_boundary":
             invalidateContextUsage()
-            onEvent?(.notice(Notice(level: .info, message: "Context compacted.")))
+            onEvent?(.notice(Notice(level: .info, message: AppText.localized("Context compacted."))))
         case "task_started":
             handleTaskStarted(message)
         case "task_progress":
@@ -574,7 +575,7 @@ final class ClaudeSession: ProviderSession {
         guard let taskID = message["task_id"]?.string, message["skip_transcript"]?.bool != true else { return }
         let isAgent = message["subagent_type"]?.string != nil || message["task_type"]?.string == "local_agent"
         guard isAgent else {
-            backgroundTasks.append((taskID, message["description"]?.string ?? "a background command"))
+            backgroundTasks.append((taskID, message["description"]?.string ?? AppText.localized("a background command")))
             onEvent?(.backgroundTasks(backgroundTasks.map(\.description)))
             return
         }
@@ -749,7 +750,7 @@ final class ClaudeSession: ProviderSession {
             let text = message["result"]?.string ?? errors
             // The limit refusal may arrive as the result alone, without a rate limit event before it.
             if UsageLimitSignal.matches(text) { onEvent?(.usageLimit(resetsAt: UsageLimitSignal.resetTime(in: text))) }
-            onEvent?(.turnCompleted(status: .failed, error: text.isEmpty ? "Claude stopped before finishing." : text))
+            onEvent?(.turnCompleted(status: .failed, error: text.isEmpty ? AppText.localized("Claude stopped before finishing.") : text))
         } else {
             onEvent?(.turnCompleted(status: .completed, error: nil))
         }
@@ -839,7 +840,7 @@ final class ClaudeSession: ProviderSession {
         // The result's own error names the failure better than the stderr tail can.
         let reason = launchError ?? TextCleanup.lastLines(tail)
         launchError = reason
-        pendingControl.failAll(ProviderError.failed(reason ?? "Claude exited."))
+        pendingControl.failAll(ProviderError.failed(reason ?? AppText.localized("Claude exited.")))
         turnActive = false
         // A launch that failed is reported by `start()` throwing; only a session that
         // ran says it exited.
@@ -860,25 +861,25 @@ final class ClaudeSession: ProviderSession {
         case "TodoWrite", "AskUserQuestion", "ExitPlanMode", "EnterPlanMode", "ToolSearch":
             return nil
         case "Bash":
-            return ToolCall(kind: .command, title: input["command"]?.string ?? "Shell command", detail: input["description"]?.string)
+            return ToolCall(kind: .command, title: input["command"]?.string ?? AppText.localized("Shell command"), detail: input["description"]?.string)
         case "BashOutput", "KillShell", "KillBash", "Monitor", "TaskOutput", "TaskStop":
             return ToolCall(kind: .command, title: name)
         case "Read":
-            return ToolCall(kind: .read, title: path("file_path") ?? "Read file")
+            return ToolCall(kind: .read, title: path("file_path") ?? AppText.localized("Read file"))
         case "Write":
-            var call = ToolCall(kind: .edit, title: path("file_path") ?? "Write file")
+            var call = ToolCall(kind: .edit, title: path("file_path") ?? AppText.localized("Write file"))
             if withEdits, let file = path("file_path"), let content = input["content"]?.string {
                 call.edits = [FileEdit(path: file, old: "", new: content)]
             }
             return call
         case "Edit":
-            var call = ToolCall(kind: .edit, title: path("file_path") ?? "Edit file")
+            var call = ToolCall(kind: .edit, title: path("file_path") ?? AppText.localized("Edit file"))
             if withEdits, let file = path("file_path") {
                 call.edits = [FileEdit(path: file, old: input["old_string"]?.string ?? "", new: input["new_string"]?.string ?? "")]
             }
             return call
         case "MultiEdit":
-            var call = ToolCall(kind: .edit, title: path("file_path") ?? "Edit file")
+            var call = ToolCall(kind: .edit, title: path("file_path") ?? AppText.localized("Edit file"))
             if withEdits, let file = path("file_path") {
                 call.edits = (input["edits"]?.array ?? []).map {
                     FileEdit(path: file, old: $0["old_string"]?.string ?? "", new: $0["new_string"]?.string ?? "")
@@ -886,21 +887,21 @@ final class ClaudeSession: ProviderSession {
             }
             return call
         case "NotebookEdit":
-            return ToolCall(kind: .edit, title: path("notebook_path") ?? "Edit notebook")
+            return ToolCall(kind: .edit, title: path("notebook_path") ?? AppText.localized("Edit notebook"))
         case "Glob":
-            return ToolCall(kind: .search, title: input["pattern"]?.string ?? "Find files", detail: path("path"))
+            return ToolCall(kind: .search, title: input["pattern"]?.string ?? AppText.localized("Find files"), detail: path("path"))
         case "Grep":
-            return ToolCall(kind: .search, title: input["pattern"]?.string ?? "Search", detail: path("path"))
+            return ToolCall(kind: .search, title: input["pattern"]?.string ?? AppText.localized("Search"), detail: path("path"))
         case "LS":
-            return ToolCall(kind: .search, title: path("path") ?? "List files")
+            return ToolCall(kind: .search, title: path("path") ?? AppText.localized("List files"))
         case "WebFetch":
-            return ToolCall(kind: .web, title: input["url"]?.string ?? "Fetch page")
+            return ToolCall(kind: .web, title: input["url"]?.string ?? AppText.localized("Fetch page"))
         case "WebSearch":
-            return ToolCall(kind: .web, title: input["query"]?.string ?? "Search the web")
+            return ToolCall(kind: .web, title: input["query"]?.string ?? AppText.localized("Search the web"))
         case "Task", "Agent":
-            return ToolCall(kind: .agent, title: input["description"]?.string ?? "Subagent", detail: input["subagent_type"]?.string)
+            return ToolCall(kind: .agent, title: input["description"]?.string ?? AppText.localized("Subagent"), detail: input["subagent_type"]?.string)
         case "Skill":
-            return ToolCall(kind: .other, title: "Skill · \(input["skill"]?.string ?? input["command"]?.string ?? "")")
+            return ToolCall(kind: .other, title: String(format: AppText.localized("Skill · %@"), input["skill"]?.string ?? input["command"]?.string ?? ""))
         default:
             if name.hasPrefix("mcp__") {
                 let parts = name.split(separator: "__", omittingEmptySubsequences: true)

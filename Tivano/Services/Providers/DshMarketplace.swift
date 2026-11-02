@@ -90,7 +90,7 @@ enum DshMarketplace {
                (manifest["peerDependencies"] as? [String: Any] ?? [:]).isEmpty {
                 return DshLaunchPlan(executable: executable, arguments: arguments, environment: environment, ownedDirectory: nil)
             }
-            throw ProviderError.failed(String(format: AppText.localized("DeepSeek Harness at %@ cannot inherit the desktop app's marketplace profile, and retrying will fail the same way. Use the CLI bundled with the DeepSeek Harness app, or set it as the Binary path in Settings → Providers → DeepSeek Harness."), executable.path))
+            throw ProviderError.failed(String(format: AppText.localized("DeepSeek Harness at %@ cannot inherit the desktop app's marketplace profile, and retrying will fail the same way. Use the CLI bundled with the DeepSeek Harness app, or set it as the Binary path in Settings › Providers › DeepSeek Harness."), executable.path))
         }
         let state = DshCLI.home
         let root = state.appendingPathComponent("marketplace-runs", isDirectory: true)

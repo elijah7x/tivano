@@ -1656,7 +1656,7 @@ private struct CommitSheet: View {
                 }
                 .buttonStyle(.glass)
                 .disabled(isGenerating || !canGenerate)
-                .help(Text(verbatim: canGenerate ? Chrome.localized("Write a commit message from these changes") : Chrome.localized("Turn on text generation in Settings > Source control")))
+                .help(Text(verbatim: canGenerate ? Chrome.localized("Write a commit message from these changes") : Chrome.localized("Turn on text generation in Settings › Source control")))
                 Toggle("Push after committing", isOn: $pushesAfterCommit)
                     .toggleStyle(.checkbox)
                     .disabled(git.status?.branch == nil)

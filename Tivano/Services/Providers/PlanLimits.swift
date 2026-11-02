@@ -55,8 +55,8 @@ enum ResetCreditError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .codexUnavailable: "Codex CLI not found."
-        case .unknownOutcome: "Codex returned an unknown reset result."
+        case .codexUnavailable: AppText.localized("Codex CLI not found.")
+        case .unknownOutcome: AppText.localized("Codex returned an unknown reset result.")
         case .rejected(let message): message
         }
     }
@@ -124,7 +124,9 @@ enum PlanLimitsReader {
         case 10_080: return "Weekly"
         case 40_320...44_640: return "Monthly"
         default:
-            return minutes % 1_440 == 0 ? "\(minutes / 1_440)-day limit" : "\(max(1, minutes / 60))-hour limit"
+            return minutes % 1_440 == 0
+                ? String(format: AppText.localized("%lld-day limit"), minutes / 1_440)
+                : String(format: AppText.localized("%lld-hour limit"), max(1, minutes / 60))
         }
     }
 

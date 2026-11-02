@@ -8,7 +8,7 @@ struct StdioFramer {
 
     enum FrameError: LocalizedError {
         case tooLarge
-        var errorDescription: String? { AppText.localized("The agent sent a message over 16 MB") }
+        var errorDescription: String? { AppText.localized("The agent sent a message over 16 MB.") }
     }
 
     private static let limit = 16 * 1024 * 1024

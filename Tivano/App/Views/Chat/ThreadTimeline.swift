@@ -3265,7 +3265,7 @@ enum DisplayBlock: Identifiable, Equatable {
         switch self {
         case .merging: return .merging
         case .group(.single(let entry), _, _):
-            guard case .user(let message) = entry.item.content, Self.isMergeOutcome(message) else { return nil }
+            guard case .user(let message) = entry.item.content, Self.isMergeOutcome(message, id: entry.item.id) else { return nil }
             return .outcome(message)
         default: return nil
         }
@@ -3365,19 +3365,20 @@ enum DisplayBlock: Identifiable, Equatable {
 
     /// Whether the timeline already ends with the merge's outcome note, so the merging
     /// pill has already become the merged report and must not linger as a second row.
-    /// Merge notes are Hydra's own (no heads behind them) and titled "Hydra …"; a head's
-    /// landing or patch note leads with the head's name instead.
     @MainActor
     private static func endsWithMergeOutcome(_ entries: [TimelineEntry]) -> Bool {
         guard let last = entries.last, case .user(let message) = last.item.content else { return false }
-        return isMergeOutcome(message)
+        return isMergeOutcome(message, id: last.item.id)
     }
 
-    /// Whether a Hydra note is about a merge's outcome. Merge notes are Hydra's own (no
-    /// heads behind them) and titled "Hydra …"; a head's landing or patch note leads with
-    /// the head's name instead.
-    static func isMergeOutcome(_ message: UserMessage) -> Bool {
+    /// Whether a Hydra note is about a merge's outcome. The note's words are localized as
+    /// they are written, so its row is recognized by the id it lands under: the merging
+    /// pill's own, which every merge note carries (see `ThreadRuntime.newHydraMergeNoteID`).
+    /// Notes from before that id existed are English and titled "Hydra …".
+    @MainActor
+    static func isMergeOutcome(_ message: UserMessage, id: String) -> Bool {
         guard message.isFromHydra, (message.hydraHeads ?? []).isEmpty else { return false }
+        if id.hasPrefix(ThreadRuntime.hydraMergeNotePrefix) { return true }
         let title = message.text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
         return title.hasPrefix("Hydra ")
     }

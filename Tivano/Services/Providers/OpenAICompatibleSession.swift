@@ -341,7 +341,7 @@ class OpenAICompatibleSession: ProviderSession {
                 let round = try await streamOneRound(model: currentModel, effort: input.effort)
                 reportUsage(round)
                 if round.statusCode == 401 || (round.rawError?.localizedCaseInsensitiveContains("invalid") == true && round.rawError?.localizedCaseInsensitiveContains("key") == true) {
-                    throw ProviderError.failed("\(config.title) rejected the API key. Check it in Settings → Providers → \(config.title).")
+                    throw ProviderError.failed(String(format: AppText.localized("%@ rejected the API key. Check it in Settings › Providers › %@."), config.title, config.title))
                 }
                 if let error = round.rawError, !error.isEmpty {
                     throw ProviderError.failed(friendlyError(error, statusCode: round.statusCode))
@@ -424,7 +424,7 @@ class OpenAICompatibleSession: ProviderSession {
         }
         if hitCeiling {
             // The tool results are in history, so "continue" resumes cleanly.
-            onEvent?(.notice(Notice(level: .warning, message: "\(config.title) paused after \(Self.maxRoundsPerTurn) rounds of tool calls in one turn. Say “continue” to pick up where it left off.")))
+            onEvent?(.notice(Notice(level: .warning, message: String(format: AppText.localized("%@ paused after %lld rounds of tool calls in one turn. Say “continue” to pick up where it left off."), config.title, Self.maxRoundsPerTurn))))
             onEvent?(.turnCompleted(status: .interrupted, error: nil))
             return
         }
@@ -554,7 +554,7 @@ class OpenAICompatibleSession: ProviderSession {
                 // (the next attempt takes fresh response ids) and the user is told why
                 // the reply they were reading stopped.
                 if failure.emittedOutput {
-                    onEvent?(.notice(Notice(level: .warning, message: "\(config.title) lost the connection while answering. That reply was cut off, and this response is restarting.")))
+                    onEvent?(.notice(Notice(level: .warning, message: String(format: AppText.localized("%@ lost the connection while answering. That reply was cut off, and this response is restarting."), config.title))))
                 }
                 let delay = Self.transportRetryDelays[min(attempt, Self.transportRetryDelays.count - 1)]
                 attempt += 1
@@ -571,7 +571,7 @@ class OpenAICompatibleSession: ProviderSession {
     private func terminalTransportMessage(_ error: Error) -> String {
         let reason = error.localizedDescription
         let attempts = Self.maxTransportRetries + 1
-        let base = "\(config.title) could not reach the network after \(attempts) attempts. Check the connection, then try again."
+        let base = String(format: AppText.localized("%@ could not reach the network after %lld attempts. Check the connection, then try again."), config.title, attempts)
         return reason.isEmpty ? base : "\(base) (\(reason))"
     }
 
@@ -825,7 +825,7 @@ class OpenAICompatibleSession: ProviderSession {
                     if !shouldContinue { break }
                 } else {
                     guard line.count < 16 * 1024 * 1024 else {
-                        throw ProviderError.failed("The server sent a stream line larger than 16 MB.")
+                        throw ProviderError.failed(AppText.localized("The server sent a stream line larger than 16 MB."))
                     }
                     line.append(byte)
                 }
@@ -847,13 +847,13 @@ class OpenAICompatibleSession: ProviderSession {
         }
         let trimmed = body.trimmed
         if !trimmed.isEmpty { return String(trimmed.prefix(500)) }
-        return "\(config.title) returned status \(statusCode)."
+        return String(format: AppText.localized("%@ returned status %lld."), config.title, statusCode)
     }
 
     /// Turns a provider's raw failure into something the user can act on.
     /// Every provider's mapping differs, so subclasses override.
     func friendlyError(_ message: String, statusCode: Int) -> String {
-        message.isEmpty ? "\(config.title) stopped before finishing." : message
+        message.isEmpty ? String(format: AppText.localized("%@ stopped before finishing."), config.title) : message
     }
 
     private func finishInterrupted() async {
@@ -948,7 +948,7 @@ class OpenAICompatibleSession: ProviderSession {
         let callID = tool.id
         if let (server, name) = MCPHub.parse(callName: tool.name) {
             onEvent?(.toolStarted(id: callID, call: ToolCall(kind: .mcp, title: "\(server) · \(name)", detail: args.isNull ? nil : args.prettyString)))
-            guard await approveIfNeeded(kind: .mcp, title: "Call \(server) \(name)", detail: args.compactString, toolItemID: nil) else {
+            guard await approveIfNeeded(kind: .mcp, title: String(format: AppText.localized("Call %@ %@"), server, name), detail: args.compactString, toolItemID: nil) else {
                 return declined(callID)
             }
             do {
@@ -985,7 +985,7 @@ class OpenAICompatibleSession: ProviderSession {
             let path = args["path"]?.string ?? ""
             let call = ToolCall(kind: .read, title: fileTools.displayPath(path))
             onEvent?(.toolStarted(id: callID, call: call))
-            guard await approveIfNeeded(kind: .read, title: "Read \(fileTools.displayPath(path))", detail: path, toolItemID: nil) else {
+            guard await approveIfNeeded(kind: .read, title: String(format: AppText.localized("Read %@"), fileTools.displayPath(path)), detail: path, toolItemID: nil) else {
                 return declined(callID)
             }
             do {
@@ -1021,7 +1021,7 @@ class OpenAICompatibleSession: ProviderSession {
             let path = args["path"]?.string ?? ""
             let call = ToolCall(kind: .search, title: pattern.isEmpty ? "Search" : pattern, detail: path.isEmpty ? nil : fileTools.displayPath(path))
             onEvent?(.toolStarted(id: callID, call: call))
-            guard await approveIfNeeded(kind: .search, title: "Search for “\(pattern)”", detail: path.isEmpty ? nil : path, toolItemID: nil) else {
+            guard await approveIfNeeded(kind: .search, title: String(format: AppText.localized("Search for “%@”"), pattern), detail: path.isEmpty ? nil : path, toolItemID: nil) else {
                 return declined(callID)
             }
             do {
@@ -1040,7 +1040,7 @@ class OpenAICompatibleSession: ProviderSession {
             var call = ToolCall(kind: .edit, title: fileTools.displayPath(path))
             call.edits = [FileEdit(path: fileTools.displayPath(path), old: "", new: content)]
             onEvent?(.toolStarted(id: callID, call: call))
-            guard await approveIfNeeded(kind: .edit, title: "Write \(fileTools.displayPath(path))", detail: nil, toolItemID: nil) else {
+            guard await approveIfNeeded(kind: .edit, title: String(format: AppText.localized("Write %@"), fileTools.displayPath(path)), detail: nil, toolItemID: nil) else {
                 return declined(callID)
             }
             do {
@@ -1063,7 +1063,7 @@ class OpenAICompatibleSession: ProviderSession {
             var call = ToolCall(kind: .edit, title: fileTools.displayPath(path))
             call.edits = [FileEdit(path: fileTools.displayPath(path), old: old, new: new)]
             onEvent?(.toolStarted(id: callID, call: call))
-            guard await approveIfNeeded(kind: .edit, title: "Edit \(fileTools.displayPath(path))", detail: nil, toolItemID: nil) else {
+            guard await approveIfNeeded(kind: .edit, title: String(format: AppText.localized("Edit %@"), fileTools.displayPath(path)), detail: nil, toolItemID: nil) else {
                 return declined(callID)
             }
             do {

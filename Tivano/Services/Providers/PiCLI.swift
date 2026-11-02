@@ -57,7 +57,7 @@ enum PiCLI {
         do {
             try process.start()
         } catch {
-            throw ProviderError.failed("Pi could not start: \(error.localizedDescription)")
+            throw ProviderError.failed(String(format: String(localized: "Pi could not start: %@"), error.localizedDescription))
         }
         process.send(["type": "get_state", "id": "state"])
         process.send(["type": "get_available_models", "id": "models"])
@@ -105,7 +105,7 @@ enum PiCLI {
             ))
         }
         guard !options.isEmpty else {
-            throw ProviderError.failed("Pi listed no models.")
+            throw ProviderError.failed(String(localized: "Pi listed no models."))
         }
         return options.sorted { ($0.detail ?? "", $0.name) < ($1.detail ?? "", $1.name) }
     }

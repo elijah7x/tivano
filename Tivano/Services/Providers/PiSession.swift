@@ -82,7 +82,7 @@ final class PiSession: ProviderSession {
     func start() async throws -> String {
         guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
         if let sessionID, !FileManager.default.fileExists(atPath: sessionID) {
-            throw ProviderError.failed("Pi no longer has this conversation; starting a new one.")
+            throw ProviderError.failed(String(localized: "Pi no longer has this conversation; starting a new one."))
         }
         let extensionURL = try PiCLI.installExtension()
         let gateDirectory = PiCLI.supportDirectory.appendingPathComponent("gates", isDirectory: true)
@@ -121,7 +121,7 @@ final class PiSession: ProviderSession {
         do {
             try process.start()
         } catch {
-            throw ProviderError.failed("Pi could not start: \(error.localizedDescription)")
+            throw ProviderError.failed(String(format: String(localized: "Pi could not start: %@"), error.localizedDescription))
         }
         self.process = process
         let messages = process.messages
@@ -160,7 +160,7 @@ final class PiSession: ProviderSession {
 
     func send(_ input: TurnInput) async throws {
         guard isRunning, let process else { throw ProviderError.notRunning }
-        guard !turnActive, preparationID == nil else { throw ProviderError.failed("Pi is still on the last turn.") }
+        guard !turnActive, preparationID == nil else { throw ProviderError.failed(String(localized: "Pi is still on the last turn.")) }
         let preparation = UUID()
         preparationID = preparation
         interruptRequested = false
@@ -326,7 +326,7 @@ final class PiSession: ProviderSession {
             guard let id = message["id"]?.string else { return }
             if !pendingResponses.resolve(id, message),
                message["command"]?.string == "prompt", message["success"]?.bool == false {
-                turnError = message["error"]?.string ?? message["message"]?.string ?? "Pi reported an error."
+                turnError = message["error"]?.string ?? message["message"]?.string ?? String(localized: "Pi reported an error.")
                 finishTurn()
             }
         case "message_start":
@@ -361,18 +361,18 @@ final class PiSession: ProviderSession {
                 finishTurn()
             }
         case "compaction_start":
-            onEvent?(.notice(Notice(level: .info, message: "Compacting the conversation…")))
+            onEvent?(.notice(Notice(level: .info, message: String(localized: "Compacting the conversation…"))))
         case "compaction_end":
-            onEvent?(.notice(Notice(level: .info, message: "Conversation compacted")))
+            onEvent?(.notice(Notice(level: .info, message: String(localized: "Conversation compacted"))))
         case "auto_retry_start":
-            onEvent?(.notice(Notice(level: .warning, message: message["errorMessage"]?.string ?? message["error"]?.string ?? "Pi is retrying.")))
+            onEvent?(.notice(Notice(level: .warning, message: message["errorMessage"]?.string ?? message["error"]?.string ?? String(localized: "Pi is retrying."))))
         case "auto_retry_end":
             // A retry cancelled while it waited ends no run, so nothing else closes the turn.
             guard message["success"]?.bool == false else { return }
-            turnError = message["finalError"]?.string ?? "Pi reported an error."
+            turnError = message["finalError"]?.string ?? String(localized: "Pi reported an error.")
             finishTurn()
         case "extension_error":
-            onEvent?(.notice(Notice(level: .error, message: message["error"]?.string ?? "Pi reported an extension error.")))
+            onEvent?(.notice(Notice(level: .error, message: message["error"]?.string ?? String(localized: "Pi reported an extension error."))))
         case "extension_ui_request":
             handleExtensionUI(message)
         default:
@@ -426,7 +426,7 @@ final class PiSession: ProviderSession {
         }
         stream.endMessage()
         if message["stopReason"]?.string == "error" {
-            turnError = message["errorMessage"]?.string ?? "Pi reported an error."
+            turnError = message["errorMessage"]?.string ?? String(localized: "Pi reported an error.")
         }
     }
 
@@ -583,7 +583,7 @@ final class PiSession: ProviderSession {
             case "error": .error
             default: .info
             }
-            onEvent?(.notice(Notice(level: level, message: params["message"]?.string ?? "Pi sent a notification.")))
+            onEvent?(.notice(Notice(level: level, message: params["message"]?.string ?? String(localized: "Pi sent a notification."))))
         case "setStatus", "setWidget", "setTitle", "set_editor_text":
             break
         default:
@@ -663,7 +663,7 @@ final class PiSession: ProviderSession {
             onEvent?(.exited(error: nil))
         } else {
             let suffix = (tail ?? "").isEmpty ? "" : "\n" + (tail ?? "")
-            onEvent?(.exited(error: "Pi exited with status \(status)\(suffix)"))
+            onEvent?(.exited(error: String(format: String(localized: "Pi exited with status %d%@"), status, suffix)))
         }
     }
 }
