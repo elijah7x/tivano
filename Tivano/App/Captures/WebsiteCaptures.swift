@@ -151,9 +151,22 @@ enum WebsiteCaptures {
         if QuotePreview.isRequested {
             library.threads = [thread(ID.composer, ID.tivanoApp, "Quote preview", .claude, "opus", "high", age: 0, status: .completed, now)]
         }
+        if PredictionPreview.isRequested {
+            library.threads = PredictionPreview.cases.enumerated().map { index, previewCase in
+                thread(previewCase.id, ID.tivanoApp, previewCase.title, .claude, "opus", "high",
+                       age: Double(index) * 10, status: .completed, now)
+            }
+        }
         write(library, to: root.appendingPathComponent("library.json"))
 
-        write(QuotePreview.isRequested ? QuotePreview.history(now) : composerHistory(now), to: root.appendingPathComponent("threads/\(ID.composer.uuidString).json"))
+        if PredictionPreview.isRequested {
+            for previewCase in PredictionPreview.cases {
+                write(PredictionPreview.history(for: previewCase, now: now),
+                      to: root.appendingPathComponent("threads/\(previewCase.id.uuidString).json"))
+            }
+        } else {
+            write(QuotePreview.isRequested ? QuotePreview.history(now) : composerHistory(now), to: root.appendingPathComponent("threads/\(ID.composer.uuidString).json"))
+        }
         write(finalAnswerHistory(now), to: root.appendingPathComponent("threads/\(ID.finalAnswer.uuidString).json"))
         write(pricingHistory(now), to: root.appendingPathComponent("threads/\(ID.pricing.uuidString).json"))
         if HeroSwitchProbe.isColdRequested {
@@ -389,6 +402,10 @@ enum WebsiteCaptures {
         }
         if UsageLimitPreview.isRequested {
             await UsageLimitPreview.run(model: model)
+            return
+        }
+        if PredictionPreview.isRequested {
+            await PredictionPreview.run(model: model)
             return
         }
         if QuotePreview.isRequested {

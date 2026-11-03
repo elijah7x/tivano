@@ -21,7 +21,7 @@ struct ProviderSwitchTab: View {
 
     private func row(back: String) -> some View {
         HStack(spacing: 7) {
-            Text(verbatim: Chrome.localized("Switching providers may lose some context"))
+            Text(verbatim: Chrome.localized("Context may be incomplete after switching providers"))
                 .foregroundStyle(Chrome.primaryText.opacity(0.9))
             Button(Chrome.localized("Undo")) { model.undoProviderSwitch(threadID) }
                 .buttonStyle(.bordered)

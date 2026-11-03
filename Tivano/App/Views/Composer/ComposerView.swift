@@ -124,12 +124,11 @@ private struct TabSlot: View {
         let hasPendingProviderSwitch = model.thread(runtime.threadID)?.pendingProviderSwitch != nil
         if hasPendingProviderSwitch || limitOffer != nil || !runtime.followUps.isEmpty || (showsChanges && runtime.changeStats != nil) {
             ZStack(alignment: .bottom) {
-                if hasPendingProviderSwitch {
-                    ProviderSwitchTab(threadID: runtime.threadID)
-                        .transition(.softAppear)
-                } else if let limitOffer {
-                    // A spent limit asks for a decision, so it takes the slot over the queue.
+                if let limitOffer {
                     UsageLimitTab(threadID: runtime.threadID, offer: limitOffer)
+                        .transition(.softAppear)
+                } else if hasPendingProviderSwitch {
+                    ProviderSwitchTab(threadID: runtime.threadID)
                         .transition(.softAppear)
                 } else if !runtime.followUps.isEmpty {
                     // The queued steering prompts take the tab slot while any are queued:
@@ -204,6 +203,7 @@ struct ComposerView: View {
                 runtime: runtime,
                 controller: controller,
                 placeholder: placeholder(for: thread),
+                placeholderHint: showsPrediction ? Chrome.localized("Press Tab to accept") : "",
                 takesFocusOnAppear: takesFocusOnAppear,
                 attachmentNotice: attachmentNotice,
                 onKey: handleKey,
@@ -339,9 +339,17 @@ struct ComposerView: View {
         return model.hydraHeadIsInOpenJob(thread)
     }
 
+    private var showsPrediction: Bool {
+        model.settings.isPromptPredictionsEnabled && !(runtime.promptPrediction?.isEmpty ?? true)
+            && !headNeedsLead && runtime.draft.isEmpty && runtime.draft.quotes.isEmpty
+    }
+
     private func placeholder(for thread: ChatThread?) -> String {
         guard let thread else { return "" }
         if headNeedsLead { return Chrome.localized("Ask the lead to send this head back") }
+        if showsPrediction, let prediction = runtime.promptPrediction {
+            return prediction
+        }
         if thread.interactionMode == .plan { return Chrome.localized("Describe what you want to plan") }
         if model.hydraIsOn(thread) {
             return String(format: Chrome.localized("Ask %@ for anything; the lead decides what to do itself and what to delegate"), thread.provider.displayName)
@@ -375,7 +383,7 @@ struct ComposerView: View {
                 dismissedSuggestions = true
                 suggestions = SuggestionState()
                 return true
-            case .deleteAtStart:
+            case .deleteAtStart, .right:
                 return false
             }
         }
@@ -399,11 +407,18 @@ struct ComposerView: View {
                 runtime.isTerminalVisible = false
             } else if runtime.isDiffVisible {
                 runtime.toggleDiff()
+            } else if showsPrediction {
+                runtime.promptPrediction = nil
             } else {
                 return false
             }
             return true
-        case .tab:
+        case .tab, .right:
+            if showsPrediction, let prediction = runtime.promptPrediction {
+                runtime.draft.text = prediction
+                runtime.promptPrediction = nil
+                return true
+            }
             return false
         case .deleteAtStart:
             if runtime.draft.command != nil {
@@ -420,6 +435,7 @@ struct ComposerView: View {
 
     private func send() {
         guard !headNeedsLead, !runtime.draft.isEmpty else { return }
+        runtime.promptPrediction = nil
         historyIndex = nil
         suggestions = SuggestionState()
         if runtime.isRunning {
@@ -438,6 +454,7 @@ struct ComposerView: View {
     /// disabled or rebound, so it falls back to send once the chord moves.
     private func steer() {
         guard !headNeedsLead, !runtime.draft.isEmpty else { return }
+        runtime.promptPrediction = nil
         historyIndex = nil
         suggestions = SuggestionState()
         if runtime.canQueue,
@@ -454,6 +471,7 @@ struct ComposerView: View {
         let text = runtime.draft.text
         let recalledIndex = historyIndex.flatMap { prompts.indices.contains($0) && prompts[$0] == text ? $0 : nil }
         guard text.isEmpty || recalledIndex != nil else { return false }
+        runtime.promptPrediction = nil
         if older {
             let next = (recalledIndex ?? prompts.count) - 1
             guard next >= 0 else { return true }
@@ -593,6 +611,7 @@ private struct ComposerTextColumn: View {
     @Bindable var runtime: ThreadRuntime
     let controller: ComposerController
     let placeholder: String
+    let placeholderHint: String
     let takesFocusOnAppear: Bool
     let attachmentNotice: String?
     let onKey: (ComposerKey) -> Bool
@@ -636,6 +655,7 @@ private struct ComposerTextColumn: View {
                 text: $runtime.draft.text,
                 height: $textHeight,
                 placeholder: placeholder,
+                placeholderHint: placeholderHint,
                 controller: controller,
                 onKey: onKey,
                 onAttach: onAttach,

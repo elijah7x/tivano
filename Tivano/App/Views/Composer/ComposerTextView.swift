@@ -6,6 +6,8 @@ enum ComposerKey {
     case up
     case down
     case tab
+    /// Right arrow in an empty composer: accepts a shown prediction.
+    case right
     case escape
     case submit
     /// Command-Return: steer the running turn (queue as a follow-up).
@@ -126,6 +128,7 @@ final class ComposerNSTextView: NSTextView {
     var placeholder = "" {
         didSet { needsDisplay = true }
     }
+    var placeholderHint = "" { didSet { needsDisplay = true } }
     var onAttach: (([AttachmentSource]) -> Void)?
     var onWidthChange: (() -> Void)?
     var onResign: (() -> Void)?
@@ -204,26 +207,102 @@ final class ComposerNSTextView: NSTextView {
         if string.isEmpty != placeholderShown { needsDisplay = true }
     }
 
+    private var placeholderAttributes: [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        return [
+            .font: font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14)),
+            .foregroundColor: NSColor.placeholderTextColor,
+            .paragraphStyle: paragraphStyle,
+        ]
+    }
+
+    private var attributedPlaceholder: NSAttributedString {
+        let attributes = placeholderAttributes
+        guard !placeholderHint.isEmpty else { return NSAttributedString(string: placeholder, attributes: attributes) }
+        let placeholderFont = font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14))
+        let hintFont = NSFont.systemFont(ofSize: placeholderFont.pointSize * 0.85)
+        let hint = placeholderHint as NSString
+        let hintSize = hint.size(withAttributes: [.font: hintFont])
+        let pillSize = NSSize(width: ceil(hintSize.width) + 14, height: ceil(hintSize.height) + 4)
+        let attachment = NSTextAttachment()
+        attachment.image = NSImage(size: pillSize, flipped: false) { rect in
+            NSColor.quaternaryLabelColor.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
+            hint.draw(at: NSPoint(x: 7, y: 2), withAttributes: [
+                .font: hintFont,
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ])
+            return true
+        }
+        attachment.bounds = NSRect(
+            x: 0, y: (placeholderFont.capHeight - pillSize.height) / 2,
+            width: pillSize.width, height: pillSize.height
+        )
+        let pill = NSAttributedString(attachment: attachment)
+        func composed(_ text: String) -> NSMutableAttributedString {
+            let composed = NSMutableAttributedString(string: text + " ", attributes: attributes)
+            composed.append(pill)
+            return composed
+        }
+        // Truncating the drawn text would cut the pill off with it, so a prediction too
+        // long for the box is shortened here until the pill still fits after it.
+        let rect = placeholderRect
+        func fits(_ text: NSAttributedString) -> Bool {
+            text.boundingRect(with: NSSize(width: rect.width, height: .greatestFiniteMagnitude),
+                              options: [.usesLineFragmentOrigin]).height <= rect.height + 0.5
+        }
+        let full = composed(placeholder)
+        guard rect.width > 0, !fits(full) else { return full }
+        let characters = Array(placeholder)
+        var low = 0, high = characters.count
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if fits(composed(String(characters[..<mid]) + "…")) { low = mid } else { high = mid - 1 }
+        }
+        return composed(String(characters[..<low]).trimmingCharacters(in: .whitespaces) + "…")
+    }
+
+    private var placeholderRect: NSRect {
+        let placeholderFont = font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14))
+        let padding = textContainer?.lineFragmentPadding ?? 0
+        let width = min(textContainer?.size.width ?? bounds.width, bounds.width - textContainerInset.width * 2)
+        return NSRect(
+            x: textContainerInset.width + padding,
+            y: textContainerInset.height,
+            width: max(0, width - padding * 2),
+            height: 3 * ceil(placeholderFont.ascender - placeholderFont.descender + placeholderFont.leading)
+        )
+    }
+
+    func placeholderHeight() -> CGFloat {
+        guard string.isEmpty, !placeholder.isEmpty else { return 0 }
+        let rect = placeholderRect
+        let measured = attributedPlaceholder.boundingRect(
+            with: NSSize(width: rect.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin]
+        )
+        return min(measured.height, rect.height)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         placeholderShown = string.isEmpty && !placeholder.isEmpty
         guard placeholderShown else { return }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14)),
-            .foregroundColor: NSColor.placeholderTextColor,
-        ]
-        let origin = NSPoint(
-            x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 0),
-            y: textContainerInset.height
-        )
-        (placeholder as NSString).draw(at: origin, withAttributes: attributes)
+        let rect = placeholderRect
+        NSGraphicsContext.saveGraphicsState()
+        rect.clip()
+        attributedPlaceholder.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        NSGraphicsContext.restoreGraphicsState()
     }
+
 }
 
 struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     var placeholder: String
+    var placeholderHint: String = ""
     let controller: ComposerController
     var onKey: (ComposerKey) -> Bool
     var onAttach: ([AttachmentSource]) -> Void
@@ -277,6 +356,7 @@ struct ComposerTextView: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.lineFragmentPadding = 0
         textView.placeholder = placeholder
+        textView.placeholderHint = placeholderHint
         textView.string = text
         textView.onAttach = onAttach
 
@@ -317,7 +397,11 @@ struct ComposerTextView: NSViewRepresentable {
             textView.needsDisplay = true
             Task { @MainActor in context.coordinator.updateHeight() }
         }
-        if textView.placeholder != placeholder { textView.placeholder = placeholder }
+        if textView.placeholder != placeholder || textView.placeholderHint != placeholderHint {
+            textView.placeholder = placeholder
+            textView.placeholderHint = placeholderHint
+            Task { @MainActor in context.coordinator.updateHeight() }
+        }
         // The caret follows the theme's accent; a theme change never rebuilds the view.
         let caret = Chrome.accentNSColor
         if textView.insertionPointColor != caret { textView.insertionPointColor = caret }
@@ -366,6 +450,8 @@ struct ComposerTextView: NSViewRepresentable {
                 return parent.onKey(.up)
             case #selector(NSResponder.moveDown(_:)):
                 return parent.onKey(.down)
+            case #selector(NSResponder.moveRight(_:)):
+                return textView.string.isEmpty ? parent.onKey(.right) : false
             case #selector(NSResponder.insertTab(_:)):
                 return parent.onKey(.tab)
             case #selector(NSResponder.cancelOperation(_:)):
@@ -394,6 +480,7 @@ struct ComposerTextView: NSViewRepresentable {
                 layoutManager.ensureLayout(for: container)
                 contentHeight = layoutManager.usedRect(for: container).height
             }
+            contentHeight = max(contentHeight, textView.placeholderHeight())
             let total = ceil(max(TypeScale.shared.content(18), contentHeight) + textView.textContainerInset.height * 2)
             if abs(parent.height - total) > 0.5 { parent.height = total }
         }

@@ -390,6 +390,13 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
     /// The landing checkout, kept after the head's temporary copy is released. Nil on
     /// older records, which keep the previous project and lead checkout rules.
     var targetCheckout: String?
+    var filesBase: String?
+    var isNonGitCheckout: Bool?
+    var backupPath: String?
+    var backupOwnedPaths: [String]?
+    var backedUpFiles: [String]?
+    var newFiles: [String]?
+    var notBackedUpFiles: [String]?
     /// Kept until an explicit route succeeds, so a failed or stopped route cannot
     /// resume in the lead's project after its runtime is reloaded.
     var pendingProjectReference: String?
@@ -463,6 +470,13 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
         baseTree = container.value(.baseTree, default: nil)
         // Missing on a library saved before explicit checkouts: nil keeps the old rules.
         targetCheckout = container.value(.targetCheckout, default: nil)
+        filesBase = container.value(.filesBase, default: nil)
+        isNonGitCheckout = container.value(.isNonGitCheckout, default: nil)
+        backupPath = container.value(.backupPath, default: nil)
+        backupOwnedPaths = container.value(.backupOwnedPaths, default: nil)
+        backedUpFiles = container.value(.backedUpFiles, default: nil)
+        newFiles = container.value(.newFiles, default: nil)
+        notBackedUpFiles = container.value(.notBackedUpFiles, default: nil)
         pendingProjectReference = container.value(.pendingProjectReference, default: nil)
         landing = container.value(.landing, default: nil)
         mergedAt = container.value(.mergedAt, default: nil)
@@ -685,8 +699,10 @@ enum HydraPrompts {
     /// prefers it so.
     enum Workplace {
         case ownCopy(path: String)
-        case shared(path: String)
+        case shared(path: String, filesBase: String? = nil, isNonGit: Bool = false)
     }
+
+    static let sharedFolderRule = "This folder is not a Git repository, so you change files in place. Tivano backed up the files you own before you started and shows the lead their diff. Change only the files you own. If you need to change any other file, stop before changing it and report under Unfinished which file, what change and why; the lead decides whether to send you back to do it."
 
     /// What a head is told about the checkout it works in and what it may do to it. The
     /// shared case is a head's lot when its project cannot be copied or the user turned
@@ -698,8 +714,10 @@ enum HydraPrompts {
             You have your own copy of the project at \(path): a git worktree Tivano made for you from the project's checkout as it was when you were sent out, uncommitted work included. Work in it directly, on the files as they are; your tools already run there. When you report, Tivano carries your changes into that checkout itself. So never commit, branch, stash, push, check out, reset, restore or clean anything, and never make or remove worktrees, whatever the project's own guidelines say about agents and worktrees: this copy already is yours. Do not use git to check your work either.
             Never build, test or verify anything in your copy: the lead runs every check itself, in its own checkout. Anything under the project folder that git does not ignore lands in the lead's checkout, so leave no build output there.
             """
-        case .shared(let path):
+        case .shared(let path, let filesBase, let isNonGit):
             """
+            \(filesBase.map { "Paths in your file list and the team split are relative to \($0); you work in \(path)." } ?? "")
+            \(isNonGit ? sharedFolderRule : "")
             You work in the lead's checkout at \(path), alongside the lead and the other heads, who are changing other files at the same time. Changes you did not make are expected there: leave every one of them alone, never stash, check out, reset, restore or clean anything, and never move work into a branch or worktree, whatever the project's own guidelines say about agents and worktrees. Do not use git status or git diff to check your work: they show everyone's changes, and the lead does the verifying.
             """
         }

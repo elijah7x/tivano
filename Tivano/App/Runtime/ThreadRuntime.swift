@@ -363,6 +363,9 @@ final class ThreadRuntime {
     /// The sent message being edited (by its turn), the same way.
     var messageEdit: PromptEdit?
 
+    /// Suggested next message for the empty composer, cleared when accepted.
+    var promptPrediction: String?
+
     var draft = ComposerDraft() {
         didSet {
             let isEmpty = draft.isEmpty
@@ -622,7 +625,7 @@ final class ThreadRuntime {
     /// session; a restarted, retried or explicitly compacted session takes it again
     /// (see `releaseSession`, `compact`).
     @ObservationIgnored private var continuationSent = false
-    @ObservationIgnored private var switchCapturedContinuation = false
+    @ObservationIgnored private var forwardedContinuation: ThreadContinuation?
     /// Which session the runtime is listening to. Every session made carries the count it
     /// was made under, and its events are dropped once the count has moved on: a CLI that
     /// closes long after it was let go used to end the turn that replaced it, take down
@@ -682,6 +685,7 @@ final class ThreadRuntime {
     @ObservationIgnored private var saveNoticeID: String?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var historyLoad: Task<Void, Never>?
+    @ObservationIgnored private var promptPredictionTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var persistenceEnabled = true
     @ObservationIgnored private var currentTurnID: UUID? {
@@ -855,6 +859,7 @@ final class ThreadRuntime {
         // Only a fresh report from the live CLI may populate its meter.
         if thread?.provider != .claude { usage = usage ?? document.usage }
         continuation = document.continuation ?? continuation
+        forwardedContinuation = document.forwardedContinuation
         followUps = document.followUps.filter { !$0.isEmpty } + followUps
         hydraMerges = document.hydraMerges + hydraMerges
         // Thinking with no text is nothing to show or keep: Claude Code redacts its
@@ -937,6 +942,7 @@ final class ThreadRuntime {
         if !recovered && !wasDirty { lastSavedRevision = saveRevision }
         if document.turnIndex == nil { saveRevision += 1 }
         if currentTurnID == nil {
+            clearPromptPrediction()
             hydraCurrentTurnTouchedPaths = []
         } else {
             // A turn's events can arrive while its history is loading.
@@ -1164,18 +1170,7 @@ final class ThreadRuntime {
     }
 
     private static func controlFailure(_ error: Error) -> ControlFailure {
-        if let failure = error as? ControlFailure { return failure }
-        // Provider errors are localized, so the Chinese wording is matched as well.
-        let text = error.localizedDescription.lowercased()
-        func has(_ words: String...) -> Bool { words.contains { text.contains($0) } }
-        let category: String
-        if has("auth", "sign in", "api key", "认证", "登录", "密钥") { category = "authentication" }
-        else if has("resume", "conversation") || (has("session", "会话", "对话") && has("not found", "找不到", "未找到", "无法继续")) { category = "continuation" }
-        else if has("limit", "quota", "额度", "用量", "上限") { category = "usage_limit" }
-        else if has("install", "安装") { category = "not_installed" }
-        else if has("permission", "denied", "权限", "拒绝") { category = "permission" }
-        else { category = "provider_or_transport" }
-        return ControlFailure(code: category == "continuation" ? .continuationUnavailable : .providerFailure, detail: category)
+        ControlFailureClassifier.classify(error)
     }
 
     func interruptExternal(turnID: UUID, operationID: UUID,
@@ -1642,6 +1637,7 @@ final class ThreadRuntime {
     }
 
     private func startTurn(text: String, attachments: [Attachment], hydraHeads: [Int]? = nil, hydraBrief: Bool = false, externalTurnID: UUID? = nil) async {
+        clearPromptPrediction()
         #if DEBUG
         // The usage-limit preview shows the tab's buttons; none of them may reach a provider.
         if UsageLimitPreview.isRequested {
@@ -1730,13 +1726,16 @@ final class ThreadRuntime {
             else { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             return
         }
-        if let thread, thread.pendingProviderSwitch != nil, continuation == nil,
+        if let thread, thread.pendingProviderSwitch != nil, continuation?.isProviderHandoff != true,
            !thread.provider.restoresFromTextTranscript {
+            forwardedContinuation = continuation
             continuation = ThreadContinuation.capture(
                 sourceID: threadID, title: thread.title, document: snapshotForPersistence()
             )
             continuationSent = false
-            switchCapturedContinuation = true
+            continuation?.isProviderHandoff = true
+            saveRevision += 1
+            saveNow()
         }
         let turnIndex = (turns.map(\.index).max() ?? -1) + 1
         var turn = TurnRecord(index: turnIndex)
@@ -1770,6 +1769,7 @@ final class ThreadRuntime {
             await stampHydraUserTurn(app: app, turnID: turn.id, text: text, attachments: attachments.map(\.path))
         }
         hydraCurrentTurnTouchedPaths = []
+        clearPromptPrediction()
         // `hydraHeads == nil` marks a turn of the user's own: it starts the request's
         // delegation budget over. Turns carrying head reports or a refusal notice continue it.
         hydraBudget.beginTurn(userAuthored: hydraHeads == nil && !continuesHydraJob)
@@ -1994,13 +1994,16 @@ final class ThreadRuntime {
                 continuationSent = true
                 // A provider switch's snapshot is consumed once the new session has it; a
                 // forwarded chat keeps its continuation for later session replacements.
-                if switchCapturedContinuation {
-                    switchCapturedContinuation = false
-                    self.continuation = nil
+                if continuation?.isProviderHandoff == true {
+                    self.continuation = forwardedContinuation
+                    forwardedContinuation = nil
                     saveRevision += 1
                     saveNow()
                 }
             }
+            // A session started outside a send (voice) skipped the commit; the first
+            // delivered message makes it.
+            completePendingProviderSwitch()
             // The session has a conversation the provider can resume from here on.
             if let unsentSessionID {
                 self.unsentSessionID = nil
@@ -2601,7 +2604,8 @@ final class ThreadRuntime {
     }
 
     private func completePendingProviderSwitch() {
-        guard let app, let thread, thread.pendingProviderSwitch != nil else { return }
+        guard !Task.isCancelled, let currentTurnID, sendInterruptedTurnID != currentTurnID,
+              let app, let thread, thread.pendingProviderSwitch != nil else { return }
         app.completeProviderSwitch(threadID)
         appendNotice(.info, String(format: Chrome.localized("Continued with %@"),
                                    app.modelLabel(provider: thread.provider, model: thread.model)))
@@ -2609,11 +2613,37 @@ final class ThreadRuntime {
 
     /// Drops the history snapshot a staged provider switch captured for a send that
     /// never started its session, so undoing the switch does not replay it to the old provider.
-    func discardProviderSwitchContinuation() {
-        guard switchCapturedContinuation, !continuationSent else { return }
-        switchCapturedContinuation = false
-        continuation = nil
+    func providerSwitchUndone(sessionLost: Bool) {
+        if sessionLost {
+            rebuildProviderHandoff()
+        } else {
+            guard continuation?.isProviderHandoff == true, !continuationSent else { return }
+            continuation = forwardedContinuation
+            forwardedContinuation = nil
+        }
         saveRevision += 1
+        saveNow()
+    }
+
+    /// Replaces the snapshot a lost session's next turn starts from with the thread's
+    /// current history, so a handoff never replays turns reverted after it was taken.
+    private func rebuildProviderHandoff() {
+        guard let thread else { return }
+        if continuation?.isProviderHandoff == true {
+            continuation = forwardedContinuation
+        }
+        forwardedContinuation = continuation
+        let handoff = ThreadContinuation.capture(
+            sourceID: threadID, title: thread.title, document: snapshotForPersistence()
+        )
+        if handoff.context.isEmpty {
+            continuation = forwardedContinuation
+            forwardedContinuation = nil
+        } else {
+            continuation = handoff
+            continuation?.isProviderHandoff = true
+        }
+        continuationSent = false
     }
 
     /// The conversation before the current turn as plain exchanges, for an API session
@@ -2960,66 +2990,81 @@ final class ThreadRuntime {
             }
             _ = try await Git(directory).output(["rev-parse", "--verify", base])
         }
-        switch thread.provider {
-        case .codex:
-            if let targetID = removed.lazy.compactMap(\.providerTurnID).first {
-                guard thread.providerSessionID != nil,
-                      let codex = try await ensureSession(allowNewSession: false) as? CodexSession else {
-                    throw ProviderError.failed(Chrome.localized("The original Codex conversation is unavailable."))
-                }
-                let sessionID = try await codex.rollback(from: targetID)
-                app.updateThread(threadID) { $0.providerSessionID = sessionID }
-            } else if thread.providerSessionID != nil || removed.contains(where: { $0.status != .failed }) {
-                throw ProviderError.failed(Chrome.localized("The selected message has no Codex turn ID, so its history cannot be safely reverted."))
-            }
-            stopSession()
-        case .copilot:
-            guard thread.providerSessionID != nil,
-                  let copilot = try await ensureSession(allowNewSession: false) as? CopilotSession else {
-                throw ProviderError.failed(Chrome.localized("The original Copilot conversation is unavailable."))
-            }
-            try await copilot.rollback(turns: removed.count)
-            stopSession()
-        case .claude:
+        // A staged switch, or an undone one whose session was lost, has no provider history
+        // to rewind: the next session starts from a snapshot of the shortened timeline.
+        let pendingHandoff = continuation?.isProviderHandoff == true && !continuationSent
+        if thread.pendingProviderSwitch != nil || (pendingHandoff && thread.providerSessionID == nil) {
             releaseSession(stop: true)
-            if index == 0 {
-                stopSession()
-                app.updateThread(threadID) {
-                    $0.providerSessionID = nil
-                    $0.providerResumeAt = nil
-                }
-            } else {
-                guard thread.providerSessionID != nil, let anchor = turns[index - 1].providerAnchor else {
-                    throw ProviderError.failed(Chrome.localized("Claude has no resume point before this message. The conversation was kept."))
-                }
-                stopSession()
-                app.updateThread(threadID) { $0.providerResumeAt = anchor }
+            app.updateThread(threadID) {
+                $0.pendingProviderSwitch?.providerSessionID = nil
+                $0.pendingProviderSwitch?.providerResumeAt = nil
+                $0.providerSessionID = nil
+                $0.providerResumeAt = nil
             }
-        case .omp:
-            if index == 0 {
+            // A staged switch recaptures at its send; an undone one is rebuilt below.
+            if thread.pendingProviderSwitch != nil { providerSwitchUndone(sessionLost: false) }
+        } else {
+            switch thread.provider {
+            case .codex:
+                if let targetID = removed.lazy.compactMap(\.providerTurnID).first {
+                    guard thread.providerSessionID != nil,
+                          let codex = try await ensureSession(allowNewSession: false) as? CodexSession else {
+                        throw ProviderError.failed(Chrome.localized("The original Codex conversation is unavailable."))
+                    }
+                    let sessionID = try await codex.rollback(from: targetID)
+                    app.updateThread(threadID) { $0.providerSessionID = sessionID }
+                } else if thread.providerSessionID != nil || removed.contains(where: { $0.status != .failed }) {
+                    throw ProviderError.failed(Chrome.localized("The selected message has no Codex turn ID, so its history cannot be safely reverted."))
+                }
+                stopSession()
+            case .copilot:
+                guard thread.providerSessionID != nil,
+                      let copilot = try await ensureSession(allowNewSession: false) as? CopilotSession else {
+                    throw ProviderError.failed(Chrome.localized("The original Copilot conversation is unavailable."))
+                }
+                try await copilot.rollback(turns: removed.count)
+                stopSession()
+            case .claude:
+                releaseSession(stop: true)
+                if index == 0 {
+                    stopSession()
+                    app.updateThread(threadID) {
+                        $0.providerSessionID = nil
+                        $0.providerResumeAt = nil
+                    }
+                } else {
+                    guard thread.providerSessionID != nil, let anchor = turns[index - 1].providerAnchor else {
+                        throw ProviderError.failed(Chrome.localized("Claude has no resume point before this message. The conversation was kept."))
+                    }
+                    stopSession()
+                    app.updateThread(threadID) { $0.providerResumeAt = anchor }
+                }
+            case .omp:
+                if index == 0 {
+                    releaseSession(stop: true)
+                    app.updateThread(threadID) {
+                        $0.providerSessionID = nil
+                        $0.providerResumeAt = nil
+                    }
+                } else {
+                    guard thread.providerSessionID != nil,
+                          let omp = try await ensureSession(allowNewSession: false) as? OmpSession else {
+                        throw ProviderError.failed(Chrome.localized("The original omp conversation is unavailable."))
+                    }
+                    let file = try await omp.rollback(removing: removed.map(userText(of:)))
+                    app.updateThread(threadID) { $0.providerSessionID = file }
+                    stopSession()
+                }
+            default:
+                // A provider that cannot rewind a conversation of its own starts a new one:
+                // the files, the timeline and the draft are put back all the same, and the
+                // next turn opens from the shortened history rather than the one that was
+                // reverted away.
                 releaseSession(stop: true)
                 app.updateThread(threadID) {
                     $0.providerSessionID = nil
                     $0.providerResumeAt = nil
                 }
-            } else {
-                guard thread.providerSessionID != nil,
-                      let omp = try await ensureSession(allowNewSession: false) as? OmpSession else {
-                    throw ProviderError.failed(Chrome.localized("The original omp conversation is unavailable."))
-                }
-                let file = try await omp.rollback(removing: removed.map(userText(of:)))
-                app.updateThread(threadID) { $0.providerSessionID = file }
-                stopSession()
-            }
-        default:
-            // A provider that cannot rewind a conversation of its own starts a new one:
-            // the files, the timeline and the draft are put back all the same, and the
-            // next turn opens from the shortened history rather than the one that was
-            // reverted away.
-            releaseSession(stop: true)
-            app.updateThread(threadID) {
-                $0.providerSessionID = nil
-                $0.providerResumeAt = nil
             }
         }
 
@@ -3044,6 +3089,7 @@ final class ThreadRuntime {
         // A head's paths list is what the turn in flight has changed; the turn they
         // belonged to is gone.
         hydraCurrentTurnTouchedPaths = []
+        clearPromptPrediction()
         // The thread's status is its last remaining turn's, or none: with every turn gone
         // it is unused again, so a new thread reuses it and ⌘W deletes it.
         app.updateThread(threadID) {
@@ -3053,6 +3099,7 @@ final class ThreadRuntime {
             $0.unreadRevision = UUID()
         }
         app.updateDockBadge()
+        if continuation?.isProviderHandoff == true, !continuationSent { rebuildProviderHandoff() }
         saveRevision += 1
         usage = nil
         if let fileError { appendNotice(.error, fileError) }
@@ -3821,7 +3868,8 @@ final class ThreadRuntime {
         // The turn's own events shared one save every few seconds; whatever they left is
         // written here, so a finished turn is always on disk.
         saveNow()
-        if status == .completed, !userStopped, externalSubmission?.turnID != turnID {
+        let allowsPromptPrediction = status == .completed && !userStopped && externalSubmission?.turnID != turnID
+        if allowsPromptPrediction {
             refreshTitleIfDue()
         }
         finishControlTurn(turnID, status: status)
@@ -3887,6 +3935,7 @@ final class ThreadRuntime {
             }
         }
         app?.turnFinished(threadID, status: status, continues: continues, turnID: turnID, userStopped: userStopped)
+        if allowsPromptPrediction, !continues { predictNextPromptIfDue(turnID: turnID) }
         if let app, let kind = hydraLedgerTurn {
             recordHydraLedger(app: app, turnID: turnID, kind: kind)
             hydraLedgerTurn = nil
@@ -5228,6 +5277,48 @@ final class ThreadRuntime {
         saveRevision += 1
     }
 
+    private func clearPromptPrediction() {
+        promptPredictionTask?.cancel()
+        promptPredictionTask = nil
+        if promptPrediction != nil { promptPrediction = nil }
+    }
+
+    private func predictNextPromptIfDue(turnID: UUID) {
+        guard let app, app.settings.isPromptPredictionsEnabled,
+              let thread = app.thread(threadID), !thread.isHydraHead,
+              draft.isEmpty, draft.quotes.isEmpty, phase == .idle,
+              let engine = app.textEngine(preferring: thread.provider, allowsDefaultModel: false) else { return }
+        clearPromptPrediction()
+        let context = promptPredictionContext()
+        promptPredictionTask = Task { [weak self] in
+            let prediction = await TextGeneration.nextPrompt(context: context, engine: engine)
+            guard let self, !Task.isCancelled else { return }
+            defer { self.promptPredictionTask = nil }
+            guard app.settings.isPromptPredictionsEnabled, self.phase == .idle,
+                  self.turns.last?.id == turnID, self.draft.isEmpty, self.draft.quotes.isEmpty else { return }
+            self.promptPrediction = prediction
+        }
+    }
+
+    private func promptPredictionContext() -> String {
+        let firstRequest = turns.first.map { TextCleanup.singleLine(userText(of: $0), limit: 600) } ?? ""
+        let firstSection = firstRequest.isEmpty ? [] : ["First request: \(firstRequest)"]
+        var recent: [String] = turns.suffix(6).compactMap { turn in
+            var lines: [String] = []
+            let user = TextCleanup.singleLine(userText(of: turn), limit: 600)
+            if !user.isEmpty { lines.append("User: \(user)") }
+            let assistant = turn.id == turns.last?.id
+                ? String(assistantText(of: turn).prefix(3_000))
+                : TextCleanup.singleLine(assistantText(of: turn), limit: 600)
+            if !assistant.isEmpty { lines.append("Assistant: \(assistant)") }
+            return lines.isEmpty ? nil : lines.joined(separator: "\n")
+        }
+        while (firstSection + recent).joined(separator: "\n").count > 8_000, !recent.isEmpty {
+            recent.removeFirst()
+        }
+        return (firstSection + recent).joined(separator: "\n")
+    }
+
     private func refreshTitleIfDue() {
         guard let app, app.settings.threadTitleMode == .continuous,
               let thread = app.thread(threadID), !thread.hasCustomTitle,
@@ -5479,6 +5570,7 @@ final class ThreadRuntime {
         head.turns = turns.filter { !finishedIDs.contains($0.id) }
         head.usage = usage
         head.continuation = continuation
+        head.forwardedContinuation = forwardedContinuation
         head.followUps = followUps
         head.hydraMerges = hydraMerges
         return ThreadSave(head: head, dirtyTurns: dirty)
@@ -5491,6 +5583,7 @@ final class ThreadRuntime {
         document.turns = turns
         document.usage = usage
         document.continuation = continuation
+        document.forwardedContinuation = forwardedContinuation
         document.followUps = followUps
         document.hydraMerges = hydraMerges
         return document

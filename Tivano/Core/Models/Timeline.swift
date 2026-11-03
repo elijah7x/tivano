@@ -360,6 +360,8 @@ struct ThreadDocument: Codable, Equatable, Sendable {
     /// The forwarded chat this thread continues, when the user opened it with one. Nil for
     /// a thread that started here. Optional, so threads stored before it still decode.
     var continuation: ThreadContinuation? = nil
+    /// The forwarded chat a provider switch's snapshot folded in, restored once the snapshot is sent or dropped.
+    var forwardedContinuation: ThreadContinuation? = nil
 
     init(threadID: UUID) {
         self.threadID = threadID
@@ -376,5 +378,6 @@ struct ThreadDocument: Codable, Equatable, Sendable {
         followUps = container.value(.followUps, default: [Lenient<FollowUpPrompt>]()).compactMap(\.value)
         hydraMerges = container.value(.hydraMerges, default: [Lenient<HydraMergeRecord>]()).compactMap(\.value)
         continuation = container.value(.continuation, default: nil)
+        forwardedContinuation = container.value(.forwardedContinuation, default: nil)
     }
 }

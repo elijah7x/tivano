@@ -21,9 +21,12 @@ enum ZCodeCLI {
     }
 
     nonisolated static func runtime(entry: URL) -> URL? {
-        guard let url = appBundle(entry: entry)?.appendingPathComponent("Contents/MacOS/ZCode"),
-              FileManager.default.isExecutableFile(atPath: url.path) else { return nil }
-        return url
+        guard let bundle = appBundle(entry: entry) else { return nil }
+        // The helper is an LSUIElement, as ZCode itself uses for its CLI: the main binary
+        // registers every server process and its workers as a Dock app.
+        return ["Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper", "Contents/MacOS/ZCode"]
+            .map { bundle.appendingPathComponent($0) }
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
     nonisolated static func builtinConfig(entry: URL) -> URL? {

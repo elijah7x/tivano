@@ -8,6 +8,66 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-11-03
+
+### English
+
+### New features
+
+- Composer predictions: after a reply, the empty composer suggests your likely next message in gray, with a "Press Tab to accept" hint; Tab or → puts it in the draft for you to edit or send. It uses the Text generation model and can be turned off in Settings › Text generation.
+- Settings › Text generation has one Model picker, like Default model. Automatic uses Haiku for Claude chats and GPT Terra at low effort for every other chat; Choose model sets any Claude or Codex model and effort; Off turns titles, commit messages and predictions off. Choosing Codex no longer runs your Codex default model, which could be a costly one.
+
+- Hydra heads can work in your home folder. A head that only reads may use it as is. A head that changes files there works in the narrowest folder holding the files it was given, and does not start if any lies outside home. In any folder that is not a Git repository, Tivano backs up a head's files before it starts and shows the lead their diff and the backup location when it reports. A head that needs to change a file it was not given stops and asks the lead first. Heads never work in Tivano's own data folders (either edition's library, `~/.tivano`, `~/.tivano-dev`) or a folder holding one. The report always lists files that could not be backed up, and a head continued with new files backs those up too.
+
+### Bug fixes
+
+- Chats on ZCode no longer fill the Dock with blank "exec" icons, one for each ZCode background process.
+- Switching a forwarded chat to another provider now hands over the chat's own conversation too, not only the context it was forwarded with.
+- Undoing a provider switch after a crash, after reverting messages, or while the chat was still loading no longer replays deleted or duplicated history to the previous model.
+- Messages can be edited or reverted while a provider switch is waiting, and pressing Escape while the new session starts leaves the switch undoable instead of committing it.
+- Editing or reverting messages after undoing a provider switch whose original session was lost now reverts locally instead of failing on a missing Codex or Copilot session.
+- Picking the previous provider again after a failed send on a waiting switch no longer sends the chat's history snapshot to the restored session.
+- Local control reports the same failure kind for provider errors whether the app is in English or Chinese.
+- The CLI's help and connection error point to Settings › General for Local control, and the plan approval title, MCP sign-in pages and MCP sign-in errors are translated.
+
+### Refinements
+
+- The model buttons in Settings take only the width their label needs, so the description beside them no longer wraps early.
+- A spent usage limit now shows above a waiting provider switch, and the new model is told it is continuing the same chat rather than a forwarded one.
+- The note shown before a provider switch now reads "Context may be incomplete after switching providers".
+- In Settings › Providers and Settings › Models, the provider column stays in view while the settings beside it scroll. Picking another provider far down the page brings the page back to its top in one step instead of leaving it blank.
+
+### 简体中文
+
+### 新功能
+
+- 输入框预测：回复结束后，空输入框会用灰字给出你可能要发的下一条消息，并提示“按 Tab 键接受”；按 Tab 或 → 填入草稿，可修改后再发送。它使用文本生成的模型，可在“设置 › 文本生成”中关闭。
+- “设置 › 文本生成”改为与“默认模型”相同的单个模型选择器。“自动”在 Claude 对话中使用 Haiku，其他对话使用 GPT Terra（低推理强度）；“自选模型”可指定任意 Claude 或 Codex 模型及推理强度；“关闭”则不再生成标题、提交信息和预测。选择 Codex 时不再使用你的 Codex 默认模型，避免调用昂贵的模型。
+
+- Hydra 子智能体可以在主目录中工作。只读的子智能体可直接使用主目录；需要修改文件的子智能体会在包含其指定文件的最小文件夹中工作，若有文件位于主目录之外则不会启动。在非 Git 仓库的文件夹中，Tivano 会在子智能体开工前备份其指定文件，并在汇报时向主智能体展示 diff 和备份位置。子智能体需要修改未指定的文件时，会先停下并请主智能体确认。子智能体不会在 Tivano 自己的数据文件夹（任一版本的资料库、`~/.tivano`、`~/.tivano-dev`）或包含它们的文件夹中工作。汇报中始终列出未能备份的文件；继续派发并新增文件的子智能体，也会先备份这些新文件。
+
+### 问题修复
+
+- 使用 ZCode 的对话不再在程序坞里为每个 ZCode 后台进程显示一个空白的“exec”图标。
+- 转发而来的对话切换服务商时，会一并交接本对话自己的内容，而不只是转发时带来的上下文。
+- 在崩溃后、撤回消息后或对话仍在加载时撤销服务商切换，不会再向原模型重放已删除或重复的历史。
+- 服务商切换等待生效期间可以编辑或撤回消息；新会话启动时按 Esc，切换仍可撤销，不会被直接提交。
+- 撤销服务商切换后，若原会话已丢失，编辑或撤回消息会在本地完成，不再因找不到 Codex 或 Copilot 会话而失败。
+- 等待生效的切换发送失败后，重新选回原服务商时，不会再把对话历史快照发给恢复的会话。
+- 无论界面是英文还是中文，本地控制对服务商错误报告的失败类型都一致。
+- CLI 帮助和连接错误改为指向“设置 › 通用”中的本地控制；计划审批标题、MCP 登录页面和 MCP 登录错误提示已翻译。
+
+### 优化改进
+
+- 设置中的模型按钮只占用标签所需的宽度，旁边的说明文字不再过早换行。
+- 用量已用完的提示现在显示在待生效的服务商切换之上；新模型会被告知是在同一对话中接续，而不是转发来的对话。
+- 切换服务商前的提示改为“切换服务商后，上下文可能不完整”。
+- 设置 › 服务商和设置 › 模型中，右侧内容滚动时左侧服务商列表保持可见。在页面下方选择其他服务商时，页面会一次回到列表顶部，不再出现空白。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.3.0] - 2026-11-02
 
 ### English

@@ -17,30 +17,40 @@ enum MCPOAuthError: LocalizedError, Sendable {
     case signedOut
     case network(String)
 
+    /// A server's own detail is a value, not part of the key: the sentence is what the
+    /// catalog translates, and the detail follows it untranslated.
     var errorDescription: String? {
         switch self {
         case .discoveryFailed(let detail):
-            detail.isEmpty ? "Couldn't find the sign-in page." : "Couldn't find the sign-in page. \(detail)"
+            detail.isEmpty
+                ? AppText.localized("Couldn't find the sign-in page.")
+                : AppText.localized("Couldn't find the sign-in page.") + " " + detail
         case .metadataFailed(let detail):
-            detail.isEmpty ? "The server's sign-in details didn't make sense." : "The server's sign-in details didn't make sense. \(detail)"
+            detail.isEmpty
+                ? AppText.localized("The server's sign-in details didn't make sense.")
+                : AppText.localized("The server's sign-in details didn't make sense.") + " " + detail
         case .registrationUnsupported:
-            "This server doesn't let apps sign in on their own."
+            AppText.localized("This server doesn't let apps sign in on their own.")
         case .registrationFailed(let detail):
-            detail.isEmpty ? "Sign-in setup failed." : "Sign-in setup failed. \(detail)"
+            detail.isEmpty
+                ? AppText.localized("Sign-in setup failed.")
+                : AppText.localized("Sign-in setup failed.") + " " + detail
         case .tokenFailed(let detail):
-            detail.isEmpty ? "Couldn't finish signing in." : "Couldn't finish signing in. \(detail)"
+            detail.isEmpty
+                ? AppText.localized("Couldn't finish signing in.")
+                : AppText.localized("Couldn't finish signing in.") + " " + detail
         case .callbackFailed(let detail):
-            detail.isEmpty ? "Sign-in didn't finish." : detail
+            detail.isEmpty ? AppText.localized("Sign-in didn't finish.") : detail
         case .stateMismatch:
-            "Sign-in didn't finish. Try again."
+            AppText.localized("Sign-in didn't finish. Try again.")
         case .timedOut:
-            "Sign-in timed out. Try again and complete it in the browser."
+            AppText.localized("Sign-in timed out. Try again and complete it in the browser.")
         case .cancelled:
-            "Sign-in was cancelled."
+            AppText.localized("Sign-in was cancelled.")
         case .signedOut:
-            "You're signed out. Sign in again to continue."
+            AppText.localized("You're signed out. Sign in again to continue.")
         case .network(let detail):
-            detail.isEmpty ? "The network didn't answer." : detail
+            detail.isEmpty ? AppText.localized("The network didn't answer.") : detail
         }
     }
 }
@@ -412,7 +422,7 @@ enum MCPOAuth {
         do {
             listener = try NWListener(using: parameters)
         } catch {
-            throw MCPOAuthError.network("Couldn't listen for the sign-in reply.")
+            throw MCPOAuthError.network(AppText.localized("Couldn't listen for the sign-in reply."))
         }
         let shared = CallbackState()
         return try await withTaskCancellationHandler {
@@ -423,7 +433,7 @@ enum MCPOAuth {
                     switch state {
                     case .ready:
                         guard let port = listener.port else {
-                            wait.finish(.failure(MCPOAuthError.network("Couldn't listen for the sign-in reply.")))
+                            wait.finish(.failure(MCPOAuthError.network(AppText.localized("Couldn't listen for the sign-in reply."))))
                             return
                         }
                         let redirectURI = "http://127.0.0.1:\(port)/callback"
@@ -437,7 +447,7 @@ enum MCPOAuth {
                             }
                         }
                     case .failed:
-                        wait.finish(.failure(MCPOAuthError.network("The connection to the browser broke.")))
+                        wait.finish(.failure(MCPOAuthError.network(AppText.localized("The connection to the browser broke."))))
                     case .cancelled:
                         wait.finish(.failure(MCPOAuthError.cancelled))
                     default:
@@ -529,7 +539,7 @@ enum MCPOAuth {
         }
         if let providerError = value("error"), !providerError.isEmpty {
             let description = value("error_description")
-            let message = (description?.isEmpty == false ? description! : "The sign-in was refused (\(providerError)).")
+            let message = (description?.isEmpty == false ? description! : String(format: AppText.localized("The sign-in was refused (%@)."), providerError))
             let page = failurePage(serverName: serverName, message: message)
             sendHTML(page, status: 200, statusText: "OK", on: connection) {
                 wait.finish(.failure(MCPOAuthError.callbackFailed(message)))
@@ -537,14 +547,14 @@ enum MCPOAuth {
             return
         }
         guard let code = value("code"), !code.isEmpty else {
-            let page = failurePage(serverName: serverName, message: "The browser didn't send back a code.")
+            let page = failurePage(serverName: serverName, message: AppText.localized("The browser didn't send back a code."))
             sendHTML(page, status: 200, statusText: "OK", on: connection) {
-                wait.finish(.failure(MCPOAuthError.callbackFailed("The browser didn't send back a code.")))
+                wait.finish(.failure(MCPOAuthError.callbackFailed(AppText.localized("The browser didn't send back a code."))))
             }
             return
         }
         guard value("state") == expectedState else {
-            let page = failurePage(serverName: serverName, message: "Sign-in didn't finish. Try again.")
+            let page = failurePage(serverName: serverName, message: AppText.localized("Sign-in didn't finish. Try again."))
             sendHTML(page, status: 200, statusText: "OK", on: connection) {
                 wait.finish(.failure(MCPOAuthError.stateMismatch))
             }
@@ -554,7 +564,7 @@ enum MCPOAuth {
         sendHTML(page, status: 200, statusText: "OK", on: connection) {
             let state = shared.current()
             guard let client = state.client, !state.redirectURI.isEmpty else {
-                wait.finish(.failure(MCPOAuthError.callbackFailed("Sign-in didn't finish.")))
+                wait.finish(.failure(MCPOAuthError.callbackFailed(AppText.localized("Sign-in didn't finish."))))
                 return
             }
             wait.finish(.success(CallbackResult(code: code, redirectURI: state.redirectURI, client: client)))
@@ -716,7 +726,7 @@ enum MCPOAuth {
 
     private static func fetchJSON(url: String) async throws -> JSONValue {
         guard let requestURL = URL(string: url) else {
-            throw MCPOAuthError.network("That address isn't valid.")
+            throw MCPOAuthError.network(AppText.localized("That address isn't valid."))
         }
         var request = URLRequest(url: requestURL, timeoutInterval: 30)
         request.httpMethod = "GET"
@@ -727,7 +737,7 @@ enum MCPOAuth {
             let (body, urlResponse) = try await URLSession.shared.data(for: request)
             data = body
             guard let http = urlResponse as? HTTPURLResponse else {
-                throw MCPOAuthError.network("The server didn't answer properly.")
+                throw MCPOAuthError.network(AppText.localized("The server didn't answer properly."))
             }
             response = http
         } catch let error as MCPOAuthError {
@@ -745,7 +755,7 @@ enum MCPOAuth {
         guard let requestURL = URL(string: url),
               let bodyData = try? JSONSerialization.data(withJSONObject: body, options: [])
         else {
-            throw MCPOAuthError.network("That address isn't valid.")
+            throw MCPOAuthError.network(AppText.localized("That address isn't valid."))
         }
         var request = URLRequest(url: requestURL, timeoutInterval: 30)
         request.httpMethod = "POST"
@@ -755,7 +765,7 @@ enum MCPOAuth {
         do {
             let (data, urlResponse) = try await URLSession.shared.data(for: request)
             guard let http = urlResponse as? HTTPURLResponse else {
-                throw MCPOAuthError.network("The server didn't answer properly.")
+                throw MCPOAuthError.network(AppText.localized("The server didn't answer properly."))
             }
             return (data, http)
         } catch let error as MCPOAuthError {
@@ -767,7 +777,7 @@ enum MCPOAuth {
 
     private static func postForm(url: String, fields: [(String, String)]) async throws -> (Data, HTTPURLResponse) {
         guard let requestURL = URL(string: url) else {
-            throw MCPOAuthError.network("That address isn't valid.")
+            throw MCPOAuthError.network(AppText.localized("That address isn't valid."))
         }
         var request = URLRequest(url: requestURL, timeoutInterval: 30)
         request.httpMethod = "POST"
@@ -777,7 +787,7 @@ enum MCPOAuth {
         do {
             let (data, urlResponse) = try await URLSession.shared.data(for: request)
             guard let http = urlResponse as? HTTPURLResponse else {
-                throw MCPOAuthError.network("The server didn't answer properly.")
+                throw MCPOAuthError.network(AppText.localized("The server didn't answer properly."))
             }
             return (data, http)
         } catch let error as MCPOAuthError {
@@ -840,16 +850,16 @@ enum MCPOAuth {
 
     static func successPage(serverName: String) -> String {
         page(
-            headTitle: "Signed in to \(escapeHTML(serverName))",
-            heading: "Signed in to \(escapeHTML(serverName))",
-            message: "You can close this tab and head back to Tivano."
+            headTitle: escapeHTML(String(format: AppText.localized("Signed in to %@"), serverName)),
+            heading: escapeHTML(String(format: AppText.localized("Signed in to %@"), serverName)),
+            message: escapeHTML(AppText.localized("You can close this tab and head back to Tivano."))
         )
     }
 
     static func failurePage(serverName: String, message: String) -> String {
         page(
-            headTitle: "Sign-in didn't finish \u{2014} \(escapeHTML(serverName))",
-            heading: "Sign-in didn't finish",
+            headTitle: escapeHTML(String(format: AppText.localized("Sign-in didn't finish — %@"), serverName)),
+            heading: escapeHTML(AppText.localized("Sign-in didn't finish")),
             message: escapeHTML(message)
         )
     }

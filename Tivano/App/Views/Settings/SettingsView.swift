@@ -372,6 +372,8 @@ private struct SettingsPageScroll: View {
     @State private var mcpSearch = ""
     @State private var archiveFilter = ArchiveFilter()
     @State private var scrollChrome = ChromeScrollModel()
+    @State private var stickyContext = SettingsScrollOffset()
+    @State private var scrollPosition = ScrollPosition()
     @State private var scrollTracker = SettingsScrollTracker()
 
     var body: some View {
@@ -379,11 +381,16 @@ private struct SettingsPageScroll: View {
         .onDisappear { scrollTracker.end() }
         .onChange(of: page, initial: true) {
             scrollChrome.update(travel: 0)
+            stickyContext.travel = 0
             modelSearch = ""
             providerSearch = ""
             mcpSearch = ""
             archiveFilter = ArchiveFilter()
         }
+    }
+
+    private var contentTopInset: CGFloat {
+        fullWindow || pageHasChromeControls ? Chrome.chromeTopPadding + Chrome.capsuleHeight + 16 : 22
     }
 
     private var pageScroll: some View {
@@ -406,9 +413,24 @@ private struct SettingsPageScroll: View {
             .padding(.horizontal, fullWindow ? Chrome.contentHorizontalPadding * 2 : Chrome.contentHorizontalPadding + 8)
             .frame(maxWidth: .infinity)
             // Full-window pages clear the titlebar; the old window keeps its existing inset.
-            .padding(.top, fullWindow || pageHasChromeControls ? Chrome.chromeTopPadding + Chrome.capsuleHeight + 16 : 22)
+            .padding(.top, contentTopInset)
             .padding(.bottom, fullWindow ? Chrome.contentHorizontalPadding * 2 : 24)
+            .coordinateSpace(.named(SettingsStickyCoordinates.space))
+            .environment(\.settingsStickyContext, stickyContext)
+            .onChange(of: contentTopInset, initial: true) { _, inset in
+                stickyContext.topInset = inset + 8
+            }
             .allowsHitTesting(!scrollTracker.isFrozen)
+        }
+        .scrollPosition($scrollPosition)
+        .onChange(of: stickyContext.scrollRequest) { _, request in
+            guard let request else { return }
+            stickyContext.scrollRequest = nil
+            // One unanimated update: scrolling a frame before the swap shows the page jump twice.
+            withTransaction(Transaction(animation: nil)) {
+                scrollPosition.scrollTo(y: request.y)
+                request.then()
+            }
         }
         .onPreferenceChange(KeepsakeOverlayPreference.self) { keepsakeOverlayShown = $0 }
         // The expanded keepsake is placed at the card's frame; scrolling would separate them.
@@ -418,6 +440,7 @@ private struct SettingsPageScroll: View {
         .onScrollGeometryChange(for: CGFloat.self, of: Self.travel) { _, travel in
             scrollTracker.note()
             scrollChrome.update(travel: travel)
+            stickyContext.travel = travel
         }
         .onScrollPhaseChange { _, phase in
             // Fingers on the content freeze the rows (no click can land then anyway); the
@@ -516,7 +539,6 @@ private struct GeneralSettingsPage: View {
     private static let workspaceOptions = WorkspaceMode.allCases.map { ($0, $0.title) }
     private static let hapticOptions = TimelineHapticStyle.allCases.map { ($0, $0.title) }
     private static let languageOptions = AppLanguage.allCases.map { ($0, $0.title) }
-    private static let textGenerationOptions = TextGenerationChoice.allCases.map { ($0, $0.title) }
     private static let locationOptions: [(NewThreadLocation, String)] = [
         (.recent, "Follow the latest chat"),
         (.standalone, "Tasks (no project)"),
@@ -613,12 +635,7 @@ private struct GeneralSettingsPage: View {
         }
         ChromeSection(title: "Text generation") {
             ChromeCard {
-                ChromeRow(
-                    title: "Thread titles and commit messages",
-                    detail: "Automatic uses the thread's own provider. Claude uses Haiku, Codex your default model."
-                ) {
-                    GlassPickerButton(options: Self.textGenerationOptions, selection: $settings.textGeneration, asset: { ProviderKind(rawValue: $0.rawValue)?.iconName })
-                }
+                TextGenerationModelRows()
                 if settings.textGeneration != .off {
                     ChromeRowDivider()
                     ChromeRow(
@@ -626,6 +643,14 @@ private struct GeneralSettingsPage: View {
                         detail: "Name once titles a chat from its first message. Keep updated renames it every few turns when the work moves on. Titles you set yourself never change."
                     ) {
                         GlassPickerButton(options: ThreadTitleMode.allCases.map { ($0, $0.title) }, selection: $settings.threadTitleMode)
+                    }
+                    ChromeRowDivider()
+                    ChromeRow(
+                        title: "Composer predictions",
+                        detail: "After a reply, suggests your likely next message in the empty composer; press Tab or → to use it. Recent messages from the chat go to the model above."
+                    ) {
+                        SettingsSwitch(isOn: $settings.promptPredictionsEnabled)
+                            .accessibilityLabel(Text("Composer predictions"))
                     }
                 }
             }
@@ -688,36 +713,13 @@ private struct NewThreadModelSettingsRow: View {
             details.append(Chrome.localized("No providers available. You can still use Last selection."))
         }
         return ChromeRow(title: "Default model", detail: details.joined(separator: "\n")) {
-            Button {
-                isPresented = true
-            } label: {
-                HStack(spacing: 6) {
-                    if let selection {
-                        Image(selection.provider.iconName)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 14, height: 14)
-                    }
-                    Text(verbatim: displayedTitle)
-                        .font(.ui(size: 12.5, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Image(systemName: "chevron.down")
-                        .font(Chrome.chevronFont)
-                        .foregroundStyle(Chrome.secondaryText)
-                }
-                .padding(.horizontal, Chrome.capsuleHorizontalPadding)
-                .frame(height: Chrome.capsuleContentHeight)
-                .contentShape(Capsule(style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .chromeGlassCapsule()
-            .frame(maxWidth: 190, alignment: .trailing)
-            .foregroundStyle(Chrome.primaryText)
-            .help(Text(verbatim: helpTitle))
-            .accessibilityLabel(Text("Default model"))
-            .accessibilityValue(Text(verbatim: helpTitle))
-            .popover(isPresented: $isPresented, arrowEdge: .trailing) {
+            ModelChoiceButton(
+                title: displayedTitle,
+                help: helpTitle,
+                iconName: selection?.provider.iconName,
+                accessibilityLabel: "Default model",
+                isPresented: $isPresented
+            ) {
                 NewThreadModelPicker(
                     selection: selection,
                     selectedModelID: option?.id ?? selection?.modelID,
@@ -727,11 +729,58 @@ private struct NewThreadModelSettingsRow: View {
                     model.settings.newThreadModelSelection = selection
                     isPresented = false
                 }
-                .frame(width: 360)
-                .presentedChrome()
+            }
+        }
+    }
+}
+
+struct ModelChoiceButton<Popover: View>: View {
+    let title: String
+    let help: String
+    let iconName: String?
+    let accessibilityLabel: String
+    @Binding var isPresented: Bool
+    @ViewBuilder let popover: () -> Popover
+
+    var body: some View {
+        Button {
+                isPresented = true
+            } label: {
+                HStack(spacing: 6) {
+                    if let iconName {
+                        Image(iconName)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 14, height: 14)
+                    }
+                    Text(verbatim: title)
+                        .font(.ui(size: 12.5, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "chevron.down")
+                        .font(Chrome.chevronFont)
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+                .padding(.horizontal, Chrome.capsuleHorizontalPadding)
+                // Caps a long title without claiming 190 points for a short one, so the
+                // row's detail keeps the width the capsule does not need.
+                .frame(maxWidth: 190)
+                .frame(height: Chrome.capsuleContentHeight)
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .chromeGlassCapsule()
+            .fixedSize()
+            .foregroundStyle(Chrome.primaryText)
+            .help(Text(verbatim: help))
+            .accessibilityLabel(Text(verbatim: Chrome.localized(accessibilityLabel)))
+            .accessibilityValue(Text(verbatim: help))
+            .popover(isPresented: $isPresented, arrowEdge: .trailing) {
+                popover()
+                    .frame(width: 360)
+                    .presentedChrome()
             }
             .background { NoWindowDragArea() }
-        }
     }
 }
 
@@ -739,6 +788,10 @@ struct NewThreadModelPicker: View {
     @Environment(AppModel.self) private var model
     let selection: NewThreadModelSelection?
     let selectedModelID: String?
+    let automaticTitle: String
+    let allowedProviders: [ProviderKind]?
+    let offSelected: Bool
+    let selectOff: (() -> Void)?
     let select: (NewThreadModelSelection?) -> Void
     @State private var selectedProvider: ProviderKind?
 
@@ -746,17 +799,25 @@ struct NewThreadModelPicker: View {
         selection: NewThreadModelSelection?,
         selectedModelID: String?,
         initialProvider: ProviderKind?,
+        automaticTitle: String = "Last selection",
+        allowedProviders: [ProviderKind]? = nil,
+        offSelected: Bool = false,
+        selectOff: (() -> Void)? = nil,
         select: @escaping (NewThreadModelSelection?) -> Void
     ) {
         self.selection = selection
         self.selectedModelID = selectedModelID
+        self.automaticTitle = automaticTitle
+        self.allowedProviders = allowedProviders
+        self.offSelected = offSelected
+        self.selectOff = selectOff
         self.select = select
         _selectedProvider = State(initialValue: initialProvider)
     }
 
     var body: some View {
         let registry = model.providers
-        let providers = registry.availableProviders
+        let providers = registry.availableProviders.filter { allowedProviders?.contains($0) ?? true }
         let provider = selectedProvider.flatMap { providers.contains($0) ? $0 : nil }
         let providerPrompt = selectedProvider.map {
             String(format: Chrome.localized("%@ (unavailable)"), $0.displayName)
@@ -775,11 +836,15 @@ struct NewThreadModelPicker: View {
         let isLoading = provider.map { registry.loadingCatalogs.contains($0) } ?? false
         let error = provider.flatMap { registry.status($0).catalogError }
         VStack(alignment: .leading, spacing: 0) {
-            PopoverItem("Last selection", isChecked: selection == nil) {
+            PopoverItem(automaticTitle, isChecked: selection == nil && !offSelected) {
                 select(nil)
             }
             .padding(.horizontal, 6)
             .padding(.top, 6)
+            if let selectOff {
+                PopoverItem("Off", isChecked: offSelected, action: selectOff)
+                    .padding(.horizontal, 6)
+            }
             Divider()
                 .padding(.horizontal, 14)
                 .padding(.vertical, 5)
@@ -788,7 +853,7 @@ struct NewThreadModelPicker: View {
                 Image(systemName: "checkmark")
                     .font(.ui(.subheadline, weight: .semibold))
                     .foregroundStyle(Chrome.primaryText)
-                    .opacity(selection == nil ? 0 : 1)
+                    .opacity(selection == nil || offSelected ? 0 : 1)
                     .frame(width: 14)
                 Text(verbatim: Chrome.localized("Custom model"))
                     .font(.ui(.subheadline, weight: .semibold))
@@ -800,7 +865,7 @@ struct NewThreadModelPicker: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text("Custom model"))
-            .accessibilityAddTraits(selection == nil ? .isHeader : [.isHeader, .isSelected])
+            .accessibilityAddTraits(selection == nil || offSelected ? .isHeader : [.isHeader, .isSelected])
             editorRow("Provider") {
                 GlassPickerButton(
                     options: providerOptions,
@@ -855,7 +920,7 @@ struct NewThreadModelPicker: View {
                 }
             }
             if providers.isEmpty {
-                catalogNote(Chrome.localized("No providers available. You can still use Last selection."))
+                catalogNote(Chrome.localized(automaticTitle == "Last selection" ? "No providers available. You can still use Last selection." : "No providers available."))
             } else if let provider {
                 if isLoading {
                     catalogNote(String(format: Chrome.localized(options.isEmpty ? "Loading %@'s models…" : "Refreshing %@'s models…"), provider.displayName))
@@ -877,7 +942,7 @@ struct NewThreadModelPicker: View {
         }
         .padding(.bottom, 14)
         .task(id: selectedProvider) {
-            guard let provider = selectedProvider, registry.availableProviders.contains(provider), !Task.isCancelled else { return }
+            guard let provider = selectedProvider, providers.contains(provider), !Task.isCancelled else { return }
             await registry.loadCatalog(provider, force: false)
         }
     }
@@ -1121,9 +1186,11 @@ private struct ProvidersSettingsPage: View {
         VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
             ProviderSelectionSection(settings: settings)
             if !enabled.isEmpty {
-                HStack(alignment: .providerCardTop, spacing: Chrome.sectionSpacing) {
-                    ProviderListColumn(providers: visible, selected: selected) { selection = $0 }
-                        .frame(width: 200)
+                StickySidebarRow(alignment: .providerCardTop, spacing: Chrome.sectionSpacing) { select in
+                    ProviderListColumn(providers: visible, selected: selected) { provider in
+                        select { selection = provider }
+                    }
+                } detail: {
                     if let selected {
                         ProviderSettingsSection(provider: selected, alignsCardTop: true)
                             .id(selected)

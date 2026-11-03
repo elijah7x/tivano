@@ -1543,6 +1543,12 @@ final class AppModel {
         if let selectedThreadID, ids.contains(selectedThreadID) { self.selectedThreadID = nil }
         for thread in removed { discardThreadState(thread, deletingDocument: false) }
         Storage.deleteDocuments(removed.map(\.id))
+        let backups = StoragePaths.root.appendingPathComponent("hydra-backups", isDirectory: true)
+        Task.detached {
+            for id in ids {
+                try? FileManager.default.removeItem(at: backups.appendingPathComponent(id.uuidString))
+            }
+        }
         Task {
             // Helpers can share a parent's checkout, so clear every checkpoint before
             // removing any of the owned worktrees those refs are reached through.
@@ -1932,22 +1938,73 @@ final class AppModel {
 
     // MARK: - Text generation
 
-    func textEngine(preferring provider: ProviderKind?) -> TextGeneration.Engine? {
-        func claude() -> TextGeneration.Engine? {
-            guard providers.status(.claude).auth != .signedOut, let executable = providers.executable(for: .claude) else { return nil }
-            return .claude(executable: executable, environment: providers.environment(for: .claude))
+    func fastTextModel(for provider: ProviderKind) -> ModelOption? {
+        let keyword: String
+        switch provider {
+        case .claude: keyword = "haiku"
+        case .codex: keyword = "terra"
+        default: return nil
         }
-        func codex() -> TextGeneration.Engine? {
+        let matches = providers.models(for: provider).filter {
+            $0.id.lowercased().contains(keyword) || $0.name.lowercased().contains(keyword)
+        }
+        if provider == .claude {
+            return matches.first(where: { $0.isDefault }) ?? matches.first
+        }
+        return matches.first
+    }
+
+    func textEngine(preferring provider: ProviderKind?, allowsDefaultModel: Bool = true) -> TextGeneration.Engine? {
+        func claude(model: String? = nil, effort: String? = nil) -> TextGeneration.Engine? {
+            guard providers.status(.claude).auth != .signedOut, let executable = providers.executable(for: .claude) else { return nil }
+            return .claude(executable: executable, environment: providers.environment(for: .claude), model: model, effort: effort)
+        }
+        func codex(model: String? = nil, effort: String? = nil) -> TextGeneration.Engine? {
             guard providers.status(.codex).auth != .signedOut,
                   let executable = providers.executable(for: .codex),
-                  let model = providers.defaultModel(for: .codex)?.id else { return nil }
-            return .codex(executable: executable, environment: providers.environment(for: .codex), model: model)
+                  let model = model ?? providers.defaultModel(for: .codex)?.id else { return nil }
+            return .codex(executable: executable, environment: providers.environment(for: .codex), model: model, effort: effort)
+        }
+        // Codex's default effort for a model that has no "low", so a model without it never fails.
+        func lowEffort(_ model: ModelOption) -> String? {
+            model.efforts.contains("low") ? "low" : model.defaultEffort
+        }
+        func chosenEffort(_ model: ModelOption?) -> String? {
+            settings.textGenerationEffort.flatMap { model?.efforts.contains($0) == true ? $0 : nil }
+        }
+        func fastClaude(effort: String? = nil) -> TextGeneration.Engine? {
+            claude(model: fastTextModel(for: .claude)?.id ?? "haiku", effort: effort)
+        }
+        func terraCodex(effort: String? = nil) -> TextGeneration.Engine? {
+            guard let model = fastTextModel(for: .codex) else { return nil }
+            return codex(model: model.id, effort: effort ?? lowEffort(model))
+        }
+        func defaultCodex() -> TextGeneration.Engine? {
+            guard let model = providers.defaultModel(for: .codex) else { return nil }
+            return codex(model: model.id, effort: lowEffort(model))
+        }
+        func selectedModel(for provider: ProviderKind) -> TextGeneration.Engine? {
+            guard let model = providers.model(settings.textGenerationModelID, for: provider) else {
+                let fast = fastTextModel(for: provider)
+                return provider == .claude
+                    ? fastClaude(effort: chosenEffort(fast))
+                    : (terraCodex(effort: chosenEffort(fast)) ?? defaultCodex())
+            }
+            let effort = chosenEffort(model)
+            return provider == .claude ? claude(model: model.id, effort: effort) : codex(model: model.id, effort: effort ?? lowEffort(model))
         }
         switch settings.textGeneration {
         case .off: return nil
-        case .claude: return claude()
-        case .codex: return codex()
-        case .automatic: return provider == .codex ? (codex() ?? claude()) : (claude() ?? codex())
+        case .claude: return selectedModel(for: .claude)
+        case .codex: return selectedModel(for: .codex)
+        // Claude chats use Haiku, every other chat Terra. Without Terra, Haiku comes before
+        // the Codex default, which may be a costly model. A caller that runs on every reply
+        // passes `allowsDefaultModel: false` so it never reaches that costly default.
+        case .automatic:
+            let fallback = allowsDefaultModel ? defaultCodex() : nil
+            return provider == .claude
+                ? (fastClaude() ?? terraCodex() ?? fallback)
+                : (terraCodex() ?? fastClaude() ?? fallback)
         }
     }
 

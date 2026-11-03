@@ -38,7 +38,7 @@ extension HydraPrompts {
 
         Every new-head entry needs `"files"`: the paths that head changes, or `[]` for a head that only reads and reports. No path may appear in two entries. Optional: `"name"`, `"project"`. Use only this block to delegate, never your own sub-agent tool, and never put three backticks inside a prompt. Tivano gives every head the user's request and the team's file split; resolve design choices in the brief and ask the head no questions. To send a finished head of this request back to its part, use an entry `{"continue": "<head name>", "prompt": "..."}`; heads of earlier requests cannot be sent back, so give their part to a new head. A user message while heads are out belongs to the same job.
 
-        Without `"project"`, a head works in and lands changes in your checkout. To work elsewhere—a worktree, another repository or any folder, including non-Git folders—set `"project"` to its absolute path and list `"files"` relative to it. Non-Git folders are changed in place: no copy, review, merge or undo, so brief precisely. SSH hosts are not supported workplaces: do remote writes yourself; heads can only read or prepare.\(projects)
+        Without `"project"`, a head works in and lands changes in your checkout. To work elsewhere—a worktree, another repository or any folder, including non-Git folders—set `"project"` to its absolute path and list `"files"` relative to it. Non-Git folders, the home folder included, are changed in place without a copy or merge. Tivano backs up a head's listed files first and shows you their diff when it reports, so list exact files. A head that only reads may work in the home folder with "files": []. A head that writes there gets the narrowest folder containing its files. A head that needs other files stops and reports, and you send it back with "continue" if you agree. SSH hosts are not supported workplaces: do remote writes yourself; heads can only read or prepare.\(projects)
 
         Give each head every file its change needs, including callers, models and shared types. If one task produces an API another consumes, send the consumer after the producer lands, or give it the exact interface; do not batch dependent tasks without it. When a head must restore earlier content, name the base commit.
 
@@ -68,7 +68,7 @@ extension HydraPrompts {
     /// How a v2 head works. No pacing rules: they were written for slower models and only
     /// make a capable head second-guess itself.
     static let v2HowToWork = """
-    - Read what the task needs, then make the change. Do exactly this task: touch no file you do not own unless unavoidable, and never revert or reformat others' work.
+    - Read what the task needs, then make the change. Do exactly this task: stop and report under Unfinished before changing any file you do not own, and never revert or reformat others' work.
     - Never build, test, lint or verify; the lead does that.
     - If something blocks you, stop and say so in your report instead of working around it.
     """
@@ -76,10 +76,7 @@ extension HydraPrompts {
     /// A new v2 head's whole brief: the lead's entry, the handoff packet, the workplace,
     /// how to work and the three-line report format.
     static func v2HeadPrompt(persona: HydraPersona, delegation: HydraDelegation, workplace: Workplace, packet: HydraHandoffPacket) -> String {
-        var workplaceText = workplaceRules(workplace)
-        if case .shared = workplace {
-            workplaceText += " If this shared folder is not a Git repository, changes are final in place; nothing is reverted."
-        }
+        let workplaceText = workplaceRules(workplace)
         let limit = HydraHandoffPacket.requestLimit
         let request = String(packet.request.prefix(limit))
         let truncation = packet.request.count > limit ? "\n\n[The user's request was truncated to the first \(limit) characters.]" : ""
@@ -106,7 +103,7 @@ extension HydraPrompts {
         Team:
         \(team)
 
-        \(delegation.files.isEmpty ? "You change no files: read, investigate and report what you found." : "Only change files you own unless unavoidable, and say so in Deviations.")
+        \(delegation.files.isEmpty ? "You change no files: read, investigate and report what you found." : "Change only files you own. Report any needed change to other files under Unfinished before changing them.")
 
         ## Your report
         Tivano already knows which files you changed; do not list them. Report the result in one or two sentences, then end with exactly these three lines, each `none` when empty:
@@ -122,8 +119,8 @@ extension HydraPrompts {
         switch workplace {
         case .ownCopy, nil:
             workplaceRule = "You keep your own copy and files."
-        case .shared(let path):
-            workplaceRule = "You continue in the lead's shared checkout at \(path), alongside others whose changes you must leave alone. If this shared folder is not a Git repository, changes are final in place; nothing is reverted."
+        case .shared:
+            workplaceRule = workplace.map(workplaceRules) ?? ""
         }
         return """
         The lead sends you back to your part:
