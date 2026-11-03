@@ -484,10 +484,11 @@ extension AppModel {
     }
 
     /// Resolves an explicit absolute path onto a sidebar project and a working folder.
-    /// Missing folders are created only when their parent exists. System folders and
-    /// the app library (except task-workspaces) are refused. Linked Git worktrees reuse
-    /// their repository's project; paths outside every sidebar project stay under the
-    /// lead's project and work in place at that path.
+    /// Missing folders are created only when their parent exists. System folders and the
+    /// folders Tivano keeps its own data in (except task-workspaces) are refused. Linked
+    /// Git worktrees reuse their repository's project; paths outside every sidebar project
+    /// stay under the lead's project and work in place at that path. Home is allowed; owned
+    /// files narrow its workplace to their deepest common existing directory.
     private func routeHydraHead(_ id: UUID, reference: String) async -> Bool {
         guard hydraHeadCanStart(id), let head = thread(id), let parentID = head.parentThreadID, let lead = thread(parentID) else { return false }
         let name = head.hydra?.persona.name ?? Chrome.localized("The head")
@@ -495,17 +496,42 @@ extension AppModel {
         guard expanded.hasPrefix("/") else {
             return failHydraRoute(id, String(format: Chrome.localized("Hydra: no project named %@ is in the sidebar, so %@ did not start."), reference, name))
         }
-        let canonical = HydraPaths.canonical(expanded)
-        let library = HydraPaths.canonical(StoragePaths.root.path)
+        var canonical = HydraPaths.canonical(expanded)
         let taskWorkspaces = HydraPaths.canonical(StoragePaths.root.appendingPathComponent("task-workspaces", isDirectory: true).path)
+        let protectedRoots = Self.hydraProtectedRoots()
         func contains(_ root: String) -> Bool {
             canonical == root || canonical.hasPrefix(root + "/")
         }
         let systemRoots = ["/System", "/Library", "/usr", "/bin", "/sbin", "/private/etc", "/Applications"]
-        if canonical == "/" || canonical == HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
+        let home = HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
+        // Home holds every protected folder, so it never matches the "contains" rule here;
+        // it is judged one owned file at a time below.
+        if canonical == "/"
             || systemRoots.contains(where: { contains(HydraPaths.canonical($0)) })
-            || (contains(library) && !contains(taskWorkspaces)) {
+            || (canonical != home && Self.hydraPathTouchesProtectedRoot(canonical, roots: protectedRoots, taskWorkspaces: taskWorkspaces)) {
             return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is a system folder, so %@ did not start."), reference, name))
+        }
+        if canonical == home {
+            let files = hydraOwnedFiles(id)
+            for file in files where !Self.hydraOwnedPathIsSafe(file, base: home) {
+                return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ lists files outside %@, so %@ did not start."), file, home, name))
+            }
+            // Each owned path is checked on its own: two files can share home as their
+            // folder while one sits in, or contains, a protected folder.
+            for file in files {
+                let path = HydraPaths.canonical(URL(fileURLWithPath: home).appendingPathComponent(file).path)
+                if path == home || Self.hydraPathTouchesProtectedRoot(path, roots: protectedRoots, taskWorkspaces: taskWorkspaces) {
+                    return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is a system folder, so %@ did not start."), file, name))
+                }
+            }
+            if let narrowed = Self.hydraOwnedDirectory(files, base: home), narrowed != home {
+                canonical = narrowed
+                updateHydraHead(id) { $0.filesBase = home }
+            }
+        }
+        if canonical == "/" || systemRoots.contains(where: { contains(HydraPaths.canonical($0)) })
+            || (canonical != home && Self.hydraPathTouchesProtectedRoot(canonical, roots: protectedRoots, taskWorkspaces: taskWorkspaces)) {
+            return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is a system folder, so %@ did not start."), canonical, name))
         }
         let manager = FileManager.default
         var isDir: ObjCBool = false
@@ -525,7 +551,7 @@ extension AppModel {
         guard isDir.boolValue else {
             return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
         }
-        guard let identity = await HydraGitIdentityReader.read(at: expanded) else {
+        guard let identity = await HydraGitIdentityReader.read(at: canonical) else {
             guard hydraHeadCanStart(id) else { return false }
             // Git metadata git cannot read is a broken repository, not a plain folder to edit in place.
             var ancestor = URL(fileURLWithPath: canonical, isDirectory: true)
@@ -540,12 +566,14 @@ extension AppModel {
             let listed = projects.filter { HydraPaths.same($0.path, canonical) }
             let chosen = hydraPreferredProject(listed, lead: lead, mainCheckout: canonical)
                 ?? project(lead.projectID)
+            updateHydraHead(id) { $0.isNonGitCheckout = true }
             applyHydraRoute(id, project: chosen, checkout: canonical, lead: lead)
             return true
         }
         guard hydraHeadCanStart(id) else { return false }
         let chosen = await hydraProject(for: identity, lead: lead, headID: id)
         guard hydraHeadCanStart(id) else { return false }
+        updateHydraHead(id) { $0.isNonGitCheckout = false }
         applyHydraRoute(id, project: chosen, checkout: identity.checkout, lead: lead)
         return true
     }
@@ -741,8 +769,16 @@ extension AppModel {
             }
         }
         guard thread(id)?.hydra?.status == .running else { return }
-        var workplace = HydraPrompts.Workplace.shared(path: checkout)
-        if settings.hydraIsolateHeads, let copy = await makeHydraCopy(for: head, of: checkout) {
+        if thread(id)?.hydra?.isNonGitCheckout == nil {
+            let identity = await HydraGitIdentityReader.read(at: checkout)
+            updateHydraHead(id) { $0.isNonGitCheckout = identity == nil }
+        }
+        if thread(id)?.hydra?.isNonGitCheckout == true {
+            await prepareHydraBackup(id, checkout: checkout)
+        }
+        guard hydraHeadCanStart(id) else { return }
+        var workplace = HydraPrompts.Workplace.shared(path: checkout, filesBase: thread(id)?.hydra?.filesBase, isNonGit: thread(id)?.hydra?.isNonGitCheckout == true)
+        if thread(id)?.hydra?.isNonGitCheckout != true, settings.hydraIsolateHeads, let copy = await makeHydraCopy(for: head, of: checkout) {
             updateThread(id) {
                 $0.worktreePath = copy.path
                 $0.branch = nil
@@ -761,7 +797,10 @@ extension AppModel {
             $0.executionStartedAt = .now
             $0.executionFinishedAt = nil
         }
-        let headBrief = brief(info.persona, workplace)
+        var headBrief = brief(info.persona, workplace)
+        if case .ownCopy(let path) = workplace, let filesBase = thread(id)?.hydra?.filesBase {
+            headBrief += "\n\nPaths in your file list and the team split are relative to \(filesBase). Your copy at \(path) corresponds to \(checkout): resolve each listed path against \(filesBase), then use its path relative to \(checkout) inside your copy. Change files only inside your copy."
+        }
         if let jobID = info.jobID {
             updateHydraJob(jobID, of: parentID) { job in
                 guard let index = job.heads.firstIndex(where: { $0.headID == id }) else { return }
@@ -892,8 +931,20 @@ extension AppModel {
         }
         let leadRuntime = runtime(for: parentID)
         let copyPath = info.hasOwnCopy ? head.worktreePath : nil
-        leadRuntime.hydraHeadFinished(head.id, info: finished, status: outcome, summary: summary, landing: landing, copyPath: copyPath,
-                                       provider: head.provider.displayName, startupFailure: outcome == .failed && startupFailure)
+        if copyPath == nil, finished.backupPath != nil {
+            // Reading the diff of an in-place head's backed-up files is disk work, so its
+            // report reaches the lead once that is done.
+            let spoken = summary
+            Task {
+                let diff = await Self.hydraBackupReport(finished)
+                let report = [spoken, diff].compactMap { $0 }.joined(separator: "\n\n")
+                leadRuntime.hydraHeadFinished(head.id, info: finished, status: outcome, summary: report, landing: landing, copyPath: copyPath,
+                                               provider: head.provider.displayName, startupFailure: outcome == .failed && startupFailure)
+            }
+        } else {
+            leadRuntime.hydraHeadFinished(head.id, info: finished, status: outcome, summary: summary, landing: landing, copyPath: copyPath,
+                                           provider: head.provider.displayName, startupFailure: outcome == .failed && startupFailure)
+        }
         // A completed v1 copy goes back once the lead has the report; a v2 copy stays for
         // continuations until its job settles. Late heads of a closed job release now,
         // since no settlement remains to release them. Other stopped or failed heads keep

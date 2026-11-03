@@ -793,7 +793,7 @@ final class ClaudeSession: ProviderSession {
             onEvent?(.approval(ApprovalRequest(
                 id: requestID,
                 kind: .plan,
-                title: "Implement this plan",
+                title: AppText.localized("Implement this plan"),
                 options: [
                     .init(id: "allow", title: "Implement plan", role: .approve),
                     .init(id: "deny", title: "Keep planning", role: .decline),

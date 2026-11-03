@@ -51,6 +51,26 @@ enum TextGeneration {
         return title
     }
 
+    static func nextPrompt(context: String, engine: Engine) async -> String? {
+        let prompt = """
+        Predict this user's next message from the whole conversation below. Write it as the user would, in the user's language and voice, as one short single-line message, ideally under 120 characters and never over 240. Say only the next request itself; do not add process steps the user has not asked for, such as reviewing or confirming first. First consider whether the user would want to adjust, verify or reuse what was just produced; do not invent unrelated tasks. If no next message is reasonably likely, the suggestion is null. Reply with JSON only: {"suggestion": string or null}.
+
+        Conversation:
+        \(context.prefix(8_000))
+        """
+        guard let result = await run(prompt, engine: engine, directory: FileManager.default.temporaryDirectory) else { return nil }
+        let text = result.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "")
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start <= end,
+              let object = try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)),
+              let dictionary = object as? [String: Any],
+              let suggestion = dictionary["suggestion"] as? String,
+              !suggestion.contains(where: \.isNewline) else { return nil }
+        let cleaned = String(suggestion.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned.count <= 240 else { return nil }
+        return cleaned
+    }
+
     private static func cleanedTitle(_ text: String) -> String? {
         let cleaned = TextCleanup.singleLine(text, limit: 60)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`*#. "))
@@ -162,22 +182,22 @@ enum TextGeneration {
 
     private static func run(_ prompt: String, engine: Engine, directory: URL) async -> String? {
         switch engine {
-        case .claude(let executable, let environment, _, _):
-            let arguments = [
-                "-p", "--output-format", "text", "--model", "haiku", "--tools", "",
+        case .claude(let executable, let environment, let model, let effort):
+            var arguments = [
+                "-p", "--output-format", "text", "--model", model ?? "haiku", "--tools", "",
                 "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
                 "--no-session-persistence",
             ]
+            if let effort, !effort.isEmpty { arguments += ["--effort", effort] }
             guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 120),
                   result.succeeded else { return nil }
             return result.trimmedOutput.nilIfEmpty
-        case .codex(let executable, let environment, let model, _):
+        case .codex(let executable, let environment, let model, let effort):
             let output = FileManager.default.temporaryDirectory.appendingPathComponent("tivano-\(UUID().uuidString).txt")
             defer { try? FileManager.default.removeItem(at: output) }
-            let arguments = [
-                "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model,
-                "--config", "model_reasoning_effort=\"low\"", "--output-last-message", output.path, "-",
-            ]
+            var arguments = ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model]
+            if let effort, !effort.isEmpty { arguments += ["--config", "model_reasoning_effort=\"\(effort)\""] }
+            arguments += ["--output-last-message", output.path, "-"]
             guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 180),
                   result.succeeded else { return nil }
             return (try? String(contentsOf: output, encoding: .utf8))?

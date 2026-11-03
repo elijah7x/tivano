@@ -14,6 +14,7 @@ extension AppModel {
     }
 
     func stageProviderSwitch(_ threadID: UUID, apply: (inout ChatThread) -> Void) {
+        var undoneSessionLost: Bool?
         updateThread(threadID) { thread in
             if thread.pendingProviderSwitch == nil {
                 thread.pendingProviderSwitch = ProviderSwitchOrigin(provider: thread.provider, model: thread.model, effort: thread.effort, fastMode: thread.fastMode, dshMode: thread.dshMode, runtimeMode: thread.runtimeMode, interactionMode: thread.interactionMode, hydraEnabled: thread.hydraEnabled, hydraEnabledIsExplicit: thread.hydraEnabledIsExplicit, hydraPairID: thread.hydraPairID, temporaryHydraPair: thread.temporaryHydraPair, providerSessionID: thread.providerSessionID, providerResumeAt: thread.providerResumeAt)
@@ -35,8 +36,12 @@ extension AppModel {
                 thread.hydraEnabledIsExplicit = applied.hydraEnabledIsExplicit
                 thread.hydraPairID = applied.hydraPairID
                 thread.temporaryHydraPair = applied.temporaryHydraPair
+                undoneSessionLost = origin.providerSessionID == nil && !origin.provider.restoresFromTextTranscript
             }
         }
+        // Picking the old provider again is an undo: the failed send's handoff snapshot must
+        // not reach the session the switch went back to.
+        if let undoneSessionLost { existingRuntime(for: threadID)?.providerSwitchUndone(sessionLost: undoneSessionLost) }
     }
 
     private static func restoreProviderSwitch(_ thread: inout ChatThread, origin: ProviderSwitchOrigin) {
@@ -57,11 +62,17 @@ extension AppModel {
     }
 
     func undoProviderSwitch(_ threadID: UUID) {
-        updateThread(threadID) { thread in
-            guard let origin = thread.pendingProviderSwitch else { return }
-            Self.restoreProviderSwitch(&thread, origin: origin)
+        let runtime = runtime(for: threadID)
+        // Restore and settle the snapshot in one step after loading, so a send or another
+        // switch made meanwhile is never overwritten by a late undo.
+        Task { @MainActor in
+            await runtime.ensureLoaded()
+            guard runtime.phase == .idle, !runtime.isReverting,
+                  let origin = thread(threadID)?.pendingProviderSwitch else { return }
+            let sessionLost = origin.providerSessionID == nil && !origin.provider.restoresFromTextTranscript
+            updateThread(threadID) { Self.restoreProviderSwitch(&$0, origin: origin) }
+            runtime.providerSwitchUndone(sessionLost: sessionLost)
         }
-        existingRuntime(for: threadID)?.discardProviderSwitchContinuation()
     }
 
     func completeProviderSwitch(_ threadID: UUID) {

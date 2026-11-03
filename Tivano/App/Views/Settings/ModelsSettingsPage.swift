@@ -171,11 +171,11 @@ struct ModelsSettingsPage: View {
             }
 
             if !providers.isEmpty {
-                HStack(alignment: .modelCardTop, spacing: Chrome.sectionSpacing) {
-                    ModelProviderListColumn(providers: providers, selected: selected, pins: pins) {
-                        catalogueSelection = $0
+                StickySidebarRow(alignment: .modelCardTop, spacing: Chrome.sectionSpacing) { select in
+                    ModelProviderListColumn(providers: providers, selected: selected, pins: pins) { provider in
+                        select { catalogueSelection = provider }
                     }
-                    .frame(width: 200)
+                } detail: {
                     Group {
                         if let selected {
                             ProviderModelsSection(

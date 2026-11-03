@@ -109,7 +109,7 @@ struct PromptEditor<Extra: View, Actions: View>: View {
             onCancel()
             return true
         // Nothing sits before the text here, so Delete at the start is the text view's.
-        case .up, .down, .tab, .deleteAtStart:
+        case .up, .down, .tab, .right, .deleteAtStart:
             return false
         }
     }

@@ -192,6 +192,7 @@ final class AppSettings {
         static let voiceEnabled = "voiceEnabled"
         static let alphaEnabled = "alphaEnabled"
         static let alphaVoiceEnabled = "alphaVoiceEnabled"
+        static let promptPredictionsEnabled = "promptPredictionsEnabled"
         static let alphaDecisionsEnabled = "alphaDecisionsEnabled"
         static let externalControlEnabled = "externalControlEnabled"
         static let remoteMCPEnabled = "remoteMCPEnabled"
@@ -215,6 +216,8 @@ final class AppSettings {
         static let openCodeProviderMigrated = "openCodeProviderMigrated"
         static let lastHydraPair = "lastHydraPairID"
         static let textGeneration = "textGeneration"
+        static let textGenerationModelID = "textGenerationModelID"
+        static let textGenerationEffort = "textGenerationEffort"
         static let threadTitleMode = "threadTitleMode"
         static let preventSleepDuringTasks = "preventSleepDuringTasks"
         static let taskSleepMode = "taskSleepMode"
@@ -441,6 +444,13 @@ final class AppSettings {
         didSet { defaults.set(alphaDecisionsEnabled, forKey: Key.alphaDecisionsEnabled) }
     }
 
+    /// Suggest the next message after a reply when text generation is enabled.
+    var promptPredictionsEnabled: Bool {
+        didSet { defaults.set(promptPredictionsEnabled, forKey: Key.promptPredictionsEnabled) }
+    }
+
+    var isPromptPredictionsEnabled: Bool { promptPredictionsEnabled && textGeneration != .off }
+
     var isDecisionsEnabled: Bool { alphaEnabled && alphaDecisionsEnabled }
 
     /// Dedicated, default-false permission. Installing the command never changes it.
@@ -552,6 +562,16 @@ final class AppSettings {
 
     var textGeneration: TextGenerationChoice {
         didSet { defaults.set(textGeneration.rawValue, forKey: Key.textGeneration) }
+    }
+
+    /// Model selected for text generation; nil uses the provider's fast model.
+    var textGenerationModelID: String? {
+        didSet { defaults.set(textGenerationModelID, forKey: Key.textGenerationModelID) }
+    }
+
+    /// Reasoning effort selected for text generation; nil uses its default.
+    var textGenerationEffort: String? {
+        didSet { defaults.set(textGenerationEffort, forKey: Key.textGenerationEffort) }
     }
 
     var threadTitleMode: ThreadTitleMode {
@@ -1014,6 +1034,7 @@ final class AppSettings {
         } else {
             voiceEnabled = defaults.bool(forKey: Key.voiceEnabled)
         }
+        promptPredictionsEnabled = defaults.object(forKey: Key.promptPredictionsEnabled) as? Bool ?? true
         alphaDecisionsEnabled = defaults.bool(forKey: Key.alphaDecisionsEnabled)
         // Local control and Remote MCP used to need Alpha too; keep what was in effect.
         var storedExternalControl = defaults.bool(forKey: Key.externalControlEnabled)
@@ -1043,6 +1064,8 @@ final class AppSettings {
         ThemeManager.current = initialTheme
         appLanguage = AppLanguage(rawValue: defaults.string(forKey: Key.appLanguage) ?? "") ?? .system
         textGeneration = TextGenerationChoice(rawValue: defaults.string(forKey: Key.textGeneration) ?? "") ?? .automatic
+        textGenerationModelID = defaults.string(forKey: Key.textGenerationModelID)
+        textGenerationEffort = defaults.string(forKey: Key.textGenerationEffort)
         threadTitleMode = ThreadTitleMode(rawValue: defaults.string(forKey: Key.threadTitleMode) ?? "") ?? .firstTurn
         shelfTitle = defaults.string(forKey: Key.shelfTitle) ?? ""
         commitInstructions = defaults.string(forKey: Key.commitInstructions) ?? ""

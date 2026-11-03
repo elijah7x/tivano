@@ -178,6 +178,23 @@ extension AppModel {
         if info.landing != nil, !info.hasOwnCopy || head.worktreePath == nil {
             return "its copy was already released"
         }
+        let checkout = info.targetCheckout ?? (try? executionDirectory(for: head))
+        // The lead may list paths the head was never sent with, including folders Tivano
+        // writes itself; those never reach a head.
+        if let base = info.filesBase ?? checkout {
+            let home = HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
+            let protectedRoots = Self.hydraProtectedRoots()
+            let taskWorkspaces = HydraPaths.canonical(StoragePaths.root.appendingPathComponent("task-workspaces", isDirectory: true).path)
+            for file in delegation.files {
+                guard Self.hydraOwnedPathIsSafe(file, base: base) else {
+                    return String(format: Chrome.localized("its files list %@, which is outside %@"), file, base)
+                }
+                let path = HydraPaths.canonical(URL(fileURLWithPath: base).appendingPathComponent(file).path)
+                if path == home || Self.hydraPathTouchesProtectedRoot(path, roots: protectedRoots, taskWorkspaces: taskWorkspaces) {
+                    return String(format: Chrome.localized("its files list %@, which is a folder Tivano keeps its own data in"), file)
+                }
+            }
+        }
         updateHydraHead(head.id) {
             $0.status = .running
             $0.finishedAt = nil
@@ -187,9 +204,20 @@ extension AppModel {
         if info.hasOwnCopy, let path = head.worktreePath {
             workplace = .ownCopy(path: path)
         } else {
-            workplace = (info.targetCheckout ?? (try? executionDirectory(for: head))).map { .shared(path: $0) }
+            workplace = checkout.map { .shared(path: $0, filesBase: info.filesBase, isNonGit: info.isNonGitCheckout == true) }
         }
-        headRuntime.sendHydraBrief(HydraPrompts.v2ContinuePrompt(delegation: delegation, packet: packet, workplace: workplace), attachments: [])
+        let brief = HydraPrompts.v2ContinuePrompt(delegation: delegation, packet: packet, workplace: workplace)
+        let headID = head.id
+        if let checkout, info.isNonGitCheckout == true, !info.hasOwnCopy {
+            // Files the lead listed now are copied before the head hears its brief, even for
+            // a head first sent with none; the job record gains them just after this returns.
+            Task { @MainActor in
+                await prepareHydraBackup(headID, checkout: checkout)
+                headRuntime.sendHydraBrief(brief, attachments: [])
+            }
+        } else {
+            headRuntime.sendHydraBrief(brief, attachments: [])
+        }
         return nil
     }
 }

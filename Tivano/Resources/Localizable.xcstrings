@@ -1,6 +1,336 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "No providers available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可用的提供商。"
+          }
+        }
+      }
+    },
+    "Hydra: %@ lists files outside %@, so %@ did not start." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hydra：列出的路径 %@ 位于 %@ 之外，因此 %@ 未启动。"
+          }
+        }
+      }
+    },
+    "After a reply, suggests your likely next message in the empty composer; press Tab or → to use it. Recent messages from the chat go to the model above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回复结束后，在空输入框里给出你可能要发的下一条消息，按 Tab 或 → 采用。会把本对话的近期消息发给上面选定的模型。"
+          }
+        }
+      }
+    },
+    "Composer predictions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入框预测"
+          }
+        }
+      }
+    },
+    "No thread titles, commit messages or composer predictions are generated." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不生成对话标题、提交信息和输入框预测。"
+          }
+        }
+      }
+    },
+    "Press Tab to accept" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按 Tab 键接受"
+          }
+        }
+      }
+    },
+    "Sign-in didn't finish" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录未完成"
+          }
+        }
+      }
+    },
+    "Sign-in didn't finish — %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录未完成 — %@"
+          }
+        }
+      }
+    },
+    "Claude chats use %@; other chats use %@ at low effort. For thread titles, commit messages and composer predictions." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude 对话用 %1$@，其他对话用 %2$@（低推理强度）。用于对话标题、提交信息和输入框预测。"
+          }
+        }
+      }
+    },
+    "Writes thread titles, commit messages and composer predictions. Fast, inexpensive models are usually enough." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于生成对话标题、提交信息和输入框预测。快速、便宜的模型通常就够用。"
+          }
+        }
+      }
+    },
+    "You can close this tab and head back to Tivano." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你可以关闭此标签页并返回 Tivano。"
+          }
+        }
+      }
+    },
+    "Signed in to %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已登录 %@"
+          }
+        }
+      }
+    },
+    "Sign-in didn't finish. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录未完成，请重试。"
+          }
+        }
+      }
+    },
+    "Couldn't find the sign-in page." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到登录页面。"
+          }
+        }
+      }
+    },
+    "The server's sign-in details didn't make sense." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器的登录信息无法识别。"
+          }
+        }
+      }
+    },
+    "This server doesn't let apps sign in on their own." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个服务器不允许应用自行登录。"
+          }
+        }
+      }
+    },
+    "Sign-in setup failed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录设置失败。"
+          }
+        }
+      }
+    },
+    "Couldn't finish signing in." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法完成登录。"
+          }
+        }
+      }
+    },
+    "Sign-in didn't finish." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录未完成。"
+          }
+        }
+      }
+    },
+    "Sign-in timed out. Try again and complete it in the browser." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录超时。请重试，并在浏览器中完成登录。"
+          }
+        }
+      }
+    },
+    "Sign-in was cancelled." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录已取消。"
+          }
+        }
+      }
+    },
+    "Couldn't listen for the sign-in reply." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法接收登录回调。"
+          }
+        }
+      }
+    },
+    "The connection to the browser broke." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与浏览器的连接已中断。"
+          }
+        }
+      }
+    },
+    "That address isn't valid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个地址无效。"
+          }
+        }
+      }
+    },
+    "The server didn't answer properly." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器没有正确响应。"
+          }
+        }
+      }
+    },
+    "You're signed out. Sign in again to continue." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你已退出登录。请重新登录以继续。"
+          }
+        }
+      }
+    },
+    "The network didn't answer." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络没有响应。"
+          }
+        }
+      }
+    },
+    "The browser didn't send back a code." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浏览器未返回授权码。"
+          }
+        }
+      }
+    },
+    "The sign-in was refused (%@)." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录被拒绝（%@）。"
+          }
+        }
+      }
+    },
+    "Implement this plan" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实施此计划"
+          }
+        }
+      }
+    },
     "No pairs match" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5014,17 +5344,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动检查已关闭，仍可手动检查。"
-          }
-        }
-      }
-    },
-    "Automatic uses the thread's own provider. Claude uses Haiku, Codex your default model." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "“自动”使用对话自己的服务商。Claude 使用 Haiku，Codex 使用你的默认模型。"
           }
         }
       }
@@ -10991,6 +11310,28 @@
         }
       }
     },
+    "its files list %@, which is a folder Tivano keeps its own data in" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它列出的路径 %@ 位于 Tivano 自用目录中"
+          }
+        }
+      }
+    },
+    "its files list %@, which is outside %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它列出的路径 %@ 位于 %@ 之外"
+          }
+        }
+      }
+    },
     "Hydra: %@ is not a Git checkout Tivano can read, so %@ did not start." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13169,13 +13510,13 @@
         }
       }
     },
-    "Switching providers may lose some context" : {
+    "Context may be incomplete after switching providers" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "注意：切换服务商接力可能有损耗"
+            "value" : "切换服务商后，上下文可能不完整"
           }
         }
       }
@@ -14177,17 +14518,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "创建拉取请求"
-          }
-        }
-      }
-    },
-    "Open the correct edition of Tivano yourself and enable Local control in Settings > Alpha. Use --help for syntax. Never blindly retry a write after a disconnect." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请自行打开对应的 Tivano（正式版或 Dev 版），并在“设置 › 实验室”中启用本地控制。使用 --help 查看语法。连接中断后，切勿盲目重试写操作。"
           }
         }
       }
@@ -21045,17 +21375,6 @@
         }
       }
     },
-    "Tivano local control (the app must already be running and manually enabled in Settings > Alpha).\nCommands: info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\nList flags: --limit N --cursor TOKEN\nThread flags: --archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\nWrites: --operation INSTANCE/UUID/TIMESTAMP reuses an existing ticket in that instance only.\nSave the ticket printed before delivery. A disconnect is not failure; query the ticket instead of repeating the write.\nJSON output reports acceptance, not task success. Expired/restarted outcomes are unknown. No automatic retries or app launch." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tivano 本地控制（应用必须已运行，并在“设置 › 实验室”中手动启用）。\n命令：info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\n列表选项：--limit N --cursor TOKEN\n对话选项：--archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\n写操作：--operation INSTANCE/UUID/TIMESTAMP 仅在同一应用实例中复用已有操作凭据。\n请保存发送前打印的操作凭据。断开连接不代表失败；应查询凭据，而非重复执行写操作。\nJSON 输出表示操作已接受，不代表任务成功。过期或重启后的结果为 unknown。不会自动重试或启动应用。"
-          }
-        }
-      }
-    },
     "Tivano uses the authentication route already selected in mcode. Token Plan uses your existing mcode sign-in; API-key users keep their configured key. Local checks and model lists do not verify server authentication." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26718,6 +27037,94 @@
         }
       }
     },
+    "Cannot diff %@: it now resolves outside %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法比较 %1$@：它现在指向 %2$@ 之外。"
+          }
+        }
+      }
+    },
+    "Could not diff %@: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法比较 %1$@：%2$@"
+          }
+        }
+      }
+    },
+    "[Diff truncated at 20,000 characters.]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[差异已截断至 20,000 个字符。]"
+          }
+        }
+      }
+    },
+    "No changes to the backed-up or newly listed files." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已备份文件和新列出的文件都没有变化。"
+          }
+        }
+      }
+    },
+    "Not backed up (size, unsupported path or copy failure): %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未备份（文件过大、路径不受支持或复制失败）：%@"
+          }
+        }
+      }
+    },
+    "Added: %lld; removed: %lld." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增：%lld；删除：%lld。"
+          }
+        }
+      }
+    },
+    "and %lld more" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %lld 个"
+          }
+        }
+      }
+    },
+    "%@ worked in place in %@. The diff of its listed files against the copies taken before it started is above; the originals are at %@. Restore any file from there if the change is wrong." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 直接在 %2$@ 中改动文件。上面是它列出的文件与开工前所取副本的差异；原件位于 %3$@。如果改动有问题，可以从那里恢复任意文件。"
+          }
+        }
+      }
+    },
     "The work is in the checkout and on `%@`; the next try opens the request." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26982,13 +27389,13 @@
         }
       }
     },
-    "Open the correct edition of Tivano yourself and enable Local control in Settings › Alpha. Use --help for syntax. Never blindly retry a write after a disconnect." : {
+    "Open the correct edition of Tivano yourself and enable Local control in Settings › General. Use --help for syntax. Never blindly retry a write after a disconnect." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请自行打开正确版本的 Tivano，并在设置 › Alpha 中启用本地控制。使用 --help 查看语法。连接中断后，切勿直接重试写操作。"
+            "value" : "请自行打开正确版本的 Tivano，并在设置 › 通用 中启用本地控制。使用 --help 查看语法。连接中断后，切勿直接重试写操作。"
           }
         }
       }
@@ -27092,13 +27499,13 @@
         }
       }
     },
-    "Tivano local control (the app must already be running and manually enabled in Settings › Alpha).\nCommands: info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\nList flags: --limit N --cursor TOKEN\nThread flags: --archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\nWrites: --operation INSTANCE/UUID/TIMESTAMP reuses an existing ticket in that instance only.\nSave the ticket printed before delivery. A disconnect is not failure; query the ticket instead of repeating the write.\nJSON output reports acceptance, not task success. Expired/restarted outcomes are unknown. No automatic retries or app launch." : {
+    "Tivano local control (the app must already be running and manually enabled in Settings › General).\nCommands: info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\nList flags: --limit N --cursor TOKEN\nThread flags: --archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\nWrites: --operation INSTANCE/UUID/TIMESTAMP reuses an existing ticket in that instance only.\nSave the ticket printed before delivery. A disconnect is not failure; query the ticket instead of repeating the write.\nJSON output reports acceptance, not task success. Expired/restarted outcomes are unknown. No automatic retries or app launch." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tivano 本地控制（应用必须已运行，并在“设置 › 实验室”中手动启用）。\n命令：info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\n列表选项：--limit N --cursor TOKEN\n线程选项：--archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\n写操作：--operation INSTANCE/UUID/TIMESTAMP 仅在同一应用实例中复用已有操作凭据。\n请保存发送前打印的操作凭据。断开连接不代表失败；应查询凭据，而非重复执行写操作。\nJSON 输出表示操作已接受，不代表任务成功。过期或重启后的结果为 unknown。不会自动重试或启动应用。"
+            "value" : "Tivano 本地控制（应用必须已运行，并在“设置 › 通用”中手动启用）。\n命令：info | providers | projects | threads | thread UUID | history UUID\n  create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]\n  send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]\n  send UUID --stdin [--continuation MODE]\n  interrupt UUID --turn UUID\n  operation INSTANCE/UUID/TIMESTAMP\n  settings get | settings set textGeneration automatic|claude|codex|off\n  settings set antiSlopEnabled|performanceMode|showsSkylight true|false\n列表选项：--limit N --cursor TOKEN\n线程选项：--archive active|archived|all --role normal|helper|head|all\n  --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]\n写操作：--operation INSTANCE/UUID/TIMESTAMP 仅在同一应用实例中复用已有操作凭据。\n请保存发送前打印的操作凭据。断开连接不代表失败；应查询凭据，而非重复执行写操作。\nJSON 输出表示操作已接受，不代表任务成功。过期或重启后的结果为 unknown。不会自动重试或启动应用。"
           }
         }
       }
