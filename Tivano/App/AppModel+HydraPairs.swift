@@ -55,6 +55,12 @@ extension AppModel {
     /// A temporary pair rides on the chat itself and is not remembered for new chats.
     func enterHydraPair(_ pair: HydraPair, for threadID: UUID, temporary: Bool = false) {
         guard let thread = thread(threadID) else { return }
+        if thread.chimeraEnabled {
+            guard canSwitchChimeraMode(threadID) else { return }
+            if openHydraJob(of: threadID) != nil {
+                Task { await endHydraJobsForHydraOff(of: threadID) }
+            }
+        }
         let provider = pair.provider
         let switchesProvider = provider != thread.provider
         let lead = hydraLead(of: pair, for: thread)
@@ -68,10 +74,15 @@ extension AppModel {
                 thread.hydraPairID = pair.id
                 thread.temporaryHydraPair = temporary ? pair : nil
                 thread.hydraEnabled = true
+                // Left inside the staged switch, so undoing it brings Chimera back too.
+                thread.chimeraEnabled = false
+                thread.chimeraHydraSnapshot = nil
             }
             return
         }
         updateThread(threadID) { thread in
+            thread.chimeraEnabled = false
+            thread.chimeraHydraSnapshot = nil
             if switchesProvider {
                 thread.provider = provider
                 thread.providerSessionID = nil

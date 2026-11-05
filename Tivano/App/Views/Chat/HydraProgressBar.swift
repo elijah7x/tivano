@@ -130,12 +130,13 @@ struct HydraProgressBar: View {
         let staves = resolved.staves
         let counts = resolved.counts
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let isRunning = status == .running
+        let waiting = hydraWaitingStatus(status, runtime: runtime)
+        let isRunning = status == .running && waiting == nil
         let elapsed = RelativeTime.duration((isRunning ? Date.now : finishedAt ?? .now).timeIntervalSince(startedAt))
         let sweepRuntime = chatColumnIsShown && isRunning ? ObjectIdentifier(runtime) : nil
         let sweeps = chatColumnIsShown && isRunning && !reduceMotion && !performanceMode && SweepBudget.shared.sweeps(ObjectIdentifier(runtime))
         let isScrolling = chatColumnIsShown && ScrollActivity.shared.isScrolling
-        let colors = HydraStaveColors(tint: tint, colorScheme: colorScheme)
+        let colors = HydraStaveColors(tint: waiting.map { Chrome.threadStatusColor($0, isDark: colorScheme == .dark) } ?? tint, colorScheme: colorScheme)
         VStack(alignment: .leading, spacing: 6) {
             HydraStaves(
                 staves: staves,
@@ -144,7 +145,7 @@ struct HydraProgressBar: View {
                 status: status,
                 hoveredIndex: chatColumnIsShown ? hoveredIndex : nil,
                 isSweeping: sweeps,
-                reduceMotion: reduceMotion || performanceMode,
+                reduceMotion: reduceMotion || performanceMode || waiting != nil,
                 isScrolling: isScrolling,
                 isColumnShown: chatColumnIsShown
             )
@@ -178,7 +179,15 @@ struct HydraProgressBar: View {
                 }
             }
             .animation(.smooth(duration: 0.15), value: hoveredIndex)
-            if !counts.line.isEmpty {
+            if let waiting {
+                HStack(spacing: 6) {
+                    ThreadStatusMark(status: waiting)
+                    Text(verbatim: Chrome.localized(waiting.title))
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.threadStatusColor(waiting, isDark: colorScheme == .dark))
+                }
+                .frame(maxWidth: .infinity)
+            } else if !counts.line.isEmpty {
                 Text(verbatim: counts.line)
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
@@ -203,7 +212,7 @@ struct HydraProgressBar: View {
             SweepBudget.shared.leave(registration: sweepRegistration)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: String(format: Chrome.localized(isRunning ? "%@, %@ so far" : "%@, %@"), counts.sentence, elapsed)))
+        .accessibilityLabel(Text(verbatim: waiting.map { "\(model.thread(runtime.threadID)?.hydra?.displayName ?? model.thread(runtime.threadID)?.title ?? ""), \(Chrome.localized($0.title))" } ?? String(format: Chrome.localized(isRunning ? "%@, %@ so far" : "%@, %@"), counts.sentence, elapsed)))
     }
 
     private func updateSweepRegistration(_ runtimeID: ObjectIdentifier?) {
@@ -878,10 +887,11 @@ struct HydraHeadProgress: View {
         let info = head.hydra
         let task = info?.task.trimmed ?? ""
         let status = info?.status ?? .running
+        let waiting = hydraWaitingStatus(status, runtime: runtime)
         let startedAt = info?.startedAt ?? head.createdAt
         VStack(spacing: 0) {
             Spacer(minLength: 0)
-            HydraWorkingTitle(text: task.isEmpty ? head.title : task, isRunning: status == .running)
+            HydraWorkingTitle(text: task.isEmpty ? head.title : task, isRunning: status == .running && waiting == nil)
                 .frame(maxWidth: .infinity)
             HydraProgressBar(
                 runtime: runtime,

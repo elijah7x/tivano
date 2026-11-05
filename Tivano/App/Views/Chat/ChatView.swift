@@ -1124,6 +1124,10 @@ private struct ChatChromeRow: View {
                 HydraButton(thread: thread, runtime: runtime)
                     .transition(.softAppear)
             }
+            if let thread = model.thread(runtime.threadID) {
+                ChimeraButton(thread: thread, runtime: runtime)
+                    .transition(.softAppear)
+            }
             if let directory, git.directory == directory, git.isRepository {
                 BranchMenu(runtime: runtime, directory: directory, git: git)
             }

@@ -51,6 +51,7 @@ final class StdioProcess: @unchecked Sendable {
         var framer: StdioFramer
         var errorBuffer = Data()
         var failureReason: String?
+        var lastOutputAt: Date?
         var outputFinished = false
         var terminating = false
         var queuedBytes = 0
@@ -97,6 +98,7 @@ final class StdioProcess: @unchecked Sendable {
 
     var failureReason: String? { state.withLock { $0.failureReason } }
     var exitStatus: Int32? { state.withLock { $0.exitStatus } }
+    var lastOutputAt: Date? { state.withLock { $0.lastOutputAt } }
 
     func start() throws {
         stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -109,6 +111,7 @@ final class StdioProcess: @unchecked Sendable {
                 handle.readabilityHandler = nil
                 self.finishOutput()
             } else {
+                self.state.withLock { $0.lastOutputAt = Date() }
                 self.consume(data)
             }
         }

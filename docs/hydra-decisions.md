@@ -2,7 +2,7 @@
 
 状态：首批（影子模式）已实现（2026-10-28），Debug 构建通过、已打包 Dev。历史回放结果见下文"历史回放"一节。
 
-2026-11-01 起题目为第二版（账本字段 `qv=2`，缺省视为 1）。
+2026-11-05 起题目版本按点位递增（`HydraDecisionRequests.questionVersion(point)`）。`headReport`、`preReview`、`reviewDisposition` 仍为 `qv=2`，本轮冻结题目与 state，保持 `reworkLikely`、`defectLikely` 样本连续；新点位从 1 开始。账本缺省 `qv` 视为 1，评估按（点位，qv）分组，不同版本不合并。
 
 ## 目标与边界
 
@@ -19,9 +19,13 @@
 - 按 job 盖章：`beginHydraJob` 时把 `isDecisionsEnabled` 写入 `HydraJobRecord.decisions`。中途打开只影响下一个 job；中途关闭后，后台任务在读取 Keychain 和发送前复查当前开关与 job 盖章，不满足则退出、不写决策账本；已发出的请求不追回。
 - capture run 不运行任何决策点（Keychain 不可读，存储根目录也是 capture 的）。
 
+## 本轮测量原则（2026-11-05）
+
+前两轮标签只记录 lead 自己的动作（续派、审查有意见），预测 lead 已会做的事价值有限。Jev 的价值应体现在 lead 漏掉、事后才暴露的问题，以及可节省的成本（如低风险 job 跳过审查）；后者本轮只测算，不改变现有审查规则。因此本轮改标签不改题，新增三个只写账本的测量点。H3 一类的文本分类已证明可靠：qv2 与正则一致 42/43，唯一分歧是正则不认中文“接受”。
+
 ## 点位
 
-每个点位由 Tivano 用代码从可观察事实组装 state，不使用被评判 agent 自己写的摘要。字符上限按 `prefix` 截断并在末尾加 `[truncated]`。下面的英文题目是发给 Jev 的原文，实现照抄。
+每个点位由 Tivano 用代码从可观察事实组装 state，不使用被评判 agent 自己写的摘要。字符上限按 `prefix` 截断并在末尾加 `[truncated]`。H1–H3 的英文题目是发给 Jev 的原文，实现照抄；新测量点以下列题意和选项说明。
 
 ### H1 `headReport`：head 回报一致性
 
@@ -45,7 +49,7 @@ state：
 
 - `reworkLikely`（noul）："Will the lead most likely have to send this agent back to rework its part, judging by the report, the files it owned and the files that landed?"
 
-结果标签：`continued_after`（同一 head 之后还有一条 `headReport` 判断）为主；H2 结果里命中该 head 落地文件的审查意见为辅。启发式基线：`notes.flagsSomething`、`followedReportFormat == false`。
+结果标签：本轮改用 `rework_after`、`head_missed_defect`、`correction`（定义见评估）；原 `continued_after`（同一 head 之后还有一条 `headReport` 判断）保留作历史对照。启发式基线：`notes.flagsSomething`、`followedReportFormat == false`。
 
 ### H2 `preReview`：审前风险
 
@@ -70,7 +74,7 @@ state：
 - `defectLikely`（noul）："The state summarises a finished multi-agent coding job just before an independent code review: the user's request, the lead's final reply, open points the agents flagged, whether a build ran, and line counts per changed file (no source). Will the review find at least one defect that would make the software behave wrongly? Judge the summary only; this is not a verdict on the code."
 - `unrelatedChanges`（noul）："The state summarises a finished multi-agent coding job just before an independent code review: the user's request, the lead's final reply, open points the agents flagged, and the changed files with line counts (no source). The review will see every changed file in the checkout. Does the changed-file list include files that neither the request nor the lead's reply gives any reason to touch, so the review is likely to see changes that do not belong to this job? Judge the summary only."
 
-`unrelatedChanges` 用于观察审查对象归属：生产案例中部分「审查有意见」来自不属于本 job 的改动。结果只写账本，评估与 `findings_any` 和以 Jev 处置为准的 accepted 标签对照。
+`unrelatedChanges` 用于观察审查对象归属：生产案例中部分「审查有意见」来自不属于本 job 的改动。本轮暂停与 `findings_any` 比较，只对 `outside_any` 评估；保留提问一轮正是为了等这个标签。
 
 结果：审查返回后追加一条 `outcome` 记录，含 findings 数和被意见提到的改动文件（意见文本包含相对路径；或者文件名在改动文件中唯一且出现在意见里）。另外以 job 账本的 `reviewAccepted > 0` 为辅助标签。启发式基线：总增删行数、`filesTotal`、`headFlags` 条数、`!leadBuilt`。首批还有一道 `riskiestFile`（最可能出错的文件），回放中命中率不如"改动最多的文件"，已删除。
 
@@ -89,6 +93,52 @@ state：`review`（lead 收到的审查消息，≤ 8000 字符）、`leadReply`
 
 用途：和现有正则计数（`Finding N: accepted`）对照，减少 `reviewAccepted` 的未知；靠人工抽样核对，不作为提示候选。回放验证后决定两者并存：job 账本的 `reviewAccepted` 仍是正则计数，Jev 的处置只写决策账本，评估以 Jev 为准；不让 Hydra 账本依赖外部服务。
 
+### `continuation`：续派原因（只用于测量）
+
+时机：lead 续派 head 时，含把早先请求的 head 换人重派；重派在本地记 `meta.via=redispatch`。
+
+state：head 原任务、上次回报、新 brief。
+
+题目：`reason`（choice），判断这次续派的原因：
+
+- `fix`：修复原任务结果中的错误。
+- `omission`：补上原任务遗漏的工作。
+- `extension`：追加原任务之外的工作。
+- `investigation`：继续调查或深挖问题。
+- `retry`：因失败或中断而重试。
+
+`rework` = `fix` 或 `omission`，用来清洗 H1 标签；第三轮抽样中低分续派多为追加或深挖，不能一律算返工。
+
+### `reviewFindings`：审查意见归属（只用于测量）
+
+时机：审查返回且有意见时、lead 回复之前。
+
+state：用户请求、改动文件与增删行数、逐条意见文本。
+
+题目：每条意见一题（choice），最多 8 条，判断它与本 job 的关系：
+
+- `inJobDefect`：本 job 内会使软件行为出错的缺陷。
+- `inJobOther`：属于本 job，但不是行为缺陷。
+- `outsideJob`：不属于本 job。
+- `unclear`：信息不足，无法判断。
+
+本地 `meta.findingPaths` 记录每条意见提到的改动文件，不发送，用于把被接受的本 job 缺陷关联到 head 落地文件。
+
+### `followUp`：用户后续反馈（只用于测量）
+
+时机：用户在有 head 或有审查的 job 之后发下一条消息时；同一 job 内的追问也算，在本地记 `meta.sameJob`。
+
+state：先前请求、lead 最后回复、用户新消息。
+
+题目：`followUp`（choice），判断新消息与先前结果的关系：
+
+- `correction`：要求纠正先前结果，结果没让用户满意。
+- `nextStep`：在先前结果上继续下一步。
+- `newTopic`：开始无关的新话题。
+- `unclear`：信息不足，无法判断。
+
+`correction` 是“结果没让用户满意”的最接近真值的信号。三个新点位都只写账本，不提示 lead，不改变 Hydra；数据外发仍限于设置说明已列出的请求、回报、lead 回复、审查意见和文件统计。
+
 ## 调用与失败
 
 - 每次调用一个请求、不重试，总超时 8 秒；调用放在 detached task 里，不阻塞 head 回报、审查、合并或 settle。
@@ -103,15 +153,17 @@ state：`review`（lead 收到的审查消息，≤ 8000 字符）、`leadReply`
 
 ```json
 {"v": 1, "qv": 2, "kind": "decision", "id": "<uuid>", "at": "<ISO 8601>",
- "point": "headReport|preReview|reviewDisposition",
- "leadID": "<uuid>", "jobID": "<uuid>", "headID": "<uuid，仅 headReport>",
+ "point": "headReport|preReview|reviewDisposition|continuation|reviewFindings|followUp",
+ "leadID": "<uuid>", "jobID": "<uuid>", "headID": "<uuid，head 相关点位>",
  "engine": "typesafe", "model": "jev-latest", "responseModel": "jev-1.14.0",
  "status": "ok|failed|skipped", "error": null,
  "latencyMs": 412, "inputTokens": 1630, "outputTokens": 151,
- "state": {}, "questions": {}, "answers": {}}
+ "state": {}, "questions": {}, "answers": {}, "meta": {}}
 ```
 
-`qv` 是题目与 state 语义的版本，来自 `HydraDecisionRequests.questionVersion`；语义变化时递增，缺省视为 1。账本格式版本 `v` 保持 1，outcome 记录不加 `qv`。
+`qv` 是各点位题目与 state 语义的版本，来自 `HydraDecisionRequests.questionVersion(point)`；该点位语义变化时才递增，缺省视为 1。本轮三个旧点位保持 2，三个新点位从 1 开始；评估按（点位，qv）分组，不合并不同版本。账本格式版本 `v` 保持 1，outcome 记录不加 `qv`。
+
+decision 记录可带本地 `meta` 对象，只落盘、不发送给 TypeSafe，用于重派来源、逐条意见路径和同 job 追问等关联信息。
 
 `answers` 原样保存 Jev 的 `answers` 对象；失败时为 null。保存 `state` 与 `questions` 原文，以后可以把同一批真实状态离线回放给其他引擎、便宜 LLM 的枚举输出基线或不同阈值，不必重新跑任务。
 
@@ -131,15 +183,33 @@ H1 的标签（`continuations`、状态）和 H2 的辅助标签（`reviewAccept
 
 ## 评估
 
-`python3 -I scripts/hydra_eval.py decisions --out <目录>` 只读账本和 `library.json`，按 `qv` 分组、再按点位输出；缺省 `qv` 视为 1，不同版本不合并比较：
+`python3 -I scripts/hydra_eval.py decisions --out <目录>` 只读账本和 `library.json`，按（点位，qv）分组输出；缺省 `qv` 视为 1，不同版本不合并比较。新增标签：
+
+- `rework_after`：后续续派被标为 `fix` 或 `omission`。
+- `real_defect_any`：至少一条意见为 `inJobDefect` 且 H3 为 `accepted`。
+- `outside_any`：至少一条意见为 `outsideJob`。
+- `head_missed_defect`：被接受的本 job 缺陷落在该 head 落地的文件上。
+- `correction`：用户后续消息被标为 `correction`。
+
+评估输出：
 
 - 覆盖：ok / failed / skipped 计数（按 error 分）、延迟 p50 / p95、token 合计。
-- H1：`reworkLikely` 对 `continued_after` 的 AUROC，以及启发式基线的 AUROC；`continued_after` 定义为同一 head 之后还有一条 `headReport` 判断。第一版另统计 `gapUnreported` 和 `completion`。
-- H2：`defectLikely`、第二版的 `unrelatedChanges` 对 `findings_any`（`findings > 0`）和 `accepted_any_jev` 的 AUROC，以及各基线的 AUROC。`accepted_any_jev` 以 H3 处置为准（至少一条 accepted），正则计数仅作对照。
+- 无账本 job：拆为尚未结束、无可触发点、有触发证据但无账本三类，不把未触发混作漏记。
+- H1：`reworkLikely` 对 `rework_after`、`head_missed_defect`、`correction` 的 AUROC，以及启发式基线的 AUROC；`continued_after` 保留作历史对照。第一版另统计 `gapUnreported` 和 `completion`。
+- H2：`defectLikely` 对 `real_defect_any`、`correction` 的 AUROC，以及各基线的 AUROC。`unrelatedChanges` 暂停与 `findings_any` 比较，只对 `outside_any` 评估。H3 accepted 以 Jev 处置为准，正则计数仅作对照。
 - H3：各选项分布，以及每个 job 的 accepted 数与正则计数的一致率。
 - 正例或反例少于 10 个时只报计数，写"不足以判断"。
 
-进入提示阶段的建议门槛（由 owner 决定，不自动生效）：该点位正例、反例各 ≥ 30，Jev 的 AUROC 比最好的启发式高 ≥ 0.05，且前后两半数据方向一致。不满足的点位直接删掉。
+实用价值表按阈值输出：
+
+| 用途 | 指标 |
+|---|---|
+| 提醒 | 触发率、精确率、每 100 次提醒命中数 |
+| 审查分流测算 | 低于阈值可跳过的审查比例，对照漏掉的真缺陷比例 |
+
+审查分流只测潜在收益与代价，本轮不跳过审查。
+
+进入提示阶段的建议门槛（由 owner 决定，不自动生效）：该点位正例、反例各 ≥ 30，Jev 的 AUROC 比最好的启发式高 ≥ 0.05，且前后两半数据方向一致。通过 AUROC 门槛后，进入提示阶段前还需看实用价值表（提醒精确率与每 100 次命中数），由 owner 决定。标签尚不足以判断时继续影子测量；有充分数据仍无价值的点位再删除。
 
 ## 历史回放（2026-10-28）
 
@@ -152,6 +222,17 @@ H1 的标签（`continuations`、状态）和 H2 的辅助标签（`reviewAccept
 Dev 实测（2026-10-28，Codex 同模型、演示仓库）：job 正常完成，2 个 head 回报和 1 次审前判断都成功写入账本（App 内延迟 0.3–0.6 秒），审查为 Claude、0 条意见，结果记录齐全；没有意见所以 H3 未触发，它在 App 内的链路未实测。两份回报都写了"主线程需补充入口导出"，指的是本来分给 lead 的文件，`gapUnreported` 仍给出 0.84 / 0.91：留给 lead 或不归自己负责的文件的工作，也会被当成缺口，题目随后补上了这条分工说明（当时版本）。
 
 结论：H3 的判断比正则计数可靠，但按上面的决定两者并存；H1、H2 有信号但样本不足，继续影子积累，达到上面的门槛再考虑提示阶段；`riskiestFile` 已删除。同一批状态两次打分的 AUROC 相差约 0.03，比较时要考虑模型自身的波动。
+
+## 第三轮生产数据（2026-11-05）
+
+A5S + H8S 共 952 条记录；qv2 自 11-02 Release 2.2.42 起积累约 3.5 天。
+
+- **H1 `reworkLikely`**：qv2 对 `continued_after` 的 AUROC 为 0.672，比最好启发式高 0.157，差值的 95% 区间为 0.07–0.24，前后两半一致，正例 39，数字上过门槛。但阈值 0.7 时提醒 5% 的报告、精确率仅 26.7%（阈值 0.5 时为 20%）；抽查续派多为追加或深挖，标签不足以支撑提示阶段。
+- **H2 `defectLikely`**：qv2 AUROC 为 0.857，`headFlags` 为 0.771，差 0.086，95% 区间跨 0（-0.01–0.17）；qv1 的差值为 -0.014，对 accepted 的 AUROC 为 0.48，尚不稳定。`unrelatedChanges` 对 `findings_any` 为 0.50，与 `defectLikely` 相关约为 0，目前没有可检验标签。
+- **H3 审查处置**：一致率 97.7%（42/43），唯一分歧为正则不认中文“接受”。
+- **覆盖**：219 个已盖章但无账本的 job 均未到决策点，多为无改动、无 checkout，非漏记。
+
+结论：H3 作为测量工具保留；H1、H2 继续影子。正则保留并补中文“接受/采纳”，job 账本不依赖外部服务的决定不变。本轮先补齐标签，再判断提醒与节省审查成本是否有实用价值。
 
 ## 以后的提示阶段（未实现）
 

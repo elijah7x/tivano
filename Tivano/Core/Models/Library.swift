@@ -142,6 +142,12 @@ enum NewThreadAffiliation: Sendable {
     case current
 }
 
+struct ChimeraHydraSnapshot: Codable, Hashable, Sendable {
+    var hydraEnabled: Bool
+    var hydraPairID: UUID?
+    var temporaryHydraPair: HydraPair?
+}
+
 struct ProviderSwitchOrigin: Codable, Hashable, Sendable {
     var provider: ProviderKind
     var model: String?
@@ -150,6 +156,8 @@ struct ProviderSwitchOrigin: Codable, Hashable, Sendable {
     var dshMode: DshAgentMode?
     var runtimeMode: RuntimeMode
     var interactionMode: InteractionMode
+    var chimeraHydraSnapshot: ChimeraHydraSnapshot?
+    var chimeraEnabled = false
     var hydraEnabled: Bool
     var hydraEnabledIsExplicit: Bool
     var hydraPairID: UUID?
@@ -231,6 +239,9 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// Per-chat Hydra switch: off kills heads for this chat only, on restores them
     /// (with the app-wide switch on). New threads start on the saved default
     /// (see `hydraDefaultEnabled()`); flipping a chat's switch saves there too.
+    var chimeraHydraSnapshot: ChimeraHydraSnapshot?
+    var chimeraEnabled = false
+    var chimeraLastPicks: [String: ChimeraPick] = [:]
     var hydraEnabled = true
     /// Whether `hydraEnabled` above was saved by a build that has the per-chat switch.
     /// Saves from before it carried an ignored false under the same key, so a thread
@@ -381,6 +392,9 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         // explicit flag: they come back on. A save that wrote the flag holds a real choice.
         let explicit = container.value(.hydraEnabledIsExplicit, default: false)
         hydraEnabled = explicit ? container.value(.hydraEnabled, default: true) : true
+        chimeraHydraSnapshot = try container.decodeIfPresent(ChimeraHydraSnapshot.self, forKey: .chimeraHydraSnapshot)
+        chimeraEnabled = container.value(.chimeraEnabled, default: false)
+        chimeraLastPicks = container.value(.chimeraLastPicks, default: [:])
         hydraEnabledIsExplicit = true
         hydraPairID = container.value(.hydraPairID, default: nil)
         temporaryHydraPair = container.value(.temporaryHydraPair, default: nil)
@@ -401,5 +415,26 @@ struct Library: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         projects = try container.decode([Project].self, forKey: .projects)
         threads = try container.decode([ChatThread].self, forKey: .threads)
+    }
+}
+
+extension ProviderSwitchOrigin {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        chimeraHydraSnapshot = try container.decodeIfPresent(ChimeraHydraSnapshot.self, forKey: .chimeraHydraSnapshot)
+        chimeraEnabled = try container.decodeIfPresent(Bool.self, forKey: .chimeraEnabled) ?? false
+        provider = try container.decode(ProviderKind.self, forKey: .provider)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        effort = try container.decodeIfPresent(String.self, forKey: .effort)
+        fastMode = try container.decode(Bool.self, forKey: .fastMode)
+        dshMode = try container.decodeIfPresent(DshAgentMode.self, forKey: .dshMode)
+        runtimeMode = try container.decode(RuntimeMode.self, forKey: .runtimeMode)
+        interactionMode = try container.decode(InteractionMode.self, forKey: .interactionMode)
+        hydraEnabled = try container.decode(Bool.self, forKey: .hydraEnabled)
+        hydraEnabledIsExplicit = try container.decode(Bool.self, forKey: .hydraEnabledIsExplicit)
+        hydraPairID = try container.decodeIfPresent(UUID.self, forKey: .hydraPairID)
+        temporaryHydraPair = try container.decodeIfPresent(HydraPair.self, forKey: .temporaryHydraPair)
+        providerSessionID = try container.decodeIfPresent(String.self, forKey: .providerSessionID)
+        providerResumeAt = try container.decodeIfPresent(String.self, forKey: .providerResumeAt)
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 // Hydra's heads are threads: each one has a timeline of its own, sits in its lead's
 // floating panel while it works, and drops under the lead in the sidebar once dismissed,
@@ -154,6 +155,7 @@ private enum HydraTreeCache {
 /// `AppModel.startHydraWatchdog`): its one loop, each head's tool count at the last
 /// look, the heads it has labelled as thinking, and the heads it stopped, whose reports
 /// open with why.
+/// Heads waiting for a user answer or approval do not count toward idle time.
 @MainActor
 private enum HydraWatchdog {
     /// How often it looks, and how long a head is quiet before it is called thinking,
@@ -166,16 +168,25 @@ private enum HydraWatchdog {
     static var toolCounts: [UUID: Int] = [:]
     static var labelled: Set<UUID> = []
     static var stalledHeadIDs: Set<UUID> = []
+    static var stalledLastOutput: [UUID: Date] = [:]
+    static let log = Logger(subsystem: "dev.tivano.Tivano", category: "hydra")
 
     /// Said in a head's report when the watchdog stopped it for sitting still.
-    static var stalledNote: String { Chrome.localized("Stalled: no edits for 10 minutes; stopped by Tivano. Resend with a sharper brief.") }
+    static func stalledNote(lastOutput: Date?) -> String {
+        var note = Chrome.localized("Stalled: no edits or tool calls for 10 minutes; stopped by Tivano.")
+        if let lastOutput {
+            let minutes = Int64(max(0, Date.now.timeIntervalSince(lastOutput)) / 60)
+            note += " " + String(format: Chrome.localized("Last output from the provider: %lld min before the stop."), minutes)
+        }
+        return note
+    }
 }
 
 extension AppModel {
     /// Whether a chat leads a team right now: Hydra on for the app (the master) and on
     /// for this chat's own switch. Helpers lead no team of their own.
     func hydraIsOn(_ thread: ChatThread) -> Bool {
-        settings.hydraEnabled && thread.hydraEnabled && !thread.isHelper
+        ((settings.hydraEnabled && thread.hydraEnabled) || chimeraIsOn(thread)) && !thread.isHelper
     }
 
     /// Whether the provider defines the lead's Hydra policy at launch, in its system
@@ -190,6 +201,7 @@ extension AppModel {
     /// for as long as the chat stays on that pair's provider. A chat with none leads its
     /// heads on its own model and effort; no pair applies to a chat on its own.
     func hydraPair(for thread: ChatThread) -> HydraPair? {
+        if chimeraIsOn(thread) { return nil }
         if let temporary = thread.temporaryHydraPair, temporary.id == thread.hydraPairID {
             return temporary.provider == thread.provider ? temporary : nil
         }
@@ -279,7 +291,15 @@ extension AppModel {
             projects: ownRefs,
             headsNote: keepsModel ? pair?.headsNote?.trimmed.nilIfEmpty : nil,
             headsMatchLead: headsMatchLead,
-            tilt: settings.hydraTilt
+            tilt: settings.hydraTilt,
+            isChimera: chimeraIsOn(thread),
+            chimeraPresets: chimeraIsOn(thread) ? settings.chimeraPresets.enumerated().compactMap { index, preset in
+                // One line per preset: a specialty's line breaks cannot forge entries.
+                let specialty = preset.specialty.split(whereSeparator: \.isNewline).joined(separator: " ").trimmed
+                guard !specialty.isEmpty else { return nil }
+                return "\(index + 1). \(preset.pick.briefLabel): \(specialty)"
+            } : [],
+            chimeraPresetList: chimeraIsOn(thread) ? settings.chimeraPresets : []
         )
     }
 
@@ -296,9 +316,19 @@ extension AppModel {
             }
             return
         }
+        // Out of Chimera only between turns, as its own switch allows.
+        if thread.chimeraEnabled, !canSwitchChimeraMode(id) { return }
+        // Hydra turned on from a Chimera chat that had it on before goes back to exactly
+        // that Hydra, its pair and model included, as turning Chimera off does.
+        if thread.chimeraEnabled, thread.chimeraHydraSnapshot?.hydraEnabled == true {
+            setChimera(false, for: id)
+            return
+        }
         let pair = settings.hydraPair(for: thread.provider, model: thread.model)
         updateThread(id) {
             $0.hydraEnabled = true
+            $0.chimeraEnabled = false
+            $0.chimeraHydraSnapshot = nil
             $0.hydraPairID = pair?.id
         }
         settings.hydraDefaultEnabled = true
@@ -597,10 +627,11 @@ extension AppModel {
         preferredIndex: Int? = nil,
         project: String? = nil,
         profile: String? = nil,
+        castProfile: HydraHeadProfile? = nil,
         job: HydraJobStamp? = nil,
         brief: @escaping @Sendable (HydraPersona, HydraPrompts.Workplace) -> String
     ) -> ChatThread? {
-        guard let head = insertHydraHead(from: parentID, task: task, origin: origin, batchID: batchID, preferredIndex: preferredIndex, project: project, profile: profile, job: job) else { return nil }
+        guard let head = insertHydraHead(from: parentID, task: task, origin: origin, batchID: batchID, preferredIndex: preferredIndex, project: project, profile: profile, castProfile: castProfile, job: job) else { return nil }
         let route = hydraRouteReference(project)
         Task { await startTivanoHead(head.id, route: route, attachments: attachments, brief: brief) }
         return head
@@ -614,6 +645,7 @@ extension AppModel {
         preferredIndex: Int? = nil,
         project: String? = nil,
         profile: String? = nil,
+        castProfile: HydraHeadProfile? = nil,
         job: HydraJobStamp? = nil
     ) -> ChatThread? {
         guard let parent = thread(parentID), beginThreadTurn(parentID) else { return nil }
@@ -651,7 +683,7 @@ extension AppModel {
         // A delegation routed to one of the pair's head profiles runs on that profile's
         // model, effort and provider instead of the pair's shared worker fields; an
         // unknown profile name falls back to the shared fields, like an unrouted one.
-        let routed = profile.flatMap { launch?.profile(named: $0) }
+        let routed = castProfile ?? profile.flatMap { launch?.profile(named: $0) }
         let persona = HydraRoster.persona(at: index)
         // A name hits now. An absolute path, or a name that hits nothing, waits for the
         // startup task: git has to say which checkout it is before the head is given a
@@ -669,8 +701,11 @@ extension AppModel {
         var head = ChatThread(
             projectID: target?.id ?? parent.projectID,
             provider: headsProvider,
-            model: routed?.model ?? launch?.workerModel ?? (elsewhere ? providers.defaultModel(for: headsProvider)?.id : parent.model),
-            effort: routed?.effort ?? launch?.workerEffort ?? (elsewhere ? nil : parent.effort),
+            // A Chimera pick left on the default means the provider's default, not the pair's or the lead's.
+            model: castProfile != nil ? (routed?.model ?? providers.defaultModel(for: headsProvider)?.id)
+                : routed?.model ?? launch?.workerModel ?? (elsewhere ? providers.defaultModel(for: headsProvider)?.id : parent.model),
+            effort: castProfile != nil ? routed?.effort
+                : routed?.effort ?? launch?.workerEffort ?? (elsewhere ? nil : parent.effort),
             // A Tivano-run head works in its own copy under a brief that forbids git and
             // build-output work, and its landing is a patch the lead reviews: nobody sits
             // at its chat to answer a permission prompt, so it runs with full access. Left
@@ -844,11 +879,23 @@ extension AppModel {
         updateThread(id) { thread in
             guard var info = thread.hydra else { return }
             change(&info)
+            if info.status == .running { info.stopReason = nil }
             thread.hydra = info
         }
     }
 
     // MARK: - Reporting back
+
+    func hydraHeadStartedWaiting(_ id: UUID) {
+        guard let head = thread(id), head.isHydraHead, let info = head.hydra,
+              let parentID = head.parentThreadID,
+              let leadRuntime = existingRuntime(for: parentID) else { return }
+        let name = info.persona.name
+        leadRuntime.appendHydraNote(String(
+            format: AppText.localized("%@ is waiting for your answer. Open it from the Hydra panel to reply."),
+            name
+        ))
+    }
 
     /// A head is done: its status and report land on it, and its lead hears about it. The
     /// report is relayed by the lead's runtime, which waits for the rest of a batch.
@@ -856,8 +903,10 @@ extension AppModel {
         guard let head = thread(id), let info = head.hydra, !info.isFinished else { return }
         // A head the watchdog stopped tells its lead why, ahead of whatever it had said.
         var summary = summary
-        if HydraWatchdog.stalledHeadIDs.remove(id) != nil {
-            summary = [HydraWatchdog.stalledNote, summary ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let stalled = HydraWatchdog.stalledHeadIDs.remove(id) != nil && status == .interrupted
+        let lastOutput = HydraWatchdog.stalledLastOutput.removeValue(forKey: id)
+        if stalled {
+            summary = [HydraWatchdog.stalledNote(lastOutput: lastOutput), summary ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
         }
         if status != .running { hydraHeadRetries[id] = nil }
         let outcome: HydraHeadInfo.Status = switch status {
@@ -871,6 +920,7 @@ extension AppModel {
         let live = existingRuntime(for: id)
         updateHydraHead(id) {
             $0.status = outcome
+            $0.stopReason = stalled ? .stalled : nil
             $0.summary = summary ?? $0.summary
             $0.finishedAt = .now
             if info.jobID != nil { $0.reportNotes = reportNotes }
@@ -1335,6 +1385,7 @@ extension AppModel {
 
     /// Stops every head of a lead's still at work.
     func stopAllHydraHeads(of parentID: UUID) {
+        existingRuntime(for: parentID)?.clearQueuedHydraHeads()
         for head in hydraTeam(of: parentID) where head.hydra?.status == .running {
             stopHydraHead(head.id)
         }
@@ -1478,6 +1529,15 @@ extension AppModel {
         var toolCounts: [UUID: Int] = [:]
         for head in threads where head.isHydraHead && head.hydra?.kind == .tivano && head.hydra?.status == .running {
             guard let headRuntime = existingRuntime(for: head.id), headRuntime.isRunning else { continue }
+            if !headRuntime.approvals.isEmpty || !headRuntime.questions.isEmpty {
+                headRuntime.hydraLastEventAt = .now
+                toolCounts[head.id] = headRuntime.hydraToolCalls
+                if HydraWatchdog.labelled.remove(head.id) != nil, headRuntime.hydraThinking {
+                    headRuntime.hydraActivity = nil
+                    headRuntime.hydraThinkingLabel = nil
+                }
+                continue
+            }
             let idle = headRuntime.hydraIdleSeconds
             let tools = headRuntime.hydraToolCalls
             toolCounts[head.id] = tools
@@ -1493,7 +1553,11 @@ extension AppModel {
                 continue
             }
             if idle >= HydraWatchdog.stalledAfter, headRuntime.hydraEditCount == 0, HydraWatchdog.toolCounts[head.id] == tools {
+                let lastOutput = headRuntime.providerLastOutputAt
                 HydraWatchdog.stalledHeadIDs.insert(head.id)
+                HydraWatchdog.stalledLastOutput[head.id] = lastOutput
+                let outputAge = lastOutput.map { "\(max(0, Date.now.timeIntervalSince($0)))s" } ?? "unknown"
+                HydraWatchdog.log.info("Stopped stalled head \(head.id.uuidString, privacy: .public): idle=\(idle)s lastOutputAge=\(outputAge, privacy: .public)")
                 HydraWatchdog.labelled.remove(head.id)
                 stopHydraHead(head.id)
                 continue

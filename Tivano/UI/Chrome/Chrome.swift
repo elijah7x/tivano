@@ -1325,19 +1325,27 @@ struct ChromeRow<Control: View>: View {
     /// Off for a detail that is display text rather than a localization key (a theme's
     /// subtitle, which stays in English).
     var localizesDetail = true
+    /// Off for a title that is display text, such as a name the model wrote.
+    var localizesTitle = true
+    var detailLineLimit: Int? = nil
+    var titleLineLimit: Int? = nil
     @ViewBuilder var control: Control
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: Chrome.localized(title))
+                Text(verbatim: localizesTitle ? Chrome.localized(title) : title)
                     .font(.ui(.body))
                     .foregroundStyle(Chrome.primaryText)
+                    .lineLimit(titleLineLimit)
+                    .truncationMode(.tail)
                 if let detail, !detail.isEmpty {
                     Text(verbatim: localizesDetail ? Chrome.localized(detail) : detail)
                         .font(.ui(.subheadline))
                         .foregroundStyle(Chrome.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(detailLineLimit)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: detailLineLimit == nil)
                 }
             }
             Spacer(minLength: 12)

@@ -118,7 +118,9 @@ final class BadgePopoverCoordinator: NSObject, NSPopoverDelegate {
     private let popover = NSPopover()
     private var anchorRect: CGRect?
     private var monitors: [Any] = []
+    private var resignObserver: NSObjectProtocol?
     private weak var shownIn: NSWindow?
+    private var appearanceObservation: NSKeyValueObservation?
     private var shownRect: NSRect = .zero
     var onClose: (() -> Void)?
 
@@ -139,6 +141,14 @@ final class BadgePopoverCoordinator: NSObject, NSPopoverDelegate {
         guard let anchor = anchorRect.flatMap(WindowRectAnchor.target(for:)) else { return }
         // Opened again while the last one is still fading out: that one goes at once.
         if popover.isShown { popover.close() }
+        popover.appearance = anchor.view.window?.effectiveAppearance
+        // Follow the window after its appearance updates; the theme notification fires
+        // before HostedRoot applies the new color scheme.
+        appearanceObservation = anchor.view.window?.observe(\.effectiveAppearance, options: [.new]) { [weak self] window, _ in
+            MainActor.assumeIsolated {
+                self?.popover.appearance = window.effectiveAppearance
+            }
+        }
         // The content closes the popover itself through the environment (a sheet that
         // answers, a card whose button acts), the way rows in an AppKit popover do.
         let content = content.environment(\.closePopover, { [weak self] in self?.close() })
@@ -149,14 +159,30 @@ final class BadgePopoverCoordinator: NSObject, NSPopoverDelegate {
         shownRect = anchor.view.convert(anchor.rect, to: nil)
         popover.show(relativeTo: anchor.rect, of: anchor.view, preferredEdge: anchor.view.isFlipped ? .minY : .maxY)
         startMonitors()
+        // Folds away when the app goes to the background, as the model picker's popover does.
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            // At once, not on the animation: a picker popover still open inside this one
+            // makes an animated close a no-op, and the card stayed behind.
+            MainActor.assumeIsolated { self?.closeNow() }
+        }
     }
 
     /// Closes on the popover's own animation; `onClose` follows once it has closed (see
     /// `popoverDidClose`), once, whichever way it went.
     func close() {
         guard popover.isShown else { return }
-        stopMonitors()
+        // The monitors go once it has closed (`popoverDidClose`): a picker popover still
+        // open inside this one turns the animated close down, and a card left without
+        // them could no longer close on Escape, an outside click or the app leaving.
         popover.performClose(nil)
+    }
+
+    private func closeNow() {
+        guard popover.isShown else { return }
+        stopMonitors()
+        popover.close()
     }
 
     nonisolated func popoverDidClose(_ notification: Notification) {
@@ -194,7 +220,11 @@ final class BadgePopoverCoordinator: NSObject, NSPopoverDelegate {
     }
 
     private func stopMonitors() {
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
+        appearanceObservation = nil
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
         monitors.removeAll()
     }
 }
+

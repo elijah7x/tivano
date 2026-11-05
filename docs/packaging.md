@@ -78,6 +78,30 @@ Before building, use the approved Dev code revision; copying a version number
 alone does not promote code. The release display name and unbadged icon remain
 Release's even when the numeric version catches up.
 
+## Preview releases
+
+Preview versions use `X.Y.Z-preview.N` (`N` is a positive integer), matching
+`^[0-9]+\.[0-9]+\.[0-9]+-preview\.[1-9][0-9]*$`. The tag is `v<full-version>`,
+the GitHub title is `Tivano <full-version>`, and the installer is
+`Tivano-<full-version>.dmg`. These are GitHub prereleases, never marked latest.
+
+The long-lived local `preview` branch runs parallel to local `dev`; neither is
+pushed. Merge dev into preview with an ordinary merge commit when wanted. When
+preview features ship stable, squash them into dev as one commit. On preview,
+set `config/release.xcconfig` with `scripts/set_version.py release X.Y.Z-preview.N`
+and write a `## [X.Y.Z-preview.N] - YYYY-MM-DD` CHANGELOG section.
+`MARKETING_VERSION` stays numeric; `TivanoReleaseVersion` carries the full identity.
+
+An explicit owner request ("发 preview") authorizes `scripts/ship_preview.sh`.
+It publishes a fresh `git commit-tree <preview tree> -p <live remote main sha>`
+commit and pushes only `v<full-version>`. It never changes main/dev, update feeds
+or the mirror, and does not install. Refresh the installed `.git/hooks/pre-push`
+copy from `.githooks/pre-push` so its preview checks are active.
+
+Stable builds never offer previews. Preview builds update in-app to any strictly
+newer SemVer preview or stable release. There is no in-app rollback; users who
+want an older stable release reinstall its stable DMG manually.
+
 ## Edition data
 
 See [independent edition libraries](shared-library.md). Release and Dev each own

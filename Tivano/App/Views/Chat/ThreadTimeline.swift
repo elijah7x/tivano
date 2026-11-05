@@ -695,6 +695,10 @@ struct ThreadTimeline: View, Equatable {
                             .id("hydra-review-running")
                     }
                     // The agent's questions end the conversation as badges until they are answered.
+                    if let casting = runtime.chimeraCasting {
+                        ChimeraCastingBadgeRow(runtime: runtime)
+                            .id(casting.batchID)
+                    }
                     ForEach(runtime.questions) { request in
                         QuestionBadgeRow(request: request, runtime: runtime)
                             .id("question-" + request.id)

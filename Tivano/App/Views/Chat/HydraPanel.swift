@@ -150,13 +150,15 @@ struct HydraPanel: View {
                 if !isPoppedOut {
                     HydraHeadsButton(runtime: runtime, heads: heads, dismiss: dismiss)
                 }
-                // The head's stored record, not its live one: the strip sits over a
-                // streaming chat and shows only the name and the state, neither of which
-                // the runtime's progress changes. Reading that progress here would redraw
-                // the strip on every token the head spends.
+                // Observe pending decisions without subscribing to streaming progress.
                 if let selected, let info = selected.hydra {
+                    let waiting = hydraWaitingStatus(info.status, runtime: model.existingRuntime(for: selected.id))
                     HStack(spacing: 6) {
-                        HydraGlyph(persona: info.persona, size: 16, isRunning: info.status == .running, status: info.status)
+                        if let waiting {
+                            ThreadStatusMark(status: waiting)
+                        } else {
+                            HydraGlyph(persona: info.persona, size: 16, isRunning: info.status == .running, status: info.status)
+                        }
                         HydraNameText(persona: info.persona, size: 12.5, weight: .medium, color: Chrome.primaryText.opacity(0.92))
                             .lineLimit(1)
                         // The provider's mark: the strip says whose model is at work on
@@ -164,13 +166,15 @@ struct HydraPanel: View {
                         ProviderIcon(provider: selected.provider, size: 12)
                             .foregroundStyle(Chrome.secondaryText)
                             .help(model.providers.model(selected.model, for: selected.provider)?.shortName ?? selected.provider.displayName)
-                        Text(verbatim: HydraStatusText.short(info))
+                        Text(verbatim: waiting.map { Chrome.localized($0.title) } ?? HydraStatusText.short(info))
                             .font(.ui(.callout))
-                            .foregroundStyle(Chrome.secondaryText)
+                            .foregroundStyle(waiting.map { Chrome.threadStatusColor($0, isDark: colorScheme == .dark) } ?? Chrome.secondaryText)
                             .lineLimit(1)
                         // How long the head has been at it, or took: its own clock, so the
                         // strip itself is still drawn once.
-                        HydraElapsedTime(startedAt: info.startedAt, finishedAt: info.finishedAt, isRunning: info.status == .running)
+                        if waiting == nil {
+                            HydraElapsedTime(startedAt: info.startedAt, finishedAt: info.finishedAt, isRunning: info.status == .running)
+                        }
                         // Under the pointer the name reads as a way in: the chevron says the
                         // chat opens. Its room is kept, so the capsule never changes width.
                         Image(systemName: "chevron.right")
@@ -199,7 +203,7 @@ struct HydraPanel: View {
                         })
                         .onHover { isNameHovering = $0 }
                         .help(Text(verbatim: String(format: Chrome.localized("Open %@'s chat"), info.displayName)))
-                        .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("Open %@'s chat"), info.displayName)))
+                        .accessibilityLabel(Text(verbatim: waiting.map { "\(info.displayName), \(Chrome.localized($0.title))" } ?? String(format: Chrome.localized("Open %@'s chat"), info.displayName)))
                         .accessibilityAddTraits(.isButton)
                     }
                     .transition(.softAppear)
@@ -368,6 +372,7 @@ private struct HydraSpokesMark: View {
 /// tinted row.
 private struct HydraHeadRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
     let head: ChatThread
     let isOnStage: Bool
     let select: () -> Void
@@ -379,10 +384,16 @@ private struct HydraHeadRow: View {
             // A running head's note and counts live on its runtime, off the thread
             // record; this row is the one view that follows them.
             let info = HydraLiveInfo.shown(stored, model.existingRuntime(for: head.id))
+            let waiting = hydraWaitingStatus(info.status, runtime: model.existingRuntime(for: head.id))
             HStack(spacing: 10) {
                 Button(action: select) {
                     HStack(spacing: 10) {
-                        HydraGlyph(persona: info.persona, size: 22, isRunning: info.status == .running, status: info.status)
+                        if let waiting {
+                            ThreadStatusMark(status: waiting)
+                                .frame(width: 22, height: 22)
+                        } else {
+                            HydraGlyph(persona: info.persona, size: 22, isRunning: info.status == .running, status: info.status)
+                        }
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
                                 HydraNameText(persona: info.persona, size: 13, weight: .medium, color: Chrome.primaryText)
@@ -391,9 +402,9 @@ private struct HydraHeadRow: View {
                                 ProviderIcon(provider: head.provider, size: 11)
                                     .foregroundStyle(Chrome.secondaryText)
                                     .help(model.providers.model(head.model, for: head.provider)?.shortName ?? head.provider.displayName)
-                                Text(verbatim: HydraStatusText.long(info))
+                                Text(verbatim: waiting.map { Chrome.localized($0.title) } ?? HydraStatusText.long(info))
                                     .font(.ui(.subheadline))
-                                    .foregroundStyle(info.status == .failed ? Chrome.danger : Chrome.secondaryText)
+                                    .foregroundStyle(waiting.map { Chrome.threadStatusColor($0, isDark: colorScheme == .dark) } ?? (info.status == .failed ? Chrome.danger : Chrome.secondaryText))
                                     .lineLimit(1)
                             }
                             Text(verbatim: info.task.isEmpty ? Chrome.localized("Waiting for a task") : info.task)
@@ -424,9 +435,17 @@ private struct HydraHeadRow: View {
                 withAnimation(Chrome.hover) { isHovering = hovering }
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(Text(verbatim: String(format: Chrome.localized(isOnStage ? "%@, %@, %@, on stage" : "%@, %@, %@"), info.displayName, HydraStatusText.long(info), info.task)))
+            .accessibilityLabel(Text(verbatim: String(format: Chrome.localized(isOnStage ? "%@, %@, %@, on stage" : "%@, %@, %@"), info.displayName, waiting.map { Chrome.localized($0.title) } ?? HydraStatusText.long(info), info.task)))
         }
     }
+}
+
+@MainActor
+func hydraWaitingStatus(_ status: HydraHeadInfo.Status, runtime: ThreadRuntime?) -> ThreadActivityStatus? {
+    guard status == .running, let runtime else { return nil }
+    if !runtime.approvals.isEmpty { return .approval }
+    if !runtime.questions.isEmpty { return .question }
+    return nil
 }
 
 /// The stop button beside a working head: the same tinted circle with the white stop
@@ -571,7 +590,7 @@ enum HydraStatusText {
         case .running: Chrome.localized("working")
         case .completed: Chrome.localized("done")
         case .failed: Chrome.localized("failed")
-        case .stopped: Chrome.localized("stopped")
+        case .stopped: Chrome.localized(info.stopReason == .stalled ? "stalled" : "stopped")
         }
     }
 
@@ -584,7 +603,7 @@ enum HydraStatusText {
         case .failed:
             return "· " + Chrome.localized("failed")
         case .stopped:
-            return "· " + Chrome.localized("stopped")
+            return "· " + Chrome.localized(info.stopReason == .stalled ? "stalled" : "stopped")
         }
     }
 
@@ -597,7 +616,7 @@ enum HydraStatusText {
         case .failed:
             return Chrome.localized("Failed") + (info.summary.map { " · " + TextCleanup.singleLine($0, limit: 80) } ?? "")
         case .stopped:
-            return Chrome.localized("Stopped")
+            return Chrome.localized(info.stopReason == .stalled ? "Stalled" : "Stopped")
         }
     }
 

@@ -10,7 +10,7 @@
 #   scripts/ship.sh
 #
 # The release cannot drift from dev: it stops unless Dev's version is newer than
-# the last v* tag, and unless main's tree equals dev's after the merge. Each step
+# the last stable version tag, and unless main's tree equals dev's after the merge. Each step
 # skips when already done, so a failed run can be repeated. Never installs, quits
 # or launches an app; Release is updated through its own updater.
 set -euo pipefail
@@ -137,7 +137,7 @@ git fetch origin --prune --tags --quiet
 VERSION=$(version_in dev dev)
 TAG="v$VERSION"
 # Only tags in main's history count; tags inherited from upstream Droppy do not.
-LAST=$(git tag --merged origin/main -l 'v[0-9]*' --sort=-v:refname | head -1)
+LAST=$(git tag --merged origin/main -l 'v[0-9]*' --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
 if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
   [ "$(git rev-parse "$TAG^{tree}")" = "$(git rev-parse "dev^{tree}")" ] \
     || fail "$TAG already exists for other code. Merge into dev, which advances Dev's version, then ship."

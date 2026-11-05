@@ -221,7 +221,7 @@ struct HydraReportDigest {
     /// it leaves with the last head's final paragraph when it reads like instructions.
     private static let leadPrefixes = [
         "The changes listed above", "The heads worked in your checkout", "A file listed with conflicts",
-        "Do not check any of this", "Do not wait for", "A head that failed", "A head the user stopped",
+        "Do not check any of this", "Do not wait for", "A head that failed", "A head the user stopped", "A head Tivano stopped",
         "The user queued", "The user sent",
     ]
 

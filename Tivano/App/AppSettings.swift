@@ -193,6 +193,7 @@ final class AppSettings {
         static let alphaEnabled = "alphaEnabled"
         static let alphaVoiceEnabled = "alphaVoiceEnabled"
         static let promptPredictionsEnabled = "promptPredictionsEnabled"
+        static let alphaChimeraEnabled = "alphaChimeraEnabled"
         static let alphaDecisionsEnabled = "alphaDecisionsEnabled"
         static let externalControlEnabled = "externalControlEnabled"
         static let remoteMCPEnabled = "remoteMCPEnabled"
@@ -259,6 +260,7 @@ final class AppSettings {
         static let hydraMaxHeads = "hydraMaxHeads"
         static let sidebarPanelOrigin = "sidebarPanelOrigin"
         static let sidebarPanelSize = "sidebarPanelSize"
+        static let chimeraPresets = "chimeraPresets"
         static let hydraPairs = "hydraPairs"
         static let hasSeenHydraIntro = "hasSeenHydraIntro"
     }
@@ -426,6 +428,7 @@ final class AppSettings {
     var alphaEnabled: Bool {
         didSet {
             defaults.set(alphaEnabled, forKey: Key.alphaEnabled)
+            HydraPrompts.acceptsChimeraFence = isChimeraEnabled
         }
     }
 
@@ -440,6 +443,15 @@ final class AppSettings {
 
     /// Labs decision model shadow points (docs/hydra-decisions.md).
     /// Read once per Hydra job and checked again before every call.
+    var alphaChimeraEnabled: Bool {
+        didSet {
+            defaults.set(alphaChimeraEnabled, forKey: Key.alphaChimeraEnabled)
+            HydraPrompts.acceptsChimeraFence = isChimeraEnabled
+        }
+    }
+
+    var isChimeraEnabled: Bool { alphaEnabled && alphaChimeraEnabled }
+
     var alphaDecisionsEnabled: Bool {
         didSet { defaults.set(alphaDecisionsEnabled, forKey: Key.alphaDecisionsEnabled) }
     }
@@ -985,6 +997,10 @@ final class AppSettings {
 
     /// The lead-and-heads pairings, in the order Settings and the model picker show them.
     /// Reordering writes this array; nothing else stores the order.
+    var chimeraPresets: [ChimeraPreset] {
+        didSet { store(chimeraPresets, forKey: Key.chimeraPresets) }
+    }
+
     private(set) var hydraPairs: [HydraPair] {
         didSet { store(hydraPairs, forKey: Key.hydraPairs) }
     }
@@ -1035,6 +1051,8 @@ final class AppSettings {
             voiceEnabled = defaults.bool(forKey: Key.voiceEnabled)
         }
         promptPredictionsEnabled = defaults.object(forKey: Key.promptPredictionsEnabled) as? Bool ?? true
+        alphaChimeraEnabled = defaults.bool(forKey: Key.alphaChimeraEnabled)
+        HydraPrompts.acceptsChimeraFence = storedAlphaEnabled && defaults.bool(forKey: Key.alphaChimeraEnabled)
         alphaDecisionsEnabled = defaults.bool(forKey: Key.alphaDecisionsEnabled)
         // Local control and Remote MCP used to need Alpha too; keep what was in effect.
         var storedExternalControl = defaults.bool(forKey: Key.externalControlEnabled)
@@ -1141,6 +1159,7 @@ final class AppSettings {
         } else {
             sidebarPanelSize = nil
         }
+        chimeraPresets = Self.load([Lenient<ChimeraPreset>].self, forKey: Key.chimeraPresets)?.compactMap(\.value) ?? []
         hydraPairs = Self.load([Lenient<HydraPair>].self, forKey: Key.hydraPairs)?.compactMap(\.value) ?? []
         // The window zoom is gone. Drop a stored percent instead of turning it into a font size.
         defaults.removeObject(forKey: "appZoom")

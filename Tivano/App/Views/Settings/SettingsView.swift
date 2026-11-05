@@ -7,6 +7,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     case providers
     case models
     case hydra
+    case chimera
     case mcp
     case sourceControl
     case shortcuts
@@ -26,6 +27,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .models: "Models"
         case .alpha: "Alpha"
         case .hydra: "Hydra"
+        case .chimera: "Chimera"
         case .sourceControl: "Source control"
         case .shortcuts: "Shortcuts"
         case .archive: "Storage"
@@ -46,6 +48,8 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         // Never drawn: the sidebar gives the Hydra row the dragon mark instead. Kept so
         // the switch stays exhaustive and anything else that asks gets a sane symbol.
         case .hydra: "point.3.connected.trianglepath.dotted"
+        // Never drawn: the sidebar gives the Chimera row its own mark instead.
+        case .chimera: "person.3.sequence"
         case .sourceControl: "arrow.triangle.branch"
         case .shortcuts: "command"
         case .archive: "internaldrive"
@@ -63,6 +67,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .mcp: Color(red: 0.95, green: 0.55, blue: 0.20)
         case .models: Color(red: 0.686, green: 0.322, blue: 0.871)
         case .hydra: Color(red: 0.188, green: 0.690, blue: 0.780)
+        case .chimera: Color(red: 0.78, green: 0.40, blue: 0.60)
         case .sourceControl: Color(red: 0.345, green: 0.337, blue: 0.839)
         case .shortcuts: Color(red: 0.32, green: 0.48, blue: 0.93)
         case .archive: Chrome.orange
@@ -76,6 +81,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "usage", "limits", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "语音", "麦克风", "通话", "local control", "control", "cli", "本地控制"]
         case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
         case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
+        case .chimera: ["chimera", "casting", "presets", "roles", "选角", "预设", "角色"]
         case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
         case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "zcode", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
         case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting", "remote mcp", "remote", "远程"]
@@ -122,8 +128,9 @@ struct SettingsView: View {
 
     private var visiblePages: [SettingsPage] {
         let query = search.trimmed
-        guard !query.isEmpty else { return SettingsPage.allCases }
-        return SettingsPage.allCases.filter { page in
+        let pages = SettingsPage.allCases.filter { $0 != .chimera || model.settings.isChimeraEnabled }
+        guard !query.isEmpty else { return pages }
+        return pages.filter { page in
             ([page.title] + page.keywords).contains { key in
                 [key, Chrome.localized(key)].contains {
                     $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
@@ -165,12 +172,19 @@ struct SettingsView: View {
         .frame(width: 780, height: 580)
         .onChange(of: SettingsNavigation.shared.requestedPage, initial: true) { _, requested in
             guard let requested else { return }
-            page = requested
+            page = requested == .chimera && !model.settings.isChimeraEnabled ? .alpha : requested
             SettingsNavigation.shared.requestedPage = nil
+        }
+        .onChange(of: model.settings.isChimeraEnabled, initial: true) { _, enabled in
+            if !enabled {
+                if page == .chimera { page = .alpha }
+                if SettingsNavigation.shared.page == .chimera { SettingsNavigation.shared.page = .alpha }
+            }
         }
         .onChange(of: visiblePages) { _, pages in
             guard !pages.isEmpty, !pages.contains(page), let first = pages.first else { return }
-            page = first
+            // Chimera switched off from its own page lands on Alpha, where its switch is.
+            page = page == .chimera && !model.settings.isChimeraEnabled ? .alpha : first
         }
     }
 
@@ -256,6 +270,9 @@ private struct SettingsSidebarIcon: View {
                 // The Hydra page wears the dragon mark, the same one as the composer button.
                 HydraMarkImage()
                     .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
+            } else if page == .chimera {
+                ChimeraMarkImage()
+                    .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
             } else if page == .alpha {
                 AlphaMarkImage()
                     .frame(width: Chrome.symbolSize, height: Chrome.symbolSize)
@@ -281,8 +298,9 @@ struct SettingsSidebar: View {
 
     private var visiblePages: [SettingsPage] {
         let query = search.trimmed
-        guard !query.isEmpty else { return SettingsPage.allCases }
-        return SettingsPage.allCases.filter { page in
+        let pages = SettingsPage.allCases.filter { $0 != .chimera || model.settings.isChimeraEnabled }
+        guard !query.isEmpty else { return pages }
+        return pages.filter { page in
             ([page.title] + page.keywords).contains { key in
                 [key, Chrome.localized(key)].contains {
                     $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
@@ -343,9 +361,13 @@ struct SettingsSidebar: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background { WindowDragArea() }
         .onDisappear { scrollTracker.end() }
+        .onChange(of: model.settings.isChimeraEnabled, initial: true) { _, enabled in
+            if !enabled, page == .chimera { navigation.page = .alpha }
+        }
         .onChange(of: visiblePages) { _, pages in
             guard !pages.isEmpty, !pages.contains(page), let first = pages.first else { return }
-            navigation.page = first
+            // Chimera switched off from its own page lands on Alpha, where its switch is.
+            navigation.page = page == .chimera && !model.settings.isChimeraEnabled ? .alpha : first
         }
     }
 
@@ -477,6 +499,7 @@ private struct SettingsPageScroll: View {
         case .models:
             ModelsSettingsPage(query: modelSearch)
         case .hydra: HydraSettingsPage()
+        case .chimera: ChimeraSettingsPage()
         case .alpha: AlphaSettingsPage()
         case .sourceControl: SourceControlSettingsPage()
         case .shortcuts: ShortcutsSettingsPage()
@@ -789,6 +812,7 @@ struct NewThreadModelPicker: View {
     let selection: NewThreadModelSelection?
     let selectedModelID: String?
     let automaticTitle: String
+    let showsAutomaticChoice: Bool
     let allowedProviders: [ProviderKind]?
     let offSelected: Bool
     let selectOff: (() -> Void)?
@@ -800,6 +824,7 @@ struct NewThreadModelPicker: View {
         selectedModelID: String?,
         initialProvider: ProviderKind?,
         automaticTitle: String = "Last selection",
+        showsAutomaticChoice: Bool = true,
         allowedProviders: [ProviderKind]? = nil,
         offSelected: Bool = false,
         selectOff: (() -> Void)? = nil,
@@ -808,6 +833,7 @@ struct NewThreadModelPicker: View {
         self.selection = selection
         self.selectedModelID = selectedModelID
         self.automaticTitle = automaticTitle
+        self.showsAutomaticChoice = showsAutomaticChoice
         self.allowedProviders = allowedProviders
         self.offSelected = offSelected
         self.selectOff = selectOff
@@ -836,36 +862,38 @@ struct NewThreadModelPicker: View {
         let isLoading = provider.map { registry.loadingCatalogs.contains($0) } ?? false
         let error = provider.flatMap { registry.status($0).catalogError }
         VStack(alignment: .leading, spacing: 0) {
-            PopoverItem(automaticTitle, isChecked: selection == nil && !offSelected) {
-                select(nil)
+            if showsAutomaticChoice {
+                PopoverItem(automaticTitle, isChecked: selection == nil && !offSelected) {
+                    select(nil)
+                }
+                .padding(.horizontal, 6)
+                .padding(.top, 6)
+                if let selectOff {
+                    PopoverItem("Off", isChecked: offSelected, action: selectOff)
+                        .padding(.horizontal, 6)
+                }
+                Divider()
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 5)
+                // Shares the Last selection row's checkmark column so the two choices read as peers.
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark")
+                        .font(.ui(.subheadline, weight: .semibold))
+                        .foregroundStyle(Chrome.primaryText)
+                        .opacity(selection == nil || offSelected ? 0 : 1)
+                        .frame(width: 14)
+                    Text(verbatim: Chrome.localized("Custom model"))
+                        .font(.ui(.subheadline, weight: .semibold))
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+                .padding(.leading, 14)
+                .padding(.top, 2)
+                .padding(.bottom, 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Custom model"))
+                .accessibilityAddTraits(selection == nil || offSelected ? .isHeader : [.isHeader, .isSelected])
             }
-            .padding(.horizontal, 6)
-            .padding(.top, 6)
-            if let selectOff {
-                PopoverItem("Off", isChecked: offSelected, action: selectOff)
-                    .padding(.horizontal, 6)
-            }
-            Divider()
-                .padding(.horizontal, 14)
-                .padding(.vertical, 5)
-            // Shares the Last selection row's checkmark column so the two choices read as peers.
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark")
-                    .font(.ui(.subheadline, weight: .semibold))
-                    .foregroundStyle(Chrome.primaryText)
-                    .opacity(selection == nil || offSelected ? 0 : 1)
-                    .frame(width: 14)
-                Text(verbatim: Chrome.localized("Custom model"))
-                    .font(.ui(.subheadline, weight: .semibold))
-                    .foregroundStyle(Chrome.secondaryText)
-            }
-            .padding(.leading, 14)
-            .padding(.top, 2)
-            .padding(.bottom, 3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text("Custom model"))
-            .accessibilityAddTraits(selection == nil || offSelected ? .isHeader : [.isHeader, .isSelected])
             editorRow("Provider") {
                 GlassPickerButton(
                     options: providerOptions,
@@ -920,7 +948,7 @@ struct NewThreadModelPicker: View {
                 }
             }
             if providers.isEmpty {
-                catalogNote(Chrome.localized(automaticTitle == "Last selection" ? "No providers available. You can still use Last selection." : "No providers available."))
+                catalogNote(Chrome.localized(showsAutomaticChoice && automaticTitle == "Last selection" ? "No providers available. You can still use Last selection." : "No providers available."))
             } else if let provider {
                 if isLoading {
                     catalogNote(String(format: Chrome.localized(options.isEmpty ? "Loading %@'s models…" : "Refreshing %@'s models…"), provider.displayName))
@@ -940,6 +968,7 @@ struct NewThreadModelPicker: View {
                 }
             }
         }
+        .padding(.top, showsAutomaticChoice ? 0 : 6)
         .padding(.bottom, 14)
         .task(id: selectedProvider) {
             guard let provider = selectedProvider, providers.contains(provider), !Task.isCancelled else { return }

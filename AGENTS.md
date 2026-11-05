@@ -151,10 +151,14 @@
   does not change how the app manages ordinary Hydra worktrees. On success,
   remove only worktrees created by this run that are safe to remove; on failure,
   preserve remaining worktrees and artifacts. Never auto-clean reused worktrees.
+- Preview versions match `^[0-9]+\.[0-9]+\.[0-9]+-preview\.[1-9][0-9]*$`: tag `v<full-version>`, title `Tivano <full-version>`, DMG `Tivano-<full-version>.dmg`; GitHub prerelease, never latest.
+- The long-lived LOCAL `preview` branch runs parallel to local `dev`; never push either. Bring dev into preview with an ordinary merge commit when wanted; land preview features in dev as one squashed commit when they ship stable. On preview, set `config/release.xcconfig` with `scripts/set_version.py release X.Y.Z-preview.N` (`MARKETING_VERSION` stays numeric; `TivanoReleaseVersion` carries the full identity) and write a `## [X.Y.Z-preview.N] - YYYY-MM-DD` CHANGELOG section.
+- An explicit owner request ("发 preview") authorizes `scripts/ship_preview.sh`: publish a GitHub-only prerelease through a fresh `git commit-tree <preview tree> -p <live remote main sha>` commit, push only its tag, never touch main/dev/feeds/mirror, and do not install. Refresh the installed `.git/hooks/pre-push` copy from `.githooks/pre-push`.
+- Stable builds never offer previews; preview builds update in-app to any strictly newer SemVer preview or stable. No in-app rollback: users reinstall a stable DMG manually.
 - Public GitHub Releases contain exactly one uploaded app installer: the notarized `Tivano-<version>.dmg`. Never upload an App ZIP as a second download, including from one-off completion scripts. Local package ZIPs and notarization submission ZIPs stay local. GitHub's automatic Source code archives are platform-generated; do not delete release tags to remove them.
 
 - Every `## [x.y.z]` entry in CHANGELOG.md that ships outside work carries a `### Thanks` section, one bullet per person in the form `- Name (@github-handle): what they did (#PR).`, after Refinements.
-- `python3 scripts/release_credits.py` prints the block for everything merged since the previous `v*` tag (run it while writing the entry).
+- `python3 scripts/release_credits.py` prints the block for everything merged since the previous stable `vX.Y.Z` tag (run it while writing the entry).
 - `scripts/publish_release.sh` runs `scripts/release_credits.py --check` on the notes and refuses to publish while anyone is missing.
 - The app's About cards ignore the Thanks heading, so it changes nothing there.
 - When a pull request from outside merges between releases, add the person to the `## [Unreleased]` entry's Thanks right away rather than at release time.

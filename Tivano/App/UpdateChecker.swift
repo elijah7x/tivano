@@ -2,15 +2,25 @@ import AppKit
 import Foundation
 import UserNotifications
 
-/// A release version as GitHub tags it: `v1.2.3` or `1.2`. Anything with a prerelease suffix
-/// (`-nightly.…`, `-beta.1`) is not a version the app offers, so it does not parse.
+/// A release version with SemVer prerelease ordering.
 struct AppVersion: Comparable, Hashable, CustomStringConvertible, Sendable {
     let components: [Int]
+    let prerelease: [String]
+    var isPrerelease: Bool { !prerelease.isEmpty }
 
     init?(_ raw: String) {
         var text = raw.trimmed
         if text.hasPrefix("v") || text.hasPrefix("V") { text.removeFirst() }
-        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        let sections = text.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let identifiers = sections.count == 2
+            ? sections[1].split(separator: ".", omittingEmptySubsequences: false).map(String.init) : []
+        guard identifiers.allSatisfy({ identifier in
+            !identifier.isEmpty && identifier.utf8.allSatisfy {
+                (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45
+            } && !(identifier.utf8.allSatisfy { (48...57).contains($0) }
+                   && identifier.count > 1 && identifier.hasPrefix("0"))
+        }) else { return nil }
+        let parts = sections[0].split(separator: ".", omittingEmptySubsequences: false)
         guard (1...3).contains(parts.count) else { return nil }
         var numbers: [Int] = []
         for part in parts {
@@ -19,10 +29,12 @@ struct AppVersion: Comparable, Hashable, CustomStringConvertible, Sendable {
         }
         while numbers.count < 3 { numbers.append(0) }
         components = numbers
+        prerelease = identifiers
     }
 
     var description: String {
         components.map(String.init).joined(separator: ".")
+            + (isPrerelease ? "-" + prerelease.joined(separator: ".") : "")
     }
 
     /// The tag without its leading v: the version as the release calls itself.
@@ -33,7 +45,20 @@ struct AppVersion: Comparable, Hashable, CustomStringConvertible, Sendable {
     }
 
     static func < (lhs: AppVersion, rhs: AppVersion) -> Bool {
-        lhs.components.lexicographicallyPrecedes(rhs.components)
+        if lhs.components != rhs.components {
+            return lhs.components.lexicographicallyPrecedes(rhs.components)
+        }
+        if lhs.isPrerelease != rhs.isPrerelease { return lhs.isPrerelease }
+        for (left, right) in zip(lhs.prerelease, rhs.prerelease) {
+            if left == right { continue }
+            let leftNumeric = left.utf8.allSatisfy { (48...57).contains($0) }
+            let rightNumeric = right.utf8.allSatisfy { (48...57).contains($0) }
+            if leftNumeric != rightNumeric { return leftNumeric }
+            // Numeric identifiers can exceed Int's range.
+            if leftNumeric, left.count != right.count { return left.count < right.count }
+            return left.utf8.lexicographicallyPrecedes(right.utf8)
+        }
+        return lhs.prerelease.count < rhs.prerelease.count
     }
 }
 
@@ -97,7 +122,7 @@ final class UpdateChecker {
         static let notifiedVersion = "updateChecker_notifiedVersion"
     }
 
-    let currentVersion = AppInfo.version
+    let currentVersion = AppInfo.releaseVersion
 
     private(set) var update: AvailableUpdate?
     private(set) var isChecking = false
@@ -109,7 +134,7 @@ final class UpdateChecker {
     /// found is kept for the notes but reads as up to date.
     var updateAvailable: Bool {
         guard let update, let latest = AppVersion(update.version), let current = AppVersion(currentVersion) else { return false }
-        return latest > current
+        return latest > current && (current.isPrerelease || !latest.isPrerelease)
     }
 
     @ObservationIgnored private var backgroundTask: Task<Void, Never>?
@@ -249,17 +274,22 @@ final class UpdateChecker {
             }
             let olderThanSaved = update.flatMap { AppVersion($0.version) }
                 .map { $0 > AppVersion(found.version)! } ?? false
-            if !olderThanSaved { return try Self.reconcile(found, with: update) }
+            if !olderThanSaved, AppVersion(currentVersion)?.isPrerelease != true { return try Self.reconcile(found, with: update) }
         }
         let releases: [GitHubRelease]
         do {
             releases = try await fetchReleases()
         } catch {
             try Task.checkCancellation()
+            if let best { return try Self.reconcile(best, with: update) }
             throw error
         }
         try Task.checkCancellation()
-        guard let found = Self.newestRelease(in: releases) else { throw UpdateError.noRelease }
+        let apiCandidate = Self.newestRelease(in: releases, includingPrereleases: AppVersion(currentVersion)?.isPrerelease == true)
+        let found = [best, apiCandidate].compactMap { $0 }.max {
+            AppVersion($0.version)! < AppVersion($1.version)!
+        }
+        guard let found else { throw UpdateError.noRelease }
         return try Self.reconcile(found, with: update)
     }
 
@@ -321,12 +351,12 @@ final class UpdateChecker {
         return try JSONDecoder().decode([GitHubRelease].self, from: data)
     }
 
-    /// The newest stable release that ships a disk image. Prereleases and drafts never
-    /// count, whatever their date.
-    static func newestRelease(in releases: [GitHubRelease]) -> AvailableUpdate? {
+    /// The newest eligible release that ships a disk image.
+    static func newestRelease(in releases: [GitHubRelease], includingPrereleases: Bool = false) -> AvailableUpdate? {
         var best: (AppVersion, AvailableUpdate)?
         for release in releases {
-            guard !release.upcomingRelease, let version = AppVersion(release.tagName) else { continue }
+            guard !release.isDraft, let version = AppVersion(release.tagName),
+                  includingPrereleases || (!release.isPrerelease && !version.isPrerelease) else { continue }
             if let releasedAt = release.releasedAt, releasedAt > .now { continue }
             guard let asset = release.assets.first(where: { $0.isDiskImage }) else { continue }
             guard let downloadURL = URL(string: asset.browserDownloadURL) else { continue }
@@ -516,7 +546,8 @@ struct GitHubRelease: Decodable, Sendable {
     var name: String?
     var body: String?
     var releasedAt: Date?
-    var upcomingRelease: Bool
+    var isDraft: Bool
+    var isPrerelease: Bool
     var assets: [Asset]
 
     private enum CodingKeys: String, CodingKey {
@@ -532,9 +563,8 @@ struct GitHubRelease: Decodable, Sendable {
         name = try container.decodeIfPresent(String.self, forKey: .name)
         body = try container.decodeIfPresent(String.self, forKey: .body)
         releasedAt = try container.decodeIfPresent(String.self, forKey: .releasedAt).flatMap(Self.parseDate)
-        let isDraft = try container.decodeIfPresent(Bool.self, forKey: .draft) ?? false
-        let isPrerelease = try container.decodeIfPresent(Bool.self, forKey: .prerelease) ?? false
-        upcomingRelease = isDraft || isPrerelease
+        isDraft = try container.decodeIfPresent(Bool.self, forKey: .draft) ?? false
+        isPrerelease = try container.decodeIfPresent(Bool.self, forKey: .prerelease) ?? false
         assets = try container.decodeIfPresent([Asset].self, forKey: .assets) ?? []
     }
 

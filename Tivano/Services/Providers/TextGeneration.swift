@@ -1,7 +1,9 @@
 import Foundation
+import os
 
 /// One-shot generation of thread titles and commit messages through a provider CLI with no tools.
 enum TextGeneration {
+    private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "prediction")
     enum Engine: Sendable {
         case claude(executable: URL, environment: [String: String], model: String? = nil, effort: String? = nil)
         case codex(executable: URL, environment: [String: String], model: String, effort: String? = nil)
@@ -58,16 +60,49 @@ enum TextGeneration {
         Conversation:
         \(context.prefix(8_000))
         """
-        guard let result = await run(prompt, engine: engine, directory: FileManager.default.temporaryDirectory) else { return nil }
-        let text = result.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "")
+        let engineDescription: String
+        switch engine {
+        case .claude(_, _, let model, _): engineDescription = "claude \(model ?? "haiku")"
+        case .codex(_, _, let model, let effort): engineDescription = "codex \(model) \(effort ?? "default")"
+        }
+        let clock = ContinuousClock()
+        let started = clock.now
+        let result = await runDetailed(prompt, engine: engine, directory: FileManager.default.temporaryDirectory)
+        let elapsed = started.duration(to: clock.now).components
+        let milliseconds = Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1e15
+        guard let output = result.text else {
+            log.error("prediction failed engine=\(engineDescription, privacy: .public) ms=\(milliseconds, privacy: .public) reason=\(result.failure ?? "empty output", privacy: .public)")
+            return nil
+        }
+        func rejected(_ reason: String) {
+            log.notice("prediction rejected engine=\(engineDescription, privacy: .public) ms=\(milliseconds, privacy: .public) reason=\(reason, privacy: .public)")
+        }
+        let text = output.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "")
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start <= end,
               let object = try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)),
-              let dictionary = object as? [String: Any],
-              let suggestion = dictionary["suggestion"] as? String,
-              !suggestion.contains(where: \.isNewline) else { return nil }
+              let dictionary = object as? [String: Any] else {
+            rejected("no JSON object")
+            return nil
+        }
+        guard let suggestion = dictionary["suggestion"] as? String else {
+            rejected("suggestion null or missing")
+            return nil
+        }
+        guard !suggestion.contains(where: \.isNewline) else {
+            rejected("contains newline")
+            return nil
+        }
         let cleaned = String(suggestion.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty, cleaned.count <= 240 else { return nil }
+        guard !cleaned.isEmpty else {
+            rejected("empty after cleanup")
+            return nil
+        }
+        guard cleaned.count <= 240 else {
+            rejected("over 240 chars (\(cleaned.count))")
+            return nil
+        }
+        log.notice("prediction ok engine=\(engineDescription, privacy: .public) ms=\(milliseconds, privacy: .public) chars=\(cleaned.count, privacy: .public)")
         return cleaned
     }
 
@@ -181,28 +216,45 @@ enum TextGeneration {
     }
 
     private static func run(_ prompt: String, engine: Engine, directory: URL) async -> String? {
-        switch engine {
-        case .claude(let executable, let environment, let model, let effort):
-            var arguments = [
-                "-p", "--output-format", "text", "--model", model ?? "haiku", "--tools", "",
-                "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
-                "--no-session-persistence",
-            ]
-            if let effort, !effort.isEmpty { arguments += ["--effort", effort] }
-            guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 120),
-                  result.succeeded else { return nil }
-            return result.trimmedOutput.nilIfEmpty
-        case .codex(let executable, let environment, let model, let effort):
-            let output = FileManager.default.temporaryDirectory.appendingPathComponent("tivano-\(UUID().uuidString).txt")
-            defer { try? FileManager.default.removeItem(at: output) }
-            var arguments = ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model]
-            if let effort, !effort.isEmpty { arguments += ["--config", "model_reasoning_effort=\"\(effort)\""] }
-            arguments += ["--output-last-message", output.path, "-"]
-            guard let result = try? await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 180),
-                  result.succeeded else { return nil }
-            return (try? String(contentsOf: output, encoding: .utf8))?
-                .trimmed
-                .nilIfEmpty
+        await runDetailed(prompt, engine: engine, directory: directory).text
+    }
+
+    /// A failed run's reason with the first line of the CLI's error, such as "Not logged in".
+    private static func failure(_ result: ShellResult) -> String {
+        if result.timedOut { return "timed out" }
+        let firstLine = result.errorOutput.trimmed.split(whereSeparator: \.isNewline).first.map { String($0.prefix(200)) } ?? ""
+        return firstLine.isEmpty ? "exit \(result.status)" : "exit \(result.status): \(firstLine)"
+    }
+
+    private static func runDetailed(_ prompt: String, engine: Engine, directory: URL) async -> (text: String?, failure: String?) {
+        do {
+            switch engine {
+            case .claude(let executable, let environment, let model, let effort):
+                var arguments = [
+                    "-p", "--output-format", "text", "--model", model ?? "haiku", "--tools", "",
+                    "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
+                    "--no-session-persistence",
+                ]
+                if let effort, !effort.isEmpty { arguments += ["--effort", effort] }
+                let result = try await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 120)
+                guard result.succeeded else { return (nil, failure(result)) }
+                guard let text = result.trimmedOutput.nilIfEmpty else { return (nil, "empty output") }
+                return (text, nil)
+            case .codex(let executable, let environment, let model, let effort):
+                let output = FileManager.default.temporaryDirectory.appendingPathComponent("tivano-\(UUID().uuidString).txt")
+                defer { try? FileManager.default.removeItem(at: output) }
+                var arguments = ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model]
+                if let effort, !effort.isEmpty { arguments += ["--config", "model_reasoning_effort=\"\(effort)\""] }
+                arguments += ["--output-last-message", output.path, "-"]
+                let result = try await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 180)
+                guard result.succeeded else { return (nil, failure(result)) }
+                guard let text = (try? String(contentsOf: output, encoding: .utf8))?.trimmed.nilIfEmpty else {
+                    return (nil, "empty output")
+                }
+                return (text, nil)
+            }
+        } catch {
+            return (nil, "launch failed: \(error.localizedDescription)")
         }
     }
 }
