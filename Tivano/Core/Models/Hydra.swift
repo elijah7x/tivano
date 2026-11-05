@@ -168,6 +168,11 @@ struct HydraLaunch: Hashable, Sendable {
     var headsMatchLead = true
     /// The delegation tilt, from Settings › Hydra.
     var tilt: HydraTilt = .active
+    var isChimera = false
+    var chimeraPresets: [String] = []
+    /// The presets those numbered lines were written from, in Settings order: the lead's
+    /// "preset" numbers resolve against this copy, not against Settings edited since.
+    var chimeraPresetList: [ChimeraPreset] = []
 
     /// How many Tivano-run heads may work at once for a pair with no cap of its own. The
     /// tasks past it wait their turn (`ThreadRuntime.spawnWaitingHeads`) and go out as
@@ -333,12 +338,17 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
         var isFinished: Bool { self != .running }
     }
 
+    enum StopReason: String, Codable, Hashable, Sendable {
+        case stalled
+    }
+
     /// The head's place in the roster: its name, colour and shape.
     var index: Int
     var task: String
     var kind: Kind
     var origin: Origin
     var status: Status = .running
+    var stopReason: StopReason?
     /// The head's report, once it has one: the provider's summary for a native head, the
     /// final reply for a Tivano-run one.
     var summary: String?
@@ -445,6 +455,7 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
         // stopped, never as completed: a lead told a head is done when nobody knows what
         // became of it would answer the user for a team that never came back.
         status = container.value(.status, default: .stopped)
+        stopReason = try container.decodeIfPresent(StopReason.self, forKey: .stopReason)
         summary = container.value(.summary, default: nil)
         activity = container.value(.activity, default: nil)
         toolCalls = container.value(.toolCalls, default: 0)
@@ -548,6 +559,8 @@ struct HydraLanding: Codable, Hashable, Sendable {
 /// authoritative, so the spawned head carries exactly that roster name instead of the
 /// next sequential one. Nil means the lead did not name it and the roster order decides.
 struct HydraDelegation: Hashable, Sendable {
+    var role: String? = nil
+    var preset: Int? = nil
     var task: String
     var prompt: String
     var name: String?
@@ -608,6 +621,7 @@ struct HydraReport: Hashable, Sendable {
     var task: String
     var origin: HydraHeadInfo.Origin
     var status: HydraHeadInfo.Status
+    var stopReason: HydraHeadInfo.StopReason?
     var text: String
     /// Where a Tivano-run head's work went; nil for a head that changed nothing or has
     /// no copy of its own.
@@ -694,6 +708,10 @@ struct HydraDelegationBudget {
 
 /// The words Hydra puts in front of the lead and the heads, per provider.
 enum HydraPrompts {
+    /// Whether a `chimera` fence opens a delegation block too. Set from Settings on the main
+    /// thread: with Chimera off for the app, such a fence stays ordinary reply text.
+    nonisolated(unsafe) static var acceptsChimeraFence = false
+
     /// Where a Tivano-run head works: a copy of the checkout made for it, or the checkout
     /// itself when the project cannot be copied (no git, no commits yet) or the user
     /// prefers it so.
@@ -854,7 +872,9 @@ enum HydraPrompts {
     /// The opening fence of a delegation block: three backticks, the word hydra in any
     /// case, and the end of that line.
     private static func delegationOpener(in text: String) -> Range<String.Index>? {
-        text.firstMatch(of: #/```[ \t]*hydra(?:-sent|-leaving)?[ \t]*\r?\n/#.ignoresCase())?.range
+        acceptsChimeraFence
+            ? text.firstMatch(of: #/```[ \t]*(?:hydra|chimera)(?:-sent|-leaving)?[ \t]*\r?\n/#.ignoresCase())?.range
+            : text.firstMatch(of: #/```[ \t]*hydra(?:-sent|-leaving)?[ \t]*\r?\n/#.ignoresCase())?.range
     }
 
     /// Every three backticks that open a line from `start` on, in order. A fence with an
@@ -891,7 +911,9 @@ enum HydraPrompts {
     /// opening fence is, so a reader that has scanned the text up to some point only
     /// needs to scan what arrived since (see `HydraButton`).
     static func hasDelegationOpener(in tail: Substring) -> Bool {
-        tail.firstMatch(of: #/```[ \t]*hydra(?:-sent|-leaving)?[ \t]*\r?\n/#.ignoresCase()) != nil
+        acceptsChimeraFence
+            ? tail.firstMatch(of: #/```[ \t]*(?:hydra|chimera)(?:-sent|-leaving)?[ \t]*\r?\n/#.ignoresCase()) != nil
+            : tail.firstMatch(of: #/```[ \t]*hydra(?:-sent|-leaving)?[ \t]*\r?\n/#.ignoresCase()) != nil
     }
 
     /// The delegation block at the end of a reply, if the lead wrote one. The body up to

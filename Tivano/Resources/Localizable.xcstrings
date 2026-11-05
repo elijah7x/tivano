@@ -2136,6 +2136,17 @@
         }
       }
     },
+    "Last output from the provider: %lld min before the stop." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止前 %lld 分钟 provider 最后一次有输出。"
+          }
+        }
+      }
+    },
     "Last selection" : {
       "extractionState": "manual",
       "localizations": {
@@ -2572,6 +2583,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 尚未配置，子智能体仍使用 %@"
+          }
+        }
+      }
+    },
+    "%@ is waiting for your answer. Open it from the Hydra panel to reply." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 在等你回答，可在 Hydra 面板中打开它作答。"
           }
         }
       }
@@ -11310,6 +11332,17 @@
         }
       }
     },
+    "its folder %@ is one Tivano keeps its own data in" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它所在的文件夹 %@ 是 Tivano 自用目录"
+          }
+        }
+      }
+    },
     "its files list %@, which is a folder Tivano keeps its own data in" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -18471,6 +18504,17 @@
         }
       }
     },
+    "Stalled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "卡住"
+          }
+        }
+      }
+    },
     "Standard" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24510,6 +24554,17 @@
         }
       }
     },
+    "stalled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "卡住"
+          }
+        }
+      }
+    },
     "stdio — a command on this Mac" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26850,13 +26905,13 @@
         }
       }
     },
-    "Stalled: no edits for 10 minutes; stopped by Tivano. Resend with a sharper brief." : {
+    "Stalled: no edits or tool calls for 10 minutes; stopped by Tivano." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "卡住了：10 分钟没有任何编辑，已由 Tivano 停止。请用更明确的简报重新发送。"
+            "value" : "卡住了：10 分钟没有编辑或工具调用，已由 Tivano 停止。"
           }
         }
       }
@@ -29816,6 +29871,248 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最新、快速，可读取图片"
+          }
+        }
+      }
+    },
+    "%d roles waiting for a model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 个角色等待选择模型"
+          }
+        }
+      }
+    },
+    "Add a model and describe what it is good at." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加模型并描述它擅长什么。"
+          }
+        }
+      }
+    },
+    "Add preset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加预设"
+          }
+        }
+      }
+    },
+    "Casting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选角"
+          }
+        }
+      }
+    },
+    "Chimera" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chimera"
+          }
+        }
+      }
+    },
+    "Chimera roles skipped: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已跳过的 Chimera 角色：%@"
+          }
+        }
+      }
+    },
+    "Describe what each model is good at. In a real conversation Chimera reads these to match helpers with models and pre-fills the casting card, so you rarely pick by hand. Nothing runs until you confirm." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写下每个模型擅长什么。在真实对话中，Chimera 会据此为各个子智能体匹配和组合模型，并预填到选角卡里，省去你逐个挑选。你确认之前不会运行任何内容。"
+          }
+        }
+      }
+    },
+    "Describe what this model is good at" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "描述模型特长"
+          }
+        }
+      }
+    },
+    "Model presets" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型预设"
+          }
+        }
+      }
+    },
+    "No presets yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无预设"
+          }
+        }
+      }
+    },
+    "Pick a model for each role. Nothing starts until you send." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为每个角色选模型，确认派出后才开始。"
+          }
+        }
+      }
+    },
+    "Proposed roles for casting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已提出角色，交由你选角。"
+          }
+        }
+      }
+    },
+    "Remove this preset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除此预设"
+          }
+        }
+      }
+    },
+    "Send %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "派出%@"
+          }
+        }
+      }
+    },
+    "Send %d" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "派出 %d 个"
+          }
+        }
+      }
+    },
+    "Send 1" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "派出 1 个"
+          }
+        }
+      }
+    },
+    "Send none" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "都不派"
+          }
+        }
+      }
+    },
+    "Switch when no heads are at work." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有子智能体在工作时才能切换。"
+          }
+        }
+      }
+    },
+    "The lead assigns roles mid-conversation and you pick each role's model. Switch on to add Chimera under Hydra in the sidebar." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主智能体在对话中分配角色，由你为每个角色选模型。打开后，侧边栏 Hydra 下方会出现 Chimera。"
+          }
+        }
+      }
+    },
+    "The lead assigns roles mid-conversation. You pick the model for each role before it starts." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主智能体在对话中分配角色，每个角色开始前由你选择模型。"
+          }
+        }
+      }
+    },
+    "Turn off Chimera and go back to Hydra." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭 Chimera，回到 Hydra。"
+          }
+        }
+      }
+    },
+    "Turn on Chimera: you pick a model for each helper. Hydra turns off." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启 Chimera：为每个子智能体选择模型，同时关闭 Hydra。"
           }
         }
       }

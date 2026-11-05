@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG = ROOT / "CHANGELOG.md"
 
-RELEASE_RE = re.compile(r"^## \[(\d+(?:\.\d+)*)\](?: - (\d{4}-\d{2}-\d{2}))?\s*$")
+RELEASE_RE = re.compile(r"^## \[(\d+(?:\.\d+)*|[0-9]+\.[0-9]+\.[0-9]+-preview\.[1-9][0-9]*)\](?: - (\d{4}-\d{2}-\d{2}))?\s*$")
 
 
 def split_releases(text):

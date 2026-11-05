@@ -47,9 +47,12 @@ def previous_tag():
         rev = "HEAD"
         if version and f"v{version}" in run_git(["tag", "--points-at", "HEAD"]).split():
             rev = "HEAD^"
-        if not run_git(["tag", "--merged", rev, "--list", "v*"]).strip():
+        tags = run_git(["tag", "--merged", rev, "--list", "v*"]).split()
+        stable_tags = [tag for tag in tags if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)]
+        if not stable_tags:
             return None
-        return run_git(["describe", "--tags", "--abbrev=0", "--match", "v*", rev]).strip()
+        matches = [arg for tag in stable_tags for arg in ("--match", tag)]
+        return run_git(["describe", "--tags", "--abbrev=0", *matches, rev]).strip()
 
     # dev has a different history: select the public tag first, then map its tree.
     dev_text = (ROOT / "config/dev.xcconfig").read_text(encoding="utf-8")

@@ -62,6 +62,7 @@ final class AntigravitySession: ProviderSession {
     }
 
     var isRunning: Bool { process?.isRunning ?? false }
+    var lastOutputAt: Date? { process?.lastOutputAt }
 
     private var workingDirectory: String { configuration.workingDirectory.path }
 

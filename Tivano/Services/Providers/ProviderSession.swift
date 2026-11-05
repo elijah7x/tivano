@@ -154,6 +154,8 @@ struct ToolUpdate: Sendable {
 protocol ProviderSession: AnyObject {
     var onEvent: ((ProviderEvent) -> Void)? { get set }
     var isRunning: Bool { get }
+    /// The last time the provider process wrote to stdout, or nil when unknown.
+    var lastOutputAt: Date? { get }
 
     /// Launches the provider and returns its session id.
     func start() async throws -> String
@@ -171,6 +173,8 @@ protocol ProviderSession: AnyObject {
 }
 
 extension ProviderSession {
+    var lastOutputAt: Date? { nil }
+
     func resolveApproval(_ requestID: String, optionID: String, delivered: @escaping @MainActor (Bool) -> Void) {
         resolveApproval(requestID, optionID: optionID)
         delivered(true)

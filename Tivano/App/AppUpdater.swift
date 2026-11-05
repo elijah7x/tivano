@@ -436,7 +436,7 @@ final class AppUpdater {
 
     nonisolated private static func storageVersion(_ text: String) -> AppVersion? {
         guard text == text.trimmingCharacters(in: .whitespacesAndNewlines),
-              text.utf8.allSatisfy({ (48...57).contains($0) || $0 == 46 || $0 == 118 || $0 == 86 }) else { return nil }
+              text.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 46 || $0 == 45 }) else { return nil }
         return AppVersion(text)
     }
 
@@ -469,7 +469,7 @@ final class AppUpdater {
         if names.contains(appName) {
             try validateStorageDirectory(app)
             try verifySignature(of: app)
-            guard let installed = Bundle(url: app)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            guard let installed = Bundle(url: app).flatMap({ AppInfo.releaseVersion(in: $0) }),
                   AppVersion(installed) == version else {
                 throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: app.path])
             }
@@ -717,7 +717,7 @@ final class AppUpdater {
         let manifest = try JSONDecoder().decode(CleanupManifest.self, from: handle.readToEnd() ?? Data())
         guard manifest.format == 1, manifest.directory == identity,
               manifest.appName == Bundle.main.bundleURL.lastPathComponent,
-              let version = storageVersion(manifest.version), let current = AppVersion(AppInfo.version), version <= current,
+              let version = storageVersion(manifest.version), let current = AppVersion(AppInfo.releaseVersion), version <= current,
               manifest.identities[""]?.type == mode_t(S_IFDIR) else { throw CocoaError(.fileReadCorruptFile) }
         return manifest
     }
@@ -906,8 +906,8 @@ final class AppUpdater {
     func prepareInBackground(_ release: AvailableUpdate) {
         guard automaticEnabled, !AppInfo.isDevelopment, !CaptureRun.isEnabled,
               prepareTask == nil, installTask == nil, !handedOff,
-              let version = AppVersion(release.version), let current = AppVersion(AppInfo.version),
-              version > current, !release.version.contains("/"), release.version != ".." else { return }
+              let version = AppVersion(release.version), let current = AppVersion(AppInfo.releaseVersion),
+              version > current, (current.isPrerelease || !version.isPrerelease), !release.version.contains("/"), release.version != ".." else { return }
         if isClearingStorage {
             if let pending = deferredPreparation, let queued = AppVersion(pending.version), queued > version { return }
             deferredPreparation = release
@@ -929,7 +929,7 @@ final class AppUpdater {
                 let existing = stagedApp(release.version)
                 if FileManager.default.fileExists(atPath: existing.path),
                    (try? await Task.detached(priority: .background) { try Self.verifySignature(of: existing) }.value) != nil,
-                   Bundle(url: existing)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == release.version {
+                   Bundle(url: existing).flatMap({ AppInfo.releaseVersion(in: $0) }) == release.version {
                     autoUpdate = .ready(version: release.version)
                     return
                 }
@@ -979,7 +979,7 @@ final class AppUpdater {
     private func reverifyStaged(_ version: String) throws {
         let app = stagedApp(version)
         try Self.verifySignature(of: app)
-        guard Bundle(url: app)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version else {
+        guard Bundle(url: app).flatMap({ AppInfo.releaseVersion(in: $0) }) == version else {
             throw UpdateInstallError("Staged version mismatch")
         }
     }
@@ -1017,6 +1017,8 @@ final class AppUpdater {
 
     func install(_ update: AvailableUpdate) {
         guard installTask == nil, prepareTask == nil, !handedOff, !isClearingStorage, !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
+        guard let target = AppVersion(update.version), let current = AppVersion(AppInfo.releaseVersion),
+              target > current, current.isPrerelease || !target.isPrerelease else { return }
         installTask = Task { [self] in
             defer { installTask = nil }
             progress.begin()
@@ -1154,8 +1156,8 @@ final class AppUpdater {
             try Self.verifySignature(of: staged)
         }.value
         let bundle = Bundle(url: staged)
-        let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        guard let version, let actual = AppVersion(version), let expected = AppVersion(expectedVersion), actual == expected else {
+        let version = bundle.flatMap({ AppInfo.releaseVersion(in: $0) })
+        guard let version, version == expectedVersion else {
             throw UpdateInstallError(String(format: Chrome.localized("The downloaded app is version %@, not %@."), version ?? Chrome.localized("unknown"), expectedVersion))
         }
         let gatekeeper = try await runStagingTool(URL(filePath: "/usr/sbin/spctl"), ["--assess", "--type", "execute", staged.path], background: background, timeout: 120)
@@ -1303,7 +1305,10 @@ final class AppUpdater {
       if [ "$RELAUNCH" = "2" ]; then open -g "$DEST"; fi
     }
     /usr/sbin/taskpolicy -b /usr/bin/codesign --verify --deep --strict -R="$REQUIREMENT" "$NEW" || { echo "The staged app failed verification"; reopen; mark_complete; exit 1; }
-    ACTUAL=$(/usr/sbin/taskpolicy -b /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$NEW/Contents/Info.plist") || { reopen; mark_complete; exit 1; }
+    ACTUAL=$(/usr/sbin/taskpolicy -b /usr/libexec/PlistBuddy -c 'Print :TivanoReleaseVersion' "$NEW/Contents/Info.plist" 2>/dev/null) || ACTUAL=""
+    case "$ACTUAL" in
+      ""|*'$('* ) ACTUAL=$(/usr/sbin/taskpolicy -b /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$NEW/Contents/Info.plist") || { reopen; mark_complete; exit 1; } ;;
+    esac
     [ "$ACTUAL" = "$VERSION" ] || { echo "The staged app is $ACTUAL, not $VERSION"; reopen; mark_complete; exit 1; }
     BACKUP="$(dirname "$DEST")/.$(basename "$DEST").previous"
     rm -rf "$BACKUP"

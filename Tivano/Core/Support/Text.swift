@@ -6,7 +6,14 @@ enum AppInfo {
     static let libraryName = isDevelopment ? "Tivano Dev" : "Tivano"
     static let stateDirectoryName = isDevelopment ? ".tivano-dev" : ".tivano"
     static let numericVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.1"
-    static let version = (isDevelopment ? "dev-" : "") + numericVersion
+    static let releaseVersion = releaseVersion(in: Bundle.main) ?? numericVersion
+    static let version = isDevelopment ? "dev-" + numericVersion : releaseVersion
+
+    nonisolated static func releaseVersion(in bundle: Bundle) -> String? {
+        if let identity = bundle.object(forInfoDictionaryKey: "TivanoReleaseVersion") as? String,
+           !identity.isEmpty, !identity.contains("$(") { return identity }
+        return bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    }
     static let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
 }
 

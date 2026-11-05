@@ -1961,10 +1961,18 @@ private struct HeadCardsRow: View {
                     HStack(spacing: rowGap) {
                         ForEach(row, id: \.id) { head in
                             if let info = head.hydra {
+                                let waiting = hydraWaitingStatus(info.status, runtime: model.existingRuntime(for: head.id))
                                 Button {
                                     model.openThread(head.id)
                                 } label: {
-                                    HydraGlyph(persona: info.persona, size: ThreadRowMetrics.headGlyphSize, isRunning: info.status == .running, status: info.status)
+                                    Group {
+                                        if let waiting {
+                                            ThreadStatusMark(status: waiting)
+                                                .frame(width: ThreadRowMetrics.headGlyphSize, height: ThreadRowMetrics.headGlyphSize)
+                                        } else {
+                                            HydraGlyph(persona: info.persona, size: ThreadRowMetrics.headGlyphSize, isRunning: info.status == .running, status: info.status)
+                                        }
+                                    }
                                         .background {
                                             if model.isSelected(head.id) {
                                                 Circle().fill(Chrome.overlay(0.14)).padding(-3)
@@ -1973,7 +1981,7 @@ private struct HeadCardsRow: View {
                                 }
                                 .buttonStyle(.plain)
                                 .modifier(HeadGlyphHover(onWarm: { model.warmDocuments([head.id], urgent: true) }))
-                                .help(Text(verbatim: "\(info.persona.name) · \(info.task)"))
+                                .help(Text(verbatim: waiting.map { "\(info.displayName) · \(Chrome.localized($0.title))" } ?? "\(info.persona.name) · \(info.task)"))
                                 // Snapshots only: the menu builder must not capture the row, so the AppKit menu
                                 // it builds cannot pin the row's state storage (and its responder with it).
                                 .contextMenu { [head, model, menuRequests] in
@@ -1986,7 +1994,7 @@ private struct HeadCardsRow: View {
                                         requests: requestsSnapshot
                                     ))
                                 }
-                                .accessibilityLabel(Text("\(info.persona.name), \(info.task)"))
+                                .accessibilityLabel(Text(verbatim: waiting.map { "\(info.displayName), \(Chrome.localized($0.title))" } ?? "\(info.persona.name), \(info.task)"))
                                 .accessibilityAddTraits(.isButton)
                             }
                         }

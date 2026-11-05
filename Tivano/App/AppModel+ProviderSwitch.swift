@@ -17,7 +17,7 @@ extension AppModel {
         var undoneSessionLost: Bool?
         updateThread(threadID) { thread in
             if thread.pendingProviderSwitch == nil {
-                thread.pendingProviderSwitch = ProviderSwitchOrigin(provider: thread.provider, model: thread.model, effort: thread.effort, fastMode: thread.fastMode, dshMode: thread.dshMode, runtimeMode: thread.runtimeMode, interactionMode: thread.interactionMode, hydraEnabled: thread.hydraEnabled, hydraEnabledIsExplicit: thread.hydraEnabledIsExplicit, hydraPairID: thread.hydraPairID, temporaryHydraPair: thread.temporaryHydraPair, providerSessionID: thread.providerSessionID, providerResumeAt: thread.providerResumeAt)
+                thread.pendingProviderSwitch = ProviderSwitchOrigin(provider: thread.provider, model: thread.model, effort: thread.effort, fastMode: thread.fastMode, dshMode: thread.dshMode, runtimeMode: thread.runtimeMode, interactionMode: thread.interactionMode, chimeraHydraSnapshot: thread.chimeraHydraSnapshot, chimeraEnabled: thread.chimeraEnabled, hydraEnabled: thread.hydraEnabled, hydraEnabledIsExplicit: thread.hydraEnabledIsExplicit, hydraPairID: thread.hydraPairID, temporaryHydraPair: thread.temporaryHydraPair, providerSessionID: thread.providerSessionID, providerResumeAt: thread.providerResumeAt)
             }
             guard let origin = thread.pendingProviderSwitch else { return }
             apply(&thread)
@@ -32,6 +32,8 @@ extension AppModel {
                 thread.effort = applied.effort
                 thread.fastMode = applied.fastMode
                 thread.dshMode = applied.dshMode
+                thread.chimeraEnabled = applied.chimeraEnabled
+                thread.chimeraHydraSnapshot = applied.chimeraHydraSnapshot
                 thread.hydraEnabled = applied.hydraEnabled
                 thread.hydraEnabledIsExplicit = applied.hydraEnabledIsExplicit
                 thread.hydraPairID = applied.hydraPairID
@@ -52,6 +54,8 @@ extension AppModel {
         thread.fastMode = origin.fastMode
         thread.dshMode = origin.dshMode
         thread.interactionMode = origin.interactionMode
+        thread.chimeraEnabled = origin.chimeraEnabled
+        thread.chimeraHydraSnapshot = origin.chimeraHydraSnapshot
         thread.hydraEnabled = origin.hydraEnabled
         thread.hydraEnabledIsExplicit = origin.hydraEnabledIsExplicit
         thread.hydraPairID = origin.hydraPairID

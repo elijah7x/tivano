@@ -1017,7 +1017,8 @@ DECISION_FIELDS = [
     'responseModel', 'jobID', 'headID', 'decisions', 'reviewFindings', 'reviewAccepted',
     'headStatus', 'continuations', 'continued', 'continued_after', 'notes_flagged', 'format_missing',
     'findings', 'accepted_any', 'accepted_any_jev', 'churn', 'filesTotal', 'headFlags', 'leadBuilt',
-    'not_leadBuilt', 'accepted',
+    'not_leadBuilt', 'accepted', 'source', 'via', 'findings_any', 'rework_after',
+    'real_defect_any', 'real_defect_count', 'outside_any', 'head_missed_defect', 'correction',
 ]
 
 
@@ -1026,7 +1027,7 @@ def decision_answers(record):
     answers = record.get('answers') or {}
     flat = {}
     for key, question in questions.items():
-        if not re.fullmatch(r'gapUnreported|reworkLikely|completion|defectLikely|unrelatedChanges|finding_[1-8]', key):
+        if not re.fullmatch(r'gapUnreported|reworkLikely|completion|defectLikely|unrelatedChanges|reason|followUp|finding_[1-9][0-9]*', key):
             continue
         if not isinstance(question, dict):
             continue
@@ -1118,6 +1119,9 @@ def decision_threshold(rows, score, label, baselines):
               and all(number(r.get(k)) is not None for k in (score, *baselines))]
     positive = sum(r[label] for r in cohort)
     negative = len(cohort) - positive
+    if positive < 10 or negative < 10:
+        counts = f'positive={positive}, negative={negative}, missing={len(rows) - len(cohort)}; insufficient data'
+        return f'- {score} against {label}: {counts}', f'{score}: {counts}'
 
     def compare(sample, minimum=10):
         value = decision_auc(sample, score, label, numeric=True, minimum=minimum)
@@ -1183,16 +1187,63 @@ def decision_percentile(rows, fraction):
     return f'{value:.2f} (n={len(values)})'
 
 
+def decision_utility(rows, point):
+    lines = ['', '### Utility', '']
+    if point == 'headReport':
+        lines += ['Triggers use all ok reports of this point/version as denominator; unknown labels are excluded from precision and recall. Hits per 100 reminders uses labelled reminders only.', '',
+                  '| Threshold | Label | Triggers | Trigger rate | Labelled triggers | Precision | Recall | Hits / 100 reminders |',
+                  '|---:|---|---:|---|---:|---|---|---:|']
+        for threshold in (0.3, 0.5, 0.7):
+            triggered = [r for r in rows if number(r.get('reworkLikely_p')) is not None
+                         and number(r['reworkLikely_p']) >= threshold]
+            for label in ('continued_after', 'rework_after', 'head_missed_defect', 'correction'):
+                known = [r for r in triggered if r.get(label) in (0, 1)]
+                hits = sum(r[label] for r in known)
+                positives = sum(r.get(label) == 1 for r in rows)
+                per_hundred = f'{100 * hits / len(known):.1f}' if known else 'NA'
+                lines.append(f'| {threshold:.1f} | {label} | {len(triggered)} | {rate(len(triggered), len(rows))} | {len(known)} | {rate(hits, len(known))} | {rate(hits, positives)} | {per_hundred} |')
+    elif point == 'preReview':
+        latest = {}
+        for row in rows:
+            key = row['_job_key']
+            if key not in latest or (timestamp(row['at']) or 0) >= (timestamp(latest[key]['at']) or 0):
+                latest[key] = row
+        jobs = list(latest.values())
+        lines += ['One latest ok decision per job within this version. Skip when defectLikely_p is strictly below threshold. '
+                  'Churn control skips the same number of jobs in ascending churn order (ties retain ledger order); missing churn may reduce that count. '
+                  'Missing scores are not skipped; unknown labels are excluded from positive counts. Known skipped labels are shown to expose missingness.', '',
+                  '| Threshold | Policy | Skipped jobs / all jobs | Label | Known skipped | Missed positives | Missed / all positives |',
+                  '|---:|---|---|---|---:|---:|---|']
+        churn = sorted((r for r in jobs if number(r.get('churn')) is not None), key=lambda r: r['churn'])
+        for threshold in (0.2, 0.3, 0.4, 0.5):
+            skipped = [r for r in jobs if number(r.get('defectLikely_p')) is not None
+                       and number(r['defectLikely_p']) < threshold]
+            for policy, selected in (('defectLikely_p', skipped), ('churn matched count', churn[:len(skipped)])):
+                for label in ('findings_any', 'real_defect_any'):
+                    missed = sum(r.get(label) == 1 for r in selected)
+                    positives = sum(r.get(label) == 1 for r in jobs)
+                    known = sum(r.get(label) in (0, 1) for r in selected)
+                    lines.append(f'| {threshold:.1f} | {policy} | {rate(len(selected), len(jobs))} | {label} | {known} | {missed} | {rate(missed, positives)} |')
+    return lines
+
+
 def decisions(args):
-    libraries = list(dict.fromkeys(Path(p).expanduser().resolve() for p in (args.library or DEFAULTS)))
+    libraries = [Path(p).expanduser().resolve() for p in (args.library or DEFAULTS)]
     defaults = [library.parent / 'decisions' / name for library in DEFAULTS
                 for name in ('ledger.1.jsonl', 'ledger.jsonl')]
-    ledgers = list(dict.fromkeys(Path(p).expanduser().resolve() for p in
-                                (args.ledger if args.ledger is not None else [p for p in defaults if p.exists()])))
+    ledgers = [Path(p).expanduser().resolve() for p in
+               (args.ledger if args.ledger is not None else [p for p in defaults if p.exists()])]
+    # Positional pairing only when each ledger sits in its library's source directory.
+    paired = len(libraries) == len(ledgers) and all(
+        ledger.parent == library.parent
+        or (ledger.parent.name == 'decisions' and ledger.parent.parent == library.parent)
+        for library, ledger in zip(libraries, ledgers))
+    roots = [library.parent for library in libraries] if paired else [
+        ledger.parent.parent if ledger.parent.name == 'decisions' else ledger.parent for ledger in ledgers]
     out = prepare_output(args.out, ('decisions.csv', 'decisions.md'), libraries + ledgers)
     reader = Reader()
     jobs = collections.defaultdict(list)
-    for library in libraries:
+    for library in dict.fromkeys(libraries):
         data = reader.read(library)
         threads = data.get('threads', []) if isinstance(data, dict) else []
         if isinstance(threads, dict):
@@ -1203,7 +1254,7 @@ def decisions(args):
                 if isinstance(job, dict) and isinstance(job.get('id'), str):
                     jobs[job['id']].append((library.parent, job))
     records, outcomes, seen_jobs = [], {}, set()
-    for ledger in ledgers:
+    for ledger, root in dict.fromkeys(zip(ledgers, roots)):
         try:
             with ledger.open('rb') as handle:
                 for raw in handle:
@@ -1213,15 +1264,14 @@ def decisions(args):
                                 or not isinstance(record.get('jobID'), str)):
                             raise ValueError('invalid record')
                         if record['kind'] == 'decision':
-                            if (record.get('point') not in ('headReport', 'preReview', 'reviewDisposition')
+                            if (record.get('point') not in ('headReport', 'preReview', 'reviewDisposition', 'continuation', 'reviewFindings', 'followUp')
                                     or record.get('status') not in ('ok', 'failed', 'skipped')
                                     or any(record.get(k) is not None and not isinstance(record[k], dict)
-                                           for k in ('state', 'questions', 'answers'))):
+                                           for k in ('state', 'questions', 'answers', 'meta'))):
                                 raise ValueError('invalid decision')
                     except (ValueError, UnicodeError):
                         reader.issues['malformed_ledger_lines'] += 1
                         continue
-                    root = ledger.parent.parent
                     key = (root, record['jobID'])
                     seen_jobs.add(key)
                     if record['kind'] == 'decision':
@@ -1246,7 +1296,7 @@ def decisions(args):
         job_id = record['jobID']
         candidates = jobs.get(job_id, [])
         local = [job for folder, job in candidates if folder == root]
-        job = local[0] if len(local) == 1 else (candidates[0][1] if len(candidates) == 1 else {})
+        job = local[0] if len(local) == 1 else (candidates[0][1] if not paired and len(candidates) == 1 else {})
         row = {field: None for field in DECISION_FIELDS}
         for field in ('at', 'point', 'status', 'error', 'responseModel', 'jobID', 'headID'):
             value = record.get(field)
@@ -1261,6 +1311,10 @@ def decisions(args):
         state = record.get('state') or {}
         key = (root, job_id)
         row['_job_key'] = key
+        row['_record'] = record
+        row['source'] = root.name
+        via = (record.get('meta') or {}).get('via')
+        row['via'] = via if via in ('continue', 'redispatch') else None
         if record['point'] == 'headReport':
             heads = job.get('heads')
             head = next((h for h in heads if isinstance(h, dict) and h.get('headID') == record.get('headID')), {}) if isinstance(heads, list) else {}
@@ -1278,7 +1332,7 @@ def decisions(args):
             disposition = latest_dispositions.get(key)
             if disposition is not None:
                 choices = [value for field, value in decision_answers(disposition).items()
-                           if re.fullmatch(r'finding_[1-8]_choice', field)]
+                           if re.fullmatch(r'finding_[1-9][0-9]*_choice', field)]
                 row['accepted_any_jev'] = (1 if 'accepted' in choices else
                                            0 if choices and all(v in ('rejected', 'unaddressed') for v in choices)
                                            else None)
@@ -1290,7 +1344,7 @@ def decisions(args):
             row['leadBuilt'] = boolean(state.get('leadBuilt'))
             row['not_leadBuilt'] = int(not row['leadBuilt']) if row['leadBuilt'] is not None else None
         elif record['point'] == 'reviewDisposition':
-            choices = [value for field, value in row.items() if re.fullmatch(r'finding_[1-8]_choice', field)]
+            choices = [value for field, value in row.items() if re.fullmatch(r'finding_[1-9][0-9]*_choice', field)]
             row['accepted'] = sum(value == 'accepted' for value in choices) if choices and all(value is not None for value in choices) else None
         rows.append(row)
         row_keys.append(key)
@@ -1318,117 +1372,226 @@ def decisions(args):
                 # recorded (Jev off, capture), so whether this one was continued is unknown.
                 row['continued_after'] = None
 
+    latest_findings, follow_ups = {}, collections.defaultdict(list)
+    continuations = collections.defaultdict(list)
+    continuation_start, findings_start = {}, {}
+    for root, record in records:
+        key = (root, record['jobID'])
+        at = timestamp(record.get('at'))
+        if record['point'] == 'reviewFindings' and at is not None:
+            findings_start[root] = min(findings_start.get(root, at), at)
+        if record['point'] == 'continuation':
+            if at is not None:
+                continuation_start[root] = min(continuation_start.get(root, at), at)
+            if record['status'] == 'ok' and record.get('headID'):
+                continuations[(root, record['headID'])].append(record)
+        if record['status'] != 'ok':
+            continue
+        if record['point'] == 'followUp':
+            follow_ups[key].append(record)
+        elif record['point'] == 'reviewFindings':
+            previous = latest_findings.get(key)
+            if previous is None or (at or 0) >= (timestamp(previous.get('at')) or 0):
+                latest_findings[key] = record
+    job_labels, defect_paths, pending_defects = {}, {}, set()
+    for key in set(row_keys):
+        labels = dict(real_defect_any=None, real_defect_count=None, outside_any=None)
+        finding = latest_findings.get(key)
+        if finding is not None:
+            answers = decision_answers(finding)
+            disposition = decision_answers(latest_dispositions.get(key, {}))
+            in_job = [field for field, value in answers.items()
+                      if re.fullmatch(r'finding_[1-9][0-9]*_choice', field) and value == 'inJobDefect']
+            defects = [int(field.split('_')[1]) for field in in_job if disposition.get(field) == 'accepted']
+            # An in-job defect without a known disposition may still be accepted.
+            pending = any(disposition.get(field) not in ('accepted', 'rejected', 'unaddressed') for field in in_job)
+            if pending:
+                pending_defects.add(key)
+            labels.update(real_defect_any=1 if defects else (None if pending else 0),
+                          real_defect_count=None if pending else len(defects),
+                          outside_any=int(any(value == 'outsideJob' for field, value in answers.items()
+                                              if field.endswith('_choice'))))
+            paths = (finding.get('meta') or {}).get('findingPaths') or []
+            defect_paths[key] = [path for n in defects if n <= len(paths) and isinstance(paths[n - 1], list)
+                                 for path in paths[n - 1] if isinstance(path, str) and path]
+        # A clean review counts as zero only once the source has classified findings,
+        # so reviews from before the rollout do not add negatives without positives.
+        elif (number(outcomes.get(key, {}).get('findings')) == 0 and key[0] in findings_start
+              and (timestamp(outcomes[key].get('at')) or 0) >= findings_start[key[0]]):
+            labels.update(real_defect_any=0, real_defect_count=0, outside_any=0)
+            defect_paths[key] = []
+        job_labels[key] = labels
+    report_groups = collections.defaultdict(list)
+    for row in rows:
+        key = row['_job_key']
+        row.update(job_labels[key])
+        # Feedback labels only the decisions made before it.
+        row_at = timestamp(row['at'])
+        later = [r for r in follow_ups[key] if row_at is not None
+                 and (timestamp(r.get('at')) or 0) > row_at]
+        row['correction'] = (int(any(decision_answers(r).get('followUp_choice') == 'correction' for r in later))
+                             if later else None)
+        row['findings_any'] = (int(row['findings'] > 0) if row['findings'] is not None else None)
+        if row['point'] == 'headReport' and row['headID']:
+            report_groups[(key[0], row['headID'])].append(row)
+    for (root, head_id), group in report_groups.items():
+        if any(timestamp(row['at']) is None for row in group):
+            continue
+        ordered = sorted(group, key=lambda row: timestamp(row['at']))
+        for index, row in enumerate(ordered):
+            at = timestamp(row['at'])
+            end = timestamp(ordered[index + 1]['at']) if index + 1 < len(ordered) else None
+            following = sorted((r for r in continuations[(root, head_id)]
+                                if timestamp(r.get('at')) is not None and timestamp(r['at']) > at
+                                and (end is None or timestamp(r['at']) < end)),
+                               key=lambda r: timestamp(r['at']))
+            if following:
+                reason = decision_answers(following[0]).get('reason_choice')
+                if reason in ('fix', 'omission', 'extension', 'investigation', 'retry'):
+                    row['rework_after'] = int(reason in ('fix', 'omission'))
+            elif root in continuation_start and continuation_start[root] <= at and row['continued_after'] == 0:
+                row['rework_after'] = 0
+            last_in_job = all(later['_job_key'] != row['_job_key'] for later in ordered[index + 1:])
+            if last_in_job and row['_job_key'] in defect_paths:
+                landed = (row['_record'].get('state') or {}).get('landedFiles') or []
+                hit = any(left == right or left.endswith('/' + right) or right.endswith('/' + left)
+                          for left in defect_paths[row['_job_key']]
+                          for right in landed if isinstance(right, str) and right)
+                row['head_missed_defect'] = 1 if hit else (None if row['_job_key'] in pending_defects else 0)
+
     lines = ['# Hydra decision evaluation', '',
              'Sources opened read-only. CSV contains metadata, numeric answers, option keys and labels; no state text.',
-             'Unknown labels stay blank. Only ok decisions enter quality metrics. Repeated decisions remain separate AUROC observations; quality metrics are computed per question version (qv; missing = 1) and never pooled.',
+             'Unknown labels stay blank. Only ok decisions enter quality metrics. Repeated decisions remain separate AUROC observations; metrics group by point then question version (qv; missing = 1), never pooling versions.',
+             'rework_after: first ok continuation before the next report is fix/omission; no continuation is zero only after observed rollout and with continued_after=0. No observed rollout stays unknown.',
+             'real_defect_any/count: inJobDefect findings accepted by the latest ok disposition; an inJobDefect without a known disposition leaves it unknown unless another is accepted. outside_any: any outsideJob finding. Use the latest ok reviewFindings; absent classification stays unknown, except outcome findings=0 after the source has its first reviewFindings decision gives zero.',
+             'head_missed_defect: an accepted inJobDefect overlaps landedFiles (exact path or slash-delimited suffix); only the last report of a head within each job is labelled; an unresolved in-job defect without a hit stays unknown. No findings gives zero under the same rollout rule.',
+             'correction: any ok followUp for the job after this decision chooses correction; other observed choices give zero, no later followUp stays unknown.',
              'AUROC uses Mann–Whitney ranks with half credit for ties; latency percentiles use linear interpolation.', '',
+             '- Source pairing: ' + ('library/ledger paired in argument order; source names use library parent directory names.' if paired else
+                                     'not paired (counts differ or a ledger is outside its library directory); fallback uses ledger parent (or parent of decisions directory), matching local jobs then unique jobID across libraries.'),
              f'- Decisions: {len(rows)}; outcome jobs: {len(outcomes)}.',
              f'- Read issues: {dict(reader.issues)}; libraries visibly changed during read: {reader.changed}.']
-    versions = sorted({row['qv'] for row in rows})
-    for point in ('headReport', 'preReview', 'reviewDisposition'):
+    points = ('headReport', 'preReview', 'reviewDisposition', 'continuation', 'reviewFindings', 'followUp')
+    for point in points:
         subset = [row for row in rows if row['point'] == point]
+        versions = sorted({row['qv'] for row in subset})
         counts = collections.Counter(row['status'] for row in subset)
         errors = collections.Counter((row['status'], row['error'] or 'none') for row in subset)
         models = collections.Counter(row['responseModel'] or 'unknown' for row in subset)
         lines += ['', f'## {point} coverage', '',
                   '- ' + '; '.join(f'{status}={counts[status]}' for status in ('ok', 'failed', 'skipped')),
-                  *[f"- questions v{qv}: ok={sum(r['status'] == 'ok' for r in subset if r['qv'] == qv)}; failed={sum(r['status'] == 'failed' for r in subset if r['qv'] == qv)}" for qv in versions],
+                  *[f"- questions v{qv}: " + '; '.join(f"{status}={sum(r['status'] == status for r in subset if r['qv'] == qv)}" for status in ('ok', 'failed', 'skipped')) for qv in versions],
                   f'- Errors by status: {dict(errors)}',
                   f'- Latency ms: p50={decision_percentile(subset, 0.5)}; p95={decision_percentile(subset, 0.95)}',
                   f'- responseModel versions: {dict(models)}']
         for field in ('inputTokens', 'outputTokens'):
             values = [row[field] for row in subset if row[field] is not None]
             lines.append(f'- {field}: {sum(values)} (observed={len(values)}/{len(subset)})')
-    missing = [(root, job_id) for job_id, candidates in jobs.items() for root, job in candidates
-               if boolean(job.get('decisions')) is True and (root, job_id) not in seen_jobs
-               and not (len(candidates) == 1 and any(key[1] == job_id for key in seen_jobs))]
-    lines += ['', f'## Stamped jobs with no ledger rows ({len(missing)})', '']
-    lines += [f'- {root.name}: {job_id}' for root, job_id in missing] or ['- None.']
+    missing = collections.defaultdict(list)
+    for job_id, candidates in jobs.items():
+        for root, job in candidates:
+            if (boolean(job.get('decisions')) is not True or (root, job_id) in seen_jobs
+                    or (not paired and len(candidates) == 1 and any(key[1] == job_id for key in seen_jobs))):
+                continue
+            triggered = (job.get('reviewFindings') is not None or any(
+                isinstance(head, dict) and head.get('status') == 'completed' for head in (job.get('heads') or [])))
+            category = ('unfinished' if job.get('finishedAt') is None else
+                        'trigger evidence' if triggered else 'no trigger point')
+            missing[category].append((root, job_id))
+    lines += ['', '## Stamped jobs with no ledger rows', '',
+              *[f'- {category}: {len(missing[category])}' for category in ('unfinished', 'no trigger point', 'trigger evidence')],
+              '', 'Only jobs with trigger evidence are listed:',
+              *([f'- {root.name}: {job_id}' for root, job_id in missing['trigger evidence']] or ['- None.'])]
     ok = [row for row in rows if row['status'] == 'ok']
-    head_rows = [row for row in ok if row['point'] == 'headReport']
     frequency = collections.Counter(min(len(group), 3) for group in head_groups.values())
     lines += ['', '## headReport decision frequency', '',
               '- Decisions per head (all statuses): ' + '; '.join(
                   f'{name}={frequency[count]} heads' for count, name in ((1, '1'), (2, '2'), (3, '3+'))),
-              'Groups use source root, jobID and headID; missing headID rows are excluded. '
+              'Frequency and continued_after use source root, jobID and headID; missing headID rows are excluded. '
               'continued_after is unknown for unmatched heads or groups with missing timestamps. '
-              'Equal timestamps retain ledger input order; the last report is zero only when continuations is known.']
-    for qv in versions:
-        version_ok = [row for row in ok if row['qv'] == qv]
-        head_rows = [row for row in version_ok if row['point'] == 'headReport']
-        for label in ('continued_after', 'continued'):
-            title = label + (' (cumulative control)' if label == 'continued' else '')
-            lines += ['', f'## headReport AUROC against {title} (questions v{qv})', '']
-            for score in ('gapUnreported_p', 'reworkLikely_p', 'completion_p', 'notes_flagged', 'format_missing'):
-                if any(score in row for row in head_rows):
-                    lines.append(f'- {score}: {decision_auc(head_rows, score, label)}')
-            if any('completion_choice' in row for row in head_rows):
-                lines += ['', f'### Completion × {title} (questions v{qv})', '', '| Completion | No | Yes | Unknown |', '|---|---:|---:|---:|']
-                for choice in ('complete', 'partial', 'blocked', 'unknown'):
-                    subset = [row for row in head_rows if (row.get('completion_choice') or 'unknown') == choice]
-                    lines.append(f'| {choice} | {sum(r[label] == 0 for r in subset)} | {sum(r[label] == 1 for r in subset)} | {sum(r[label] is None for r in subset)} |')
-        review_rows = [dict(row, findings_any=int(row['findings'] > 0) if row['findings'] is not None else None)
-                       for row in version_ok if row['point'] == 'preReview']
-        lines += ['', f'## preReview AUROC (questions v{qv})', '']
-        for label in ('findings_any', 'accepted_any_jev', 'accepted_any'):
-            for score in ('defectLikely_p', 'unrelatedChanges_p', 'churn', 'filesTotal', 'headFlags', 'not_leadBuilt'):
-                if not any(score in row for row in review_rows):
-                    continue
-                lines.append(f'- {score} against {label}' + (' (regex control)' if label == 'accepted_any' else '') + f': {decision_auc(review_rows, score, label)}')
-        if any('unrelatedChanges_p' in row for row in review_rows):
-            lines += ['', f'### preReview Spearman correlations (questions v{qv})', '']
-            for other in ('defectLikely_p', 'headFlags'):
-                lines.append(f'- unrelatedChanges_p vs {other}: '
-                             + decision_spearman(review_rows, 'unrelatedChanges_p', other))
-        latest = {}
-        for key, row in zip(row_keys, rows):
-            if row['status'] != 'ok' or row['qv'] != qv:
+              'Equal timestamps retain ledger input order; the last report is zero only when continuations is known. '
+              'rework_after windows and final-report attribution use source root/headID across jobs.']
+    for point in points:
+        for qv in sorted({row['qv'] for row in rows if row['point'] == point}):
+            subset = [row for row in ok if row['point'] == point and row['qv'] == qv]
+            lines += ['', f'## {point} (questions v{qv})', '']
+            comparisons = []
+            if point == 'headReport':
+                for label in ('continued_after', 'continued'):
+                    title = label + (' (cumulative control)' if label == 'continued' else '')
+                    lines += ['', f'### AUROC against {title}', '']
+                    for score in ('gapUnreported_p', 'reworkLikely_p', 'completion_p', 'notes_flagged', 'format_missing'):
+                        if any(score in row for row in subset):
+                            lines.append(f'- {score}: {decision_auc(subset, score, label)}')
+                    if any('completion_choice' in row for row in subset):
+                        lines += ['', f'### Completion × {title}', '', '| Completion | No | Yes | Unknown |', '|---|---:|---:|---:|']
+                        for choice in ('complete', 'partial', 'blocked', 'unknown'):
+                            selected = [row for row in subset if (row.get('completion_choice') or 'unknown') == choice]
+                            lines.append(f'| {choice} | {sum(r[label] == 0 for r in selected)} | {sum(r[label] == 1 for r in selected)} | {sum(r[label] is None for r in selected)} |')
+                    comparisons.extend((score, label) for score in ('gapUnreported_p', 'reworkLikely_p', 'completion_p'))
+                for label in ('rework_after', 'head_missed_defect', 'correction'):
+                    for score in ('reworkLikely_p', 'notes_flagged', 'format_missing'):
+                        lines.append(f'- {score} against {label}: {decision_auc(subset, score, label)}')
+                    comparisons.append(('reworkLikely_p', label))
+                baselines = ('notes_flagged', 'format_missing')
+            elif point == 'preReview':
+                baselines = ('churn', 'filesTotal', 'headFlags', 'not_leadBuilt')
+                for label in ('findings_any', 'accepted_any_jev', 'accepted_any', 'real_defect_any', 'correction', 'outside_any'):
+                    scores = ('unrelatedChanges_p',) if label == 'outside_any' else ('defectLikely_p',)
+                    for score in (*scores, *baselines):
+                        if any(score in row for row in subset):
+                            lines.append(f'- {score} against {label}' + (' (regex control)' if label == 'accepted_any' else '') + f': {decision_auc(subset, score, label)}')
+                    comparisons.extend((score, label) for score in scores)
+                if any('unrelatedChanges_p' in row for row in subset):
+                    lines += ['', '### Spearman correlations', '']
+                    for other in ('defectLikely_p', 'headFlags'):
+                        lines.append(f'- unrelatedChanges_p vs {other}: ' + decision_spearman(subset, 'unrelatedChanges_p', other))
+            else:
+                distribution = collections.Counter(value for row in subset for field, value in row.items()
+                                                   if field.endswith('_choice') and value is not None)
+                options = {'continuation': ('fix', 'omission', 'extension', 'investigation', 'retry'),
+                           'reviewFindings': ('inJobDefect', 'inJobOther', 'outsideJob', 'unclear'),
+                           'followUp': ('correction', 'nextStep', 'newTopic', 'unclear'),
+                           'reviewDisposition': ('accepted', 'rejected', 'unaddressed')}[point]
+                lines.append('- Choice distribution (ok decisions): ' + str({key: distribution[key] for key in options}))
+                if point == 'continuation':
+                    for via in ('continue', 'redispatch', None):
+                        selected = [row for row in subset if row['via'] == via]
+                        counts = collections.Counter(row.get('reason_choice') for row in selected)
+                        lines.append(f'- via={via or "unknown"}: n={len(selected)}; ' + str({key: counts[key] for key in options}))
+                elif point == 'reviewDisposition':
+                    latest = {}
+                    for row in subset:
+                        key = row['_job_key']
+                        if key not in latest or (timestamp(row['at']) or 0) >= (timestamp(latest[key]['at']) or 0):
+                            latest[key] = row
+                    agreement = [row for row in latest.values() if row['accepted'] is not None and row['reviewAccepted'] is not None]
+                    lines += ['- Per-job agreement (latest ok decision): ' + rate(sum(row['accepted'] == row['reviewAccepted'] for row in agreement), len(agreement)),
+                              'Only complete choice answers with a known regex reviewAccepted count enter agreement; counts are compared as recorded.']
+            if not comparisons:
                 continue
-            group = (key, row['point'])
-            if group not in latest or (timestamp(row['at']) or 0) >= (timestamp(latest[group]['at']) or 0):
-                latest[group] = row
-        disposition = [row for row in version_ok if row['point'] == 'reviewDisposition']
-        distribution = collections.Counter(value for row in disposition for field, value in row.items()
-                                           if re.fullmatch(r'finding_[1-8]_choice', field) and value is not None)
-        agreement = [row for (_, point), row in latest.items() if point == 'reviewDisposition'
-                     and row['accepted'] is not None and row['reviewAccepted'] is not None]
-        lines += ['', f'## reviewDisposition (questions v{qv})', '', f'- Choice distribution (ok decisions): {dict(distribution)}',
-                  '- Per-job agreement (latest ok decision): ' + rate(sum(row['accepted'] == row['reviewAccepted'] for row in agreement), len(agreement)),
-                  'Only jobs with complete choice answers and a known regex reviewAccepted count enter agreement. Questions are capped at eight; counts are compared as recorded.', '']
-        summaries = []
-        lines += ['', f'## Threshold comparisons (questions v{qv})', '',
-                  'Paired complete cases; best heuristic is selected again in each bootstrap sample and time half. '
-                  'Bootstrap resamples source-root/job clusters, retaining all their observations; single-class samples are omitted. '
-                  'Missing decision times make the half comparison insufficient. CI is descriptive, not an additional threshold. '
-                  'completion_p is confidence in the selected choice, not a calibrated rework probability; interpret its comparison cautiously.',
-                  'continued measures any continuation, not proven rework: HydraJobHeadRecord stores only continuations '
-                  '(Tivano/Core/Models/Hydra2.swift:89); every successful continue increments it without a reason '
-                  '(Tivano/App/Runtime/ThreadRuntime.swift:4280). No reworked label is inferred.']
-        for point, subset, labels, scores, baselines in (
-                ('headReport', head_rows, ('continued_after', 'continued'), ('gapUnreported_p', 'reworkLikely_p', 'completion_p'),
-                 ('notes_flagged', 'format_missing')),
-                ('preReview', review_rows, ('findings_any', 'accepted_any_jev', 'accepted_any'),
-                 ('defectLikely_p', 'unrelatedChanges_p'), ('churn', 'filesTotal', 'headFlags', 'not_leadBuilt'))):
-            for label in labels:
-                results = []
-                for score in scores:
-                    if not any(score in row for row in subset):
-                        continue
-                    detail, summary = decision_threshold(subset, score, label, baselines)
-                    if label == 'continued':
-                        detail = detail.replace('against continued:', 'against continued (cumulative control):')
-                    lines.append(detail)
-                    results.append(summary)
-                if not results:
+            lines += ['', '### Threshold comparisons', '',
+                      'Paired complete cases; best heuristic is selected again in each bootstrap sample and time half. '
+                      'Bootstrap resamples source-root/job clusters, retaining all observations; single-class samples are omitted. '
+                      'Missing times make the half comparison insufficient. CI is descriptive, not an additional threshold. '
+                      'completion_p is confidence in the chosen option. continued is a cumulative control, not proven rework.']
+            summaries = []
+            for score, label in comparisons:
+                if not any(score in row for row in subset):
                     continue
-                summaries.append(f'- {point} / {label}' + (' (regex control)' if label == 'accepted_any' else
-                                                                        ' (cumulative control)' if label == 'continued' else '')
-                                 + ': ' + '; '.join(results))
-        lines += ['', f'## Threshold summary (questions v{qv})', '', *summaries]
+                detail, summary = decision_threshold(subset, score, label, baselines)
+                lines.append(detail)
+                if score == 'unrelatedChanges_p':
+                    summary = re.sub(r'threshold=[^,; ]+', 'threshold=paused', summary)
+                    summary += '; paused'
+                summaries.append(f'- {label}: {summary}')
+            lines += ['', '### Threshold summary', '', *summaries]
+            lines += decision_utility(subset, point)
     # Internal clustering identities never enter the CSV.
     for row in rows:
         row.pop('_job_key', None)
         row.pop('_head_matched', None)
+        row.pop('_record', None)
     out.mkdir(parents=True, exist_ok=True)
     fields = DECISION_FIELDS + sorted({field for row in rows for field in row} - set(DECISION_FIELDS))
     write_rows(out / 'decisions.csv', fields, rows)

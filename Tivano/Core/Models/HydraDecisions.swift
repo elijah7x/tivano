@@ -2,7 +2,7 @@
 import Foundation
 
 enum HydraDecisionPoint: String, Sendable {
-    case headReport, preReview, reviewDisposition
+    case headReport, preReview, reviewDisposition, continuation, reviewFindings, followUp
 }
 
 struct DiffFileStat: Hashable, Sendable {
@@ -106,8 +106,13 @@ struct HydraDecisionRequest: Sendable {
 }
 
 enum HydraDecisionRequests {
-    // Increment when questions or state semantics change; group evaluations by this version.
-    static let questionVersion = 2
+    // Increment per point only when its questions or state semantics change; group evaluations by (point, qv).
+    static func questionVersion(_ point: HydraDecisionPoint) -> Int {
+        switch point {
+        case .headReport, .preReview, .reviewDisposition: 2
+        case .continuation, .reviewFindings, .followUp: 1
+        }
+    }
 
     static func capped(_ text: String, _ limit: Int) -> String {
         let trimmed = text.trimmed
@@ -166,6 +171,72 @@ enum HydraDecisionRequests {
             "review": .string(capped(review, 8_000)),
             "leadReply": .string(capped(leadReply, 4_000)),
         ]), questions: questions)
+    }
+
+    static func continuation(task: String, previousReport: String, brief: String) -> HydraDecisionRequest {
+        HydraDecisionRequest(point: .continuation, state: .object([
+            "task": .string(task),
+            "previousReport": .string(capped(previousReport, 6_000)),
+            "brief": .string(capped(brief, 4_000)),
+        ]), questions: [
+            "reason": choice("The state holds an agent's earlier task, its report, and the lead's new brief sending the same agent back to work. Why is the lead sending it back?", criteria: [
+                "fix": "Something the agent already delivered for its part is wrong and must be corrected.",
+                "omission": "The agent did not deliver part of what its earlier task asked for and must finish it.",
+                "extension": "New work beyond the earlier task: a next step, wider scope or a follow-up.",
+                "investigation": "Dig further into an open question or diagnosis, without saying the earlier work was wrong.",
+                "retry": "Try again after being blocked by something outside its own work, such as missing access, files or tools.",
+            ]),
+        ])
+    }
+
+    static func reviewFindings(request: String, files: [DiffFileStat], findings: [String]) -> HydraDecisionRequest? {
+        guard !findings.isEmpty else { return nil }
+        let parts = findings.prefix(8)
+        let questions = Dictionary(uniqueKeysWithValues: parts.enumerated().map { index, _ in
+            let number = index + 1
+            return ("finding_\(number)", choice("The state holds a user's request to a multi-agent coding job, the files the job changed with line counts (no source), and an independent review's numbered findings. What does Finding \(number) concern?", criteria: [
+                "inJobDefect": "A change this job made would make the software behave wrongly.",
+                "inJobOther": "This job's changes, but not wrong behaviour: missing verification or tests, docs, style or maintainability.",
+                "outsideJob": "Code or changes this job did not make, or that its request gives no reason to touch.",
+                "unclear": "Cannot tell from the finding and the file list.",
+            ]))
+        })
+        return HydraDecisionRequest(point: .reviewFindings, state: .object([
+            "request": .string(capped(request, 4_000)),
+            "files": .array(files.prefix(40).map { .object(["path": .string($0.path), "added": .int($0.added), "deleted": .int($0.deleted)]) }),
+            "filesTotal": .int(files.count),
+            "findings": .array(parts.enumerated().map { index, text in
+                .object(["number": .int(index + 1), "text": .string(capped(text, 1_500))])
+            }),
+        ]), questions: questions)
+    }
+
+    static func followUp(request: String, leadReply: String, message: String) -> HydraDecisionRequest {
+        HydraDecisionRequest(point: .followUp, state: .object([
+            "request": .string(capped(request, 4_000)),
+            "leadReply": .string(capped(leadReply, 4_000)),
+            "message": .string(capped(message, 4_000)),
+        ]), questions: [
+            "followUp": choice("The state holds a user's earlier request, the lead's last reply to it, and the user's next message. What is the next message doing?", criteria: [
+                "correction": "Says the result is wrong, broken, incomplete or not what was asked, or asks to fix it.",
+                "nextStep": "Accepts the result and goes on: a next step, an extension or more detail on the same work.",
+                "newTopic": "Moves to something unrelated to the earlier request.",
+                "unclear": "Cannot tell.",
+            ]),
+        ])
+    }
+
+    static func splitFindings(_ review: String) -> [String] {
+        var findings: [String] = []
+        for line in review.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("Finding ") {
+                findings.append(trimmed)
+            } else if !findings.isEmpty {
+                findings[findings.count - 1] += "\n" + line
+            }
+        }
+        return findings
     }
 
     private static func noul(_ instructions: String) -> JSONValue {

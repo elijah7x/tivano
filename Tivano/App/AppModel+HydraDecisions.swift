@@ -8,14 +8,14 @@ extension AppModel {
             && thread(leadID)?.hydraJobs.first(where: { $0.id == jobID })?.decisions == true
     }
 
-    func runHydraDecision(_ request: HydraDecisionRequest, leadID: UUID, jobID: UUID, headID: UUID? = nil) {
+    func runHydraDecision(_ request: HydraDecisionRequest, leadID: UUID, jobID: UUID, headID: UUID? = nil, meta: [String: JSONValue] = [:]) {
         guard hydraJobRunsDecisions(jobID, of: leadID) else { return }
         let at = Date.now.ISO8601Format()
         Task.detached(priority: .utility) {
             guard await self.hydraJobRunsDecisions(jobID, of: leadID) else { return }
             var record: [String: JSONValue] = [
                 "v": .int(1),
-                "qv": .int(HydraDecisionRequests.questionVersion),
+                "qv": .int(HydraDecisionRequests.questionVersion(request.point)),
                 "kind": .string("decision"),
                 "id": .string(UUID().uuidString),
                 "at": .string(at),
@@ -35,6 +35,7 @@ extension AppModel {
                 "answers": .null
             ]
             if let headID { record["headID"] = .string(headID.uuidString) }
+            if !meta.isEmpty { record["meta"] = .object(meta) }
             let acquired = await HydraDecisionConcurrency.shared.acquire()
             guard await self.hydraJobRunsDecisions(jobID, of: leadID) else {
                 if acquired { await HydraDecisionConcurrency.shared.release() }

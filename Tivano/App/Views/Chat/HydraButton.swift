@@ -24,7 +24,7 @@ struct HydraButton: View {
     @State private var isIntroShown = false
 
     var body: some View {
-        let isOn = model.hydraIsOn(thread)
+        let isOn = model.hydraModeIsOn(thread)
         // This chat's own heads, read through its child cells: another lead's head
         // starting or finishing never re-renders this button.
         let heads = model.panelHeads(of: thread.id)
@@ -32,8 +32,13 @@ struct HydraButton: View {
         // The lead writing head briefs, before any head status is running: a native
         // agent tool at work, or a delegation block in the reply. Derived from the
         // lead's own timeline, so the badge pulses as soon as delegation starts.
-        let isDelegating = isOn && running == 0 && runtime.isRunning && Self.isLeadDelegating(runtime.entries)
+        let isDelegating = model.hydraIsOn(thread) && running == 0 && runtime.isRunning && Self.isLeadDelegating(runtime.entries)
         Button {
+            if model.chimeraIsOn(thread) {
+                model.settings.hydraEnabled = true
+                model.setHydra(true, for: thread.id)
+                return
+            }
             // Off for this chat, the mark opens its switch: the idle note describes a team that is on.
             if isDelegating && heads.isEmpty { isExplaining = true } else if !model.settings.hasSeenHydraIntro { isIntroShown = true } else if heads.isEmpty, !isOn { isHydraSwitchShown = true } else if heads.isEmpty { isExplaining = true } else { togglePanel() }
         } label: {
@@ -100,7 +105,7 @@ struct HydraButton: View {
         }
         #endif
         .help(Text(verbatim: help(isOn: isOn, running: running, hasHeads: !heads.isEmpty)))
-        .accessibilityLabel(Text(verbatim: panelHelp(running: running, hasHeads: !heads.isEmpty)))
+        .accessibilityLabel(Text(verbatim: model.chimeraIsOn(thread) ? Chrome.localized("Turn Hydra on for this chat") : panelHelp(running: running, hasHeads: !heads.isEmpty)))
         .accessibilityValue(Text(verbatim: isOn ? Chrome.localized("On") : Chrome.localized("Off")))
     }
 
@@ -195,7 +200,7 @@ struct HydraButton: View {
     }
 
     private func help(isOn: Bool, running: Int, hasHeads: Bool) -> String {
-        guard isOn else { return Chrome.localized("Hydra is on in Settings") }
+        guard isOn else { return Chrome.localized(model.chimeraIsOn(thread) ? "Turn Hydra on for this chat" : "Hydra is on in Settings") }
         var parts = [Chrome.localized("Hydra is on")]
         if let pair = model.hydraPair(for: thread) {
             parts.append(HydraPairSummary.workers(pair, registry: model.providers))

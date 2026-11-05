@@ -27,7 +27,8 @@ APP_NAME="Tivano"
 BUILD="$ROOT/build.noindex/public-release"
 ARCHIVE="$BUILD/Tivano.xcarchive"
 EXPORT="$BUILD/export"
-VERSION=$(scripts/version.sh release)
+NUMERIC_VERSION=$(scripts/version.sh release)
+VERSION=$(scripts/version.sh release full)
 DMG="$ROOT/build.noindex/Tivano-$VERSION.dmg"
 
 step() { printf '\n==> %s\n' "$1"; }
@@ -152,6 +153,12 @@ if ! xcodebuild -exportArchive \
   exit 1
 fi
 APP="$EXPORT/$APP_NAME.app"
+
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$NUMERIC_VERSION" ] &&
+[ "$(/usr/libexec/PlistBuddy -c 'Print :TivanoReleaseVersion' "$APP/Contents/Info.plist")" = "$VERSION" ] || {
+  echo "Built app version does not match $VERSION ($NUMERIC_VERSION)." >&2
+  exit 1
+}
 
 step "Verifying the signature"
 codesign --verify --deep --strict --verbose=2 \

@@ -20,6 +20,7 @@ extension HydraPrompts {
     /// short on purpose: rules that only matter in some turns (merge status, refusals,
     /// reports) arrive with those turns instead of standing here.
     static func v2Policy(_ launch: HydraLaunch) -> String {
+        if launch.isChimera { return ChimeraPrompts.policy(launch) }
         let team = launch.maxHeads.map { "up to \($0) helper agents" } ?? "helper agents"
         var heads = ""
         if !launch.headsMatchLead, let label = launch.headsLabel ?? launch.workerModel { heads += " Heads run on \(label)." }
@@ -49,6 +50,7 @@ extension HydraPrompts {
     /// In front of every user message of a v2 job, follow-ups included: the delegation
     /// decision, short enough to sit on every turn.
     static func v2DelegationRequest(_ launch: HydraLaunch) -> String {
+        if launch.isChimera { return ChimeraPrompts.policy(launch) + "\n\n---\n\n" }
         let (name, rule) = switch launch.tilt {
         case .restrained: ("restrained", "send heads only the parts that would crowd your context: audits, broad research, several parallel pieces")
         case .active: ("proactive", "send heads any part you can brief that would take more than a few tool calls; keep short work and work you must judge while reading")
@@ -154,7 +156,10 @@ extension HydraPrompts {
             let outcome = switch report.status {
             case .completed: ""
             case .failed: " (failed)"
-            case .stopped: " (stopped by the user before finishing)"
+            case .stopped:
+                report.stopReason == .stalled
+                    ? " (stopped by Tivano: it stalled with no progress; its copy and session are kept, so you can continue it)"
+                    : " (stopped by the user before finishing)"
             case .running: ""
             }
             var effort: [String] = []
@@ -224,8 +229,11 @@ extension HydraPrompts {
         if reports.contains(where: { $0.status == .failed && !$0.startupFailure }) {
             closing.append("A head that failed leaves its part to you: do it yourself or send it out again.")
         }
-        if reports.contains(where: { $0.status == .stopped }) {
+        if reports.contains(where: { $0.status == .stopped && $0.stopReason == nil }) {
             closing.append("A head the user stopped leaves its part alone unless the user asks for it.")
+        }
+        if reports.contains(where: { $0.stopReason == .stalled }) {
+            closing.append("A head Tivano stopped for stalling may be continued once with a smaller, more specific step, or its part given to a new head.")
         }
         closing.append("Read the flagged files first, then spot-check the rest; fix integration yourself and run the narrowest required check. Do not use git status or git diff to review this, and revert nothing: others may be editing the checkout.")
         closing.append(reportStyleRule)

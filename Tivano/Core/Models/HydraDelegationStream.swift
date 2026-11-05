@@ -118,7 +118,9 @@ extension HydraPrompts {
         let profile = entry["profile"]?.string?.trimmed
         let files = (entry["files"]?.array ?? []).compactMap { $0.string?.trimmed }.filter { !$0.isEmpty }
         let continueHead = entry["continue"]?.string?.trimmed
-        return HydraDelegation(task: task.isEmpty ? TextCleanup.singleLine(prompt, limit: 60) : task, prompt: prompt, name: announced, project: (project?.isEmpty == false) ? project : nil, profile: (profile?.isEmpty == false) ? profile : nil, files: files, filesGiven: entry["files"]?.array != nil, continueHead: (continueHead?.isEmpty == false) ? continueHead : nil)
+        // A Chimera entry's suggested preset: its 1-based number, as a number or a numeric string.
+        let preset = entry["preset"]?.int
+        return HydraDelegation(role: entry["role"]?.string, preset: preset, task: task.isEmpty ? TextCleanup.singleLine(prompt, limit: 60) : task, prompt: prompt, name: announced, project: (project?.isEmpty == false) ? project : nil, profile: (profile?.isEmpty == false) ? profile : nil, files: files, filesGiven: entry["files"]?.array != nil, continueHead: (continueHead?.isEmpty == false) ? continueHead : nil)
     }
 
     fileprivate static func isJSONWhitespace(_ byte: UInt8) -> Bool {
@@ -164,7 +166,11 @@ final class HydraDelegationStreamParser {
         case 3:
             if byte == 32 || byte == 9 || byte == 96 { return }
             if lower == 104 { opener = 4; return }
+            if lower == 99, HydraPrompts.acceptsChimeraFence { opener = 20; return }
             opener = 0
+        case 20...25:
+            let expected: [UInt8] = [104, 105, 109, 101, 114, 97]
+            opener = lower == expected[opener - 20] ? (opener == 25 ? 8 : opener + 1) : (byte == 96 ? 1 : 0)
         case 4...7:
             let expected: UInt8 = switch opener { case 4: 121; case 5: 100; case 6: 114; default: 97 }
             opener = lower == expected ? opener + 1 : (byte == 96 ? 1 : 0)

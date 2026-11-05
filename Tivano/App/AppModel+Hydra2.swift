@@ -75,6 +75,7 @@ extension AppModel {
         guard let job = openHydraJob(of: leadID) else { return }
         let ending = ending == .completed ? (job.ending ?? ending) : ending
         if ending != .completed {
+            existingRuntime(for: leadID)?.clearQueuedHydraHeads()
             updateHydraJob(job.id, of: leadID) { $0.ending = ending }
             if ending != .recovered,
                hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) { return }
@@ -132,6 +133,7 @@ extension AppModel {
 
     func endHydraJobsForHydraOff(of leadID: UUID) {
         guard let job = openHydraJob(of: leadID) else { return }
+        existingRuntime(for: leadID)?.clearQueuedHydraHeads()
         updateHydraJob(job.id, of: leadID) { $0.ending = .hydraOff }
         for head in hydraTeam(of: leadID) where head.hydra?.jobID == job.id && head.hydra?.status == .running {
             stopHydraHead(head.id)
@@ -179,6 +181,15 @@ extension AppModel {
             return "its copy was already released"
         }
         let checkout = info.targetCheckout ?? (try? executionDirectory(for: head))
+        // A head routed before Tivano's own folders were all refused may still sit in one.
+        if let target = info.targetCheckout {
+            let home = HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
+            let taskWorkspaces = HydraPaths.canonical(StoragePaths.root.appendingPathComponent("task-workspaces", isDirectory: true).path)
+            if HydraPaths.canonical(target) != home,
+               Self.hydraPathTouchesProtectedRoot(target, roots: Self.hydraProtectedRoots(), taskWorkspaces: taskWorkspaces) {
+                return String(format: Chrome.localized("its folder %@ is one Tivano keeps its own data in"), target)
+            }
+        }
         // The lead may list paths the head was never sent with, including folders Tivano
         // writes itself; those never reach a head.
         if let base = info.filesBase ?? checkout {
@@ -211,8 +222,12 @@ extension AppModel {
         if let checkout, info.isNonGitCheckout == true, !info.hasOwnCopy {
             // Files the lead listed now are copied before the head hears its brief, even for
             // a head first sent with none; the job record gains them just after this returns.
+            let batchID = info.batchID
             Task { @MainActor in
                 await prepareHydraBackup(headID, checkout: checkout)
+                // Stopped or sent elsewhere while the files were copied: the brief is stale.
+                guard let current = thread(headID)?.hydra, current.status == .running,
+                      current.batchID == batchID, headRuntime.phase == .idle else { return }
                 headRuntime.sendHydraBrief(brief, attachments: [])
             }
         } else {

@@ -63,6 +63,19 @@ struct AlphaSettingsPage: View {
             }
         }
         .modifier(AlphaGated(isOn: settings.alphaEnabled))
+        ChromeSection(title: "Chimera") {
+            ChromeCard {
+                ChromeRow(title: "Chimera", detail: "The lead assigns roles mid-conversation and you pick each role's model. Switch on to add Chimera under Hydra in the sidebar.") {
+                    SettingsSwitch(isOn: $settings.alphaChimeraEnabled)
+                        .accessibilityLabel(Text("Chimera"))
+                }
+            }
+        }
+        .modifier(AlphaGated(isOn: settings.alphaEnabled))
+        // Off for the app, Chimera gives every chat it held back to its Hydra.
+        .onChange(of: settings.isChimeraEnabled) { _, on in
+            if !on { model.leaveChimeraEverywhere() }
+        }
     }
 }
 

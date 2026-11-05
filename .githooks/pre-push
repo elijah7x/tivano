@@ -1,5 +1,5 @@
 #!/bin/sh
-# Tivano publishes main only; dev remains local.
+# Tivano publishes main and reviewed tags; dev and preview remain local.
 set -eu
 fail() { echo "$1" >&2; exit 1; }
 remote_url=${2:-}
@@ -23,6 +23,7 @@ git cat-file -e "$main_sha^{commit}" 2>/dev/null \
   || fail "Remote main is not available locally. Fetch the canonical origin and retry."
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_ref" != refs/heads/dev ] || fail "Refusing to push local dev; releases must go through reviewed main."
+  [ "$local_ref" != refs/heads/preview ] || fail "Refusing to push local preview; publish only its reviewed preview tag."
   if [ "$local_sha" = 0000000000000000000000000000000000000000 ]; then
     [ "$remote_ref" = "${TIVANO_CLEANUP_REF:-}" ] &&
     [ "$remote_sha" = "${TIVANO_CLEANUP_SHA:-}" ] &&
@@ -40,6 +41,19 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     refs/tags/v1.0.1) expected=73219c3ed8d0b5434d446a98242dc853d7b04ada ;;
     refs/tags/v1.0.0) expected=b559cfcba99014e92929f566d52e8e6cbd3eb272 ;;
     refs/tags/v0.2.7) expected=4fe5d33cb4ad97fc66b9838249d10714829ee5b0 ;;
+    refs/tags/v[0-9]*-preview.*)
+      printf '%s\n' "${remote_ref#refs/tags/}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[1-9][0-9]*$' \
+        || fail "Refusing invalid preview tag $remote_ref."
+      preview_tree=$(git rev-parse --verify 'refs/heads/preview^{tree}' 2>/dev/null) \
+        || fail "Local preview branch is missing; cannot approve preview tag."
+      expected=$(git rev-parse "$local_sha^{commit}") \
+        || fail "Preview tag must point to a commit."
+      parents=$(git show -s --format=%P "$expected")
+      [ "$parents" = "$main_sha" ] \
+        || fail "Preview commit must have exactly one parent equal to live remote main."
+      [ "$(git rev-parse "$expected^{tree}")" = "$preview_tree" ] \
+        || fail "Preview commit tree differs from local preview."
+      ;;
     refs/tags/v[0-9]*)
       printf '%s\n' "${remote_ref#refs/tags/}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
         || fail "Refusing invalid version tag $remote_ref."

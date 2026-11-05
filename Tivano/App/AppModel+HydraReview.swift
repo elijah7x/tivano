@@ -126,6 +126,7 @@ extension AppModel {
             if !fields.isEmpty { noteLines.append("\(info.persona.name): \(fields.joined(separator: " / "))") }
         }
         var decisionStats: Task<[DiffFileStat], Never>?
+        let requestText = job.request
         if let decisionPatch {
             let leadReply = runtime.entries.last(where: {
                 if case .assistant = $0.item.content { return true }
@@ -134,7 +135,6 @@ extension AppModel {
                 guard case .assistant(let message) = entry.item.content else { return nil }
                 return message.text
             } ?? ""
-            let requestText = job.request
             let headFlags = noteLines
             let heads = jobHeads.count
             let leadBuilt = job.leadBuilt
@@ -180,6 +180,15 @@ extension AppModel {
                         leadID: leadID, jobID: jobID, reviewer: selected.reviewer,
                         findings: findingCount, findingPaths: findingPaths
                     )
+                    if findingCount > 0 {
+                        let parts = HydraDecisionRequests.splitFindings(findings)
+                        if let request = HydraDecisionRequests.reviewFindings(request: requestText, files: files, findings: parts) {
+                            self.runHydraDecision(request, leadID: leadID, jobID: jobID, meta: [
+                                "reviewer": .string(selected.reviewer),
+                                "findingPaths": .array(parts.prefix(8).map { .array(DiffStats.mentionedPaths(files, in: $0).map(JSONValue.string)) }),
+                            ])
+                        }
+                    }
                 }
             }
         }

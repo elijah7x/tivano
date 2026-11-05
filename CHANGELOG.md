@@ -8,6 +8,46 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.3] - 2026-11-05
+
+### English
+
+### New features
+
+- Chimera (experimental): turn it on in Settings › Alpha, then light the Chimera button beside Hydra in a chat. The lead names the roles it wants, and a Casting card lets you pick each role's model and effort, switch roles off, or send none; nothing starts until you send. Presets in Settings › Chimera pair a model with a specialty to prefill the card, and a role you cast again in the same chat keeps your last pick. Chimera and Hydra never run together: turning Chimera on turns Hydra off and returns the picker to the lead model.
+- Tivano preview builds (such as 3.0.0 Preview 1) can be downloaded from GitHub and installed over the regular app. A preview updates itself to newer previews and to newer regular releases; regular installs never offer previews.
+
+### Bug fixes
+
+- Stopping a Hydra head while its newly listed files are being backed up no longer lets it restart with the old brief, and a head left in one of Tivano's own data folders can no longer be continued.
+- A Hydra head that Tivano stops after 10 quiet minutes now shows as Stalled instead of Stopped, and its lead is told Tivano stopped it and that it can be continued, rather than that the user stopped it. The report also says when the provider last produced output (Antigravity for now).
+- A Hydra head waiting for your answer or approval now says so (Awaiting your answer / Awaiting approval) on its capsule, in the Hydra panel and in the sidebar, instead of showing as working. Tivano's 10-minute stall check no longer runs while it waits, and the lead's chat notes that the head is waiting for you.
+
+### Refinements
+
+- Alpha › Hydra's Jev shadow test now also notes why the lead sends a head back, what each review finding concerns, and whether your next message corrects the result, so its existing judgments can be scored against what actually went wrong. Hydra still behaves the same and the lead still sees nothing. Review findings accepted in Chinese ("Finding 1：接受") now count as accepted.
+
+### 简体中文
+
+### 新功能
+
+- Chimera（实验功能）：在「设置 › 实验室」中开启后，在对话里点亮 Hydra 旁的 Chimera 按钮。主智能体列出需要的角色，选角卡片让你为每个角色选模型和推理强度，也可以关掉某个角色或都不派；你确认派出前不会开始任何工作。「设置 › Chimera」中的预设把模型和擅长方向配对，用于预填卡片；同一对话里再次出现的角色会沿用你上次的选择。Chimera 与 Hydra 不会同时运行：开启 Chimera 会关闭 Hydra，模型选择器回到主模型。
+- 可以从 GitHub 下载 Tivano 预览版（例如 3.0.0 Preview 1），直接覆盖安装正式版。预览版会自动更新到更新的预览版或更高的正式版；正式版不会推送预览版。
+
+### 问题修复
+
+- 在备份新列出的文件期间停止 Hydra 子智能体，它不会再带着旧的任务说明重新开工；位于 Tivano 自用数据目录中的子智能体也不能再被继续派发。
+- Hydra 子智能体静默 10 分钟被 Tivano 停止后，状态显示为「卡住」而不是「已停止」；主智能体收到的报告会说明是 Tivano 停止的、可以继续派发，不再误称为用户停止。报告还会写明 provider 最后一次有输出的时间（目前支持 Antigravity）。
+- Hydra 子智能体在等你回答或批准时，胶囊、Hydra 面板和侧栏会显示「待回答」或「待批准」，不再显示为工作中；等待期间不计入 10 分钟卡住检测，主智能体的对话里也会提示该子智能体在等你。
+
+### 优化改进
+
+- 「实验室 › Hydra」的 Jev 影子测试新增记录：主智能体为什么把子智能体派回去、每条审查意见涉及什么，以及你的下一条消息是否在纠正结果，用来检验已有判断是否对应真正出错的地方。Hydra 行为不变，主智能体仍看不到这些判断。用中文回复「Finding 1：接受」的审查意见现在也会计为已接受。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.4.2] - 2026-11-03
 
 ### English

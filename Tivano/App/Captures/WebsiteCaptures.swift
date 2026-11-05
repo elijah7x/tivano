@@ -404,6 +404,10 @@ enum WebsiteCaptures {
             await UsageLimitPreview.run(model: model)
             return
         }
+        if ChimeraCastingPreview.isRequested {
+            await ChimeraCastingPreview.run(model: model)
+            return
+        }
         if PredictionPreview.isRequested {
             await PredictionPreview.run(model: model)
             return

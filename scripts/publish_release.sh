@@ -14,7 +14,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 PROJECT="elijah7x/tivano"
-VERSION=$(scripts/version.sh release)
+VERSION=$(scripts/version.sh release full)
+PREVIEW=false
+TITLE="Tivano $VERSION"
+CREATE_FLAGS=()
+FINAL_FLAGS=(--prerelease=false)
+if [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-preview\.([1-9][0-9]*)$ ]]; then
+  PREVIEW=true
+  TITLE="Tivano ${BASH_REMATCH[1]} Preview ${BASH_REMATCH[2]}"
+  CREATE_FLAGS=(--prerelease --latest=false)
+  FINAL_FLAGS=(--prerelease=true --latest=false)
+fi
 TAG="v$VERSION"
 DMG_NAME="Tivano-$VERSION.dmg"
 DMG="${1:-build.noindex/$DMG_NAME}"
@@ -37,10 +47,13 @@ if ! grep -qE '^## (New features|Bug fixes|Refinements)' "$NOTES"; then
   exit 1
 fi
 
+if [ "$PREVIEW" = false ]; then
 step "Checking every contributor is thanked"
 if ! python3 scripts/release_credits.py --check "$NOTES"; then
   echo "Add a ### Thanks section to the ## [$VERSION] entry in CHANGELOG.md naming them (python3 scripts/release_credits.py prints it), then publish again."
   exit 1
+fi
+
 fi
 
 python3 - "$NOTES" "$PROJECT" "$TAG" "$DMG_NAME" <<'PYNOTES'
@@ -68,6 +81,18 @@ spctl --assess --type open --context context:primary-signature --ignore-cache --
 DMG_SIZE=$(stat -f %z "$DMG")
 DMG_DIGEST="sha256:$(shasum -a 256 "$DMG" | awk '{print $1}')"
 
+if [ "$PREVIEW" = true ]; then
+  step "Checking the public preview commit"
+  REMOTE_MAIN=$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')
+  REMOTE_PREVIEW_TAG=$(git ls-remote --exit-code origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+  REVISION=$(awk '/\^\{\}$/ {print $1; found=1} END {if (!found) exit 1}' <<< "$REMOTE_PREVIEW_TAG") ||
+    REVISION=$(awk 'NR == 1 {print $1}' <<< "$REMOTE_PREVIEW_TAG")
+  [ -n "$REVISION" ] || { echo "Preview tag must already exist remotely." >&2; exit 1; }
+  PUBLIC_COMMIT=$(gh api "repos/$PROJECT/git/commits/$REVISION")
+  jq -e --arg main "$REMOTE_MAIN" --arg tree "$(git rev-parse 'refs/heads/preview^{tree}')" '
+    (.parents | length) == 1 and .parents[0].sha == $main and .tree.sha == $tree
+  ' <<< "$PUBLIC_COMMIT" > /dev/null || { echo "Preview commit violates the public tree/parent contract." >&2; exit 1; }
+else
 step "Checking the reviewed main revision"
 REVISION=$(git rev-parse "${RELEASE_REF:-HEAD}^{commit}")
 MAIN_REVISION=$(git rev-parse "refs/heads/main^{commit}")
@@ -83,6 +108,8 @@ if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
   }
 fi
 
+fi
+
 step "Checking the existing release"
 # A failed API call is not treated as a missing release. Read all pages so a
 # draft can never be overlooked because newer releases filled the first page.
@@ -96,9 +123,9 @@ EXISTING=$(jq -ce --arg tag "$TAG" '
 RELEASE_STATE=missing
 if [ "$(jq 'length' <<< "$EXISTING")" = 1 ]; then
   RELEASE_STATE=$(jq -er --arg revision "$REVISION" --arg name "$DMG_NAME" \
-    --argjson size "$DMG_SIZE" --arg digest "$DMG_DIGEST" '
+    --argjson preview "$PREVIEW" --argjson size "$DMG_SIZE" --arg digest "$DMG_DIGEST" '
     .[0] |
-    if (.draft | type) != "boolean" or .prerelease != false or
+    if (.draft | type) != "boolean" or .prerelease != $preview or
        (.assets | type) != "array" or .target_commitish != $revision
     then error("Release target or draft/prerelease state does not match")
     elif .draft and (.assets | length) == 0 then "empty-draft"
@@ -135,17 +162,26 @@ elif [ "$RELEASE_STATE" != missing ] && [ "$RELEASE_STATE" != empty-draft ]; the
   exit 1
 fi
 REMOTE_MAIN=$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')
-[ "$REMOTE_MAIN" = "$REVISION" ] || {
+if [ "$PREVIEW" = true ]; then
+  [ "$(jq 'length' <<< "$REMOTE_TAG")" = 1 ] &&
+  jq -e --arg main "$REMOTE_MAIN" '.parents[0].sha == $main' <<< "$PUBLIC_COMMIT" > /dev/null || {
+    echo "Remote preview tag is missing or main moved; refusing publication." >&2; exit 1;
+  }
+fi
+[ "$PREVIEW" = true ] || [ "$REMOTE_MAIN" = "$REVISION" ] || {
   echo "Remote main no longer equals reviewed main $REVISION; refusing publication." >&2
   exit 1
 }
 
+if [ "$PREVIEW" = false ]; then
 step "Tagging $TAG"
 if ! git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
   git tag -a "$TAG" "$REVISION" -m "Tivano $VERSION"
 fi
 if [ "$(jq 'length' <<< "$REMOTE_TAG")" = 0 ]; then
   git push origin "refs/tags/$TAG"
+fi
+
 fi
 
 case "$RELEASE_STATE" in
@@ -157,7 +193,7 @@ case "$RELEASE_STATE" in
     step "Creating the draft"
     gh release create "$TAG" "$DMG#$ASSET_LABEL" --draft \
       -R "$PROJECT" --verify-tag --target "$REVISION" \
-      --title "Tivano $VERSION" --notes-file "$NOTES"
+      --title "$TITLE" --notes-file "$NOTES" ${CREATE_FLAGS[@]+"${CREATE_FLAGS[@]}"}
     ;;
 esac
 if [ "$RELEASE_STATE" != published ]; then
@@ -166,8 +202,8 @@ if [ "$RELEASE_STATE" != published ]; then
     add | [.[] | select(.tag_name == $tag)] |
     if length == 1 then .[0] else error("Expected exactly one release") end')
   jq -e --arg revision "$REVISION" --arg name "$DMG_NAME" --argjson size "$DMG_SIZE" \
-    --arg digest "$DMG_DIGEST" '
-    .target_commitish == $revision and .draft == true and .prerelease == false and
+    --argjson preview "$PREVIEW" --arg digest "$DMG_DIGEST" '
+    .target_commitish == $revision and .draft == true and .prerelease == $preview and
     (.assets | length) == 1 and .assets[0].name == $name and
     .assets[0].size == $size and .assets[0].digest == $digest and .assets[0].state == "uploaded"
   ' <<< "$READY" > /dev/null || {
@@ -175,13 +211,17 @@ if [ "$RELEASE_STATE" != published ]; then
     exit 1
   }
   step "Publishing the matching draft"
-  gh release edit "$TAG" -R "$PROJECT" --draft=false --prerelease=false \
-    --verify-tag --title "Tivano $VERSION" --notes-file "$NOTES"
+  gh release edit "$TAG" -R "$PROJECT" --draft=false "${FINAL_FLAGS[@]}" \
+    --verify-tag --title "$TITLE" --notes-file "$NOTES"
 else
   step "Matching release already published; resuming feed and mirror"
 fi
 
 printf '\nPublished: https://github.com/%s/releases/tag/%s\n' "$PROJECT" "$TAG"
+if [ "$PREVIEW" = true ]; then
+  echo "Previews are GitHub-only; no update feed or mirror is published."
+  exit 0
+fi
 step "Publishing the static update feed"
 if ! python3 scripts/publish_update_feed.py --tag "$TAG" --dmg "$DMG"; then
   echo "GitHub release $TAG is published; static feed failed. Rerun publish_release.sh with this same DMG to resume." >&2
