@@ -6,7 +6,7 @@
 
 为你的编码 Agent 打造的 macOS 原生之家 —— 使用 Swift 与 SwiftUI 编写，采用 Liquid Glass 设计，适用于运行 macOS 26 及以上版本的 Apple silicon Mac。
 
-官网与下载：[elijah.ac.cn/tivano](https://elijah.ac.cn/tivano/)
+**官网与下载：[tivano.app](https://tivano.app/)**
 
 Tivano fork 自 Jordy Spruit 的 [Droppy Code](https://getdroppycode.app)，使用新名称独立维护。
 
