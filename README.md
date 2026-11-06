@@ -6,7 +6,7 @@
 
 A native macOS home for your coding agents — written in Swift and SwiftUI with Liquid Glass, for Apple silicon Macs on macOS 26 and later.
 
-Website and download: [elijah.ac.cn/tivano](https://elijah.ac.cn/tivano/)
+**Website and download: [tivano.app](https://tivano.app/)**
 
 Tivano is a fork of [Droppy Code](https://getdroppycode.app) by Jordy Spruit, renamed and maintained independently.
 

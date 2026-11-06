@@ -8,6 +8,18 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+### English
+
+### Refinements
+
+- The README now links prominently to [tivano.app](https://tivano.app/), the new website and download page.
+
+### 简体中文
+
+### 优化改进
+
+- README 顶部突出显示新官网与下载页 [tivano.app](https://tivano.app/)。
+
 ## [2.5.7] - 2026-11-06
 
 ### English
