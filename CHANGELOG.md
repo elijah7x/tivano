@@ -8,6 +8,36 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.7] - 2026-11-06
+
+### English
+
+### Bug fixes
+
+- Picking a model in a model picker (Settings › Default model, the text generation model, Quick Chat, Chimera presets and the Casting card) no longer closes it, so you can pick the reasoning effort right after. Last selection, Automatic and Off still close it.
+- DeepSeek Harness chats start again on DeepSeek Harness 0.2.2 with delegation off or in Minimal mode. When a DeepSeek Harness update drops a row that Tivano only switches off, the chat now starts anyway; delegation tools stay off by package name even if they are renamed, and a patch that still can't apply names the DeepSeek Harness version, the missing row and the patch file.
+
+### Refinements
+
+- Settings › Chimera presets: every model pill has the same width so the specialty fields line up, and each preset has a drag handle to reorder it instead of a Model label.
+- In a chat with Chimera on, the count of heads at work sits on the Chimera button instead of Hydra's, and clicking it while they work shows or hides their panel. The panel's head count shows the Chimera mark.
+
+### 简体中文
+
+### 问题修复
+
+- 在模型选择器（「设置 › 默认模型」、文本生成模型、快速对话、Chimera 预设和选角卡片）中选完模型后不再自动收起，可以接着选推理强度。选择「上一次选择」「自动」或「关闭」仍会直接收起。
+- 关闭委派或使用 Minimal 模式时，DeepSeek Harness 0.2.2 的对话可以正常启动了。DeepSeek Harness 更新后删除了某个 Tivano 只是用来关闭的配置项时，对话仍会照常启动；委派类工具按插件包名关闭，即使上游改名也不会漏开；补丁仍无法应用时，报错会写明 DeepSeek Harness 版本、缺失的配置项和对应补丁文件。
+
+### 优化改进
+
+- 「设置 › Chimera」的模型预设：模型药丸宽度统一，擅长方向输入框对齐；每条预设左侧改为拖动手柄，可调整顺序，不再显示「模型」标签。
+- 开启 Chimera 的对话里，工作中的子智能体数量显示在 Chimera 按钮上，不再显示在 Hydra 按钮上；子智能体工作时点击它可显示或隐藏面板。面板上的子智能体计数改用 Chimera 图标。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.5.3] - 2026-11-05
 
 ### English

@@ -66,7 +66,7 @@ struct QuickChatView: View {
                         initialProvider: preview.provider
                     ) { selection in
                         state.modelOverride = selection
-                        showsModelPicker = false
+                        if selection == nil { showsModelPicker = false }
                     }
                     .frame(width: 360)
                     .presentedChrome()

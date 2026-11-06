@@ -115,6 +115,7 @@ enum DshMarketplace {
             }
             let options: [String: Any] = [
                 "runtime": resources.appendingPathComponent("app.asar/dsh").path,
+                "version": DshCLI.bundledRuntimeVersion(of: executable) ?? "",
                 "source": source.path,
                 "home": DshCLI.accountHome(environment: environment).path,
                 "overlays": overlays,

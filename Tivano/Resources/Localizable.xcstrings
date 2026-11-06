@@ -1790,6 +1790,17 @@
         }
       }
     },
+    "DeepSeek Harness %1$@ has no ACP row %2$@, which %3$@ changes. Update Tivano, or remove that entry from the patch." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek Harness %1$@ 中没有 ACP 配置项 %2$@，但 %3$@ 要修改它。请更新 Tivano，或从该补丁中删除这一项。"
+          }
+        }
+      }
+    },
     "DeepSeek Harness %@ changed what Tivano reads to load your desktop profile, so chats on it run without the profile's plugins until Tivano catches up." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3104,6 +3115,17 @@
         }
       }
     },
+    "%d heads working · Show or hide the Chimera panel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 个子智能体工作中 · 显示或隐藏 Chimera 面板"
+          }
+        }
+      }
+    },
     "%d heads working · Show or hide the Hydra panel" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3573,6 +3595,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "1 个子智能体工作中"
+          }
+        }
+      }
+    },
+    "1 head working · Show or hide the Chimera panel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个子智能体工作中 · 显示或隐藏 Chimera 面板"
           }
         }
       }
@@ -15255,6 +15288,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在准备分工。整段分工内容准备好后才会派出子智能体。"
+          }
+        }
+      }
+    },
+    "Preparing the delegation · Show or hide the Chimera panel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备分工 · 显示或隐藏 Chimera 面板"
           }
         }
       }
@@ -29926,6 +29970,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chimera"
+          }
+        }
+      }
+    },
+    "Chimera is on, %d heads working, show or hide the panel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chimera 已开启，%d 个子智能体工作中，显示或隐藏面板"
+          }
+        }
+      }
+    },
+    "Chimera is on, 1 head working, show or hide the panel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chimera 已开启，1 个子智能体工作中，显示或隐藏面板"
+          }
+        }
+      }
+    },
+    "Chimera is on, show the panel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chimera 已开启，显示面板"
           }
         }
       }

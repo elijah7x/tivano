@@ -299,8 +299,9 @@ private struct HydraHeadsButton: View {
 
     var body: some View {
         let running = heads.count { $0.hydra?.status == .running }
+        let isChimera = model.thread(runtime.threadID).map(model.chimeraIsOn) ?? false
         HStack(spacing: 6) {
-            HydraSpokesMark()
+            HydraSpokesMark(isChimera: isChimera)
             Text(verbatim: "\(heads.count)")
                 .font(.ui(size: 12.5, weight: .semibold).monospacedDigit())
             if running > 0 {
@@ -358,12 +359,20 @@ private struct HydraHeadsButton: View {
     }
 }
 
-/// The dragon-head mark at capsule size.
+/// The Hydra or Chimera mark at capsule size.
 private struct HydraSpokesMark: View {
+    var isChimera = false
+
     var body: some View {
-        HydraMarkImage()
-            .foregroundStyle(Chrome.primaryText.opacity(0.9))
-            .frame(width: 15, height: 15)
+        if isChimera {
+            ChimeraMarkImage()
+                .foregroundStyle(Chrome.primaryText.opacity(0.9))
+                .frame(width: 18, height: 15)
+        } else {
+            HydraMarkImage()
+                .foregroundStyle(Chrome.primaryText.opacity(0.9))
+                .frame(width: 15, height: 15)
+        }
     }
 }
 

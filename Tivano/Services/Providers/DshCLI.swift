@@ -1,5 +1,12 @@
+import CryptoKit
 import Foundation
 import Synchronization
+
+enum DshPatchCheck: Equatable {
+    case applies(delegationRows: [String])
+    case missingRow(file: String, row: String)
+    case unreadable
+}
 
 enum DshCLI {
     static let packageName = "@deepseek-ai/dsh"
@@ -327,9 +334,30 @@ enum DshCLI {
             try Task.checkCancellation()
             // The marketplace bootstrap admits the exact in-memory composition before
             // making ACP ready; a separate dump would read a different generation.
-            if plan.ownedDirectory == nil, plan.arguments.contains("--patch"),
-               !(await patchesApply(executable: plan.executable, arguments: plan.arguments, environment: plan.environment)) {
-                throw ProviderError.failed(AppText.localized("DeepSeek Harness could not load Tivano's configuration. Update DeepSeek Harness or check your profile patches, then try again."))
+            if plan.ownedDirectory == nil, plan.arguments.contains("--patch") {
+                switch await checkPatches(executable: plan.executable, arguments: plan.arguments, environment: plan.environment) {
+                case .applies(let rows):
+                    if !rows.isEmpty {
+                        // Patches name rows by id, which upstream renames, so delegation is also enforced by package name.
+                        let content = rows.sorted().map { "- id: \($0)\n  disabled: true\n" }.joined()
+                        let hash = SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined().prefix(12)
+                        let patch = patchDirectory().appendingPathComponent("delegation-guard-\(hash).yml")
+                        if (try? String(contentsOf: patch, encoding: .utf8)) != content {
+                            try content.write(to: patch, atomically: true, encoding: .utf8)
+                        }
+                        plan = DshLaunchPlan(executable: plan.executable, arguments: plan.arguments + ["--patch", patch.path], environment: plan.environment, ownedDirectory: nil, warning: plan.warning)
+                    }
+                case .missingRow(let file, let row):
+                    let version: String
+                    if let bundled = bundledRuntimeVersion(of: plan.executable) {
+                        version = bundled
+                    } else {
+                        version = await installedVersion(of: plan.executable) ?? "?"
+                    }
+                    throw ProviderError.failed(String(format: AppText.localized("DeepSeek Harness %1$@ has no ACP row %2$@, which %3$@ changes. Update Tivano, or remove that entry from the patch."), version, row, file))
+                case .unreadable:
+                    throw ProviderError.failed(AppText.localized("DeepSeek Harness could not load Tivano's configuration. Update DeepSeek Harness or check your profile patches, then try again."))
+                }
             }
             try Task.checkCancellation()
             return plan
@@ -363,25 +391,37 @@ enum DshCLI {
     }
 
     static func patchesApply(executable: URL, arguments: [String], environment: [String: String]) async -> Bool {
+        if case .applies = await checkPatches(executable: executable, arguments: arguments, environment: environment) { return true }
+        return false
+    }
+
+    static func checkPatches(executable: URL, arguments: [String], environment: [String: String]) async -> DshPatchCheck {
         var environment = environment
         applyBaseEnvironment(&environment, apiKey: environment["DEEPSEEK_API_KEY"] ?? "")
         guard !Task.isCancelled,
               let result = try? await Shell.run(executable, arguments + ["--dump-config"], environment: environment, timeout: 20),
-              result.succeeded, !Task.isCancelled else { return false }
+              result.succeeded, !Task.isCancelled else { return .unreadable }
         let directory = home.appendingPathComponent("tivano-patches", isDirectory: true)
             .resolvingSymlinksInPath().standardizedFileURL
         let userPatch = userProfilePatch(environment: environment)?.resolvingSymlinksInPath().standardizedFileURL
-        return !result.errorOutput.split(whereSeparator: \.isNewline).contains { line in
+        for line in result.errorOutput.split(whereSeparator: \.isNewline) {
             let prefix = "dsh: ["
             guard line.hasPrefix(prefix),
                   let separator = line.range(of: "] patch: entry \""),
-                  line.hasSuffix("\" not found") else { return false }
-            let file = URL(fileURLWithPath: String(line.dropFirst(prefix.count).prefix(upTo: separator.lowerBound)))
+                  line.hasSuffix("\" not found") else { continue }
+            let path = String(line.dropFirst(prefix.count).prefix(upTo: separator.lowerBound))
+            let file = URL(fileURLWithPath: path)
                 .resolvingSymlinksInPath().standardizedFileURL
             let row = String(line[separator.upperBound...].dropLast("\" not found".count))
-            if file == directory.appendingPathComponent("minimal-optional.yml"), row == "tool-working-directory" { return false }
-            if file == userPatch, row.hasPrefix("ui-") { return false }
-            return true
+            if file.path.hasPrefix(directory.path + "/"),
+               let content = try? String(contentsOf: file, encoding: .utf8),
+               DshPatches.disableOnlyIDs(content).contains(row) { continue }
+            if file == userPatch, row.hasPrefix("ui-") { continue }
+            return .missingRow(file: path, row: row)
         }
+        let delegationOff = zip(arguments, arguments.dropFirst()).contains { flag, value in
+            flag == "--patch" && ["no-delegation.yml", "minimal.yml"].contains(URL(fileURLWithPath: value).lastPathComponent)
+        }
+        return .applies(delegationRows: delegationOff ? DshPatches.enabledDelegationRows(inDump: result.output) : [])
     }
 }

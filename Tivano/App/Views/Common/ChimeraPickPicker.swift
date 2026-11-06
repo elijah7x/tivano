@@ -5,11 +5,13 @@ struct ChimeraPickPicker: View {
     @Binding private var pick: ChimeraPick?
     /// Off where the icon alone names the provider and room is short (the casting card).
     private let showsProvider: Bool
+    private let width: CGFloat?
     @State private var isPresented = false
 
-    init(pick: Binding<ChimeraPick?>, showsProvider: Bool = true) {
+    init(pick: Binding<ChimeraPick?>, showsProvider: Bool = true, width: CGFloat? = nil) {
         _pick = pick
         self.showsProvider = showsProvider
+        self.width = width
     }
 
     var body: some View {
@@ -40,6 +42,7 @@ struct ChimeraPickPicker: View {
             help: displayedTitle,
             iconName: pick?.provider.iconName,
             accessibilityLabel: "Model",
+            width: width,
             isPresented: $isPresented
         ) {
             NewThreadModelPicker(
@@ -50,7 +53,6 @@ struct ChimeraPickPicker: View {
                 allowedProviders: providers
             ) { selection in
                 pick = selection.map { ChimeraPick(provider: $0.provider, model: $0.modelID, effort: $0.effort) }
-                isPresented = false
             }
         }
         .disabled(providers.isEmpty)
