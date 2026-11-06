@@ -1,6 +1,71 @@
+import Foundation
+
 /// Row patches for `dsh --profile acp --patch`.
 /// Row ids are dsh internals and can change between versions.
 enum DshPatches {
+    static func disableOnlyIDs(_ content: String) -> Set<String> {
+        var ids = Set<String>()
+        var entry: [String] = []
+        func finishEntry() {
+            guard entry.count == 2, entry[1] == "  disabled: true",
+                  entry[0].range(of: #"^- id: \S+$"#, options: .regularExpression) != nil else { return }
+            ids.insert(String(entry[0].dropFirst("- id: ".count)))
+        }
+        for line in content.split(whereSeparator: \.isNewline) {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            if line.hasPrefix("- ") {
+                finishEntry()
+                entry = []
+            }
+            entry.append(String(line))
+        }
+        finishEntry()
+        return ids
+    }
+
+    static func enabledDelegationRows(inDump dump: String) -> [String] {
+        var rows: [String] = []
+        var seen = Set<String>()
+        var row: (id: String, indent: String)?
+        var name: String?
+        var disabled: String?
+        func finishRow() {
+            guard let row, let name, disabled != "true",
+                  name.range(of: #"^@deepseek-ai/dsh-(tool-subagent|tool-workflow|tool-goal|command-goal)([-/].*)?$"#, options: .regularExpression) != nil,
+                  seen.insert(row.id).inserted else { return }
+            rows.append(row.id)
+        }
+        for line in dump.split(whereSeparator: \.isNewline) {
+            let clean = line.trimmingCharacters(in: .whitespaces)
+            if clean.isEmpty || clean.hasPrefix("#") { continue }
+            let indent = String(line.prefix(while: { $0.isWhitespace }))
+            let isRow = line.range(of: #"^\s*- id: \S+\s*$"#, options: .regularExpression) != nil
+            if let current = row, indent.count <= current.indent.count || isRow {
+                finishRow()
+                row = nil
+            }
+            if isRow {
+                row = (String(clean.dropFirst("- id: ".count)).trimmingCharacters(in: .whitespaces), indent)
+                name = nil
+                disabled = nil
+                continue
+            }
+            guard let row, indent == row.indent + "  " else { continue }
+            if clean.hasPrefix("name:") {
+                var value = String(clean.dropFirst("name:".count)).trimmingCharacters(in: .whitespaces)
+                if value.count >= 2, let first = value.first,
+                   (first == "'" || first == "\""), value.last == first {
+                    value = String(value.dropFirst().dropLast())
+                }
+                name = value
+            } else if clean.hasPrefix("disabled:") {
+                disabled = String(clean.dropFirst("disabled:".count)).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        finishRow()
+        return rows
+    }
+
     static let ptc = #"""
     - id: tools
       config:
@@ -30,8 +95,6 @@ enum DshPatches {
     - id: plan-mode
       disabled: true
     - id: tool-subagent-control
-      disabled: true
-    - id: tool-subagent-list-agents
       disabled: true
     - id: tool-subagent
       disabled: true
@@ -101,8 +164,8 @@ enum DshPatches {
     """#
 
     // Mirrors dsh-web-app/presets/cordis.patch.yml; ACP also needs the host inspect services.
-    /// Rows only some versions have (`working_directory` arrived in 0.2.1). An unknown row is
-    /// ignored by dsh, and `DshCLI.patchesApply` does not count this file's warnings.
+    /// Rows only some versions have (`working_directory` arrived in 0.2.1).
+    /// Disable-only entries for rows a DSH version lacks are skipped generally.
     static let minimalOptional = #"""
     - id: tool-working-directory
       disabled: true
@@ -130,8 +193,6 @@ enum DshPatches {
 
     static let noDelegation = #"""
     - id: tool-subagent-control
-      disabled: true
-    - id: tool-subagent-list-agents
       disabled: true
     - id: tool-subagent
       disabled: true

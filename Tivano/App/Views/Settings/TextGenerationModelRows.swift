@@ -84,7 +84,7 @@ struct TextGenerationModelRows: View {
                     } else {
                         settings.textGeneration = .automatic
                     }
-                    isPresented = false
+                    if selection == nil { isPresented = false }
                 }
             }
         }

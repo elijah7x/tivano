@@ -750,7 +750,7 @@ private struct NewThreadModelSettingsRow: View {
                         ?? (providers.contains(model.settings.defaultProvider) ? model.settings.defaultProvider : providers.first)
                 ) { selection in
                     model.settings.newThreadModelSelection = selection
-                    isPresented = false
+                    if selection == nil { isPresented = false }
                 }
             }
         }
@@ -762,6 +762,7 @@ struct ModelChoiceButton<Popover: View>: View {
     let help: String
     let iconName: String?
     let accessibilityLabel: String
+    var width: CGFloat? = nil
     @Binding var isPresented: Bool
     @ViewBuilder let popover: () -> Popover
 
@@ -769,25 +770,15 @@ struct ModelChoiceButton<Popover: View>: View {
         Button {
                 isPresented = true
             } label: {
-                HStack(spacing: 6) {
-                    if let iconName {
-                        Image(iconName)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 14, height: 14)
+                Group {
+                    if let width {
+                        choiceLabel.frame(width: width, alignment: .leading)
+                    } else {
+                        // Caps a long title without claiming 190 points for a short one, so the
+                        // row's detail keeps the width the capsule does not need.
+                        choiceLabel.frame(maxWidth: 190)
                     }
-                    Text(verbatim: title)
-                        .font(.ui(size: 12.5, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Image(systemName: "chevron.down")
-                        .font(Chrome.chevronFont)
-                        .foregroundStyle(Chrome.secondaryText)
                 }
-                .padding(.horizontal, Chrome.capsuleHorizontalPadding)
-                // Caps a long title without claiming 190 points for a short one, so the
-                // row's detail keeps the width the capsule does not need.
-                .frame(maxWidth: 190)
                 .frame(height: Chrome.capsuleContentHeight)
                 .contentShape(Capsule(style: .continuous))
             }
@@ -804,6 +795,26 @@ struct ModelChoiceButton<Popover: View>: View {
                     .presentedChrome()
             }
             .background { NoWindowDragArea() }
+    }
+
+    private var choiceLabel: some View {
+        HStack(spacing: 6) {
+            if let iconName {
+                Image(iconName)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 14, height: 14)
+            }
+            Text(verbatim: title)
+                .font(.ui(size: 12.5, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if width != nil { Spacer(minLength: 0) }
+            Image(systemName: "chevron.down")
+                .font(Chrome.chevronFont)
+                .foregroundStyle(Chrome.secondaryText)
+        }
+        .padding(.horizontal, Chrome.capsuleHorizontalPadding)
     }
 }
 

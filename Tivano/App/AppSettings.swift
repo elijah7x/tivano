@@ -1249,6 +1249,21 @@ final class AppSettings {
         return true
     }
 
+    @discardableResult
+    func moveChimeraPreset(_ id: UUID, to neighbourID: UUID, placeAfter: Bool) -> Bool {
+        guard id != neighbourID,
+              let from = chimeraPresets.firstIndex(where: { $0.id == id }),
+              let to = chimeraPresets.firstIndex(where: { $0.id == neighbourID }) else { return false }
+        var dest = to + (placeAfter ? 1 : 0)
+        if from < dest { dest -= 1 }
+        guard from != dest else { return false }
+        var reordered = chimeraPresets
+        let moved = reordered.remove(at: from)
+        reordered.insert(moved, at: dest)
+        chimeraPresets = reordered
+        return true
+    }
+
     func hydraPair(_ id: UUID?) -> HydraPair? {
         guard let id else { return nil }
         return hydraPairs.first { $0.id == id }

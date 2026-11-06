@@ -25,6 +25,7 @@ struct HydraButton: View {
 
     var body: some View {
         let isOn = model.hydraModeIsOn(thread)
+        let isChimera = model.chimeraIsOn(thread)
         // This chat's own heads, read through its child cells: another lead's head
         // starting or finishing never re-renders this button.
         let heads = model.panelHeads(of: thread.id)
@@ -56,7 +57,7 @@ struct HydraButton: View {
             // it over everything else in it, so a badge laid over the button after the
             // glass, as an overlay or a later sibling, came out underneath.
             .overlay(alignment: .topTrailing) {
-                if running > 0 || isSending || isDelegating {
+                if !isChimera, running > 0 || isSending || isDelegating {
                     HydraSendWorkingBadge(running: running, isSending: isSending || isDelegating)
                         .offset(x: 3, y: -3)
                         .transition(.scale.combined(with: .opacity))
@@ -109,12 +110,15 @@ struct HydraButton: View {
         .accessibilityValue(Text(verbatim: isOn ? Chrome.localized("On") : Chrome.localized("Off")))
     }
 
+    private func togglePanel() { Self.togglePanel(model: model, runtime: runtime) }
+
     /// Shows the floating panel; shown, hides it. The panel fades and scales in and out
     /// in place while the chat slides to make room or take it back. Heads keep working
     /// either way. With nothing out yet the popover explains instead (see the body).
-    private func togglePanel() {
+    @MainActor
+    static func togglePanel(model: AppModel, runtime: ThreadRuntime) {
         if runtime.isHydraPanelHidden {
-            let heads = model.panelHeads(of: thread.id)
+            let heads = model.panelHeads(of: runtime.threadID)
             let staged = heads.filter { $0.id != runtime.hydraPoppedHeadID }
             let selected = staged.first { $0.id == runtime.hydraSelectedHeadID }
                 ?? staged.last { $0.hydra?.status == .running }
@@ -131,7 +135,7 @@ struct HydraButton: View {
     /// still running, or a delegation block in a reply (streaming briefs, or written
     /// while the heads have yet to go out; the block leaves the reply once they do).
     @MainActor
-    private static func isLeadDelegating(_ entries: [TimelineEntry]) -> Bool {
+    static func isLeadDelegating(_ entries: [TimelineEntry]) -> Bool {
         guard let lastEntry = entries.last else { return false }
         // The row's own turn, fixed for its lifetime: reading it through `item` would make
         // this button observe the last row of the turn before as well.
@@ -640,9 +644,10 @@ final class HydraChargeLayerView: NSView {
 /// place into the working count: the same anchor, the same capsule at the same size, the
 /// existing mini spinner and the panel slide for motion, so nothing jumps and no second
 /// row ever appears.
-private struct HydraSendWorkingBadge: View {
+struct HydraSendWorkingBadge: View {
     let running: Int
     let isSending: Bool
+    var isChimera = false
 
     var body: some View {
         Group {
@@ -663,7 +668,7 @@ private struct HydraSendWorkingBadge: View {
         .background(isSending ? Chrome.glassTint : Chrome.accent, in: Capsule())
         .contentShape(Capsule())
         .animation(Chrome.panelSlide, value: isSending)
-        .help(Text(verbatim: isSending && running == 0 ? Chrome.localized("Preparing the delegation · Show or hide the Hydra panel") : running == 1 ? Chrome.localized("1 head working · Show or hide the Hydra panel") : String(format: Chrome.localized("%d heads working · Show or hide the Hydra panel"), running)))
+        .help(Text(verbatim: isSending && running == 0 ? Chrome.localized(isChimera ? "Preparing the delegation · Show or hide the Chimera panel" : "Preparing the delegation · Show or hide the Hydra panel") : running == 1 ? Chrome.localized(isChimera ? "1 head working · Show or hide the Chimera panel" : "1 head working · Show or hide the Hydra panel") : String(format: Chrome.localized(isChimera ? "%d heads working · Show or hide the Chimera panel" : "%d heads working · Show or hide the Hydra panel"), running)))
         .accessibilityHidden(true)
     }
 }

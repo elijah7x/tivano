@@ -13,6 +13,7 @@ enum DshMarketplaceBootstrap {
             "compatibility": AppText.localized("Bundle %@ is incompatible with this DeepSeek Harness version."),
             "resolution": AppText.localized("Cannot resolve the selected marketplace bundles and their installed dependencies."),
             "patch": AppText.localized("A patch in %@ targets a missing or incompatible ACP row. Desktop-only overrides are not supported."),
+            "patchRow": AppText.localized("DeepSeek Harness %1$@ has no ACP row %2$@, which %3$@ changes. Update Tivano, or remove that entry from the patch."),
             "acp": AppText.localized("The ACP boundary row %@ was changed or disabled."),
             "entry": AppText.localized("Unsupported Cordis entry: %@"),
             "plugin": AppText.localized("Cannot resolve enabled plugin %@."),
@@ -46,7 +47,7 @@ enum DshMarketplaceBootstrap {
     // serving ACP. Exit 0 is compatible, 1 a profile problem, 3 a runtime mismatch.
     const checking = process.env.TIVANO_DSH_CHECK === '1';
     const fail = message => { throw new AdmissionError(message); };
-    const message = (key, value) => options.errors[key].replace('%@', () => String(value));
+    const message = (key, ...values) => options.errors[key].replace(/%([1-3])\$@|%@/g, (_, position) => String(values[position ? Number(position) - 1 : 0]));
     const readonly = message('readonly');
     const fingerprints = new Map();
     function stamp(file) {
@@ -166,6 +167,7 @@ enum DshMarketplaceBootstrap {
             }
             return ids;
         }
+        const disableOnly = patch => patch !== null && typeof patch === 'object' && typeof patch.id === 'string' && patch.disabled === true && Object.keys(patch).length === 2;
         const inheritedIds = collectIds(inheritedRows);
         const surfaceIds = collectIds(surfaceRows);
         const optionalDesktopUI = new Set(['ui-settings-account', 'ui-chat', 'ui-settings']);
@@ -176,18 +178,54 @@ enum DshMarketplaceBootstrap {
         const homePatch = path.join(options.home, 'cordis.patch.yml');
         inputs.push({ label: homePatch, patches: patches(homePatch, true) });
         for (const file of options.overlays) {
-            let overlay = patches(file);
-            if (path.basename(file) === 'minimal-optional.yml') {
-                const before = boot.composeEntries(inputs.map(input => input.patches));
-                if (!before.some(row => row.id === 'tool-working-directory')) overlay = overlay.filter(patch => patch.id !== 'tool-working-directory');
-            }
+            const present = collectIds(boot.composeEntries(inputs.map(input => input.patches)));
+            // A disable aimed at a row this DSH version no longer has is already satisfied.
+            const overlay = patches(file).filter(patch => !(disableOnly(patch) && !present.has(patch.id)));
             inputs.push({ label: file, patches: overlay });
         }
         // Prefixes identify the offending source; the final tree still uses one flattened pass.
-        for (let index = 0; index < inputs.length; index++) boot.composeEntries(inputs.slice(0, index + 1).map(input => input.patches), () => fail(message('patch', inputs[index].label)));
+        for (let index = 0; index < inputs.length; index++) boot.composeEntries(inputs.slice(0, index + 1).map(input => input.patches), () => {
+            if (index > 0) {
+                let known;
+                try {
+                    known = collectIds(boot.composeEntries(inputs.slice(0, index).map(input => input.patches)));
+                } catch {
+                    fail(message('patch', inputs[index].label));
+                }
+                // Patches may target nested rows through a `config` list.
+                function missing(list) {
+                    for (const patch of list) {
+                        if (patch === null || typeof patch !== 'object' || typeof patch.id !== 'string') continue;
+                        if (!known.has(patch.id)) return patch.id;
+                        const nested = Array.isArray(patch.config) ? missing(patch.config) : undefined;
+                        if (nested) return nested;
+                    }
+                }
+                const row = missing(inputs[index].patches);
+                if (row) fail(message('patchRow', options.version || '?', row, inputs[index].label));
+            }
+            fail(message('patch', inputs[index].label));
+        });
         let rows = boot.composeEntries(inputs.map(input => input.patches));
         const telemetry = boot.resolveTelemetryPatch(process.env.DSH_TELEMETRY_DISABLED, rows.some(row => row.id === 'session-telemetry-otel'));
         if (telemetry) rows = boot.composeEntries([[{ insert: rows }, telemetry]]);
+        // Patches name rows by id, which upstream renames; package names keep delegation off across versions.
+        const delegationOff = options.overlays.some(file => ['no-delegation.yml', 'minimal.yml'].includes(path.basename(file)));
+        const delegation = /^@deepseek-ai\/dsh-(tool-subagent|tool-workflow|tool-goal|command-goal)(?:[-/].*)?$/;
+        if (delegationOff) {
+            function guardDelegation(list) {
+                return list.map(row => {
+                    const next = { ...row };
+                    if (typeof row.name === 'string' && delegation.test(row.name) && row.disabled !== true) {
+                        next.disabled = true;
+                        process.stderr.write(`dsh: disabling ${row.id} (${row.name}); delegation is off\n`);
+                    }
+                    if (Array.isArray(row.config)) next.config = guardDelegation(row.config);
+                    return next;
+                });
+            }
+            rows = guardDelegation(rows);
+        }
         for (const [id, name] of [['acp', '@deepseek-ai/dsh-acp'], ['acp-app-startup', '@deepseek-ai/dsh-acp-app']]) {
             const matches = rows.filter(row => row.id === id);
             if (matches.length !== 1 || matches[0].name !== name || matches[0].disabled) fail(message('acp', id));
