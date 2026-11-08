@@ -259,8 +259,10 @@ private struct ThreadColumns: NSViewRepresentable {
 
     let threadID: UUID
     let prebuilt: [UUID]
-    /// Threads with a turn under way. A hidden column of one goes: its rows would stream
-    /// unseen, at the same cost as on screen.
+    /// Threads with a turn under way. Their hidden columns stay: with no timeline shown, a
+    /// runtime flushes its streamed text once a second, so the rows cost little unseen and
+    /// switching back finds the column built. Only a prebuild skips them: building a column
+    /// ahead of a click is a frame's worth of work, not spent on a thread that streams.
     let running: Set<UUID>
     let isCovered: Bool
     let model: AppModel
@@ -274,7 +276,8 @@ private struct ThreadColumns: NSViewRepresentable {
         let columns = context.coordinator
         columns.cover(pane, isCovered, model: model, liveResize: liveResize)
         columns.show(threadID, in: pane, model: model, liveResize: liveResize)
-        columns.dropHidden(where: { running.contains($0) || model.thread($0) == nil || model.existingRuntime(for: $0) == nil })
+        // A running thread's hidden column is kept (see `running`); a deleted thread's goes.
+        columns.dropHidden(where: { model.thread($0) == nil || model.existingRuntime(for: $0) == nil })
         columns.prebuild(prebuilt.filter { model.thread($0) != nil && !running.contains($0) }, in: pane, model: model, liveResize: liveResize)
     }
 

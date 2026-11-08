@@ -8,17 +8,25 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.12] - 2026-11-08
+
 ### English
 
 ### Refinements
 
 - The README now links prominently to [tivano.app](https://tivano.app/), the new website and download page.
+- Several chats streaming at once keep the app responsive: a chat you are not looking at now updates its text once a second instead of every frame and catches up the moment you open it, and switching back to a chat that is still running no longer rebuilds it from scratch.
 
 ### 简体中文
 
 ### 优化改进
 
 - README 顶部突出显示新官网与下载页 [tivano.app](https://tivano.app/)。
+- 多个对话同时输出时界面更流畅：未在查看的对话改为每秒刷新一次文字，打开时立即补齐；切回仍在运行的对话也不再从头重建。
+
+### Thanks
+
+- No outside contributors.
 
 ## [2.5.7] - 2026-11-06
 

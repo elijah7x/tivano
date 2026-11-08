@@ -159,7 +159,7 @@ def main():
         work = Path(directory)
         generated = work / "UIAudit.swift"
         generated.write_text(swift)
-        sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
+        sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
         machine = "arm64" if platform.machine() == "arm64" else "x86_64"
         command = ["xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
                    "-target", f"{machine}-apple-macosx26.0", "-sdk", sdk,

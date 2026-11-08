@@ -676,6 +676,8 @@ final class ThreadRuntime {
     @ObservationIgnored private var entryIndex: [String: TimelineEntry] = [:]
     @ObservationIgnored private var pendingDeltas: [String: PendingDelta] = [:]
     @ObservationIgnored private var flushTask: Task<Void, Never>?
+    /// How many timelines show this runtime's rows right now (see `noteTimeline`).
+    @ObservationIgnored private var shownTimelines = 0
     @ObservationIgnored private var streamByteLengths: [String: Int] = [:]
     @ObservationIgnored private var pendingFlushBytes = 0
     /// Bumped by anything that changes what `saveNow` writes, so the periodic save
@@ -4848,6 +4850,8 @@ final class ThreadRuntime {
         if isHead { StreamLoad.shared.noteStreaming(self) }
         var delay = Self.flushDelay(for: pendingFlushBytes, scrolling: ScrollActivity.shared.isScrolling)
         if isHead { delay = max(delay, StreamLoad.shared.headFlushDelayMilliseconds) }
+        let offscreen = shownTimelines == 0
+        if offscreen { delay = max(delay, Self.offscreenFlushMilliseconds) }
         let remaining = Duration.milliseconds(delay) - (ContinuousClock.now - lastFlushAt)
         let firstVisible: Bool
         switch entryIndex[id]?.item.content {
@@ -4856,7 +4860,7 @@ final class ThreadRuntime {
         case .plan(let plan): firstVisible = plan.markdown.isEmpty
         default: firstVisible = false
         }
-        if firstVisible || remaining <= .zero {
+        if (firstVisible && !offscreen) || remaining <= .zero {
             flushDeltas()
             return
         }
@@ -4865,6 +4869,24 @@ final class ThreadRuntime {
             try? await Task.sleep(for: remaining)
             guard !Task.isCancelled else { return }
             self?.flushDeltas()
+        }
+    }
+
+    /// How long a runtime with no timeline on screen waits between flushes, in milliseconds.
+    /// Nobody reads the text of a timeline that is not shown, so once a second is enough to
+    /// keep it merged; the first timeline to show it again flushes what is pending at once.
+    private nonisolated static let offscreenFlushMilliseconds = 1000
+
+    /// A timeline starts or stops showing this runtime's rows, reported by the timeline's
+    /// scroll tracking. While none does, deltas are flushed once a second rather than per
+    /// frame. The first one to show catches the text up before its first frame.
+    func noteTimeline(shown: Bool) {
+        if shown {
+            shownTimelines += 1
+            guard shownTimelines == 1, !pendingDeltas.isEmpty else { return }
+            flushDeltas()
+        } else {
+            shownTimelines = max(0, shownTimelines - 1)
         }
     }
 

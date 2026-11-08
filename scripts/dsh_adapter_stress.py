@@ -26,7 +26,7 @@ CASES = {
     'mixed-mcp': 'Surface mixed MCP failure or retry selectively, retaining healthy server.',
     'wrong-session': 'Foreign session messages and permission requests produce no user events.',
     'selection-timeout': 'Unanswered model selection fails within the external 60-second budget, without a turn.',
-    'probe-timeout': 'Unanswered catalog selection fails within the external 60-second budget.',
+    'probe-timeout': 'Unanswered effort switches keep the listed models; the probe ends within its 180-second deadline (ffd3ce0a4).',
     'late-input': 'Approval includes command arguments supplied by later tool_call_update.',
     'failed-edit': 'Failed edit with unchanged disk has no actual edits in final tool state.',
     'failed-write': 'Failed write with unchanged disk has no actual edits in final tool state.',
@@ -57,6 +57,19 @@ CASES = {
 }
 
 
+def sandbox_policy(out):
+    """Offline sandbox: writes stay in the run directory, plus two per-user temporary
+    paths production code uses regardless of TMPDIR: Foundation's atomic-write staging
+    (TemporaryItems) and ACPSession.probeModels' tivano-catalog working directory.
+    Without them those writes fail silently, and probes pass only on hosts where the
+    catalog directory happens to exist already."""
+    temp = Path(subprocess.check_output(['/usr/bin/getconf', 'DARWIN_USER_TEMP_DIR'], text=True).strip()).resolve()
+    allowed = ' '.join('(subpath ' + json.dumps(str(path)) + ')'
+                       for path in (out, temp / 'TemporaryItems', temp / 'tivano-catalog'))
+    return ('(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n'
+            '(allow file-write* ' + allowed + ' (literal "/dev/null"))\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case', action='append', choices=CASES, help='Run selected case(s); default all')
@@ -72,8 +85,7 @@ def main():
     kit = out / 'kit'
     shutil.copytree(root / 'scripts/fixtures/dsh_adapter', kit)
     policy = out / 'offline.sb'
-    policy.write_text('(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n'
-                      '(allow file-write* (subpath ' + json.dumps(str(out)) + ') (literal "/dev/null"))\n')
+    policy.write_text(sandbox_policy(out))
     python = str(Path(sys.executable).resolve())
     # Use the same interpreter, not whichever python an inherited PATH selects.
     peer = kit / 'fake-dsh'
@@ -124,7 +136,9 @@ def main():
         return {'exit': process.returncode, 'timeout': expired, 'seconds': time.monotonic() - started}
 
     selected = list(dict.fromkeys(args.case or list(CASES)))
-    deadline = time.monotonic() + 180 + len(selected) * 70
+    # probe-timeout waits out one 45-second switch deadline per model.
+    case_budget = {'probe-timeout': 200}
+    deadline = time.monotonic() + 180 + sum(case_budget.get(name, 60) + 10 for name in selected)
     results = []
     summary = {'artifacts': str(out), 'results': results, 'passed': False}
     try:
@@ -146,7 +160,7 @@ def main():
             (directory / 'lease').write_text(str(out))
             (directory / 'unchanged.txt').write_text('before')
             try:
-                budget = min(60, max(0, deadline - time.monotonic()))
+                budget = min(case_budget.get(name, 60), max(0, deadline - time.monotonic()))
                 if budget <= 0:
                     raise RuntimeError('Global run budget exhausted')
                 stage = run([str(kit / 'adapter'), str(peer)], directory, budget, env)
@@ -162,7 +176,7 @@ def main():
             row.update(expected=CASES[name], process=stage, providerEvidence='simulated ACP peer, not a real provider')
             row['passed'] = row.get('passed') is True and stage['exit'] == 0 and not stage['timeout']
             if stage['timeout']:
-                row['error'] = 'External timeout (60 seconds); production deadlines unchanged'
+                row['error'] = f"External timeout ({case_budget.get(name, 60)} seconds); production deadlines unchanged"
             if 'observed' not in row:
                 frames = []
                 for path in directory.glob('wire-*.jsonl'):

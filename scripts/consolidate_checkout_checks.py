@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+if sys.flags.optimize:
+    raise SystemExit("run without -O or PYTHONOPTIMIZE; fixture assertions must remain enabled")
 sys.dont_write_bytecode = True
 SOURCE = Path(__file__).resolve().parent.parent
 _temporary = tempfile.TemporaryDirectory(prefix='tivano-consolidation-checks-')

@@ -24,8 +24,10 @@ def prepare(root, kit):
         'Tivano/Core/Support/Text.swift',
         'Tivano/Core/Support/Coding.swift',
         'Tivano/Core/Models/Provider.swift',
+        'Tivano/Core/Models/ProviderAccount.swift',
         'Tivano/Core/Models/ModelFamilies.swift',
         'Tivano/Core/Models/DshAgentMode.swift',
+        'Tivano/Core/Models/Voice.swift',
         'Tivano/Core/Models/ZaiRegion.swift',
         'Tivano/Core/Models/Requests.swift',
         'Tivano/Core/Models/TokenSpend.swift',
@@ -49,7 +51,7 @@ def prepare(root, kit):
         'compiled_sources': [str(p) for p in sources],
         'extracted_types': extracted,
         'sha256': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources + [root / p for p in extracted]},
-        'shims': ['CaptureRun: isolated storage and ephemeral defaults', 'HydraLaunch and VoiceOrchestratorContext: unused empty context', 'LoginEnvironment: isolated HOME; no login shell', 'Shell: fail closed (version/patch preflight not exercised in Standard mode)', 'Storage: attachment import fails closed (no image fixtures)', 'MCPProviderConfig: static two-server fixture or empty list; never launches MCP'],
+        'shims': ['CaptureRun: isolated storage and ephemeral defaults', 'HydraLaunch: unused empty context', 'LoginEnvironment: isolated HOME; no login shell', 'Shell: fail closed except canned provider-list and patch-warning fixtures; marketplace preflight is not executed', 'Storage: attachment import fails closed (no image fixtures)', 'MCPProviderConfig: static two-server fixture or empty list with no skipped commands; never reads user MCP configuration or launches MCP'],
     }
     (kit / 'sources.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return [str(p) for p in sources]

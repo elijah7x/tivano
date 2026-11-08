@@ -31,12 +31,20 @@ import QuartzCore
 struct DisplayBlock { let id: String }
 enum Chrome { static let contentTopInset: CGFloat = 16 }
 enum TimelineMetrics { static let rowSpacing: CGFloat = 12 }
+
+/// Counts what the production tracking reports; the runtime's flush pacing reads the count.
+@MainActor
+final class ThreadRuntime {
+    var shownTimelines = 0
+    func noteTimeline(shown: Bool) { shownTimelines += shown ? 1 : -1 }
+}
 '''
 swift += "\n@MainActor\n" + declaration("private final class TimelineMeasurements")
 swift += r'''
 @MainActor
 private final class TrackingHarness {
     var columnIsShown = false
+    weak var shownRuntime: ThreadRuntime?
     var blankWatch: Task<Void, Never>?
     var viewportRefreshTask: Task<Void, Never>?
     var refreshPending = false
@@ -58,6 +66,13 @@ swift += "\n}\n"
 swift += r'''
 @main
 struct Checks {
+    /// The refresh fires after production's 300 ms wait; a fixed sleep with a small margin
+    /// fails on a loaded host, so wait for the expected state (up to 5 s) instead.
+    @MainActor static func eventually(_ condition: () -> Bool) async {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !condition() && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
     @MainActor static func main() async {
         let m = TimelineMeasurements()
         var reference: [String: CGRect] = [:]
@@ -102,18 +117,20 @@ struct Checks {
         print("PASS: 20,000 height updates, restoration, invalidation and stale generations")
 
         let t = TrackingHarness()
+        let r = ThreadRuntime()
         t.armBlankWatch()
         t.armViewportRefresh()
         t.noteReturnToFront()
         precondition(t.blankWatch == nil && t.viewportRefreshTask == nil)
         precondition(t.checkRequest == 0 && t.refreshRequest == 0)
 
-        t.setColumnShown(true)
-        try? await Task.sleep(for: .milliseconds(380))
-        precondition(t.checkRequest == 2 && t.refreshRequest == 1)
+        t.setColumnShown(true, on: r)
+        await eventually { t.checkRequest >= 2 && t.refreshRequest >= 1 }
+        try? await Task.sleep(for: .milliseconds(380)) // no extra requests may follow
+        precondition(t.checkRequest == 2 && t.refreshRequest == 1, "visible column: expected 2 checks and 1 refresh, got \(t.checkRequest)/\(t.refreshRequest)")
         let checked = t.checkRequest
-        t.setColumnShown(true)
-        precondition(t.checkRequest == checked) // repeated visibility is inert
+        t.setColumnShown(true, on: r)
+        precondition(t.checkRequest == checked, "repeated visibility must be inert") // repeated visibility is inert
 
         // Hide after a refresh has entered its asynchronous wait. Its canceled
         // continuation must not fire or clear the next visible column's task.
@@ -121,26 +138,44 @@ struct Checks {
         t.armViewportRefresh()
         t.armBlankWatch()
         try? await Task.sleep(for: .milliseconds(25))
-        t.setColumnShown(false)
+        t.setColumnShown(false, on: r)
         let hiddenChecks = t.checkRequest
         let hiddenRefreshes = t.refreshRequest
         t.armBlankWatch()
         t.armViewportRefresh()
         try? await Task.sleep(for: .milliseconds(380))
-        precondition(t.checkRequest == hiddenChecks && t.refreshRequest == hiddenRefreshes)
-        precondition(!t.refreshPending && t.endedActivity == 1)
+        precondition(t.checkRequest == hiddenChecks && t.refreshRequest == hiddenRefreshes, "hidden column must not check or refresh")
+        await eventually { !t.refreshPending && t.endedActivity == 1 }
+        precondition(!t.refreshPending && t.endedActivity == 1, "hiding must end the pending refresh once, got pending=\(t.refreshPending) ended=\(t.endedActivity)")
 
-        t.setColumnShown(true)
+        t.setColumnShown(true, on: r)
         try? await Task.sleep(for: .milliseconds(25))
-        t.setColumnShown(false)
-        t.setColumnShown(true)
+        t.setColumnShown(false, on: r)
+        t.setColumnShown(true, on: r)
         let returnChecks = t.checkRequest
-        try? await Task.sleep(for: .milliseconds(380))
-        precondition(t.refreshRequest == hiddenRefreshes + 1)
-        precondition(t.checkRequest == returnChecks + 1)
-        precondition(!t.refreshPending)
-        t.setColumnShown(false)
+        await eventually { t.refreshRequest >= hiddenRefreshes + 1 && t.checkRequest >= returnChecks + 1 && !t.refreshPending }
+        try? await Task.sleep(for: .milliseconds(380)) // no extra requests may follow
+        precondition(t.refreshRequest == hiddenRefreshes + 1, "rapid return: expected exactly one refresh, got \(t.refreshRequest - hiddenRefreshes)")
+        precondition(t.checkRequest == returnChecks + 1, "rapid return: expected exactly one check, got \(t.checkRequest - returnChecks)")
+        precondition(!t.refreshPending, "rapid return left a refresh pending")
+        t.setColumnShown(false, on: r)
+        precondition(r.shownTimelines == 0, "hidden column must leave no visible count, got \(r.shownTimelines)")
         print("PASS: hidden/prebuilt suppression, visible repair, cancellation and rapid return")
+
+        // The runtime's visible count: one per shown timeline, inert on repeats, moved
+        // with a runtime swapped under a shown timeline, and never left behind on hide.
+        let u = TrackingHarness()
+        let first = ThreadRuntime()
+        let second = ThreadRuntime()
+        u.setColumnShown(true, on: first)
+        u.setColumnShown(true, on: first)
+        precondition(first.shownTimelines == 1, "repeated show must count once, got \(first.shownTimelines)")
+        u.setColumnShown(true, on: second)
+        precondition(first.shownTimelines == 0 && second.shownTimelines == 1, "swap must move the count, got \(first.shownTimelines)/\(second.shownTimelines)")
+        u.setColumnShown(false, on: second)
+        u.setColumnShown(false, on: second)
+        precondition(second.shownTimelines == 0, "hide must take the count back once, got \(second.shownTimelines)")
+        print("PASS: visible-timeline count pairs show and hide across runtime swaps")
     }
 }
 '''
