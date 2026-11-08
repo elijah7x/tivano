@@ -79,10 +79,26 @@
 - New code goes in the lowest layer whose dependencies it has. A Core file that needs
   the provider registry, the settings or a view is in the wrong layer: split the part
   that needs them into an extension in the layer above (see `App/HydraCookbook+Resolve.swift`).
-- There is no test target. The lead runs the build
-  (`xcodebuild -project Tivano.xcodeproj -scheme Tivano -configuration Debug build`)
-  and existing acceptance scripts as appropriate within the owner's authorization;
-  heads never run checks.
+- There is no test target. The lead runs the build and checks with
+  `python3 scripts/verify.py` within the owner's authorization; heads never run checks.
+
+## Checks
+
+- Before merging into dev, run `python3 scripts/verify.py` in the integration
+  worktree. Any FAIL, TIMEOUT or missing prerequisite blocks the merge. Use
+  `--all` for all offline checks. Never weaken assertions, timeouts or thresholds
+  to make checks pass.
+- When fixing a bug an offline check can catch, add or extend that check in the
+  same commit and register its covered files in the `verify.py` registry.
+- Check scripts must fail explicitly when extraction markers or replacement
+  targets do not match; never silently fall back to real network, Keychain or
+  user data.
+- The build host re-runs `scripts/verify.py --all` on every new dev commit
+  (see docs/operations/build-host-ci.md); after fast-forwarding dev,
+  `python3 scripts/ci_gate.py kick` starts it immediately.
+- `scripts/ship.sh` refuses to release a dev commit without a passing build-host
+  record; `TIVANO_SKIP_CI_GATE=1` overrides only on an explicit owner instruction
+  for that release.
 
 ## Hydra heads (the chat team)
 

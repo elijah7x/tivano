@@ -39,13 +39,46 @@ def main():
     model = "Tivano/App/AppModel.swift"
     control = "Tivano/Core/Models/LocalControl.swift"
     coding = "Tivano/Core/Support/Coding.swift"
+    text = "Tivano/Core/Support/Text.swift"
+    accounts = "Tivano/Core/Models/ProviderAccount.swift"
+    chimera = "Tivano/Core/Models/Chimera.swift"
+    hydra = "Tivano/Core/Models/Hydra.swift"
+    hydra2 = "Tivano/Core/Models/Hydra2.swift"
     library = "Tivano/Core/Models/Library.swift"
     paths = "Tivano/Core/Support/StoragePaths.swift"
     fixture = "scripts/fixtures/workspace_recovery/Recovery.swift"
     source = (ROOT / fixture).read_text()
+    # Provider execution is outside these recovery checks; current models also
+    # reference Claude and the provider's display name.
+    source = source.replace(declaration(fixture, "enum ProviderKind:"), r'''enum ProviderKind: String, Codable, Sendable {
+    case codex, claude
+    var displayName: String {
+        switch self { case .codex: "Codex"; case .claude: "Claude" }
+    }
+    func supported(_ mode: RuntimeMode) -> RuntimeMode { mode }
+}''', 1)
+    # Chimera.swift's prompt helper needs only these members. The full Hydra
+    # implementation imports SwiftUI and unrelated delegation logic.
+    prompt_shims = r'''
+struct HydraLaunch {
+    var isChimera = false
+    var chimeraPresets: [String] = []
+}
+enum HydraPrompts {
+    static func v2Policy(_ launch: HydraLaunch) -> String {
+        fatalError("Hydra prompt generation is outside workspace recovery checks")
+    }
+}
+'''
     replacements = {
         "MODELS_PRODUCTION": "\n".join([
-            (ROOT / coding).read_text(), (ROOT / library).read_text(),
+            prompt_shims,
+            # Extract real support declarations without Text.swift's AppInfo and
+            # FileEdit dependencies or Hydra.swift's SwiftUI dependency.
+            declaration(text, "enum AppText {"),
+            "extension String {\n" + declaration(text, "    var trimmed:") + "\n}",
+            "extension HydraHeadInfo {\n" + declaration(hydra, "    enum Status:") + "\n}",
+            *((ROOT / path).read_text() for path in (coding, accounts, chimera, hydra2, library)),
             *(declaration(control, marker) for marker in (
                 "enum ControlWorkspaceMode:", "enum ControlWorkspacePhase:",
                 "struct ControlWorkspace:", "struct ControlFailure:")),
@@ -72,7 +105,7 @@ def main():
         "scope": "extracted production recovery, model coding and directory resolution; isolated dependencies, not App end-to-end proof",
         "compile_command": command,
         "sources": {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in (
-            store, model, control, coding, library, paths, fixture,
+            store, model, control, coding, text, accounts, chimera, hydra, hydra2, library, paths, fixture,
             "scripts/local_control_domain_checks.py", "scripts/workspace_recovery_checks.py")},
         "generated_sha256": hashlib.sha256(source.encode()).hexdigest(),
         "cases": [],

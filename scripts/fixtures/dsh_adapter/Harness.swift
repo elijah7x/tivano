@@ -107,10 +107,12 @@ struct AssertionFailure: Error { let message: String }
             let warningFile = root.appendingPathComponent("patch-warnings.txt")
             let optional = args.first { $0.hasSuffix("minimal-optional.yml") }!
             let required = args.first { $0.hasSuffix("minimal.yml") }!
-            for (warning, expected) in [("", true), ("dsh: [\(required)] patch: entry \"tool-bash\" not found", false), ("", true), ("dsh: [\(optional)] patch: entry \"tool-working-directory\" not found", true), ("dsh: [/external/minimal-optional.yml] patch: entry \"tool-working-directory\" not found", false)] {
+            // Since 56b493af2 a missing row that a Tivano patch only disables is skipped;
+            // rows the patch changes otherwise must still exist.
+            for (warning, expected) in [("", true), ("dsh: [\(required)] patch: entry \"system-prompt\" not found", false), ("dsh: [\(required)] patch: entry \"tool-bash\" not found", true), ("", true), ("dsh: [\(optional)] patch: entry \"tool-working-directory\" not found", true), ("dsh: [/external/minimal-optional.yml] patch: entry \"tool-working-directory\" not found", false)] {
                 try warning.write(to: warningFile, atomically: false, encoding: .utf8)
                 let accepted = await DshCLI.patchesApply(executable: executable, arguments: args, environment: env)
-                try require(accepted == expected, "Patch diagnostic stale or optional file falsely exempted")
+                try require(accepted == expected, "Patch diagnostic stale or optional file falsely exempted: expected \(expected) for [\(warning)]")
             }
             return
         }
@@ -130,12 +132,15 @@ struct AssertionFailure: Error { let message: String }
                 if name == "probe-default" {
                     try require(models.filter(\.isDefault).map(\.id) == ["deepseek-account/v4-flash"], "Full probe replaced non-Pro default")
                 }
-                try require(name != "probe-timeout", "Unanswered probe selection unexpectedly succeeded")
+                if name == "probe-timeout" {
+                    let switches = wire().filter { $0["method"] as? String == "session/set_config_option" }.count
+                    try require(switches >= 2, "Unanswered probe did not try each model's switch")
+                }
                 try require(Set(models.map(\.id)) == Set(["deepseek-account/v4-flash", "deepseek-account/v4-pro"]), "Probe lost models")
             } catch is AssertionFailure { throw AssertionFailure(message: "Probe result violated expectation") }
             catch {
                 observations["probeError"] = String(describing: error)
-                try require(name == "probe-timeout", "Normal probe failed")
+                try require(false, "Probe failed instead of keeping the listed models")
             }
             return
         }

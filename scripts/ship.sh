@@ -134,6 +134,13 @@ step "Checking main and versions"
 git fetch origin --prune --tags --quiet
 [ "$(git rev-parse main)" = "$MAIN_START" ] \
   && [ "$MAIN_START" = "$(git rev-parse origin/main)" ] || fail "Local main differs from origin/main or moved. Resolve that first."
+if [ "${TIVANO_SKIP_CI_GATE:-}" = 1 ]; then
+  echo "WARNING: TIVANO_SKIP_CI_GATE=1 — this release has no build-host full-check evidence." >&2
+else
+  step "Checking build-host CI for dev"
+  python3 scripts/ci_gate.py check "$DEV_START" \
+    || fail "Build-host CI gate failed. Run python3 scripts/ci_gate.py kick, then python3 scripts/ci_gate.py check --wait before retrying."
+fi
 VERSION=$(version_in dev dev)
 TAG="v$VERSION"
 # Only tags in main's history count; tags inherited from upstream Droppy do not.

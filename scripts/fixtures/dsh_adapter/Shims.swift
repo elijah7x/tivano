@@ -5,7 +5,6 @@ enum CaptureRun {
     static var defaults: UserDefaults? { nil }
 }
 struct HydraLaunch: Sendable {}
-struct VoiceOrchestratorContext: Sendable {}
 enum LoginEnvironment {
     static var homeDirectory: String { ProcessInfo.processInfo.environment["HOME"]! }
     static var current: [String: String] { ProcessInfo.processInfo.environment }
@@ -13,12 +12,14 @@ enum LoginEnvironment {
 }
 struct ShellResult: Sendable {
     var succeeded = false
+    var status: Int32 { succeeded ? 0 : 1 }
     var output = ""
     var stdout: Data { Data(output.utf8) }
     var errorOutput = ""
 }
 enum Shell {
-    static func run(_ executable: URL, _ arguments: [String], environment: [String: String], timeout: Double) async throws -> ShellResult {
+    // Keep the marketplace preflight signature without launching a real shell.
+    static func run(_ executable: URL, _ arguments: [String], in directory: URL? = nil, environment: [String: String], timeout: Double) async throws -> ShellResult {
         let test = ProcessInfo.processInfo.environment["DSH_TEST_CASE"] ?? ""
         if arguments == ["provider", "list", "--json"], test.hasPrefix("empty-variant") {
             return ShellResult(succeeded: true, output: test == "empty-variant"
@@ -37,9 +38,10 @@ enum Storage {
     static func importAttachment(data: Data, name: String, fileExtension: String) throws -> Attachment { throw ProviderError.failed("No fixture images") }
 }
 enum MCPProviderConfig {
-    static func acpServers(allowsHTTP: Bool) -> JSONValue {
-        guard ProcessInfo.processInfo.environment["DSH_TEST_CASE"] == "mixed-mcp" else { return .array([]) }
-        return [["name": "healthy", "command": "/not-executed", "args": [], "env": []],
-                ["name": "broken", "command": "/not-executed", "args": [], "env": []]]
+    // Preserve the production tuple without reading user config or resolving commands.
+    static func acpServers(allowsHTTP: Bool) -> (servers: JSONValue, skipped: [String]) {
+        guard ProcessInfo.processInfo.environment["DSH_TEST_CASE"] == "mixed-mcp" else { return (.array([]), []) }
+        return ([["name": "healthy", "command": "/not-executed", "args": [], "env": []],
+                 ["name": "broken", "command": "/not-executed", "args": [], "env": []]], [])
     }
 }

@@ -9,12 +9,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def declaration(path: str, marker: str) -> str:
     source = (ROOT / path).read_text()
+    if source.count(marker) != 1:
+        raise ValueError(f"{path}: expected one declaration marker: {marker}")
     start = source.index(marker)
-    opening = source.index("{", start)
+    opening = source.find("{", start)
+    if opening == -1:
+        raise ValueError(f"{path}: declaration has no opening brace: {marker}")
     depth, end = 1, opening + 1
-    while depth:
+    while depth and end < len(source):
         depth += (source[end] == "{") - (source[end] == "}")
         end += 1
+    if depth:
+        raise ValueError(f"{path}: declaration has unbalanced braces: {marker}")
     return source[start:end]
 
 
@@ -23,8 +29,12 @@ def declaration(path: str, marker: str) -> str:
 swift = r'''
 import Foundation
 enum RuntimeMode: String, Codable { case supervised }
-enum ProviderKind: String, Codable {
-    case codex
+// Provider execution is outside these persistence checks.
+enum ProviderKind: String, Codable, Sendable {
+    case codex, claude
+    var displayName: String {
+        switch self { case .codex: "Codex"; case .claude: "Claude" }
+    }
     func supported(_ mode: RuntimeMode) -> RuntimeMode { mode }
 }
 enum DshAgentMode: String, Codable { case standard }
@@ -32,6 +42,17 @@ enum InteractionMode: String, Codable { case build }
 enum TurnStatus: String, Codable { case completed }
 struct HydraPair: Codable, Hashable { var id = UUID() }
 struct HydraHeadInfo: Codable, Hashable { var targetCheckout: String? }
+// Chimera's model file also builds prompts; the full Hydra implementation pulls in
+// SwiftUI and unrelated delegation logic. These members only let that file compile.
+struct HydraLaunch {
+    var isChimera = false
+    var chimeraPresets: [String] = []
+}
+enum HydraPrompts {
+    static func v2Policy(_ launch: HydraLaunch) -> String {
+        fatalError("Hydra prompt generation is outside standalone task checks")
+    }
+}
 enum PermissionLowering {
     static func note(provider: ProviderKind, from: RuntimeMode, to: RuntimeMode) {}
 }
@@ -43,7 +64,14 @@ enum AppInfo { static let libraryName = "Unused task checks" }
 enum Chrome { static func localized(_ key: String) -> String { key } }
 enum ProviderError: Error { case failed(String), notRunning }
 '''
+# Text.swift also contains app identity and FileEdit helpers; Hydra.swift imports
+# SwiftUI. Keep the required support declarations real without those dependencies.
+swift += "\n" + declaration("Tivano/Core/Support/Text.swift", "enum AppText {")
+swift += "\nextension String {\n" + declaration("Tivano/Core/Support/Text.swift", "    var trimmed:") + "\n}\n"
+swift += "\nextension HydraHeadInfo {\n" + declaration("Tivano/Core/Models/Hydra.swift", "    enum Status:") + "\n}\n"
 for path in ("Tivano/Core/Support/Coding.swift", "Tivano/Core/Models/LocalControl.swift",
+             "Tivano/Core/Models/ProviderAccount.swift", "Tivano/Core/Models/Chimera.swift",
+             "Tivano/Core/Models/Hydra2.swift",
              "Tivano/Core/Models/Library.swift",
              "Tivano/Core/Support/StoragePaths.swift"):
     swift += "\n" + (ROOT / path).read_text()

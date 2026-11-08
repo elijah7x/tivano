@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,10 +20,22 @@ def declaration(source, marker):
 
 
 def main():
+    if sys.flags.optimize:
+        raise SystemExit("run without -O or PYTHONOPTIMIZE; fixture assertions must remain enabled")
     production = (ROOT / 'Tivano/Services/Providers/PlanLimits.swift').read_text()
+    marker = '// MARK: - Claude'
+    count = production.count(marker)
+    if count != 1:
+        raise SystemExit(f'PlanLimits.swift: marker {marker!r} found {count} times, expected 1; refusing to run to avoid accessing real api.anthropic.com')
     claude = production[production.index('    // MARK: - Claude'):]
     # Replace only the transport; retain request construction and response handling.
-    claude = claude.replace('URLSession.shared.data(for: request)', 'FixtureHTTP.data(for: request)')
+    transport = 'URLSession.shared.data(for: request)'
+    count = claude.count(transport)
+    if count != 1:
+        raise SystemExit(f'Claude production transport changed: {transport!r} found {count} times, expected 1; refusing to run to avoid accessing real api.anthropic.com')
+    claude = claude.replace(transport, 'FixtureHTTP.data(for: request)')
+    if 'URLSession' in claude:
+        raise SystemExit('Claude production transport changed: URLSession remains after replacement; refusing to run to avoid accessing real api.anthropic.com')
     source = 'import Foundation\n'
     source += (ROOT / 'Tivano/Core/Support/JSONValue.swift').read_text()
     source += (ROOT / 'Tivano/Core/Support/ISO8601.swift').read_text()

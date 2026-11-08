@@ -365,12 +365,16 @@ def updater_source():
     swift += declaration(ROOT / "Tivano/App/UpdateChecker.swift", "struct AppVersion:") + "\n"
     swift += declaration(UPDATER, "enum AutoUpdateState:") + "\n"
     swift += declaration(UPDATER, "enum AutoUpdateFailure:") + "\n"
+    # Version identity comes from production and the fixture bundle's Info.plist;
+    # only edition selection is synthetic so updater-dev keeps exercising its gate.
+    app_info = ROOT / "Tivano/Core/Support/Text.swift"
+    swift += "enum AppInfo {\n"
+    for name in ("numericVersion", "releaseVersion", "version"):
+        swift += constant(app_info, "static let " + name)
+    swift += declaration(app_info, "    nonisolated static func releaseVersion(in ") + "\n"
+    swift += '    static let isDevelopment = ProcessInfo.processInfo.environment["FIXTURE_DEV"] == "1"\n}\n'
     swift += r'''
 // These stubs represent application state, not cleanup policy.
-enum AppInfo {
-    static let version = "2.0.0"
-    static let isDevelopment = ProcessInfo.processInfo.environment["FIXTURE_DEV"] == "1"
-}
 enum CaptureRun {
     static let isEnabled = ProcessInfo.processInfo.environment["FIXTURE_CAPTURE"] == "1"
 }
@@ -463,9 +467,11 @@ func stage(_ version: String, installedVersion: String? = nil) throws -> URL {
         let appName = Bundle.main.bundleURL.lastPathComponent
         switch test {
         case "updater-versions":
-            for invalid in ["", " 1.0", "1.0 ", "../1", "1/2", "1.2-beta", "1..2", "1.2.3.4", "vv1", "１.2", "999999999999999999999999999"] {
+            // Preview staging folders carry SemVer prerelease identifiers (2.4.5); malformed ones stay rejected.
+            for invalid in ["", " 1.0", "1.0 ", "../1", "1/2", "1.2.3-", "1.2.3-a..b", "1.2.3-01", "1.2.3-a/b", "1.2.3-../x", "1..2", "1.2.3.4", "vv1", "１.2", "999999999999999999999999999"] {
                 try require(AppUpdater.storageVersion(invalid) == nil, "Accepted unsafe version \(invalid)")
             }
+            try require(AppUpdater.storageVersion("2.5.0-preview.1") != nil, "Rejected a preview staging folder")
             let old = try stage("1.9.9"), equal = try stage("2.0.0"), future = try stage("2.0.1")
             let ignored = StoragePaths.root.appendingPathComponent("Updates/unknown/recovery.patch")
             try Fixture.write(ignored)

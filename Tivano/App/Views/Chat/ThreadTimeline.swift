@@ -757,16 +757,16 @@ struct ThreadTimeline: View, Equatable {
             remeasurePending = false
             tracking.layoutAction = {}
             tracking.navigationAction = {}
-            tracking.setColumnShown(false)
+            tracking.setColumnShown(false, on: runtime)
             tracking.endActivity()
         }
         .onChange(of: columnIsShown, initial: true) { _, shown in
-            tracking.setColumnShown(shown)
+            tracking.setColumnShown(shown, on: runtime)
             if shown { tracking.armViewportRefresh("columnShown") }
         }
         // The thread opens at its end and stays there while its rows measure in.
         .onAppear {
-            tracking.setColumnShown(columnIsShown)
+            tracking.setColumnShown(columnIsShown, on: runtime)
             tracking.holdEnd(for: 1.5)
         }
         .coordinateSpace(name: "timelineViewport")
@@ -1693,6 +1693,7 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     @ObservationIgnored private var nudgePhase = 0
     @ObservationIgnored private var nudgeOrigin = NSPoint.zero
     @ObservationIgnored private var columnIsShown = false
+    @ObservationIgnored private weak var shownRuntime: ThreadRuntime?
     @ObservationIgnored private var viewportRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var refreshPending = false
     /// Refreshes come in bursts (one change sets off a few as rows measure); a burst that
@@ -1890,7 +1891,16 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     }
 
     /// Cached columns remain mounted; an offscreen column has no visible rows to repair.
-    func setColumnShown(_ shown: Bool) {
+    /// The runtime is told too: it flushes streamed text per frame only while a timeline
+    /// shows it. The count is added to the runtime the timeline was shown with and taken
+    /// back from that one, so a runtime swapped under a mounted timeline keeps no stray count.
+    func setColumnShown(_ shown: Bool, on runtime: ThreadRuntime) {
+        let counted = shown ? runtime : nil
+        if shownRuntime !== counted {
+            shownRuntime?.noteTimeline(shown: false)
+            shownRuntime = counted
+            counted?.noteTimeline(shown: true)
+        }
         guard shown != columnIsShown else { return }
         columnIsShown = shown
         if shown {

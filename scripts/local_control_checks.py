@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    if sys.flags.optimize:
+        raise SystemExit("run without -O or PYTHONOPTIMIZE; fixture assertions must remain enabled")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifacts", type=Path)
     args = parser.parse_args()
@@ -32,7 +34,7 @@ def main():
     output.mkdir(parents=True, mode=0o700)
     os.chmod(output, 0o700)
     swift = subprocess.check_output(["xcrun", "--find", "swiftc"], text=True).strip()
-    sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
+    sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
     sources = [
         "Tivano/Core/Models/LocalControl.swift",
         "Tivano/Services/Control/ControlSocket.swift",

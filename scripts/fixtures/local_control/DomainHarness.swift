@@ -14,8 +14,17 @@ enum ProviderKind: String, Codable, CaseIterable, Sendable {
 enum DshAgentMode: String, Codable, Sendable { case standard }
 enum InteractionMode: String, Codable, Sendable { case build, plan }
 enum TurnStatus: String, Codable, Sendable { case running, completed, interrupted, failed }
-struct HydraPair: Codable, Hashable, Sendable { var id = UUID() }
-struct HydraHeadInfo: Codable, Hashable, Sendable { var targetCheckout: String? }
+struct HydraPair: Codable, Hashable, Sendable {
+    var id = UUID()
+    var provider: ProviderKind
+    var orchestratorModel: String?
+    var orchestratorEffort: String?
+}
+struct HydraHeadInfo: Codable, Hashable, Sendable {
+    var targetCheckout: String?
+    var index = 0
+    var status: Status = .running
+}
 enum PermissionLowering { static func note(provider: ProviderKind, from: RuntimeMode, to: RuntimeMode) {} }
 struct EmptyDefaults: Sendable {
     static let standard = EmptyDefaults()
@@ -28,7 +37,7 @@ enum CaptureRun {
 }
 enum AppInfo { static let libraryName = "Synthetic Local Control" }
 enum Chrome { static func localized(_ key: String) -> String { key } }
-enum ProviderError: LocalizedError { case failed(String), notRunning
+enum ProviderError: LocalizedError { case failed(String), notRunning, notInstalled(ProviderKind)
     var errorDescription: String? { if case .failed(let value) = self { return value }; return "synthetic_not_running" }
 }
 
@@ -42,6 +51,7 @@ enum ProviderError: LocalizedError { case failed(String), notRunning
 @MainActor final class Settings {
     enum Key {
         static let alphaEnabled = "alphaEnabled", externalControlEnabled = "externalControlEnabled"
+        static let alphaChimeraEnabled = "alphaChimeraEnabled", hydraEnabled = "hydraEnabled"
         static let performanceMode = "performanceMode", clearerBackdrop = "clearerBackdrop"
         static let showsSkylight = "showsSkylight", antiSlopEnabled = "antiSlopEnabled", textGeneration = "textGeneration"
         static let cliInstallationTarget = "cliInstallationTarget"
@@ -49,10 +59,12 @@ enum ProviderError: LocalizedError { case failed(String), notRunning
     let defaults = MemoryDefaults()
     var onExternalControlChanged: (() -> Void)?
     var disabled: Set<ProviderKind> = []
+    var hydraPairs: [HydraPair] = []
     func isEnabled(_ provider: ProviderKind) -> Bool { !disabled.contains(provider) }
     /* SETTINGS_PRODUCTION */
     init() {
         alphaEnabled = false; externalControlEnabled = false; performanceMode = false
+        alphaChimeraEnabled = false; hydraEnabled = true
         clearerBackdrop = true; showsSkylight = true; antiSlopEnabled = true; textGeneration = .automatic
         cliInstallationTarget = nil
     }
@@ -69,6 +81,8 @@ struct ModelOption: Sendable { var id: String; var defaultEffort: String? }
     var catalog = [ModelOption(id: "synthetic-model", defaultEffort: nil)]
     func status(_ provider: ProviderKind) -> ProviderStatus { statuses[provider] ?? ProviderStatus() }
     func models(for provider: ProviderKind) -> [ModelOption] { catalog }
+    // Synthetic catalog IDs are exact; provider alias resolution is outside this harness.
+    func model(_ id: String?, for provider: ProviderKind) -> ModelOption? { models(for: provider).first { $0.id == id } }
 }
 
 @MainActor enum Setup {
@@ -135,6 +149,7 @@ enum Storage {
     enum Engine { case claude, codex }
     func textEngine(preferring: ProviderKind?) -> Engine? { switch settings.textGeneration { case .off: nil; case .codex: .codex; default: .claude } }
     /* APPMODEL_PRODUCTION */
+    /* HYDRA_PRODUCTION */
 }
 
 @MainActor final class AppControlService {
@@ -160,6 +175,7 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
     var hasWorkingHelpers = false, isWaitingForLimit = false, hydraFlushScheduled = false, isStartingSession = false
     var backgroundTasks: [String] = [], followUps: [Int] = [], hydraPendingReports: [Int] = [], turns: [Int] = []
     var approvals: [String] = [], questions: [String] = []
+    var chimeraCasting: Int?
     var pendingSend: Int?
     var providerHistoryOperation: Task<Void, Never>?, hydraLanding: Task<Void, Never>?
     var finishingTurnID: UUID?, closingTurnID: UUID?, currentTurnID: UUID?
@@ -189,10 +205,140 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
         guard try condition() else { throw Failure(name: name) }; passed.append(name); print("PASS \(name)")
     }
     struct Failure: Error { var name: String }
-    static func rejects(_ code: ControlFailure.Code, _ name: String, _ action: () throws -> Void) throws {
-        do { try action() } catch let error as ControlFailure { try check(error.code == code, name); return }
+    static func rejects(_ code: ControlFailure.Code, _ name: String, detail: String? = nil, _ action: () throws -> Void) throws {
+        do { try action() } catch let error as ControlFailure {
+            try check(error.code == code && (detail == nil || error.detail == detail), name); return
+        }
         throw Failure(name: "Expected \(code): \(name)")
     }
+
+    static func checkHydra() async throws {
+        let app = AppModel()
+        app.selectedThreadID = UUID()
+        let selected = app.selectedThreadID
+        var request = ControlCreate(ticket: ControlTicket(instance: app.localControl.instance), projectID: nil,
+                                    workspace: .local, provider: "codex", hydra: true)
+        app.settings.hydraEnabled = false
+        try rejects(.unsupported, "Hydra creation requires the app-wide switch", detail: "hydra_disabled") {
+            _ = try app.createExternalThread(request, provider: .codex)
+        }
+        try check(app.threads.isEmpty && app.committed == nil, "disabled Hydra creation neither persists nor publishes a thread")
+        app.settings.hydraEnabled = true
+        let unpaired = try app.createExternalThread(request, provider: .codex)
+        try check(unpaired.hydraEnabled && unpaired.hydraPairID == nil && unpaired.runtimeMode == .supervised,
+                  "explicit Hydra creation works without a configured pair and stays supervised")
+        let pair = HydraPair(provider: .codex, orchestratorModel: "synthetic-model", orchestratorEffort: "high")
+        app.settings.hydraPairs = [pair]
+        let lead = try app.createExternalThread(request, provider: .codex)
+        try check(lead.hydraEnabled && lead.hydraPairID == pair.id && lead.model == pair.orchestratorModel && lead.effort == pair.orchestratorEffort,
+                  "Hydra creation inherits an available pair lead model and effort when no model is requested")
+        try check(lead.runtimeMode == .supervised && lead.temporaryHydraPair == nil
+                  && app.committed?.threads.contains(where: { $0.id == lead.id && $0.hydraEnabled }) == true,
+                  "Hydra creation persists its explicit configuration without granting full access")
+        try check(app.selectedThreadID == selected && app.uiDraft == "untouched UI draft",
+                  "Hydra creation leaves selection and the UI draft untouched")
+        app.providers.catalog.append(ModelOption(id: "explicit-model", defaultEffort: nil))
+        request.model = "explicit-model"
+        let explicit = try app.createExternalThread(request, provider: .codex)
+        try check(explicit.hydraPairID == pair.id && explicit.model == request.model && explicit.effort == nil,
+                  "an explicit Hydra model is not overwritten by pair model or effort")
+        request.model = nil
+        app.settings.hydraPairs[0].orchestratorModel = "unavailable-model"
+        let unavailable = try app.createExternalThread(request, provider: .codex)
+        try check(unavailable.model == nil && unavailable.effort == pair.orchestratorEffort,
+                  "an unavailable pair model is not selected but its effort is retained")
+        request.hydra = false
+        let ordinary = try app.createExternalThread(request, provider: .codex)
+        try check(!ordinary.hydraEnabled && ordinary.hydraPairID == nil && ordinary.model == nil && ordinary.effort == nil,
+                  "explicit Hydra off does not inherit a configured pair")
+        let metadata = try app.localControl.query(ControlThreadQuery(), app)
+        try check(metadata.items.first(where: { $0.id == lead.id })?.hydra == true,
+                  "thread metadata advertises Hydra on the lead")
+
+        var head = lead
+        head.id = UUID(); head.parentThreadID = lead.id; head.hydra = HydraHeadInfo()
+        app.threads.append(head)
+        try check(try app.localControl.requireOrdinaryThread(lead.id, app: app).id == lead.id,
+                  "a Hydra lead with only heads remains eligible for local control")
+        try rejects(.unsupported, "local control cannot submit directly to a Hydra head") {
+            _ = try app.localControl.requireOrdinaryThread(head.id, app: app)
+        }
+        let runtime = ThreadRuntime(app, lead.id)
+        try rejects(.busy, "a running Hydra head blocks external reservation on its lead") {
+            try runtime.reserveExternalSubmission(turnID: UUID(), continuation: .fresh) { _ in }
+        }
+        try check(runtime.sent.isEmpty && runtime.followUps.isEmpty, "busy Hydra reservation neither sends nor queues")
+        app.updateThread(head.id) { $0.hydra?.status = .completed }
+        let turnID = UUID()
+        try runtime.reserveExternalSubmission(turnID: turnID, continuation: .fresh) { _ in }
+        await runtime.submitExternal(text: "drive Hydra lead", turnID: turnID)
+        try check(runtime.sent.count == 1 && runtime.sent[0].id == turnID && runtime.sent[0].text == "drive Hydra lead",
+                  "completed heads allow an external turn through the Hydra lead front door")
+        try check(runtime.draft == "reader's untouched draft" && runtime.followUps.isEmpty,
+                  "Hydra lead submission neither consumes the draft nor queues")
+        runtime.finish(turnID, .completed)
+
+        let race = ThreadRuntime(app, lead.id)
+        let raceID = UUID()
+        var failure: ControlFailure?
+        try race.reserveExternalSubmission(turnID: raceID, continuation: .fresh) { failure = $0.failure }
+        race.beforeLoaded = { app.updateThread(head.id) { $0.hydra?.status = .running } }
+        await race.submitExternal(text: "must not race a head", turnID: raceID)
+        try check(failure?.code == .busy && race.sent.isEmpty && race.followUps.isEmpty,
+                  "a head starting during history load rejects the accepted submission as busy without queueing")
+    }
+
+    static func checkFailureClassification() async throws {
+        let messages: [(english: String, chinese: String, category: String)] = [
+            ("Sign in to continue.", "请登录后继续。", "authentication"),
+            ("Context window exceeded.", "上下文窗口已超出。", "continuation"),
+            ("Usage quota exceeded.", "用量配额已超出。", "usage_limit"),
+            ("CLI is not installed.", "尚未安装 CLI。", "not_installed"),
+            ("Permission denied.", "权限被拒绝。", "permission"),
+            ("Connection closed.", "连接已关闭。", "provider_or_transport")
+        ]
+        let app = AppModel()
+        let request = ControlCreate(ticket: ControlTicket(instance: app.localControl.instance), projectID: nil,
+                                    workspace: .local, provider: "codex")
+        let thread = try app.createExternalThread(request, provider: .codex)
+        for message in messages {
+            let english = ControlFailureClassifier.classify(ProviderError.failed(message.english))
+            let chinese = ControlFailureClassifier.classify(ProviderError.failed(message.chinese))
+            let expected = ControlFailure(code: message.category == "continuation" ? .continuationUnavailable : .providerFailure,
+                                          detail: message.category)
+            try check(english == expected && chinese == expected,
+                      "English and Chinese provider messages retain the same \(message.category) failure")
+            for text in [message.english, message.chinese] {
+                let runtime = ThreadRuntime(app, thread.id)
+                let turnID = UUID()
+                var completion: ControlTurnUpdate?
+                try runtime.reserveExternalSubmission(turnID: turnID, continuation: .fresh) { completion = $0 }
+                await runtime.submitExternal(text: "synthetic classification turn", turnID: turnID)
+                runtime.event(.turnCompleted(status: .failed, error: text))
+                runtime.finish(turnID, .failed)
+                try check(completion?.state == .failed && completion?.failure == expected,
+                          "runtime completion preserves \(message.category): \(text)")
+            }
+        }
+        let typed: [(error: any Error, category: String)] = [
+            (ProviderError.notInstalled(.codex), "not_installed"),
+            (ProviderError.notInstalled(.deepseek), "authentication"),
+            (ProviderError.notRunning, "provider_or_transport"),
+            (TypeSafeAPI.Failure.authRejected, "authentication"),
+            (TypeSafeAPI.Failure.rateLimited, "usage_limit"),
+            (ClaudeAccountValidationError.settingsConflict, "authentication"),
+            (ClaudeAccountValidationError.identityChanged, "provider_or_transport"),
+            (ResetCreditError.codexUnavailable, "not_installed"),
+            (ClaudeCredentialError.activationRequired, "authentication")
+        ]
+        for value in typed {
+            try check(ControlFailureClassifier.classify(value.error) == ControlFailure(code: .providerFailure, detail: value.category),
+                      "typed \(String(describing: value.error)) failure is \(value.category)")
+        }
+        let original = ControlFailure(code: .busy, detail: "synthetic_busy")
+        try check(ControlFailureClassifier.classify(original) == original, "existing control failure retains its code and diagnostic detail")
+    }
+
     static func main() async throws {
         let root = CaptureRun.storageRoot!
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -276,12 +422,16 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
         app.settings.onExternalControlChanged = { callbacks += 1 }
         try check(!app.settings.externalControlEnabled && !app.settings.isExternalControlEnabled, "dedicated control permission defaults false")
         app.settings.externalControlEnabled = true
-        try check(!app.settings.isExternalControlEnabled, "Alpha remains an independent gate")
+        try check(app.settings.isExternalControlEnabled && callbacks == 1, "dedicated control permission enables admission with Alpha off")
         app.settings.alphaEnabled = true
-        try check(app.settings.isExternalControlEnabled, "both gates are required")
+        try check(app.settings.isExternalControlEnabled && callbacks == 1, "opening Alpha does not change control permission or notify admission")
         app.settings.alphaEnabled = false
-        try check(!app.settings.isExternalControlEnabled && callbacks == 3, "closing Alpha invokes revocation callback")
+        try check(app.settings.isExternalControlEnabled && callbacks == 1, "closing Alpha does not revoke control permission or notify admission")
+        app.settings.externalControlEnabled = false
+        try check(!app.settings.isExternalControlEnabled && callbacks == 2, "closing dedicated control permission invokes revocation callback")
         app.settings.alphaEnabled = true
+        try check(!app.settings.isExternalControlEnabled && callbacks == 2, "Alpha alone cannot enable control permission")
+        app.settings.externalControlEnabled = true
         app.settings.clearerBackdrop = true
         try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .performanceMode, value: .bool(true)), app)
         try check(app.settings.performanceMode && app.settings.clearerBackdrop, "performance setter keeps the clearer-glass preference")
@@ -369,7 +519,7 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
         let revoked = ThreadRuntime(app, standalone.id)
         let revokedID = UUID()
         try revoked.reserveExternalSubmission(turnID: revokedID, continuation: .fresh) { _ in }
-        revoked.beforeLoaded = { app.settings.alphaEnabled = false; app.settings.externalControlEnabled = false }
+        revoked.beforeLoaded = { app.settings.externalControlEnabled = false }
         await revoked.submitExternal(text: "already accepted", turnID: revokedID)
         try check(revoked.sent.count == 1, "permission revocation does not silently cancel an accepted turn")
         revoked.finish(revokedID, .completed)
@@ -382,6 +532,8 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
         persistence.finish(persistenceID, .completed)
         try check(final?.state == .failed && final?.failure?.code == .persistence, "completion persistence failure cannot report successful receipt")
         DiskWriter.shared.succeeds = true
+        try await checkHydra()
+        try await checkFailureClassification()
         let data = try JSONSerialization.data(withJSONObject: ["checks": passed, "count": passed.count, "scope": "extracted production domain declarations with synthetic framework/provider/storage dependencies; no provider execution or App end-to-end proof"], options: [.prettyPrinted, .sortedKeys])
         try data.write(to: root.appendingPathComponent("domain-results.json"))
         print("DOMAIN CHECKS COMPLETE: \(passed.count)")

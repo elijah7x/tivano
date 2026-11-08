@@ -259,8 +259,7 @@ def main():
                     + ' ' + shlex.quote(str(kit / 'peer.py')) + '\n')
     peer.chmod(0o700)
     policy = out / 'offline.sb'
-    policy.write_text('(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n'
-                      '(allow file-write* (subpath ' + json.dumps(str(out)) + ') (literal "/dev/null"))\n')
+    policy.write_text(runpy.run_path(str(root / 'scripts/dsh_adapter_stress.py'))['sandbox_policy'](out))
     sources = runpy.run_path(str(root / 'scripts/fixtures/dsh_adapter/prepare.py'))['prepare'](root, kit)
     results = []
 

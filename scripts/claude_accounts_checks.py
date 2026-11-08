@@ -7,7 +7,9 @@ are replaced; credential parsing and ProviderAccounts transaction logic are unch
 """
 import os
 from pathlib import Path
+import re
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -334,6 +336,12 @@ CHECKS = r'''
             _ = try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true, timeout: 0.3)
         }
         check(Date().timeIntervalSince(started) < 3, "stuck prompt times out")
+        // The Keychain read is still blocked here; give the main-actor ticker up to 3 s to
+        // show it keeps running, instead of relying on the 0.3 s timeout window on a busy host.
+        let tickDeadline = Date().addingTimeInterval(3)
+        while ticks <= 2 && FixtureKeychain.copyWaiting && Date() < tickDeadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
         check(ticks > 2, "main actor keeps running while Keychain waits")
         check(FixtureKeychain.copyWaiting, "managed read reached blocked Keychain")
         let stuckReads = FixtureKeychain.reads
@@ -486,20 +494,29 @@ CHECKS = r'''
 
 
 def main():
+    if sys.flags.optimize:
+        raise SystemExit("run without -O or PYTHONOPTIMIZE; fixture assertions must remain enabled")
     credential = (ROOT / "Tivano/Services/Providers/ClaudeAccountCredentials.swift").read_text()
     for api, stub in {"SecItemCopyMatching": "copy", "SecItemUpdate": "update",
                       "SecItemAdd": "add", "SecItemDelete": "delete"}.items():
-        if api not in credential:
-            raise RuntimeError(f"Security boundary changed: {api}")
-        credential = credential.replace(api + "(", "FixtureKeychain." + stub + "(")
+        target = api + "("
+        if credential.count(target) == 0:
+            raise SystemExit(f"Security boundary changed: no {target!r} calls to replace; refusing to run against the real Keychain")
+        credential = credential.replace(target, "FixtureKeychain." + stub + "(")
     registry = (ROOT / "Tivano/Services/Providers/ProviderRegistry.swift").read_text()
     start = registry.index("    private static func claudeAccountAllowsProbe(")
     end = registry.index("\n    static func auth(", start)
     probe = registry[start:end].replace("private static", "static")
-    source = SHIMS + "\nextension ProviderRegistry {\n" + probe + "\n}\n" + credential
+    source = "\nextension ProviderRegistry {\n" + probe + "\n}\n" + credential
     source += (ROOT / "Tivano/Services/Providers/ClaudeSwapImport.swift").read_text()
     source += (ROOT / "Tivano/Core/Models/ProviderAccount.swift").read_text()
     source += (ROOT / "Tivano/Services/Providers/ProviderAccounts.swift").read_text() + CHECKS
+    # Scan before prepending SHIMS so fake definitions are excluded, not production
+    # fragments. API names have a suffix; the bare SecItem in SecItem.h is not an API.
+    remaining = sorted(set(re.findall(r'\b(?:SecItem|SecKeychain|SecAccess)\w+\b', source)))
+    if remaining:
+        raise SystemExit(f"Security boundary changed: real Keychain identifiers remain: {', '.join(remaining)}; refusing to run")
+    source = SHIMS + source
     with tempfile.TemporaryDirectory(prefix="tivano-claude-checks-") as temp:
         directory = Path(temp).resolve()
         swift = directory / "Checks.swift"
