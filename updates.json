@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v2.5.12",
-      "name": "Tivano 2.5.12",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v2.5.12/Tivano-2.5.12.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## Refinements\n\n- The README now links prominently to [tivano.app](https://tivano.app/), the new website and download page.\n- Several chats streaming at once keep the app responsive: a chat you are not looking at now updates its text once a second instead of every frame and catches up the moment you open it, and switching back to a chat that is still running no longer rebuilds it from scratch.\n\n## 简体中文\n\n## 优化改进\n\n- README 顶部突出显示新官网与下载页 [tivano.app](https://tivano.app/)。\n- 多个对话同时输出时界面更流畅：未在查看的对话改为每秒刷新一次文字，打开时立即补齐；切回仍在运行的对话也不再从头重建。\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-11-08T13:53:42Z",
+      "tag_name": "v2.5.18",
+      "name": "Tivano 2.5.18",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v2.5.18/Tivano-2.5.18.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## Bug fixes\n\n- A Kimi Code turn that ends without any reply now shows an error instead of finishing silently. Kimi Code reports usage limits, an expired membership and API or network failures this way, so these no longer look like an empty success.\n- Switching back to a chat running Hydra after resizing the window, or opening or closing the sidebar, no longer shows its head cards cut off at both window edges with a squeezed chat box for a moment.\n- A DeepSeek Harness chat no longer fails every message with \"Internal error: the ACP bridge has been disposed\". DeepSeek Harness can shut down its ACP connection while its process keeps running; Tivano now drops that process when this happens, so the next message starts a fresh one.\n- With the interface in Chinese, Tivano no longer quits when an agent such as DeepSeek Harness or Kimi Code takes longer than 45 seconds to answer a request; it shows the timeout message instead.\n- An Antigravity head whose model stops answering no longer just reads \"Thinking\" for 10 minutes and then stalls. Errors Antigravity reports, such as a model stream that timed out, now show in the head, the stall report names the last one, and a head stopped this way before it changed any file is asked once to continue its conversation.\n- Updating Claude Code from Settings no longer always ends with \"The CLI was updated, but the model catalog could not be reloaded\", and Retry update no longer fails the same way until Tivano restarts. The Claude model picker now offers Fable 5.2 and keeps Fable 5.1 for chats that use it.\n\n## 简体中文\n\n## 问题修复\n\n- Kimi Code 结束一轮却没有任何回复时，现在会显示错误提示，不再悄无声息地结束。用量达到上限、会员过期、接口或网络出错时，Kimi Code 都会这样结束，过去看起来像是成功但没有内容。\n- 调整窗口大小或开关侧栏后，切回正在运行 Hydra 的对话时，head 卡片不再短暂地被窗口两侧边缘截断、输入框被挤窄。\n- DeepSeek Harness 对话不再每条消息都报“Internal error: the ACP bridge has been disposed”。DeepSeek Harness 可能在进程仍在运行时关闭自己的 ACP 连接；现在 Tivano 遇到这种情况会丢弃这个进程，下一条消息自动启动新进程。\n- 中文界面下，DeepSeek Harness、Kimi Code 等 agent 某个请求超过 45 秒未响应时，Tivano 不再闪退，而是显示超时提示。\n- Antigravity head 的模型不再回应时，不会只显示“正在思考”10 分钟后被判为卡住。Antigravity 报告的错误（例如模型数据流超时）现在会显示在 head 中，卡住的报告会写明最后一条；这样被停下、且尚未改动任何文件的 head 会自动接着原对话继续一次。\n- 在设置中更新 Claude Code 后，不再总是提示“CLI 已更新，但无法重新加载模型目录”，“重试更新”也不会在重启 Tivano 前一直以同样方式失败。Claude 模型选择器现在提供 Fable 5.2，并为仍在使用 Fable 5.1 的对话保留该模型。\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-11-10T03:03:37Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-2.5.12.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v2.5.12/Tivano-2.5.12.dmg",
-          "size": 11120489,
-          "sha256": "9a7b74f647d795eb8f535d00ad80517a3cf0c9c4581cd5cc7094afd1b93cee11"
+          "name": "Tivano-2.5.18.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v2.5.18/Tivano-2.5.18.dmg",
+          "size": 11115561,
+          "sha256": "90938ee5efd1a103450cdf2bcfd833d870994b2de30595f33e16dfc0e6c59ae9"
         }
       ]
     }
