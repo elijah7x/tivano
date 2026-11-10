@@ -2383,7 +2383,8 @@ final class ThreadRuntime {
                 codexHistoryDirectory: thread.hydra?.ownedCodexWorkingDirectory,
                 antiSlopEnabled: signature.antiSlopEnabled,
                 voiceContext: signature.voiceContext,
-                modelCatalog: thread.provider.namesModelVariants || thread.provider == .dsh || thread.provider == .minimaxCode ? app.providers.models(for: thread.provider) : [],
+                modelCatalog: thread.provider.namesModelVariants || thread.provider == .dsh || thread.provider == .minimaxCode
+                    || thread.provider == .antigravity ? app.providers.models(for: thread.provider) : [],
                 dshMode: thread.dshMode ?? .standard,
                 dshFinalReport: signature.dshFinalReport,
                 claudeAccountID: claudeAccount?.id,

@@ -296,6 +296,7 @@ final class ProviderRegistry {
     /// From `agy models`: base models with their supported effort levels.
     /// Effort is adjusted via the effort slider, not separate duplicate rows.
     static let antigravitySeed: [ModelOption] = [
+        ModelOption(id: "gemini-4-argon", name: "Gemini 4 Argon", efforts: ["low", "medium", "high"], defaultEffort: "medium"),
         ModelOption(id: "gemini-3.8-flash", name: "Gemini 3.8 Flash", efforts: ["low", "medium", "high"], defaultEffort: "high", isDefault: true),
         ModelOption(id: "gemini-3.7-flash", name: "Gemini 3.7 Flash", efforts: ["low", "medium", "high"], defaultEffort: "high"),
         ModelOption(id: "gemini-3.6-flash", name: "Gemini 3.6 Flash", efforts: ["low", "medium", "high"], defaultEffort: "high"),

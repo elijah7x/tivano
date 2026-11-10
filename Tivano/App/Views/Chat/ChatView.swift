@@ -1744,7 +1744,8 @@ private struct ScriptsEditor: View {
                                     TextField("Name", text: $script.name)
                                         .textFieldStyle(.roundedBorder)
                                     Button(role: .destructive) {
-                                        scripts.removeAll { $0.id == script.id }
+                                        let id = script.id
+                                        scripts.removeAll { $0.id == id }
                                     } label: {
                                         Image(systemName: "trash")
                                     }

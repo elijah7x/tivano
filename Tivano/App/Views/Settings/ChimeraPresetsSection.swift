@@ -28,8 +28,11 @@ struct ChimeraPresetsSection: View {
                                     onDragChanged: { translation in dragChanged(preset.id, translation: translation) },
                                     onDragEnded: { dragEnded() },
                                     onRemove: {
+                                        // Reading the element binding inside removeAll overlaps the array's
+                                        // exclusive access and traps, so capture the ID first.
+                                        let id = preset.id
                                         withAnimation(Chrome.panelSlide) {
-                                            settings.chimeraPresets.removeAll { $0.id == preset.id }
+                                            settings.chimeraPresets.removeAll { $0.id == id }
                                         }
                                     }
                                 )

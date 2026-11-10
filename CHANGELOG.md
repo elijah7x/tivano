@@ -8,6 +8,28 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.21] - 2026-11-10
+
+### English
+
+### Bug fixes
+
+- Removing a model preset in Settings › Model presets no longer quits Tivano. Removing a project script or an MCP server variable used the same code and is fixed too.
+- An Antigravity chat or Hydra head no longer fails to start with `invalid model selection` when its reasoning effort is one the model does not offer. Tivano now passes only an effort the model lists, and no longer adds High for a model it does not know. Gemini 4 Argon is in the built-in model list with Low, Medium and High.
+- Pi's model list now includes the models its extensions provide, such as Google Antigravity through pi-multi-account, and no longer lists models those extensions replace. Pi chats already loaded extensions, so the list now matches what a Pi chat offers.
+
+### 简体中文
+
+### 问题修复
+
+- 在“设置 › 模型预设”中删除预设时，Tivano 不再闪退。删除项目脚本和 MCP 服务器变量用的是同样的写法，也一并修复。
+- Antigravity 对话或 Hydra head 设置的推理档位如果模型不支持，不会再因 `invalid model selection` 启动失败。Tivano 现在只传模型列出的档位，也不再给不认识的模型自动加上 High。内置模型列表加入了 Gemini 4 Argon（Low、Medium、High 三档）。
+- Pi 的模型列表现在包含扩展提供的模型（例如 pi-multi-account 提供的 Google Antigravity），也不再列出已被扩展替换掉的模型。Pi 对话本来就会加载扩展，现在列表和对话里实际可用的模型一致。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.5.18] - 2026-11-10
 
 ### English

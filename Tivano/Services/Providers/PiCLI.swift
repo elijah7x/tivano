@@ -43,13 +43,16 @@ enum PiCLI {
     }
 
     /// Asks a throwaway `pi --mode rpc` process for its state and model catalog.
+    /// Extensions stay loaded: providers such as `google-antigravity` exist only through
+    /// one (pi 0.71 dropped the built-in), and they replace static lists such as Cursor's,
+    /// so a probe without them lists models a chat session never offers.
     static func listModels(executable: URL, environment: [String: String]) async throws -> [ModelOption] {
         let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? LoginEnvironment.homeDirectory
         var launchEnvironment = environment
         launchEnvironment["PI_SKIP_VERSION_CHECK"] = "1"
         let process = StdioProcess(
             executable: executable,
-            arguments: ["--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files"],
+            arguments: ["--mode", "rpc", "--no-session", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files"],
             directory: URL(fileURLWithPath: home),
             environment: launchEnvironment,
             framing: .lines
