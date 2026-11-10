@@ -48,6 +48,9 @@ final class AntigravitySession: ProviderSession {
     /// Tool steps whose start was announced, so a step that surfaces only as
     /// finished still gets its proper row rather than a bare "Tool".
     private var startedTools: Set<String> = []
+    /// Error steps already surfaced this turn, so a step reported again as its state
+    /// changes does not repeat its notice.
+    private var reportedErrors: Set<String> = []
 
     /// Reasoning efforts `agy --effort` accepts.
     static let efforts = ["low", "medium", "high"]
@@ -216,6 +219,8 @@ final class AntigravitySession: ProviderSession {
         switch step["step_type"]?.string {
         case "agent_response":
             if let usage = Self.contextUsage(step["usage"]) { onEvent?(.usage(usage)) }
+            // A reply step in the `ERROR` state carries the failure, not a reply.
+            if step["state"]?.string == "ERROR", noticeError(in: step, index: index) { return }
             guard let text = step["text_delta"]?.string, !text.isEmpty else { return }
             streamedText = true
             onEvent?(.messageDelta(id: "agy-\(launchID)-message-\(index)", text: text))
@@ -247,11 +252,37 @@ final class AntigravitySession: ProviderSession {
                 update.edits = finishEdit(id, parameters: parameters)
                 onEvent?(.toolUpdated(id: id, update: update))
             }
-        default:
-            // `user_input` acknowledgements and `checkpoint` markers carry
-            // nothing Tivano renders.
+        case "user_input", "checkpoint":
+            // Acknowledgements and markers carry nothing Tivano renders.
             break
+        default:
+            // Any other step is an error step when it says so: a model call that failed
+            // (`API error (attempt 1): ...`) is retried by the CLI on its own and otherwise
+            // leaves a stalled turn with nothing to read.
+            _ = noticeError(in: step, index: index)
         }
+    }
+
+    /// Says an error step's message in the thread, as a warning because the CLI may
+    /// retry. False when the step carries none.
+    private func noticeError(in step: JSONValue, index: Int) -> Bool {
+        guard let message = Self.errorMessage(in: step) else { return false }
+        if reportedErrors.insert("\(index)|\(message)").inserted {
+            onEvent?(.notice(Notice(level: .warning, message: "Antigravity: " + message)))
+        }
+        return true
+    }
+
+    /// The message of an error step. The stream does not document the error shape, so the
+    /// fields it plausibly rides on are tried in turn; the free-text fields only count on
+    /// a step that is an error itself, because ordinary steps put their reply there.
+    private static func errorMessage(in step: JSONValue) -> String? {
+        var candidates: [String?] = [step["error"]?["message"]?.string, step["error"]?.string, step["error_message"]?.string]
+        if step["step_type"]?.string?.localizedCaseInsensitiveContains("error") == true || step["state"]?.string == "ERROR" {
+            candidates += [step["text"]?.string, step["message"]?.string, step["text_delta"]?.string]
+        }
+        guard let message = candidates.lazy.compactMap({ $0?.trimmed }).first(where: { !$0.isEmpty }) else { return nil }
+        return message.count > 500 ? String(message.prefix(499)) + "…" : message
     }
 
     /// The finished edit as a diff of the file before against after, for the
@@ -284,6 +315,7 @@ final class AntigravitySession: ProviderSession {
         turnActive = false
         editSnapshots.removeAll()
         startedTools.removeAll()
+        reportedErrors.removeAll()
         if let usage = result["usage"], !usage.isNull {
             // Totals are cumulative over the session (per the headless docs), so the
             // spend tracker resolves them into per-turn deltas — but only once its

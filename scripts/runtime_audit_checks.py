@@ -162,6 +162,8 @@ struct PendingReplies { mutating func resolveAll(_ value: JSONValue) {} }
     var miniMaxRestoreTask: Task<Void, Never>?
     var messageID: String?
     var thoughtID: String?
+    var promptProducedOutput = false
+    var eventTask: Task<Void, Never>?
     var pendingPermissions: [String: String] = [:]
     var pendingQuestions: [String: String] = [:]
     var todoToolCallIDs: Set<String> = []
@@ -174,6 +176,7 @@ struct PendingReplies { mutating func resolveAll(_ value: JSONValue) {} }
     func restoreMiniMaxPermission(_ original: String) async {}
     static func miniMaxFailure(_ error: RPCError, operation: String) -> String { error.message }
     static func dshFailure(_ error: Error) -> String { error.localizedDescription }
+    static func isDshBridgeDisposed(_ error: Error) -> Bool { false }
     static var kimiLoginRequired: Error { ProviderError.notRunning }
     func reopen() { connection = JSONRPCConnection(); isStopping = false; isReady = true }
 '''

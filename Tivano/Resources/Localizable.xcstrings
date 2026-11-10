@@ -2158,6 +2158,28 @@
         }
       }
     },
+    "Last message from the provider: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "provider 最后一条消息：%@"
+          }
+        }
+      }
+    },
+    "Your last request got no answer from the model and was stopped after 10 minutes. Continue the task from where you were." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你上一次请求没有得到模型回应，10 分钟后被停止。请从中断处继续任务。"
+          }
+        }
+      }
+    },
     "Last selection" : {
       "extractionState": "manual",
       "localizations": {
@@ -2505,7 +2527,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 在 %lld 秒内未响应 %@"
+            "value" : "%1$@ 在 %3$lld 秒内未响应 %2$@"
           }
         }
       }
@@ -18284,6 +18306,17 @@
         }
       }
     },
+    "Kimi Code ended the turn without a reply. This usually means a usage limit, an expired membership or a network error. Run `kimi` in a terminal to see the cause." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kimi Code 结束了这一轮但没有回复，通常是用量已达上限、会员已过期或网络出错。在终端运行 `kimi` 可查看具体原因。"
+          }
+        }
+      }
+    },
     "Sign in to Kimi Code with `kimi login`, then try again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -29497,6 +29530,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fable 5.1 · 处理最难、耗时最长的任务时最强大"
+          }
+        }
+      }
+    },
+    "Fable 5.2 · Most capable for your hardest and longest-running tasks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fable 5.2 · 处理最难、耗时最长的任务时最强大"
           }
         }
       }

@@ -544,6 +544,10 @@ final class ThreadRuntime {
     /// How long the head has been quiet, in seconds; zero before it has done anything.
     var hydraIdleSeconds: TimeInterval { hydraLastEventAt.map { Date.now.timeIntervalSince($0) } ?? 0 }
     var providerLastOutputAt: Date? { session?.lastOutputAt }
+    /// The latest warning or error the provider itself reported this turn (a failed model
+    /// call it is retrying, say), for the report of a head the watchdog stops. Cleared when
+    /// a turn starts. A notice is no sign of life: it never restarts the watchdog's clock.
+    @ObservationIgnored var providerLastWarning: String?
 
     private struct HydraBatch {
         var skippedRoles: [String] = []
@@ -1794,6 +1798,7 @@ final class ThreadRuntime {
         // `hydraHeads == nil` marks a turn of the user's own: it starts the request's
         // delegation budget over. Turns carrying head reports or a refusal notice continue it.
         hydraBudget.beginTurn(userAuthored: hydraHeads == nil && !continuesHydraJob)
+        providerLastWarning = nil
         if hydraJobID != nil, !hydraBrief, initialThread.hydra == nil {
             hydraLedgerTurn = hydraHeads == nil ? .request : (hydraHeads?.isEmpty == true ? .review : .report)
         } else {
@@ -3640,6 +3645,7 @@ final class ThreadRuntime {
         case .diff(let diff):
             if currentTurnID != nil { currentProviderDiff = diff }
         case .notice(let notice):
+            if notice.level != .info { providerLastWarning = notice.message }
             appendNotice(notice.level, notice.message)
         case .usageLimit(let resetsAt):
             if sessionSignature?.provider == .codex, let id = sessionSignature?.codexAccount {

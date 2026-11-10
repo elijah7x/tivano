@@ -169,14 +169,20 @@ private enum HydraWatchdog {
     static var labelled: Set<UUID> = []
     static var stalledHeadIDs: Set<UUID> = []
     static var stalledLastOutput: [UUID: Date] = [:]
+    static var stalledLastWarning: [UUID: String] = [:]
+    /// Antigravity heads already started again after a stall: each gets that once, ever.
+    static var resumedHeadIDs: Set<UUID> = []
     static let log = Logger(subsystem: "dev.tivano.Tivano", category: "hydra")
 
     /// Said in a head's report when the watchdog stopped it for sitting still.
-    static func stalledNote(lastOutput: Date?) -> String {
+    static func stalledNote(lastOutput: Date?, lastWarning: String?) -> String {
         var note = Chrome.localized("Stalled: no edits or tool calls for 10 minutes; stopped by Tivano.")
         if let lastOutput {
             let minutes = Int64(max(0, Date.now.timeIntervalSince(lastOutput)) / 60)
             note += " " + String(format: Chrome.localized("Last output from the provider: %lld min before the stop."), minutes)
+        }
+        if let lastWarning, !lastWarning.isEmpty {
+            note += " " + String(format: Chrome.localized("Last message from the provider: %@"), lastWarning)
         }
         return note
     }
@@ -905,8 +911,9 @@ extension AppModel {
         var summary = summary
         let stalled = HydraWatchdog.stalledHeadIDs.remove(id) != nil && status == .interrupted
         let lastOutput = HydraWatchdog.stalledLastOutput.removeValue(forKey: id)
+        let lastWarning = HydraWatchdog.stalledLastWarning.removeValue(forKey: id)
         if stalled {
-            summary = [HydraWatchdog.stalledNote(lastOutput: lastOutput), summary ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            summary = [HydraWatchdog.stalledNote(lastOutput: lastOutput, lastWarning: lastWarning), summary ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
         }
         if status != .running { hydraHeadRetries[id] = nil }
         let outcome: HydraHeadInfo.Status = switch status {
@@ -1086,6 +1093,48 @@ extension AppModel {
                       thread(head.id)?.hydra?.status == .running else { return }
                 headRuntime.draft = ComposerDraft(text: brief, attachments: [])
                 headRuntime.send()
+            }
+            return
+        }
+        // An Antigravity head the watchdog stopped has a model stream that went quiet
+        // (`agy` retries on its own after "stream idle timeout" and may never answer): it
+        // is asked to carry on, once, rather than reported as stalled. The session itself
+        // is gone by now, but the conversation id stays on the thread, so the next launch
+        // resumes the same conversation with `--conversation`. A stop from the panel never
+        // gets here (`stopHydraHead` drops the stall mark), and a second stall is final.
+        if status == .interrupted, head.provider == .antigravity, let headRuntime, headRuntime.hydraEditCount == 0,
+           HydraWatchdog.stalledHeadIDs.contains(head.id), !HydraWatchdog.resumedHeadIDs.contains(head.id) {
+            HydraWatchdog.resumedHeadIDs.insert(head.id)
+            HydraWatchdog.stalledHeadIDs.remove(head.id)
+            HydraWatchdog.stalledLastOutput[head.id] = nil
+            HydraWatchdog.stalledLastWarning[head.id] = nil
+            if headRuntime.hydraThinking {
+                headRuntime.hydraActivity = nil
+                headRuntime.hydraThinkingLabel = nil
+            }
+            HydraWatchdog.log.info("Resuming stalled head \(head.id.uuidString, privacy: .public) once")
+            let pause = 3 + Double(info.index % 4) * 0.5
+            Task {
+                try? await Task.sleep(for: .seconds(pause))
+                // Stopped from the panel, or steered on by hand, meanwhile: leave it.
+                guard let headRuntime = existingRuntime(for: head.id), !headRuntime.isRunning,
+                      thread(head.id)?.hydra?.status == .running else { return }
+                // Whatever the user had begun typing in the head's box stays theirs.
+                let typed = headRuntime.draft
+                headRuntime.draft = ComposerDraft(text: Chrome.localized("Your last request got no answer from the model and was stopped after 10 minutes. Continue the task from where you were."), attachments: [])
+                // The quiet that got it stopped is over: without this the next look sees
+                // the old idle time and stops the resumed turn at once.
+                headRuntime.hydraLastEventAt = .now
+                headRuntime.send()
+                // `send()` empties the draft once it takes the message. Still there means it
+                // turned the message away, so the head reports its stall now rather than
+                // sitting "running" with no turn.
+                let refused = !headRuntime.draft.isEmpty
+                headRuntime.draft = typed
+                if refused, let stopped = thread(head.id) {
+                    HydraWatchdog.stalledHeadIDs.insert(head.id)
+                    hydraHeadTurnFinished(stopped, status: .interrupted)
+                }
             }
             return
         }
@@ -1367,9 +1416,12 @@ extension AppModel {
     // MARK: - Stopping and clearing
 
     /// Stops a head where it runs: its own turn. A native head from an older version is
-    /// long gone with the session it ran in, and is only marked stopped.
-    func stopHydraHead(_ id: UUID) {
+    /// long gone with the session it ran in, and is only marked stopped. Only the watchdog
+    /// stops a head as `stalled`: any other stop is the user's, and takes back a stall mark
+    /// the watchdog set an instant before.
+    func stopHydraHead(_ id: UUID, stalled: Bool = false) {
         guard let head = thread(id), let info = head.hydra, !info.isFinished else { return }
+        if !stalled { HydraWatchdog.stalledHeadIDs.remove(id) }
         switch info.kind {
         case .tivano:
             if let headRuntime = existingRuntime(for: id), headRuntime.isRunning {
@@ -1556,10 +1608,11 @@ extension AppModel {
                 let lastOutput = headRuntime.providerLastOutputAt
                 HydraWatchdog.stalledHeadIDs.insert(head.id)
                 HydraWatchdog.stalledLastOutput[head.id] = lastOutput
+                HydraWatchdog.stalledLastWarning[head.id] = headRuntime.providerLastWarning
                 let outputAge = lastOutput.map { "\(max(0, Date.now.timeIntervalSince($0)))s" } ?? "unknown"
                 HydraWatchdog.log.info("Stopped stalled head \(head.id.uuidString, privacy: .public): idle=\(idle)s lastOutputAge=\(outputAge, privacy: .public)")
                 HydraWatchdog.labelled.remove(head.id)
-                stopHydraHead(head.id)
+                stopHydraHead(head.id, stalled: true)
                 continue
             }
             if idle >= HydraWatchdog.thinkingAfter {

@@ -224,15 +224,13 @@ final class ProviderRegistry {
     private static let claudeSeed = [
         ModelOption(id: "default", name: "Default", detail: "Claude Code's recommended model", efforts: claudeEfforts, isDefault: true, fastTier: "fast"),
         ModelOption(id: "opus", name: "Opus", efforts: claudeEfforts, fastTier: "fast"),
-        ModelOption(id: "claude-fable-5-1[1m]", name: "Fable", detail: "Fable 5.1 · Most capable for your hardest and longest-running tasks", efforts: claudeEfforts),
+        ModelOption(id: "claude-fable-5-2[1m]", name: "Fable 5.2", detail: "Fable 5.2 · Most capable for your hardest and longest-running tasks", efforts: claudeEfforts),
+        // Kept because existing threads name this id.
+        ModelOption(id: "claude-fable-5-1[1m]", name: "Fable 5.1", detail: "Fable 5.1 · Most capable for your hardest and longest-running tasks", efforts: claudeEfforts),
         ModelOption(id: "sonnet", name: "Sonnet", efforts: claudeEfforts),
         ModelOption(id: "haiku", name: "Haiku"),
     ]
 
-    /// A cached Claude list made only of the earlier seed's ids is that seed, persisted when another
-    /// provider's live catalog arrived, not a list the CLI reported: a live list always names `opus[1m]`
-    /// and the Fable row. Re-seeding it gives launches that cached the old seed the Fable row, while a
-    /// live list without Fable stays as it is, since that account cannot use it.
     /// The seed with a live Claude list laid over it: a live row for a seed id lends its
     /// effort levels, description and fast tier; a row the seed lacks is appended; no seed
     /// row is ever dropped, since threads keep naming those ids.
@@ -276,8 +274,12 @@ final class ProviderRegistry {
         }
     }
 
+    /// A cached Claude list made only of an earlier seed's ids is that seed, persisted when another
+    /// provider's live catalog arrived, not a list the CLI reported: a live list always names `opus[1m]`.
+    /// Re-seeding it gives launches that cached an earlier seed the newest Fable row, while a
+    /// live list stays as it is.
     private static func isStaleClaudeSeed(_ list: [ModelOption]) -> Bool {
-        let earlierSeedIDs: Set<String> = ["default", "opus", "sonnet", "haiku"]
+        let earlierSeedIDs: Set<String> = ["default", "opus", "claude-fable-5-1[1m]", "sonnet", "haiku"]
         return list.isEmpty || list.allSatisfy { earlierSeedIDs.contains($0.id) }
     }
 
@@ -820,6 +822,13 @@ final class ProviderRegistry {
 
     func models(for provider: ProviderKind) -> [ModelOption] {
         catalogs[provider] ?? []
+    }
+
+    /// Claude's live catalog comes only from real sessions, so `loadCatalog` never stamps its
+    /// `catalogFetchedAt`; a non-empty seeded or merged list is all a reload can mean there.
+    func catalogReloaded(_ provider: ProviderKind, since before: Date?) -> Bool {
+        if provider == .claude { return !models(for: .claude).isEmpty }
+        return catalogFetchedAt[provider] != before && !models(for: provider).isEmpty
     }
 
     func sortedModels(for provider: ProviderKind) -> [ModelOption] {
