@@ -41,6 +41,7 @@ CASES = {
     'resume-unsupported': 'Missing resume capability fails without creating replacement history.',
     'resume-permission': 'Old-session permission during resume is never automatically allowed.',
     'startup-failure': 'Failed initialize reclaims its peer before caller cleanup.',
+    'bridge-disposed': 'Disposed ACP bridge fails the turn and retires the still-running dsh session.',
     'final-report': 'Report-only launch and readiness dispatch a completed simulated report; actual guard tested separately.',
     'report-guard-missing': 'Missing report guard readiness refuses to dispatch prompt.',
     'credential-records': 'Only a nonempty canonical local account grant counts as local sign-in evidence.',

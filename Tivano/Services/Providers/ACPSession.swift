@@ -85,6 +85,9 @@ final class ACPSession: ProviderSession {
     private var runtimeMode: RuntimeMode
     private var messageID: String?
     private var thoughtID: String?
+    // Kimi Code answers a failed non-auth turn (quota, rate limit, API or network error)
+    // with a bare end_turn and no content, so an empty turn is the only failure signal.
+    private var promptProducedOutput = false
     private var counter = 0
     private var pendingPermissions: [String: RPCID] = [:]
     private struct PendingQuestion {
@@ -374,6 +377,7 @@ final class ACPSession: ProviderSession {
         }
         messageID = nil
         thoughtID = nil
+        promptProducedOutput = false
         promptPreparing = false
         onEvent?(.turnStarted(providerTurnID: nil))
         Task { [weak self] in
@@ -387,6 +391,9 @@ final class ACPSession: ProviderSession {
                     "sessionId": .string(sessionID),
                     "prompt": .array(prompt),
                 ])
+                // Updates sent before the reply are still queued; drain them so the
+                // empty-turn check sees the turn's output.
+                await self.eventTask?.value
                 self.finishPrompt(result["stopReason"]?.string, error: nil, generation: generation)
             } catch {
                 self.finishPrompt(nil, error: error, generation: generation)
@@ -569,6 +576,15 @@ final class ACPSession: ProviderSession {
         return error.localizedDescription
     }
 
+    // dsh can dispose its ACP plugin while the process and pipe stay alive; only a new process recovers.
+    private static func isDshBridgeDisposed(_ error: Error) -> Bool {
+        guard let rpc = error as? RPCError else { return false }
+        return [rpc.message, rpc.data?.string, rpc.data?["details"]?.string,
+                rpc.data?["detail"]?.string, rpc.data?["message"]?.string]
+            .compactMap { $0 }
+            .contains { $0.localizedCaseInsensitiveContains("ACP bridge has been disposed") }
+    }
+
     /// The installed 0.6.12 ACP authenticate method checks the CLI's selected route,
     /// including BYOK; passing that gate is not proof that a model accepted the key.
     static func minimaxCodeAuthentication(executable: URL, environment: [String: String]) async -> (auth: ProviderStatus.Auth, message: String) {
@@ -684,6 +700,7 @@ final class ACPSession: ProviderSession {
         } catch let error as RPCError where configuration.provider == .minimaxCode {
             throw ProviderError.failed(Self.miniMaxFailure(error, operation: method))
         } catch let error as RPCError where configuration.provider == .dsh {
+            if Self.isDshBridgeDisposed(error) { stop() }
             throw ProviderError.failed(Self.dshFailure(error))
         }
     }
@@ -1247,23 +1264,27 @@ final class ACPSession: ProviderSession {
         case "agent_message_chunk":
             if let content = update["content"], content["type"]?.string == "image",
                let image = await ToolImages.attachment(block: content) {
+                promptProducedOutput = true
                 messageID = nil
                 thoughtID = nil
                 onEvent?(.toolUpdated(id: nextID("image"), update: ToolUpdate(title: AppText.localized("Image"), status: .completed, images: [image], kind: .other)))
                 return
             }
             guard let text = update["content"]?["text"]?.string else { return }
+            if !text.isEmpty { promptProducedOutput = true }
             thoughtID = nil
             let id = update["messageId"]?.string.map { "message-\($0)" } ?? messageID ?? nextID("message")
             messageID = id
             onEvent?(.messageDelta(id: id, text: text))
         case "agent_thought_chunk":
             guard let text = update["content"]?["text"]?.string else { return }
+            if !text.isEmpty { promptProducedOutput = true }
             let id = thoughtID ?? nextID("thought")
             thoughtID = id
             onEvent?(.reasoningDelta(id: id, text: text))
         case "tool_call":
             guard let id = update["toolCallId"]?.string else { return }
+            promptProducedOutput = true
             messageID = nil
             thoughtID = nil
             let update = mergeToolDetails(update)
@@ -1280,6 +1301,7 @@ final class ACPSession: ProviderSession {
             if initial.output != nil || initial.status != nil || initial.images != nil { onEvent?(.toolUpdated(id: id, update: initial)) }
         case "tool_call_update":
             guard let id = update["toolCallId"]?.string else { return }
+            promptProducedOutput = true
             let update = mergeToolDetails(update)
             if todoToolCallIDs.contains(id) || Self.isTodoCall(update) {
                 todoToolCallIDs.insert(id)
@@ -1464,8 +1486,13 @@ final class ACPSession: ProviderSession {
                 ? "MiniMax Code stopped at a limit before completing the turn."
                 : "MiniMax Code returned an invalid ACP result."
             onEvent?(.turnCompleted(status: .failed, error: AppText.localized(message)))
+        } else if configuration.provider == .kimi, !promptProducedOutput {
+            onEvent?(.turnCompleted(status: .failed, error: AppText.localized("Kimi Code ended the turn without a reply. This usually means a usage limit, an expired membership or a network error. Run `kimi` in a terminal to see the cause.")))
         } else {
             onEvent?(.turnCompleted(status: .completed, error: nil))
+        }
+        if configuration.provider == .dsh, let error, Self.isDshBridgeDisposed(error) {
+            stop()
         }
         if configuration.provider == .minimaxCode, cancelRequested || error != nil || stopReason != "end_turn" {
             // Cancelled and failed runs cannot retain an idle CLI or lingering tools.

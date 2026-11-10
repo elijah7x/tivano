@@ -275,7 +275,7 @@ private struct ThreadColumns: NSViewRepresentable {
     func updateNSView(_ pane: NSView, context: Context) {
         let columns = context.coordinator
         columns.cover(pane, isCovered, model: model, liveResize: liveResize)
-        columns.show(threadID, in: pane, model: model, liveResize: liveResize)
+        columns.show(threadID, in: pane, model: model, liveResize: liveResize, rebuildsIfResized: running.contains(threadID))
         // A running thread's hidden column is kept (see `running`); a deleted thread's goes.
         columns.dropHidden(where: { model.thread($0) == nil || model.existingRuntime(for: $0) == nil })
         columns.prebuild(prebuilt.filter { model.thread($0) != nil && !running.contains($0) }, in: pane, model: model, liveResize: liveResize)
@@ -360,7 +360,10 @@ private struct ThreadColumns: NSViewRepresentable {
             }
         }
 
-        func show(_ id: UUID, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) {
+        /// `rebuildsIfResized`: a running thread's column kept at another pane size is built
+        /// afresh. Its ChatView still holds the old pane size and would lay out its Hydra
+        /// panels for it in the first frames shown; a new column measures before it shows them.
+        func show(_ id: UUID, in pane: NSView, model: AppModel, liveResize: WindowLiveResize, rebuildsIfResized: Bool = false) {
             guard id != shown else { return }
             resizeState = liveResize
             liveResize.setPaneOwner(isCovered ? nil : id, resizing: paneIsResizing(id, model: model))
@@ -378,6 +381,9 @@ private struct ThreadColumns: NSViewRepresentable {
                 scopes[shown]?.setVisible(false)
                 previous.autoresizingMask = []
                 previous.rootView = Self.root(shown, isShown: false, model: model, liveResize: liveResize, scope: scopes[shown])
+            }
+            if rebuildsIfResized, let kept = columns[id], kept.frame.size != pane.bounds.size {
+                drop(id)
             }
             if let kept = columns[id] {
                 kept.acceptsInteraction = !isCovered

@@ -8,6 +8,34 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.18] - 2026-11-10
+
+### English
+
+### Bug fixes
+
+- A Kimi Code turn that ends without any reply now shows an error instead of finishing silently. Kimi Code reports usage limits, an expired membership and API or network failures this way, so these no longer look like an empty success.
+- Switching back to a chat running Hydra after resizing the window, or opening or closing the sidebar, no longer shows its head cards cut off at both window edges with a squeezed chat box for a moment.
+- A DeepSeek Harness chat no longer fails every message with "Internal error: the ACP bridge has been disposed". DeepSeek Harness can shut down its ACP connection while its process keeps running; Tivano now drops that process when this happens, so the next message starts a fresh one.
+- With the interface in Chinese, Tivano no longer quits when an agent such as DeepSeek Harness or Kimi Code takes longer than 45 seconds to answer a request; it shows the timeout message instead.
+- An Antigravity head whose model stops answering no longer just reads "Thinking" for 10 minutes and then stalls. Errors Antigravity reports, such as a model stream that timed out, now show in the head, the stall report names the last one, and a head stopped this way before it changed any file is asked once to continue its conversation.
+- Updating Claude Code from Settings no longer always ends with "The CLI was updated, but the model catalog could not be reloaded", and Retry update no longer fails the same way until Tivano restarts. The Claude model picker now offers Fable 5.2 and keeps Fable 5.1 for chats that use it.
+
+### 简体中文
+
+### 问题修复
+
+- Kimi Code 结束一轮却没有任何回复时，现在会显示错误提示，不再悄无声息地结束。用量达到上限、会员过期、接口或网络出错时，Kimi Code 都会这样结束，过去看起来像是成功但没有内容。
+- 调整窗口大小或开关侧栏后，切回正在运行 Hydra 的对话时，head 卡片不再短暂地被窗口两侧边缘截断、输入框被挤窄。
+- DeepSeek Harness 对话不再每条消息都报“Internal error: the ACP bridge has been disposed”。DeepSeek Harness 可能在进程仍在运行时关闭自己的 ACP 连接；现在 Tivano 遇到这种情况会丢弃这个进程，下一条消息自动启动新进程。
+- 中文界面下，DeepSeek Harness、Kimi Code 等 agent 某个请求超过 45 秒未响应时，Tivano 不再闪退，而是显示超时提示。
+- Antigravity head 的模型不再回应时，不会只显示“正在思考”10 分钟后被判为卡住。Antigravity 报告的错误（例如模型数据流超时）现在会显示在 head 中，卡住的报告会写明最后一条；这样被停下、且尚未改动任何文件的 head 会自动接着原对话继续一次。
+- 在设置中更新 Claude Code 后，不再总是提示“CLI 已更新，但无法重新加载模型目录”，“重试更新”也不会在重启 Tivano 前一直以同样方式失败。Claude 模型选择器现在提供 Fable 5.2，并为仍在使用 Fable 5.1 的对话保留该模型。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.5.12] - 2026-11-08
 
 ### English

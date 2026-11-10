@@ -655,7 +655,7 @@ extension ProviderRegistry {
         }
         let before = catalogFetchedAt[provider]
         await loadCatalog(provider, force: true)
-        return catalogFetchedAt[provider] != before && !models(for: provider).isEmpty
+        return catalogReloaded(provider, since: before)
     }
 
     private func setCLIUpdateStatus(_ status: CLIUpdateStatus?, for provider: ProviderKind) {

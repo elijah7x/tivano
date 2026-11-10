@@ -111,6 +111,9 @@ try:
                 state[0]['currentValue'] = selected_model
                 reply(request, {'configOptions': state})
         elif method == 'session/prompt':
+            if case == 'bridge-disposed':
+                emit({'id': request['id'], 'error': {'code': -32603, 'message': 'Internal error: the ACP bridge has been disposed'}})
+                continue
             if case == 'final-report':
                 if not any(arg.endswith('/report-guard.yml') for arg in sys.argv[1:]):
                     (root / 'fixture-tool-executed').write_text('unexpected report tool')

@@ -281,6 +281,12 @@ struct AssertionFailure: Error { let message: String }
         }
         try await wait { !r.ends.isEmpty }
         try await Task.sleep(for: .milliseconds(150))
+        if name == "bridge-disposed" {
+            try require(r.ends == [.failed], "Disposed bridge did not fail the turn exactly once")
+            try require(r.failures == ["Internal error: the ACP bridge has been disposed"], "Disposed bridge detail did not match")
+            try require(!session.isRunning, "Disposed bridge left the old session running")
+            return
+        }
         try require(r.ends == [(name == "cancel" || name == "acp-cancel") ? .interrupted : .completed], "Turn did not complete exactly once with expected status")
         if name == "event-flood" {
             try require(r.text == String(repeating: "x", count: 2000), "Flood lost or duplicated text")

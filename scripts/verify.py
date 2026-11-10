@@ -81,8 +81,8 @@ CHECKS = (
            'Tivano/App/Runtime/ThreadRuntime.swift')),
     check('claude_accounts_checks', 'fast', (), 600, SWIFT,
           (*DOMAIN, *paths(PROVIDERS, 'ClaudeAccountCredentials.swift ProviderRegistry.swift '
-                           'ClaudeSwapImport.swift ProviderAccounts.swift'),
-           'Tivano/Core/Models/ProviderAccount.swift')),
+                           'ProviderRegistry+CLIUpdates.swift ClaudeSwapImport.swift ProviderAccounts.swift'),
+           *paths(MODELS, 'ProviderAccount.swift Provider.swift'))),
     check('timeline_performance_checks', 'fast', (), 300, SWIFT,
           ('Tivano/App/Views/Chat/ThreadTimeline.swift',), 'build.noindex/timeline-performance-checks'),
     check('workspace_recovery_checks', 'fast', ('{out}',), 2100, SWIFT,
@@ -97,6 +97,8 @@ CHECKS = (
            *paths(PROVIDERS, 'TypeSafeAPI.swift ClaudeAccountCredentials.swift PlanLimits.swift'),
            'Tivano/Services/Control/ControlLedger.swift'),
           'fresh external directory'),
+    check('localization_format_checks', 'fast', (), 240, (),
+          ('Tivano/Resources/Localizable.xcstrings',), 'none (read-only)'),
     check('runtime_storage_checks', 'slow', (), 7200, (*SWIFT, 'unprivileged'),
           (*paths(SUPPORT, 'HangWatchdog.swift JSONValue.swift ISO8601.swift RuntimeStorageUsage.swift '
                   'CaptureRun.swift StoragePaths.swift Text.swift'),
@@ -128,6 +130,8 @@ CHECKS = (
           'external directory/run-*'),
     check('minimax_adapter_stress', 'slow', (), 900, (*SWIFT, '/usr/bin/sandbox-exec'),
           ('scripts/fixtures/dsh_adapter/', 'scripts/dsh_adapter_stress.py', *ACP_SOURCES), 'build.noindex/minimax-code/offline-*'),
+    check('kimi_adapter_stress', 'slow', (), 900, (*SWIFT, '/usr/bin/sandbox-exec'),
+          ('scripts/fixtures/dsh_adapter/', 'scripts/dsh_adapter_stress.py', *ACP_SOURCES), 'build.noindex/kimi-code/offline-*'),
     check('consolidate_checkout_checks', 'slow', (), 900, ('git',),
           ('scripts/consolidate_checkout.py', 'scripts/consolidate_checkout_job.py')),
     check('reply_selection_checks', 'gui', (), 600, (*SWIFT, 'gui-session'),

@@ -97,6 +97,9 @@ struct PlanLimits: Equatable, Sendable {
     static var forgotten: [UUID] = []
     static func forgetClaudeIdentity(_ accountID: UUID) { forgotten.append(accountID) }
     static var authCalls = 0
+    // Storage for the production catalog rules extracted from ProviderRegistry.swift below.
+    var catalogs: [ProviderKind: [ModelOption]] = [:]
+    var catalogFetchedAt: [ProviderKind: Date] = [:]
     static var loginIdentity = ClaudeAccountIdentity(accountID: "new-account", organizationID: "org", email: "new@example.test")
     func executable(for provider: ProviderKind) -> URL? { URL(fileURLWithPath: "/fixture-never-executed") }
     func baseEnvironment(for provider: ProviderKind) -> [String: String] { LoginEnvironment.current }
@@ -487,7 +490,24 @@ CHECKS = r'''
         _ = await accounts.refreshClaudeAccount(saved.id)
         check(FixtureKeychain.reads == readsBeforeCapture && Shell.calls == callsBeforeCapture, "capture entry points never touch credentials or CLI")
         rejects("captures cannot read credentials") { _ = try ClaudeAccountCredentials.read(environment: env, isManaged: false) }
-        print("Claude account checks passed: isolated storage, selectors, permission failures, CSWAP parsing, legacy account decoding, off-main Keychain, security-tool default reads and import exclusivity; synthetic data only.")
+        // The production seed, stale-seed rule and reload predicate, sliced from ProviderRegistry.swift.
+        let seedIDs = ProviderRegistry.claudeSeed.map(\.id)
+        check(seedIDs.contains("claude-fable-5-2[1m]") && seedIDs.contains("claude-fable-5-1[1m]"), "Claude seed offers Fable 5.2 and keeps the 5.1 id")
+        let previousSeed = ["default", "opus", "claude-fable-5-1[1m]", "sonnet", "haiku"].map { ModelOption(id: $0, name: $0) }
+        check(ProviderRegistry.isStaleClaudeSeed(previousSeed) && ProviderRegistry.isStaleClaudeSeed([]), "a cached previous seed is re-seeded")
+        check(!ProviderRegistry.isStaleClaudeSeed(previousSeed + [ModelOption(id: "opus[1m]", name: "Opus 1M")]), "a live Claude list is kept")
+        let catalogRegistry = ProviderRegistry()
+        check(!catalogRegistry.catalogReloaded(.claude, since: nil), "an empty Claude list is not reloaded")
+        catalogRegistry.catalogs[.claude] = ProviderRegistry.claudeSeed
+        check(catalogRegistry.catalogFetchedAt[.claude] == nil && catalogRegistry.catalogReloaded(.claude, since: nil), "a seeded Claude list counts as reloaded without a fetch date")
+        catalogRegistry.catalogs[.codex] = [ModelOption(id: "fixture", name: "Fixture")]
+        check(!catalogRegistry.catalogReloaded(.codex, since: nil), "another provider needs a new fetch date")
+        let stamp = Date()
+        catalogRegistry.catalogFetchedAt[.codex] = stamp
+        check(catalogRegistry.catalogReloaded(.codex, since: nil) && !catalogRegistry.catalogReloaded(.codex, since: stamp), "another provider reloads only when its fetch date changed")
+        catalogRegistry.catalogs[.codex] = []
+        check(!catalogRegistry.catalogReloaded(.codex, since: nil), "an empty list is never reloaded")
+        print("Claude account checks passed: isolated storage, selectors, permission failures, CSWAP parsing, legacy account decoding, off-main Keychain, security-tool default reads, import exclusivity and the Claude catalog seed and reload rules; synthetic data only.")
     }
 }
 '''
@@ -507,7 +527,30 @@ def main():
     start = registry.index("    private static func claudeAccountAllowsProbe(")
     end = registry.index("\n    static func auth(", start)
     probe = registry[start:end].replace("private static", "static")
-    source = "\nextension ProviderRegistry {\n" + probe + "\n}\n" + credential
+    # Catalog rules are sliced the same way, and a marker that stops matching fails loudly. The real
+    # registry needs most of the provider layer, so only these members run against the shim's storage.
+    def piece(text, start, end, name):
+        if text.count(start) != 1 or text.count(end) != 1:
+            raise SystemExit(f"{name} markers changed; update scripts/claude_accounts_checks.py")
+        first = text.index(start)
+        last = text.index(end)
+        if last <= first:
+            raise SystemExit(f"{name} markers are out of order; update scripts/claude_accounts_checks.py")
+        return text[first:last]
+    seed = piece(registry, "    private static let claudeEfforts", "\n\n    /// The seed with a live Claude list laid over it", "Claude seed")
+    stale = piece(registry, "    private static func isStaleClaudeSeed(", "\n\n    // Seeds come from the same tables", "stale Claude seed rule")
+    reload = piece(registry, "    func models(for provider: ProviderKind) -> [ModelOption] {", "\n    func sortedModels(", "catalog reload rule")
+    for required in ("claude-fable-5-2[1m]", "claude-fable-5-1[1m]"):
+        if required not in seed:
+            raise SystemExit(f"Claude seed no longer names {required}; update scripts/claude_accounts_checks.py")
+    if "func catalogReloaded(" not in reload:
+        raise SystemExit("catalogReloaded moved out of the extracted slice; update scripts/claude_accounts_checks.py")
+    catalog = "\nextension ProviderRegistry {\n" + "\n\n".join(
+        part.replace("private static", "static") for part in (seed, stale)) + "\n\n" + reload + "\n}\n"
+    models = (ROOT / "Tivano/Core/Models/Provider.swift").read_text()
+    option = piece(models, "struct ModelOption: Codable", "\nextension Array where Element == ModelOption {", "ModelOption")
+    variant = piece(models, "struct ModelVariant: Codable", "\nstruct SlashCommand: Hashable", "ModelVariant")
+    source = "\nextension ProviderRegistry {\n" + probe + "\n}\n" + option + variant + catalog + credential
     source += (ROOT / "Tivano/Services/Providers/ClaudeSwapImport.swift").read_text()
     source += (ROOT / "Tivano/Core/Models/ProviderAccount.swift").read_text()
     source += (ROOT / "Tivano/Services/Providers/ProviderAccounts.swift").read_text() + CHECKS
