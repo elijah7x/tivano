@@ -864,7 +864,8 @@ private struct MCPCustomEditor: View {
                     .help(Text(verbatim: Chrome.localized(variable.isSecret ? "Kept in the Keychain" : "Stored in mcp.json; click to keep it in the Keychain instead")))
                     .accessibilityLabel(Text(verbatim: Chrome.localized(variable.isSecret ? "Kept in the Keychain" : "Stored in mcp.json; click to keep it in the Keychain instead")))
                     Button {
-                        variables.removeAll { $0.id == variable.id }
+                        let id = variable.id
+                        variables.removeAll { $0.id == id }
                     } label: {
                         Image(systemName: "minus.circle")
                             .font(.ui(.callout, weight: .medium))

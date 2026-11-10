@@ -99,6 +99,11 @@ CHECKS = (
           'fresh external directory'),
     check('localization_format_checks', 'fast', (), 240, (),
           ('Tivano/Resources/Localizable.xcstrings',), 'none (read-only)'),
+    check('binding_removal_checks', 'fast', (), 60, (), ('Tivano/',), 'none (read-only)'),
+    check('antigravity_effort_checks', 'fast', (), 60, SWIFT,
+          (*paths(PROVIDERS, 'AntigravitySession.swift ProviderRegistry.swift'),
+           'Tivano/App/Runtime/ThreadRuntime.swift'), 'none (read-only)'),
+    check('pi_catalog_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'PiCLI.swift'),), 'none (read-only)'),
     check('runtime_storage_checks', 'slow', (), 7200, (*SWIFT, 'unprivileged'),
           (*paths(SUPPORT, 'HangWatchdog.swift JSONValue.swift ISO8601.swift RuntimeStorageUsage.swift '
                   'CaptureRun.swift StoragePaths.swift Text.swift'),

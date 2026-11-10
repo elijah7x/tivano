@@ -89,7 +89,7 @@ final class AntigravitySession: ProviderSession {
         // `agy` has no `--allowed-mcp-server-names` flag (that one is Claude's) and
         // its flag parser exits 2 with usage text on an unknown flag, which killed
         // every Antigravity session as soon as one MCP server was connected.
-        let (resolvedModel, resolvedEffort) = Self.normalize(model: model, effort: effort)
+        let (resolvedModel, resolvedEffort) = Self.normalize(model: model, effort: effort, catalog: Self.addingSeedRows(configuration.modelCatalog, seed: ProviderRegistry.antigravitySeed))
         if let resolvedModel, !resolvedModel.isEmpty { arguments += ["--model", resolvedModel] }
         if let resolvedEffort, !resolvedEffort.isEmpty { arguments += ["--effort", resolvedEffort] }
         arguments += modeArguments(runtimeMode: configuration.runtimeMode, interaction: configuration.interactionMode)
@@ -434,10 +434,18 @@ final class AntigravitySession: ProviderSession {
         return ParsedModelRow(baseSlug: slug, baseName: name, effort: nil)
     }
 
+    /// A catalog restored from before a seed row existed lacks that model, which would
+    /// send it as unknown with whatever effort the thread carries; the seed fills the gap.
+    static func addingSeedRows(_ catalog: [ModelOption], seed: [ModelOption]) -> [ModelOption] {
+        catalog + seed.filter { row in !catalog.contains { $0.id == row.id } }
+    }
+
     /// Normalizes model and effort flags for `agy`.
-    /// Strips any legacy effort suffixes from model slugs, resolves the effective effort level,
-    /// and ensures --effort is only passed for models that support it.
-    static func normalize(model: String?, effort: String?) -> (model: String?, effort: String?) {
+    /// Strips any legacy effort suffixes from model slugs and resolves the effort
+    /// level against the model's catalog row: `--effort` only carries an effort the
+    /// model declares (the CLI exits on one it does not), and an unknown model gets
+    /// only an explicitly requested effort, never an invented default.
+    static func normalize(model: String?, effort: String?, catalog: [ModelOption]) -> (model: String?, effort: String?) {
         guard let model, !model.isEmpty else { return (nil, nil) }
         let parsed = parseModelRow(slug: model, name: "")
         let baseSlug = parsed.baseSlug
@@ -447,18 +455,48 @@ final class AntigravitySession: ProviderSession {
             return (baseSlug, nil)
         }
 
-        var resolvedEffort = effort
-        if resolvedEffort == nil || resolvedEffort?.isEmpty == true {
-            resolvedEffort = parsed.effort
-        }
-        if resolvedEffort == nil || resolvedEffort?.isEmpty == true {
-            resolvedEffort = baseSlug == "gpt-oss-120b" ? "medium" : "high"
+        var requested = effort
+        if requested == nil || requested?.isEmpty == true {
+            requested = parsed.effort
         }
 
-        // Validate effort against model constraints
-        if baseSlug == "gemini-3.1-pro" && resolvedEffort == "medium" {
+        // The catalog keys rows by base slug: `listModels` groups every effort
+        // variant of a model under the one row its `id` names.
+        guard let row = catalog.first(where: { $0.id == baseSlug }) else {
+            // Unknown model: pass only what was asked for. The two slugs known to
+            // accept effort keep their adjustments, and their old default when
+            // nothing was requested.
+            var resolvedEffort = requested
+            if resolvedEffort == nil || resolvedEffort?.isEmpty == true {
+                if baseSlug == "gpt-oss-120b" {
+                    resolvedEffort = "medium"
+                } else if baseSlug == "gemini-3.1-pro" {
+                    resolvedEffort = "high"
+                }
+            }
+            if baseSlug == "gemini-3.1-pro" && resolvedEffort == "medium" {
+                resolvedEffort = "high"
+            } else if baseSlug == "gpt-oss-120b" {
+                resolvedEffort = "medium"
+            }
+            return (baseSlug, resolvedEffort)
+        }
+
+        guard !row.efforts.isEmpty else { return (baseSlug, nil) }
+        var resolvedEffort: String?
+        if let requested, row.efforts.contains(requested) {
+            resolvedEffort = requested
+        } else if let fallback = row.defaultEffort, row.efforts.contains(fallback) {
+            resolvedEffort = fallback
+        } else {
+            // `listModels` orders efforts low to high, so the last one is the highest it takes.
+            resolvedEffort = row.efforts.last
+        }
+
+        // Validate effort against model constraints, without leaving the row's efforts.
+        if baseSlug == "gemini-3.1-pro" && resolvedEffort == "medium" && row.efforts.contains("high") {
             resolvedEffort = "high"
-        } else if baseSlug == "gpt-oss-120b" {
+        } else if baseSlug == "gpt-oss-120b" && row.efforts.contains("medium") {
             resolvedEffort = "medium"
         }
 
