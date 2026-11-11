@@ -158,25 +158,34 @@ private enum HydraTreeCache {
 /// Heads waiting for a user answer or approval do not count toward idle time.
 @MainActor
 private enum HydraWatchdog {
-    /// How often it looks, and how long a head is quiet before it is called thinking,
-    /// then stalled.
+    /// How often it looks. A head is thinking after 3 minutes without events, stalled
+    /// after 10 minutes with no edits and no new tools. An Antigravity head is also
+    /// abandoned after 30 minutes of complete silence, even with edits or a tool that never
+    /// returns: `agy` runs without its whole-turn cap, which used to end such a turn.
     static let tick: Duration = .seconds(30)
     static let thinkingAfter: TimeInterval = 180
     static let stalledAfter: TimeInterval = 600
+    static let abandonedAfter: TimeInterval = 1800
 
     static var loop: Task<Void, Never>?
     static var toolCounts: [UUID: Int] = [:]
     static var labelled: Set<UUID> = []
     static var stalledHeadIDs: Set<UUID> = []
+    static var abandonedHeadIDs: Set<UUID> = []
     static var stalledLastOutput: [UUID: Date] = [:]
     static var stalledLastWarning: [UUID: String] = [:]
     /// Antigravity heads already started again after a stall: each gets that once, ever.
     static var resumedHeadIDs: Set<UUID> = []
+    /// Transient-failure retries are independent of launch retries and the one-time stall resume.
+    static var transientRetries: [UUID: Int] = [:]
+    static var transientRetryTasks: [UUID: Task<Void, Never>] = [:]
     static let log = Logger(subsystem: "dev.tivano.Tivano", category: "hydra")
 
     /// Said in a head's report when the watchdog stopped it for sitting still.
-    static func stalledNote(lastOutput: Date?, lastWarning: String?) -> String {
-        var note = Chrome.localized("Stalled: no edits or tool calls for 10 minutes; stopped by Tivano.")
+    static func stopNote(lastOutput: Date?, lastWarning: String?, abandoned: Bool) -> String {
+        var note = Chrome.localized(abandoned
+            ? "Abandoned: no activity for 30 minutes; stopped by Tivano."
+            : "Stalled: no edits or tool calls for 10 minutes; stopped by Tivano.")
         if let lastOutput {
             let minutes = Int64(max(0, Date.now.timeIntervalSince(lastOutput)) / 60)
             note += " " + String(format: Chrome.localized("Last output from the provider: %lld min before the stop."), minutes)
@@ -909,13 +918,15 @@ extension AppModel {
         guard let head = thread(id), let info = head.hydra, !info.isFinished else { return }
         // A head the watchdog stopped tells its lead why, ahead of whatever it had said.
         var summary = summary
+        let abandoned = HydraWatchdog.abandonedHeadIDs.remove(id) != nil
         let stalled = HydraWatchdog.stalledHeadIDs.remove(id) != nil && status == .interrupted
         let lastOutput = HydraWatchdog.stalledLastOutput.removeValue(forKey: id)
         let lastWarning = HydraWatchdog.stalledLastWarning.removeValue(forKey: id)
         if stalled {
-            summary = [HydraWatchdog.stalledNote(lastOutput: lastOutput, lastWarning: lastWarning), summary ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            summary = [HydraWatchdog.stopNote(lastOutput: lastOutput, lastWarning: lastWarning, abandoned: abandoned), summary ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
         }
         if status != .running { hydraHeadRetries[id] = nil }
+        if status == .completed { HydraWatchdog.transientRetries[id] = nil }
         let outcome: HydraHeadInfo.Status = switch status {
         case .completed: .completed
         case .failed: .failed
@@ -1068,6 +1079,72 @@ extension AppModel {
         // Setting off, failed turns and retry paths retain the immediate-stop behavior.
         let historySession = status == .completed ? headRuntime?.retainCodexHeadSessionForHistory() : nil
         if !head.provider.isAPIKeyBased, historySession == nil { headRuntime?.stopHeadSessionAfterProviderHistory() }
+        // A transient agy failure keeps the head and its batch pending while the same provider
+        // conversation resumes. Only exhaustion or a refused continuation reports the failure.
+        if status == .failed, head.provider == .antigravity, info.status == .running,
+           let error, AntigravitySession.isTransientFailure(error),
+           let sessionID = head.providerSessionID, !sessionID.trimmed.isEmpty,
+           !HydraWatchdog.abandonedHeadIDs.contains(head.id),
+           let headRuntime, let turnID,
+           HydraWatchdog.transientRetries[head.id, default: 0] < AutoContinue.transientRetryLimit {
+            let attempt = HydraWatchdog.transientRetries[head.id, default: 0] + 1
+            HydraWatchdog.transientRetries[head.id] = attempt
+            let delay = attempt == 1 ? 3 : 9
+            updateHydraHead(head.id) {
+                $0.status = .running
+                $0.finishedAt = nil
+            }
+            headRuntime.appendNotice(.info, String(
+                format: Chrome.localized("Antigravity head %@ lost its connection; continuing the same conversation in %lld s (attempt %lld of %lld)…"),
+                info.displayName, Int64(delay), Int64(attempt), Int64(AutoContinue.transientRetryLimit)
+            ))
+            HydraWatchdog.stalledHeadIDs.remove(head.id)
+            HydraWatchdog.stalledLastOutput[head.id] = nil
+            HydraWatchdog.stalledLastWarning[head.id] = nil
+            if headRuntime.hydraThinking {
+                headRuntime.hydraActivity = nil
+                headRuntime.hydraThinkingLabel = nil
+            }
+            headRuntime.hydraLastEventAt = .now
+            HydraWatchdog.log.info("Retrying transient Antigravity failure for head \(head.id.uuidString, privacy: .public), attempt \(attempt)")
+            let retryTask = Task { @MainActor [weak self] in
+                defer { HydraWatchdog.transientRetryTasks[head.id] = nil }
+                guard let self else { return }
+                try? await Task.sleep(for: .seconds(delay))
+                if Task.isCancelled {
+                    // Closing a job cancels its waits; a head not already stopped or released
+                    // still owes its lead the failure that could not be retried.
+                    if let current = self.thread(head.id), current.hydra?.status == .running,
+                       let parentID = current.parentThreadID, let jobID = current.hydra?.jobID,
+                       self.openHydraJob(of: parentID)?.id != jobID {
+                        self.finishHydraHead(head.id, status: .failed, summary: report, startupFailure: startupFailure)
+                    }
+                    return
+                }
+                guard let current = self.thread(head.id), let currentInfo = current.hydra,
+                      currentInfo.status == .running,
+                      current.providerSessionID?.trimmed.isEmpty == false,
+                      !HydraWatchdog.abandonedHeadIDs.contains(head.id),
+                      !self.hydraCopiesReleasing.contains(head.id),
+                      !currentInfo.hasOwnCopy || current.worktreePath != nil,
+                      let currentRuntime = self.existingRuntime(for: head.id), !currentRuntime.isRunning else { return }
+                if let jobID = currentInfo.jobID {
+                    guard let parentID = current.parentThreadID,
+                          self.openHydraJob(of: parentID)?.id == jobID else {
+                        self.finishHydraHead(head.id, status: .failed, summary: report, startupFailure: startupFailure)
+                        return
+                    }
+                }
+                currentRuntime.hydraLastEventAt = .now
+                guard currentRuntime.sendContinuation(after: turnID, text: AutoContinue.failedTurnContinueMessage) else {
+                    self.finishHydraHead(head.id, status: .failed, summary: report, startupFailure: startupFailure)
+                    return
+                }
+                self.updateHydraHead(head.id) { $0.executionFinishedAt = nil }
+            }
+            HydraWatchdog.transientRetryTasks[head.id] = retryTask
+            return
+        }
         // A head that died at the door, before a tool ran (the agent's own store locked
         // while several started at once, or its process gone before a word), is started
         // again on its brief after a short pause rather than reported as failed: the lead
@@ -1102,8 +1179,10 @@ extension AppModel {
         // is gone by now, but the conversation id stays on the thread, so the next launch
         // resumes the same conversation with `--conversation`. A stop from the panel never
         // gets here (`stopHydraHead` drops the stall mark), and a second stall is final.
+        // An abandoned stop is final too, rather than resumed with the 10-minute message.
         if status == .interrupted, head.provider == .antigravity, let headRuntime, headRuntime.hydraEditCount == 0,
-           HydraWatchdog.stalledHeadIDs.contains(head.id), !HydraWatchdog.resumedHeadIDs.contains(head.id) {
+           HydraWatchdog.stalledHeadIDs.contains(head.id), !HydraWatchdog.abandonedHeadIDs.contains(head.id),
+           !HydraWatchdog.resumedHeadIDs.contains(head.id) {
             HydraWatchdog.resumedHeadIDs.insert(head.id)
             HydraWatchdog.stalledHeadIDs.remove(head.id)
             HydraWatchdog.stalledLastOutput[head.id] = nil
@@ -1417,11 +1496,15 @@ extension AppModel {
 
     /// Stops a head where it runs: its own turn. A native head from an older version is
     /// long gone with the session it ran in, and is only marked stopped. Only the watchdog
-    /// stops a head as `stalled`: any other stop is the user's, and takes back a stall mark
-    /// the watchdog set an instant before.
+    /// stops a head as `stalled`: any other stop is the user's, and takes back the stop
+    /// reason the watchdog set an instant before.
     func stopHydraHead(_ id: UUID, stalled: Bool = false) {
         guard let head = thread(id), let info = head.hydra, !info.isFinished else { return }
-        if !stalled { HydraWatchdog.stalledHeadIDs.remove(id) }
+        HydraWatchdog.transientRetryTasks.removeValue(forKey: id)?.cancel()
+        if !stalled {
+            HydraWatchdog.stalledHeadIDs.remove(id)
+            HydraWatchdog.abandonedHeadIDs.remove(id)
+        }
         switch info.kind {
         case .tivano:
             if let headRuntime = existingRuntime(for: id), headRuntime.isRunning {
@@ -1471,6 +1554,8 @@ extension AppModel {
     /// `targetCheckout` is that checkout when the head was sent to one, and is not a
     /// copy, so it stays after the copy path and `baseTree` are cleared.
     func releaseHydraCopy(of id: UUID) {
+        HydraWatchdog.transientRetries[id] = nil
+        HydraWatchdog.transientRetryTasks.removeValue(forKey: id)?.cancel()
         guard !libraryWritesBlocked, let head = thread(id), let info = head.hydra, info.hasOwnCopy,
               let copy = head.worktreePath else { return }
         let runtime = existingRuntime(for: id)
@@ -1480,6 +1565,12 @@ extension AppModel {
             guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
                   existingRuntime(for: id) === runtime else { return }
             await releaseHydraCopyAfterHistory(of: id, info: info, copy: copy)
+        }
+    }
+
+    func cancelTransientHydraRetries(of leadID: UUID, jobID: UUID) {
+        for head in hydraTeam(of: leadID) where head.hydra?.jobID == jobID {
+            HydraWatchdog.transientRetryTasks.removeValue(forKey: head.id)?.cancel()
         }
     }
 
@@ -1561,8 +1652,9 @@ extension AppModel {
     /// Keeps an eye on the Tivano-run heads at work, every half minute. One quiet for
     /// three minutes (no tool, no word of a reply) says so in its row, "Thinking for 3
     /// min…", rather than sitting on its last tool; one quiet for ten with nothing edited
-    /// and no tool since the last look has stalled, and is stopped the way the panel's
-    /// Stop stops it, with a report that opens by telling the lead why (see
+    /// and no tool since the last look has stalled. Thirty minutes of complete silence
+    /// stops any head, even one with edits or a running tool. Both stops work like the
+    /// panel's Stop, with a report that opens by telling the lead why (see
     /// `finishHydraHead`). One loop for the app; calling this again does nothing.
     func startHydraWatchdog() {
         guard HydraWatchdog.loop == nil else { return }
@@ -1576,7 +1668,7 @@ extension AppModel {
         }
     }
 
-    /// One look at the heads: the label goes on and comes off, a stalled head is stopped.
+    /// One look at the heads: the label goes on and comes off, a stalled or abandoned head is stopped.
     private func watchHydraHeads() {
         var toolCounts: [UUID: Int] = [:]
         for head in threads where head.isHydraHead && head.hydra?.kind == .tivano && head.hydra?.status == .running {
@@ -1593,6 +1685,10 @@ extension AppModel {
             let idle = headRuntime.hydraIdleSeconds
             let tools = headRuntime.hydraToolCalls
             toolCounts[head.id] = tools
+            if head.provider == .antigravity, idle >= HydraWatchdog.abandonedAfter {
+                stopIdleHydraHead(head, runtime: headRuntime, idle: idle, abandoned: true)
+                continue
+            }
             let hasRunningTool = headRuntime.entries.contains {
                 if case .tool(let tool) = $0.item.content { return tool.status == .running }
                 return false
@@ -1605,14 +1701,7 @@ extension AppModel {
                 continue
             }
             if idle >= HydraWatchdog.stalledAfter, headRuntime.hydraEditCount == 0, HydraWatchdog.toolCounts[head.id] == tools {
-                let lastOutput = headRuntime.providerLastOutputAt
-                HydraWatchdog.stalledHeadIDs.insert(head.id)
-                HydraWatchdog.stalledLastOutput[head.id] = lastOutput
-                HydraWatchdog.stalledLastWarning[head.id] = headRuntime.providerLastWarning
-                let outputAge = lastOutput.map { "\(max(0, Date.now.timeIntervalSince($0)))s" } ?? "unknown"
-                HydraWatchdog.log.info("Stopped stalled head \(head.id.uuidString, privacy: .public): idle=\(idle)s lastOutputAge=\(outputAge, privacy: .public)")
-                HydraWatchdog.labelled.remove(head.id)
-                stopHydraHead(head.id, stalled: true)
+                stopIdleHydraHead(head, runtime: headRuntime, idle: idle, abandoned: false)
                 continue
             }
             if idle >= HydraWatchdog.thinkingAfter {
@@ -1630,6 +1719,23 @@ extension AppModel {
         }
         HydraWatchdog.toolCounts = toolCounts
         HydraWatchdog.labelled.formIntersection(toolCounts.keys)
+    }
+
+    private func stopIdleHydraHead(_ head: ChatThread, runtime: ThreadRuntime, idle: TimeInterval, abandoned: Bool) {
+        let lastOutput = runtime.providerLastOutputAt
+        HydraWatchdog.stalledHeadIDs.insert(head.id)
+        if abandoned {
+            HydraWatchdog.abandonedHeadIDs.insert(head.id)
+        } else {
+            HydraWatchdog.abandonedHeadIDs.remove(head.id)
+        }
+        HydraWatchdog.stalledLastOutput[head.id] = lastOutput
+        HydraWatchdog.stalledLastWarning[head.id] = runtime.providerLastWarning
+        let outputAge = lastOutput.map { "\(max(0, Date.now.timeIntervalSince($0)))s" } ?? "unknown"
+        let reason = abandoned ? "abandoned" : "stalled"
+        HydraWatchdog.log.info("Stopped \(reason, privacy: .public) head \(head.id.uuidString, privacy: .public): idle=\(idle)s lastOutputAge=\(outputAge, privacy: .public)")
+        HydraWatchdog.labelled.remove(head.id)
+        stopHydraHead(head.id, stalled: true)
     }
 
     /// Heads whose copies are gone from disk (deleted by hand, say) work in the checkout

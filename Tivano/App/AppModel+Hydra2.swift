@@ -80,6 +80,7 @@ extension AppModel {
             if ending != .recovered,
                hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) { return }
             await existingRuntime(for: leadID)?.hydraLanding?.value
+            cancelTransientHydraRetries(of: leadID, jobID: job.id)
             updateHydraJob(job.id, of: leadID) {
                 $0.pendingReview = nil
                 $0.finishedAt = .now
@@ -123,6 +124,7 @@ extension AppModel {
         guard openHydraJob(of: leadID)?.id == job.id, runtime.phase == .idle,
               !runtime.hydraHasOutstandingWork,
               !hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) else { return }
+        cancelTransientHydraRetries(of: leadID, jobID: job.id)
         updateHydraJob(job.id, of: leadID) {
             $0.ending = .completed
             $0.finishedAt = .now
@@ -234,5 +236,51 @@ extension AppModel {
             headRuntime.sendHydraBrief(brief, attachments: [])
         }
         return nil
+    }
+
+    /// Continues one failed or stopped head in its retained copy. An open job goes through
+    /// the lead's continuation checks and ledger; a closed job leaves the composer unlocked.
+    @discardableResult
+    func continueFailedHydraHead(_ id: UUID) -> Bool {
+        guard let head = thread(id), let info = head.hydra, info.kind == .tivano,
+              info.status == .failed || info.status == .stopped,
+              info.hasOwnCopy, head.worktreePath != nil,
+              !hydraCopiesReleasing.contains(id) else { return false }
+        if let leadID = head.parentThreadID, let job = openHydraJob(of: leadID), job.id == info.jobID {
+            let ownedFiles = job.heads.first(where: { $0.headID == id })?.files ?? []
+            let delegation = HydraDelegation(
+                task: info.task,
+                prompt: AutoContinue.failedTurnContinueMessage,
+                files: ownedFiles,
+                filesGiven: true,
+                continueHead: info.persona.name
+            )
+            let packet = HydraHandoffPacket(
+                request: job.request,
+                team: [HydraHandoffPacket.Member(name: info.persona.name, task: info.task, files: ownedFiles)]
+            )
+            guard continueHydraHead(named: info.persona.name, of: leadID, delegation: delegation, packet: packet) == nil else { return false }
+            updateHydraJob(job.id, of: leadID) { job in
+                if let index = job.heads.firstIndex(where: { $0.headID == id }) {
+                    job.heads[index].continuations += 1
+                    job.heads[index].files = ownedFiles
+                } else {
+                    var record = HydraJobHeadRecord(headID: id, name: info.persona.name, files: ownedFiles)
+                    record.continuations = 1
+                    job.heads.append(record)
+                }
+            }
+            return true
+        }
+        guard let headRuntime = existingRuntime(for: id),
+              let turnID = headRuntime.turns.last(where: { $0.completedAt != nil })?.id,
+              headRuntime.sendContinuation(after: turnID, text: AutoContinue.failedTurnContinueMessage) else { return false }
+        updateHydraHead(id) {
+            $0.status = .running
+            $0.finishedAt = nil
+            $0.executionFinishedAt = nil
+        }
+        updateThread(id) { $0.isInPanel = true }
+        return true
     }
 }

@@ -2552,13 +2552,26 @@ struct TurnEndRow: View {
     /// Whether the turn produced a reply. Set by the timeline; when true the duration
     /// lives on the reply's hover line instead.
     let hasReply: Bool
+    let continueAction: (() -> Void)?
+    let continueDisabled: Bool
 
     var body: some View {
-        if !hasReply {
-            Text(Self.label(for: summary))
-                .font(.chat(.caption))
-                .foregroundStyle(Chrome.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        if !hasReply || continueAction != nil {
+            HStack(spacing: 8) {
+                if !hasReply {
+                    Text(Self.label(for: summary))
+                        .font(.chat(.caption))
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+                if let continueAction {
+                    Button(Chrome.localized("Continue"), action: continueAction)
+                        .buttonStyle(.plain)
+                        .font(.chat(.caption))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .disabled(continueDisabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -2608,6 +2621,8 @@ struct TurnFinishedBlock: View {
     /// opens on its full steps in arrival order and the chevron folds to the answer,
     /// rather than opening to the steps from the folded answer.
     let chronological: Bool
+    let continueAction: (() -> Void)?
+    let continueDisabled: Bool
 
     @Environment(\.timelineBlockID) private var blockID
     @State private var fallbackExpanded: Bool
@@ -2628,7 +2643,7 @@ struct TurnFinishedBlock: View {
             : String(format: Chrome.localized("Show %lld earlier steps (%lld hidden)"), next, hidden)
     }
 
-    init(runtime: ThreadRuntime, turnID: UUID, summary: TurnSummary, userEntries: [TimelineEntry], content: [TimelineEntry], workingDirectory: String?, canUndo: Bool, chronological: Bool) {
+    init(runtime: ThreadRuntime, turnID: UUID, summary: TurnSummary, userEntries: [TimelineEntry], content: [TimelineEntry], workingDirectory: String?, canUndo: Bool, chronological: Bool, continueAction: (() -> Void)?, continueDisabled: Bool) {
         self.runtime = runtime
         self.turnID = turnID
         self.summary = summary
@@ -2637,6 +2652,8 @@ struct TurnFinishedBlock: View {
         self.workingDirectory = workingDirectory
         self.canUndo = canUndo
         self.chronological = chronological
+        self.continueAction = continueAction
+        self.continueDisabled = continueDisabled
         _fallbackExpanded = State(initialValue: chronological)
     }
     @Environment(\.revealTimelineEnd) private var revealBox
@@ -2742,30 +2759,39 @@ struct TurnFinishedBlock: View {
                 UserMessageRow(entry: entry, runtime: runtime, canRevert: canUndo)
                     .padding(.bottom, TimelineMetrics.rowSpacing)
             }
-            Button {
-                revealBox?.disclosure(blockID, false)
-                // Match the activity tree fold's nonanimated height change.
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    isExpanded.toggle()
+            HStack(spacing: 8) {
+                Button {
+                    revealBox?.disclosure(blockID, false)
+                    // Match the activity tree fold's nonanimated height change.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(TurnEndRow.label(for: summary))
+                            .font(.chat(.callout))
+                            .foregroundStyle(Chrome.secondaryText)
+                        Image(systemName: "chevron.right")
+                            .font(.chat(.caption2, weight: .semibold))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                    .contentShape(.rect)
                 }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(TurnEndRow.label(for: summary))
+                .buttonStyle(.plain)
+                .onAppear { stepLimit = revealBox?.stepLimits[turnID] ?? 60 }
+                .help(Text(verbatim: Chrome.localized(isExpanded ? "Hide this turn's steps" : "Show this turn's steps")))
+                .accessibilityLabel(Text(verbatim: Chrome.localized(isExpanded ? "Hide this turn's steps" : "Show this turn's steps")))
+                if let continueAction {
+                    Button(Chrome.localized("Continue"), action: continueAction)
+                        .buttonStyle(.plain)
                         .font(.chat(.callout))
                         .foregroundStyle(Chrome.secondaryText)
-                    Image(systemName: "chevron.right")
-                        .font(.chat(.caption2, weight: .semibold))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .disabled(continueDisabled)
                 }
-                .contentShape(.rect)
             }
-            .buttonStyle(.plain)
-            .onAppear { stepLimit = revealBox?.stepLimits[turnID] ?? 60 }
-            .help(Text(verbatim: Chrome.localized(isExpanded ? "Hide this turn's steps" : "Show this turn's steps")))
-            .accessibilityLabel(Text(verbatim: Chrome.localized(isExpanded ? "Hide this turn's steps" : "Show this turn's steps")))
 
             if showsBody {
                 Divider()

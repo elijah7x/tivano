@@ -9,17 +9,49 @@ OUT = ROOT / "build.noindex/timeline-performance-checks"
 
 
 def declaration(marker: str) -> str:
-    start = SOURCE.index(marker)
-    opening = SOURCE.index("{", start)
+    try:
+        start = SOURCE.index(marker)
+        opening = SOURCE.index("{", start)
+    except ValueError:
+        raise SystemExit(f"FAIL: missing extraction marker {marker!r}") from None
     depth = 1
     end = opening + 1
     while depth:
+        if end >= len(SOURCE):
+            raise SystemExit(f"FAIL: unterminated declaration at {marker!r}")
         if SOURCE[end] == "{":
             depth += 1
         elif SOURCE[end] == "}":
             depth -= 1
         end += 1
     return SOURCE[start:end]
+
+
+def require_source(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(f"FAIL: {message}")
+
+
+wheel = declaration("    func noteWheelInput() {")
+navigation = declaration("    func noteUserNavigation(")
+cancels_navigation = declaration("        if !preservingHistory {")
+require_source("if !preservingHistory" in navigation, "navigation must distinguish continuous scrolling from explicit jumps")
+require_source(
+    "noteUserNavigation(preservingHistory: historyLoadPending)" in wheel,
+    "wheel input must preserve an in-flight history request",
+)
+for marker in ("navigationGeneration += 1", "navigationAction()"):
+    require_source(marker in cancels_navigation, f"wheel-preservable navigation must contain {marker!r} only in its cancellation branch")
+for marker in ("placementTask?.cancel()", "placementToken = nil"):
+    require_source(marker not in cancels_navigation and marker in navigation,
+                   f"reader input must always cancel placement corrections ({marker!r})")
+load_earlier = declaration("    private func loadEarlier(")
+settle_measurements = declaration("    private func settleMeasurements(")
+for marker in ("let anchorBlock =", "measurements.viewportFrame", "anchorID: anchor?.id", "anchorOffset: anchor?.offset ?? 0"):
+    require_source(marker in load_earlier, f"loadEarlier must record the reader anchor ({marker!r})")
+for marker in ("historyRequest?.anchorRestored = true", "keepAnchor(anchorID, offset: request.anchorOffset", "corrections: 1"):
+    require_source(marker in settle_measurements, f"history measurement must restore its anchor once ({marker!r})")
+print("PASS: wheel preserves history loading; history pages record and restore one reader anchor")
 
 
 # Only unrelated dependencies are stubbed. The measured-height implementation and

@@ -246,12 +246,21 @@ struct HydraPanel: View {
 }
 
 extension HydraPanel {
-    /// The panel's menu: open the head's chat, then what the strip's buttons do.
+    /// The panel's menu: open or continue the head, then what the strip's buttons do.
     @ViewBuilder
     fileprivate func panelMenu(_ head: ChatThread) -> some View {
         let name = head.hydra?.displayName ?? Chrome.localized("this head")
         Button(String(format: Chrome.localized("Open %@'s chat"), name)) {
             model.openThread(head.id)
+        }
+        if let info = head.hydra, info.kind == .tivano,
+           info.status == .failed || info.status == .stopped,
+           info.hasOwnCopy, head.worktreePath != nil,
+           !model.hydraCopiesReleasing.contains(head.id),
+           model.hydraHeadIsInOpenJob(head) {
+            Button(Chrome.localized("Continue head")) {
+                model.continueFailedHydraHead(head.id)
+            }
         }
         if let info = head.hydra, info.status == .running, info.canStop {
             Button(String(format: Chrome.localized("Stop %@"), name)) {

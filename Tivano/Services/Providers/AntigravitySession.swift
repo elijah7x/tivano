@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Drives Google's Antigravity CLI (`agy`) in headless streaming mode.
 ///
@@ -13,12 +14,15 @@ import Foundation
 /// headless envelopes, tool step shapes, `denied_actions`).
 @MainActor
 final class AntigravitySession: ProviderSession {
+    private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "antigravity")
+
     var onEvent: ((ProviderEvent) -> Void)?
 
     private let configuration: SessionConfiguration
     private var process: StdioProcess?
     private var readTask: Task<Void, Never>?
     private var initContinuation: CheckedContinuation<String, Error>?
+    private var launchError: String?
     private var conversationID: String?
     private var runtimeMode: RuntimeMode
     private var interactionMode: InteractionMode
@@ -41,6 +45,12 @@ final class AntigravitySession: ProviderSession {
     /// Whether any reply text streamed this turn; without it, the result's
     /// `response` is the reply.
     private var streamedText = false
+    private var latestCascadeError: (index: Int, message: String)?
+    private var cascadeErrorMessages: Set<String> = []
+    private var completedAgentResponseIndex: Int?
+    /// Reply text streamed after the latest cascade error: recovery needs a new reply,
+    /// not text the failed attempt had already produced.
+    private var replyAfterCascadeError = false
     /// Files an edit step is about to change, captured when the step went
     /// active. The stream never carries the edit itself, so the row's diff
     /// is the file before against the file after.
@@ -80,7 +90,9 @@ final class AntigravitySession: ProviderSession {
         var arguments = [
             "--input-format", "stream-json",
             "--output-format", "stream-json",
-            "--print-timeout", "30m",
+            // agy's cap covers the whole turn and can end one still producing output.
+            // Tivano's watchdogs stop quiet turns: normal chats in ThreadRuntime, heads in HydraWatchdog.
+            "--print-timeout", "0",
             "--add-dir", workingDirectory,
         ]
         // Scoping to the connected servers happens through the generated settings
@@ -149,7 +161,8 @@ final class AntigravitySession: ProviderSession {
         guard let continuation = initContinuation else { return }
         initContinuation = nil
         process?.terminate()
-        continuation.resume(throwing: ProviderError.failed(AppText.localized("Antigravity did not answer. Is `agy` signed in? Run `agy` once in Terminal.")))
+        let reason = launchError ?? AppText.localized("Antigravity did not answer. Is `agy` signed in? Run `agy` once in Terminal.")
+        continuation.resume(throwing: ProviderError.failed(authHint(in: reason) ?? reason))
     }
 
     func send(_ input: TurnInput) async throws {
@@ -163,6 +176,11 @@ final class AntigravitySession: ProviderSession {
         turnActive = true
         interruptRequested = false
         streamedText = false
+        latestCascadeError = nil
+        cascadeErrorMessages.removeAll()
+        completedAgentResponseIndex = nil
+        replyAfterCascadeError = false
+        reportedErrors.removeAll()
         onEvent?(.turnStarted(providerTurnID: nil))
         process.send(["event": "user", "message": ["content": .string(input.text)]])
     }
@@ -221,8 +239,10 @@ final class AntigravitySession: ProviderSession {
             if let usage = Self.contextUsage(step["usage"]) { onEvent?(.usage(usage)) }
             // A reply step in the `ERROR` state carries the failure, not a reply.
             if step["state"]?.string == "ERROR", noticeError(in: step, index: index) { return }
+            if step["state"]?.string == "DONE" { completedAgentResponseIndex = index }
             guard let text = step["text_delta"]?.string, !text.isEmpty else { return }
             streamedText = true
+            if !text.trimmed.isEmpty { replyAfterCascadeError = true }
             onEvent?(.messageDelta(id: "agy-\(launchID)-message-\(index)", text: text))
         case "tool":
             guard let name = step["tool_name"]?.string ?? step["tool_info"]?["name"]?.string else { return }
@@ -267,6 +287,10 @@ final class AntigravitySession: ProviderSession {
     /// retry. False when the step carries none.
     private func noticeError(in step: JSONValue, index: Int) -> Bool {
         guard let message = Self.errorMessage(in: step) else { return false }
+        latestCascadeError = (index, message)
+        cascadeErrorMessages.insert(message.trimmingCharacters(in: .whitespacesAndNewlines))
+        completedAgentResponseIndex = nil
+        replyAfterCascadeError = false
         if reportedErrors.insert("\(index)|\(message)").inserted {
             onEvent?(.notice(Notice(level: .warning, message: "Antigravity: " + message)))
         }
@@ -311,11 +335,119 @@ final class AntigravitySession: ProviderSession {
         return ContextUsage(usedTokens: used, windowTokens: nil)
     }
 
+    // MARK: - Turn outcome
+
+    struct TurnOutcome: Equatable {
+        enum Status: Equatable {
+            case completed
+            case interrupted
+            case failed
+        }
+
+        let status: Status
+        let recovered: Bool
+    }
+
+    /// Decides the terminal state without trusting a stale result status. agy can retry a
+    /// model failure, finish a reply, and still report the failed attempt's status and error.
+    /// That result completes only when a later non-error DONE agent_response and reply text
+    /// streamed after the failure prove recovery, no actions were denied, no cascade error
+    /// followed that response, and the result error is empty
+    /// or matches an earlier cascade error. An explicit finished_reason outranks the status.
+    static func turnOutcome(
+        interruptRequested: Bool,
+        status: String?,
+        finishedReason: String?,
+        hasDeniedActions: Bool,
+        hasReply: Bool,
+        completedResponseIndex: Int?,
+        latestCascadeErrorIndex: Int?,
+        cascadeErrorMessages: Set<String>,
+        resultError: String?
+    ) -> TurnOutcome {
+        if interruptRequested {
+            return TurnOutcome(status: .interrupted, recovered: false)
+        }
+        // An empty or blank reason is the same as an absent one: agy omits it on normal completion.
+        let trimmedReason = finishedReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finishedReason = trimmedReason?.isEmpty == true ? nil : trimmedReason
+        if finishedReason == "interrupted" {
+            return TurnOutcome(status: .interrupted, recovered: false)
+        }
+        if let finishedReason, !finishedReason.isEmpty {
+            return TurnOutcome(status: .failed, recovered: false)
+        }
+        switch status {
+        case "SUCCESS":
+            return TurnOutcome(status: .completed, recovered: false)
+        case "CANCELED", "INTERRUPTED":
+            return TurnOutcome(status: .interrupted, recovered: false)
+        case "WAITING":
+            return TurnOutcome(status: hasDeniedActions ? .failed : .completed, recovered: false)
+        default:
+            guard finishedReason == nil, hasReply, !hasDeniedActions,
+                  let completedResponseIndex, let latestCascadeErrorIndex,
+                  completedResponseIndex > latestCascadeErrorIndex else {
+                return TurnOutcome(status: .failed, recovered: false)
+            }
+            let resultError = resultError?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard resultError.isEmpty || cascadeErrorMessages.contains(resultError) else {
+                return TurnOutcome(status: .failed, recovered: false)
+            }
+            return TurnOutcome(status: .completed, recovered: true)
+        }
+    }
+
+    /// Whether agy gave up on a failure that automatic continuation can safely retry.
+    /// Keep this conservative: quota, configuration, authentication and permission failures
+    /// need user action, and print timeouts describe Tivano's own output limit, not transport.
+    nonisolated static func isTransientFailure(_ message: String) -> Bool {
+        let lowered = message.lowercased()
+        if lowered.contains("print_timeout") || lowered.contains("print timeout") {
+            return false
+        }
+        let permanent = [
+            "quota", "resource_exhausted", "credits", "billing",
+            "sign in", "sign-in", "log in", "log-in", "not logged into",
+            "auth", "permission", "denied",
+            "invalid model selection", "unknown flag", "not supported for model",
+        ]
+        if permanent.contains(where: { lowered.contains($0) })
+            || (lowered.contains("has no \"") && lowered.contains("effort")) {
+            return false
+        }
+        let transient = [
+            "unexpected eof", "tls handshake timeout", "no such host", "i/o timeout",
+            "connection reset", "broken pipe", "network issue", "network is down",
+            "stream idle timeout", "http2:", "timeout awaiting response headers",
+            "503", "502", "500 ", "unavailable", "internal", "deadline_exceeded",
+            "the stream was interrupted",
+        ]
+        return transient.contains(where: { lowered.contains($0) })
+    }
+
+    // MARK: - Result handling
+
     private func handleResult(_ result: JSONValue) {
+        // Before the initialize is answered, a result is the launch's failure, not a turn's:
+        // start() throws it from didClose; nothing was sent that could end here.
+        guard initContinuation == nil else {
+            if let error = result["error"]?.string?.trimmed, !error.isEmpty {
+                launchError = error
+            }
+            return
+        }
+        // Terminating `agy` after a finished turn (a head's process stops after each turn)
+        // makes it emit a second result for the same turn: status ERROR, finished_reason
+        // "interrupted", error "stream input cancelled: context canceled" (seen live with
+        // agy 1.5.5). Only a result for a turn still running ends one.
+        guard turnActive else {
+            Self.log.info("Ignored agy result with no active turn: status=\(result["status"]?.string ?? "none", privacy: .public), finished_reason=\(result["finished_reason"]?.string ?? "none", privacy: .public)")
+            return
+        }
         turnActive = false
         editSnapshots.removeAll()
         startedTools.removeAll()
-        reportedErrors.removeAll()
         if let usage = result["usage"], !usage.isNull {
             // Totals are cumulative over the session (per the headless docs), so the
             // spend tracker resolves them into per-turn deltas — but only once its
@@ -342,10 +474,11 @@ final class AntigravitySession: ProviderSession {
                 }
             }
         }
+        let response = result["response"]?.string
+        let hasReply = streamedText || response?.trimmed.isEmpty == false
         // A turn whose reply never streamed (resumed conversations can answer
         // in the result alone) still shows its text.
-        if !streamedText, let response = result["response"]?.string,
-           !response.trimmed.isEmpty {
+        if !streamedText, let response, !response.trimmed.isEmpty {
             onEvent?(.messageCompleted(id: "agy-\(launchID)-result-\(UUID().uuidString.prefix(8))", text: response))
         }
         streamedText = false
@@ -361,24 +494,44 @@ final class AntigravitySession: ProviderSession {
             conversationID = id
             onEvent?(.sessionReady(sessionID: id))
         }
-        if interruptRequested {
+        let status = result["status"]?.string
+        let finishedReason = result["finished_reason"]?.string
+        let resultError = result["error"]?.string
+        let trimmedResultError = resultError?.trimmed ?? ""
+        let outcome = Self.turnOutcome(
+            interruptRequested: interruptRequested,
+            status: status,
+            finishedReason: finishedReason,
+            hasDeniedActions: !denied.isEmpty,
+            // After a cascade error only a reply streamed since then proves recovery.
+            hasReply: latestCascadeError == nil ? hasReply : replyAfterCascadeError,
+            completedResponseIndex: completedAgentResponseIndex,
+            latestCascadeErrorIndex: latestCascadeError?.index,
+            cascadeErrorMessages: cascadeErrorMessages,
+            resultError: resultError
+        )
+        switch outcome.status {
+        case .interrupted:
             onEvent?(.turnCompleted(status: .interrupted, error: nil))
-        } else {
-            switch result["status"]?.string {
-            case "WAITING" where !denied.isEmpty:
+        case .completed:
+            if outcome.recovered {
+                if !trimmedResultError.isEmpty,
+                   reportedErrors.insert("result|\(trimmedResultError)").inserted {
+                    onEvent?(.notice(Notice(level: .warning, message: "Antigravity: " + trimmedResultError)))
+                }
+                Self.log.warning("Recovered agy result: status=\(status ?? "none", privacy: .public), finished_reason=\(finishedReason ?? "none", privacy: .public), cascade_error_step=\(self.latestCascadeError?.index ?? -1), completed_response_step=\(self.completedAgentResponseIndex ?? -1)")
+            }
+            onEvent?(.turnCompleted(status: .completed, error: nil))
+        case .failed:
+            if status == "WAITING", !denied.isEmpty {
                 // Stopped for a permission nobody could grant headless, with actions held
                 // back: reported as a failure so a head's lead hears it was starved of
                 // permissions rather than reading a clean completion.
                 onEvent?(.turnCompleted(status: .failed, error: String(format: AppText.localized("Antigravity held back %@ waiting for a permission it could not ask for. Use Full access for this chat."), denied.joined(separator: ", "))))
-            case "SUCCESS", "WAITING":
-                // WAITING: the agent stopped to ask something it cannot ask
-                // headless; the turn is over and the reply says what it needs.
-                onEvent?(.turnCompleted(status: .completed, error: nil))
-            case "CANCELED", "INTERRUPTED":
-                onEvent?(.turnCompleted(status: .interrupted, error: nil))
-            default:
-                let error = result["error"]?.string
-                onEvent?(.turnCompleted(status: .failed, error: (error?.isEmpty == false ? error : AppText.localized("Antigravity stopped before finishing."))))
+            } else {
+                let fallback = AppText.localized("Antigravity stopped before finishing.")
+                let error = trimmedResultError.isEmpty ? fallback : (authHint(in: trimmedResultError) ?? trimmedResultError)
+                onEvent?(.turnCompleted(status: .failed, error: error))
             }
         }
         interruptRequested = false
@@ -387,21 +540,70 @@ final class AntigravitySession: ProviderSession {
     private func didClose() {
         if let continuation = initContinuation {
             initContinuation = nil
-            let tail = process?.errorTail ?? ""
-            continuation.resume(throwing: ProviderError.failed(authHint(in: tail) ?? (TextCleanup.lastLines(tail) ?? AppText.localized("Antigravity exited."))))
+            // The result's own error names the failure better than the stderr tail can.
+            let reason: String
+            if let launchError {
+                reason = authHint(in: launchError) ?? launchError
+            } else {
+                reason = closeFailure()
+            }
+            self.launchError = reason
+            continuation.resume(throwing: ProviderError.failed(reason))
+        }
+        if isStopping {
+            if turnActive {
+                turnActive = false
+                onEvent?(.turnCompleted(status: .interrupted, error: nil))
+            }
+            interruptRequested = false
+            return
         }
         if turnActive {
             turnActive = false
             if interruptRequested {
                 onEvent?(.turnCompleted(status: .interrupted, error: nil))
             } else {
-                let tail = process?.errorTail ?? ""
-                onEvent?(.turnCompleted(status: .failed, error: authHint(in: tail) ?? TextCleanup.lastLines(tail) ?? AppText.localized("Antigravity exited.")))
+                onEvent?(.turnCompleted(status: .failed, error: closeFailure()))
             }
             interruptRequested = false
         }
-        guard !isStopping else { return }
         onEvent?(.exited(error: TextCleanup.lastLines(process?.errorTail ?? "")))
+    }
+
+    private func closeFailure() -> String {
+        let tail = process?.errorTail ?? ""
+        if let hint = authHint(in: tail) { return hint }
+        var lines = [Self.agyError(in: tail) ?? TextCleanup.lastLines(tail)].compactMap { $0 }
+        if let failure = process?.failureReason?.trimmed, !failure.isEmpty,
+           lines.first?.contains(failure) != true {
+            lines.append(failure)
+        }
+        if let status = process?.exitStatus {
+            lines.append(String(format: AppText.localized("The agent exited with status %d."), status))
+        }
+        let message = lines.joined(separator: "\n")
+        guard !message.isEmpty else { return AppText.localized("Antigravity exited.") }
+        return authHint(in: message) ?? message
+    }
+
+    private static func agyError(in tail: String) -> String? {
+        let prefix = "AGY_ERROR:"
+        for line in tail.components(separatedBy: .newlines).reversed() {
+            let line = line.trimmed
+            guard line.hasPrefix(prefix) else { continue }
+            let payload = line.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+            guard let error = JSONValue.parse(payload),
+                  let shortError = error["short_error"]?.string?.trimmed, !shortError.isEmpty else { continue }
+            var details: [String] = []
+            if let status = error["status"]?.string?.trimmed, !status.isEmpty {
+                details.append("status: \(status)")
+            }
+            if let reason = error["reason"]?.string?.trimmed, !reason.isEmpty {
+                details.append("reason: \(reason)")
+            }
+            return details.isEmpty ? shortError : shortError + " (" + details.joined(separator: ", ") + ")"
+        }
+        return nil
     }
 
     private func authHint(in text: String) -> String? {
