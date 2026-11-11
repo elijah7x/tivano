@@ -8,6 +8,24 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.27] - 2026-11-11
+
+### English
+
+### Bug fixes
+
+- An Antigravity conversation that hit one error no longer fails every turn after it. agy keeps repeating a conversation's last error on every later turn; Tivano now judges each turn by what it actually streamed, so automatic retries and Continue work again, and a new error still fails the turn.
+
+### 简体中文
+
+### 问题修复
+
+- Antigravity 对话出过一次错误后，之后的每一轮不会再全部被判为失败。agy 会在之后每一轮都重复这个对话上一次的错误；Tivano 现在按每一轮实际输出的内容判断，自动重试和“继续”恢复正常，真正的新错误仍会判为失败。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.5.26] - 2026-11-11
 
 ### English
