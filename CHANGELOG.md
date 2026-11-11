@@ -8,6 +8,32 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.26] - 2026-11-11
+
+### English
+
+### Bug fixes
+
+- An Antigravity turn that recovered from a dropped connection and finished its work is no longer reported as failed. Tivano now reads how agy says a turn ended, shows the earlier error as a warning, and ignores the extra result agy sends when its process is stopped after a turn.
+- An Antigravity chat or Hydra head whose connection drops for good now continues the same conversation on its own, up to twice, instead of failing. A head keeps the edits in its copy, and its lead hears only the final outcome.
+- A failed or stopped turn has a Continue button that resumes the same conversation (Antigravity, Codex and Claude), and a failed or stopped Hydra head can be continued from the Hydra panel in its own session and copy.
+- An Antigravity chat or Hydra head is no longer cut off after 30 minutes while it is still working. An Antigravity head that goes completely silent for 30 minutes, even after editing files or while a tool never returns, is now stopped by Tivano and reported as abandoned; its edits stay in its copy.
+- Scrolling up through a long conversation no longer goes blank and then drops a batch of older messages at once. Older messages load about a screen before you reach them and land without moving what you are reading, even while you keep scrolling.
+
+### 简体中文
+
+### 问题修复
+
+- Antigravity 的某一轮在连接中断后自行恢复并完成了工作，不会再被标记为失败。Tivano 现在按 agy 报告的结束原因判断，把先前的错误显示为警告，并忽略 head 进程在一轮结束后被停止时 agy 额外发送的那条结果。
+- Antigravity 对话或 Hydra head 的连接彻底中断时，现在会自动在同一对话中继续，最多两次，而不是直接失败。head 在副本里的改动会保留，lead 只会收到最终结果。
+- 失败或被停止的一轮下方新增“继续”按钮，可在同一对话中接着做（支持 Antigravity、Codex 和 Claude）；失败或被停止的 Hydra head 可以在 Hydra 面板中“继续此 head”，在原会话和副本里接着做。
+- Antigravity 对话或 Hydra head 还在工作时，不会再在 30 分钟时被强行中断。Antigravity head 如果连续 30 分钟完全没有动静（包括已经改过文件，或者工具一直不返回的情况），现在由 Tivano 停止，并在汇报中标记为“已放弃”；它的改动保留在副本里。
+- 在长对话里往上翻时，不会再先变空白、再一下子冒出一大批旧消息。更早的消息会在你翻到之前大约一屏就开始加载，插入时不会挪动你正在看的内容，连续滚动时也一样。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.5.21] - 2026-11-10
 
 ### English

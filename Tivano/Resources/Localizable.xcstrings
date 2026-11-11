@@ -7537,6 +7537,39 @@
         }
       }
     },
+    "Connection to Antigravity dropped. Continuing the same conversation in %lld s (attempt %lld of %lld)…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与 Antigravity 的连接中断，%1$lld 秒后在同一对话中继续（第 %2$lld/%3$lld 次）…"
+          }
+        }
+      }
+    },
+    "Antigravity head %@ lost its connection; continuing the same conversation in %lld s (attempt %lld of %lld)…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity head %1$@ 连接中断，%2$lld 秒后在同一对话中继续（第 %3$lld/%4$lld 次）…"
+          }
+        }
+      }
+    },
+    "Continue head" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续此 head"
+          }
+        }
+      }
+    },
     "Continue after reset" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26978,6 +27011,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已派出子智能体。"
+          }
+        }
+      }
+    },
+    "Abandoned: no activity for 30 minutes; stopped by Tivano." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已放弃：30 分钟没有任何活动，已由 Tivano 停止。"
           }
         }
       }

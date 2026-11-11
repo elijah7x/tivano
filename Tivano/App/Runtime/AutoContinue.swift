@@ -1,10 +1,9 @@
 import Foundation
 
-/// Offers to pick a chat back up once its provider's usage limit resets. A turn that stops
-/// on the limit is noted by the runtime; when that turn then fails, the chat gets an offer,
-/// shown as a tab on its composer, and waits only if the user says so. The choice belongs to
-/// that one stop: the user can take it back, and a new limit asks again. Heads are left to
-/// their leads, and only providers that report the limit reliably are offered.
+/// Picks chats back up after a usage limit or a transient Antigravity failure. Limit offers
+/// belong to one stop and wait only if the user says so; transient retries continue the same
+/// conversation in a bounded chain. Heads are left to their leads, and only providers that
+/// report the limit reliably are offered.
 @MainActor
 @Observable
 final class AutoContinue {
@@ -13,6 +12,13 @@ final class AutoContinue {
 
     /// The message sent after a chat moves to another account with usage left.
     static let switchContinueMessage = "The previous account reached its usage limit and this chat now continues on another account. Check the current state of the work first, then continue exactly where you left off and finish the task."
+
+    /// The message sent to resume a turn that failed or was interrupted.
+    static let failedTurnContinueMessage = "The previous turn ended with an error. Check the current files and your earlier tool results, then continue the task from where you left off without repeating work that is already done."
+
+    static let transientRetryLimit = 2
+    static let transientRetryDelays: [TimeInterval] = [3, 9]
+    static let transientRetryJitter: TimeInterval = 1
 
     /// How long past the reset time the chat waits, so the limit has really lifted.
     static let margin: TimeInterval = 60
@@ -50,6 +56,20 @@ final class AutoContinue {
     @ObservationIgnored private var switchCounts: [UUID: Int] = [:]
     @ObservationIgnored private var pendingSwitch: Set<UUID> = []
 
+    private struct TransientRetry {
+        let id: UUID
+        var lastTurnID: UUID
+        var attempts: Int
+        let provider: ProviderKind
+        let model: String?
+        let directory: String
+        let sessionID: String
+    }
+
+    @ObservationIgnored private var transientRetries: [UUID: TransientRetry] = [:]
+    @ObservationIgnored private var transientRetryTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var transientRetryOpening: Set<UUID> = []
+
     init(app: AppModel) {
         self.app = app
     }
@@ -64,6 +84,7 @@ final class AutoContinue {
     /// The thread's turn ended. A turn that failed on its limit opens an offer; the failure
     /// itself is reported as usual, since nothing waits until the user chooses to.
     func turnFinished(_ threadID: UUID, turnID: UUID, status: TurnStatus, continues: Bool, userStopped: Bool) {
+        if status != .failed || !continues { cancelTransientRetry(threadID) }
         guard let note = noted.removeValue(forKey: threadID), note.turnID == turnID,
               status == .failed, !continues, !userStopped,
               let app, let thread = app.thread(threadID) else { return }
@@ -98,6 +119,74 @@ final class AutoContinue {
             }
             self.openOffer(threadID, turnID: turnID, note: offerNote, thread: thread)
         }
+    }
+
+    /// Schedules the next attempt in the chain that began with the first failed turn.
+    /// Returns whether the runtime should treat the failed turn as continuing.
+    func scheduleTransientRetry(_ threadID: UUID, turnID: UUID) -> Bool {
+        guard let app, let thread = app.thread(threadID), let runtime = app.existingRuntime(for: threadID),
+              thread.provider == .antigravity, !thread.isHydraHead, !thread.isArchived,
+              let sessionID = thread.providerSessionID, !sessionID.isEmpty,
+              let directory = try? app.executionDirectory(for: thread),
+              let turn = runtime.turns.last, turn.id == turnID, turn.status == .failed else { return false }
+        var retry: TransientRetry
+        if var existing = transientRetries[threadID] {
+            guard existing.lastTurnID != turnID, existing.attempts < Self.transientRetryLimit,
+                  existing.provider == thread.provider, existing.model == thread.model,
+                  existing.directory == directory, existing.sessionID == sessionID else { return false }
+            existing.lastTurnID = turnID
+            existing.attempts += 1
+            retry = existing
+        } else {
+            retry = TransientRetry(id: turnID, lastTurnID: turnID, attempts: 1,
+                                   provider: thread.provider, model: thread.model, directory: directory, sessionID: sessionID)
+        }
+        let delay = Self.transientRetryDelays[retry.attempts - 1]
+        transientRetries[threadID] = retry
+        transientRetryTasks.removeValue(forKey: threadID)?.cancel()
+        runtime.appendNotice(.warning, String(format: Chrome.localized("Connection to Antigravity dropped. Continuing the same conversation in %lld s (attempt %lld of %lld)…"),
+                                              Int64(delay), Int64(retry.attempts), Int64(Self.transientRetryLimit)))
+        transientRetryTasks[threadID] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay + Double.random(in: 0...Self.transientRetryJitter)))
+            guard let self, !Task.isCancelled else { return }
+            self.fireTransientRetry(threadID, turnID: turnID, attempt: retry.attempts)
+        }
+        return true
+    }
+
+    private func fireTransientRetry(_ threadID: UUID, turnID: UUID, attempt: Int) {
+        transientRetryTasks[threadID] = nil
+        guard let runtime = app?.existingRuntime(for: threadID),
+              transientRetries[threadID]?.attempts == attempt,
+              transientRetryIsCurrent(threadID, turnID: turnID) else {
+            cancelTransientRetry(threadID)
+            return
+        }
+        transientRetryOpening.insert(threadID)
+        if !runtime.sendContinuation(after: turnID, text: Self.failedTurnContinueMessage) {
+            transientRetryOpening.remove(threadID)
+            cancelTransientRetry(threadID)
+        }
+    }
+
+    func transientRetryIsCurrent(_ threadID: UUID, turnID: UUID) -> Bool {
+        guard let app, let thread = app.thread(threadID), let runtime = app.existingRuntime(for: threadID),
+              let retry = transientRetries[threadID], retry.lastTurnID == turnID,
+              !thread.isArchived, thread.provider == retry.provider, thread.model == retry.model,
+              thread.providerSessionID == retry.sessionID,
+              (try? app.executionDirectory(for: thread)) == retry.directory,
+              runtime.turns.last?.id == turnID, runtime.turns.last?.status == .failed else { return false }
+        return true
+    }
+
+    func isTransientRetryOpening(_ threadID: UUID) -> Bool {
+        transientRetryOpening.contains(threadID)
+    }
+
+    func cancelTransientRetry(_ threadID: UUID) {
+        transientRetryTasks.removeValue(forKey: threadID)?.cancel()
+        transientRetries[threadID] = nil
+        transientRetryOpening.remove(threadID)
     }
 
     /// Moves the chat to another signed-in account with usage left and continues it there.
@@ -212,6 +301,7 @@ final class AutoContinue {
 
     /// A new turn opened in the chat: whatever started it, the stop is behind it now.
     func turnOpened(_ threadID: UUID) {
+        if transientRetryOpening.remove(threadID) == nil { cancelTransientRetry(threadID) }
         if pendingSwitch.remove(threadID) == nil { switchCounts[threadID] = nil }
         guard offers[threadID] != nil || tasks[threadID] != nil else { return }
         clear(threadID)

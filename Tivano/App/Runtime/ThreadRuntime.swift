@@ -1269,6 +1269,7 @@ final class ThreadRuntime {
 
     func send() {
         guard externalSubmission == nil, controlInterrupts.isEmpty, !isReverting, !draft.isEmpty, phase == .idle else { return }
+        app?.autoContinue.cancelTransientRetry(threadID)
         let attachments = draft.attachments
         let outgoing = draft.outgoingText.trimmingCharacters(in: .whitespacesAndNewlines)
         if handleLocalCommand(outgoing) {
@@ -1477,6 +1478,7 @@ final class ThreadRuntime {
     /// prompt as it would with none out: "now" means now.
     func sendFollowUpNow(_ id: UUID) {
         guard !isReverting else { return }
+        app?.autoContinue.cancelTransientRetry(threadID)
         guard let index = followUps.firstIndex(where: { $0.id == id }) else { return }
         var start = index
         if let bundle = followUps[index].bundleID {
@@ -1501,20 +1503,50 @@ final class ThreadRuntime {
         }
     }
 
-    /// Sends the usage-limit continuation straight away. It never joins the queue: a chat
-    /// that is busy again has moved on, and the continuation is dropped.
-    func sendLimitContinuation(_ text: String) {
-        guard phase == .idle, !isReverting else { return }
+    /// Sends a continuation only while the failed or interrupted turn is still the latest.
+    /// It never joins the queue: a chat that is busy again has moved on.
+    @discardableResult
+    func sendContinuation(after turnID: UUID, text: String) -> Bool {
+        let isTransientRetry = app?.autoContinue.isTransientRetryOpening(threadID) == true
+        if !isTransientRetry { app?.autoContinue.cancelTransientRetry(threadID) }
+        guard canContinue(after: turnID) else {
+            if isTransientRetry { app?.autoContinue.cancelTransientRetry(threadID) }
+            return false
+        }
         Task {
             await ensureLoaded()
+            if isTransientRetry, app?.autoContinue.transientRetryIsCurrent(threadID, turnID: turnID) != true {
+                app?.autoContinue.cancelTransientRetry(threadID)
+                return
+            }
+            guard canContinue(after: turnID) else {
+                app?.autoContinue.cancelTransientRetry(threadID)
+                return
+            }
             switchedCodexAccount = text == AutoContinue.switchContinueMessage
             await startTurn(text: text, attachments: [])
         }
+        return true
+    }
+
+    private func canContinue(after turnID: UUID) -> Bool {
+        guard phase == .idle, !isReverting, let thread, !thread.isArchived,
+              let turn = turns.last, turn.id == turnID,
+              turn.status == .failed || turn.status == .interrupted else { return false }
+        if thread.provider == .antigravity, thread.providerSessionID?.isEmpty != false { return false }
+        return true
+    }
+
+    /// Sends the usage-limit continuation straight away.
+    func sendLimitContinuation(_ text: String) {
+        guard let turnID = turns.last?.id else { return }
+        sendContinuation(after: turnID, text: text)
     }
 
     /// `flushesIfIdle` is false when `startTurn` puts back a prompt it could not start:
     /// flushing it would hand it straight back to the same refusal, a loop that never yields.
     func enqueueFollowUp(text: String, attachments: [Attachment], flushesIfIdle: Bool = true) {
+        app?.autoContinue.cancelTransientRetry(threadID)
         let prompt = FollowUpPrompt(
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: attachments
@@ -2049,7 +2081,7 @@ final class ThreadRuntime {
             if externalTurnID != nil { externalSubmission?.failure = Self.controlFailure(error) }
             if finishTurnWithCLIUpdateHint(error.localizedDescription, turnID: turn.id) { return }
             appendNotice(.error, error.localizedDescription)
-            await finishTurn(status: .failed, turnID: turn.id)
+            await finishTurn(status: .failed, turnID: turn.id, error: error.localizedDescription)
         }
     }
 
@@ -2736,6 +2768,7 @@ final class ThreadRuntime {
     /// `byUser` false is Tivano stopping a turn gone quiet (see `watchQuiet`): the thread
     /// then finishes the way a failed turn does, unread and calling for attention.
     func interrupt(byUser: Bool = true) {
+        app?.autoContinue.cancelTransientRetry(threadID)
         guard phase != .idle else { return }
         for draft in questionDrafts.values { draft.retire() }
         questionDrafts.removeAll()
@@ -2995,6 +3028,7 @@ final class ThreadRuntime {
     /// were restored as asked, a failure there being reported in the thread.
     @discardableResult
     func revert(to turnID: UUID, restoreFiles: Bool) async throws -> Bool {
+        app?.autoContinue.cancelTransientRetry(threadID)
         // Rewind restores/resumes and mutates the provider's same history. Acquire its
         // idle turn only after a prior archive has finished, just as a new send does.
         await waitForProviderHistory()
@@ -3680,7 +3714,7 @@ final class ThreadRuntime {
             let turnID = currentTurnID
             if let error, finishTurnWithCLIUpdateHint(error, turnID: turnID) { break }
             if let error { appendNotice(.error, error) }
-            Task { await finishTurn(status: status, turnID: turnID) }
+            Task { await finishTurn(status: status, turnID: turnID, error: error) }
             if status == .completed { requestProviderTitle() }
         case .exited(let error):
             let backgroundStopped = !backgroundTasks.isEmpty
@@ -3699,8 +3733,9 @@ final class ThreadRuntime {
                 let name = thread?.provider.displayName ?? Chrome.localized("The agent")
                 let turnID = currentTurnID
                 if let error, finishTurnWithCLIUpdateHint(error, turnID: turnID) { break }
-                appendNotice(.error, error ?? String(format: Chrome.localized("%@ stopped unexpectedly."), name))
-                Task { await finishTurn(status: .failed, turnID: turnID) }
+                let failure = error ?? String(format: Chrome.localized("%@ stopped unexpectedly."), name)
+                appendNotice(.error, failure)
+                Task { await finishTurn(status: .failed, turnID: turnID, error: failure) }
             }
         case .tokenSpend(let spend):
             // A provider sub-agent's spend is not this thread's own, as before. Hydra heads
@@ -3732,7 +3767,7 @@ final class ThreadRuntime {
               ProviderRegistry.needsNewerCLI(error) else { return false }
         appendNotice(.error, error)
         appendNotice(.info, String(format: String(localized: "This model needs a newer %@ CLI. Open Settings and click Update, then send your message again."), provider.displayName))
-        Task { await finishTurn(status: .failed, turnID: turnID) }
+        Task { await finishTurn(status: .failed, turnID: turnID, error: error) }
         return true
     }
 
@@ -3761,18 +3796,18 @@ final class ThreadRuntime {
             && (currentTurnID == nil || currentTurnID == turnID)
     }
 
-    private func finishTurn(status: TurnStatus, turnID: UUID?) async {
+    private func finishTurn(status: TurnStatus, turnID: UUID?, error: String? = nil) async {
         let runtimeGeneration = runtimeTurnGeneration
         // The watchdog is cancelled by finalization itself. Its cancellation must not
         // propagate into the checkpoint and persistence work that it requested.
         let finalizer = Task { @MainActor [self] in
             guard runtimeTurnGeneration == runtimeGeneration, runtimeOwnerTurnID == turnID else { return }
-            await finalizeTurn(status: status, turnID: turnID)
+            await finalizeTurn(status: status, turnID: turnID, error: error)
         }
         await finalizer.value
     }
 
-    private func finalizeTurn(status: TurnStatus, turnID: UUID?) async {
+    private func finalizeTurn(status: TurnStatus, turnID: UUID?, error: String? = nil) async {
         // An explicit nil is the caller's snapshot, never a later turn's identity.
         // Neither a stale completion nor an empty fallback may release another owner.
         guard finishingTurnID == nil, finishingGeneration == nil,
@@ -3991,6 +4026,14 @@ final class ThreadRuntime {
                 Task { await ensureLoaded(); await startTurn(text: note, attachments: []) }
                 continues = true
             }
+        }
+        if !continues, status == .failed, !userStopped,
+           let error, let app, let thread,
+           thread.provider == .antigravity, !thread.isHydraHead,
+           thread.providerSessionID?.isEmpty == false,
+           AntigravitySession.isTransientFailure(error),
+           app.autoContinue.scheduleTransientRetry(threadID, turnID: turnID) {
+            continues = true
         }
         app?.turnFinished(threadID, status: status, continues: continues, turnID: turnID, userStopped: userStopped)
         if allowsPromptPrediction, !continues {
