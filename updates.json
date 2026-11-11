@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v2.5.26",
-      "name": "Tivano 2.5.26",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v2.5.26/Tivano-2.5.26.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## Bug fixes\n\n- An Antigravity turn that recovered from a dropped connection and finished its work is no longer reported as failed. Tivano now reads how agy says a turn ended, shows the earlier error as a warning, and ignores the extra result agy sends when its process is stopped after a turn.\n- An Antigravity chat or Hydra head whose connection drops for good now continues the same conversation on its own, up to twice, instead of failing. A head keeps the edits in its copy, and its lead hears only the final outcome.\n- A failed or stopped turn has a Continue button that resumes the same conversation (Antigravity, Codex and Claude), and a failed or stopped Hydra head can be continued from the Hydra panel in its own session and copy.\n- An Antigravity chat or Hydra head is no longer cut off after 30 minutes while it is still working. An Antigravity head that goes completely silent for 30 minutes, even after editing files or while a tool never returns, is now stopped by Tivano and reported as abandoned; its edits stay in its copy.\n- Scrolling up through a long conversation no longer goes blank and then drops a batch of older messages at once. Older messages load about a screen before you reach them and land without moving what you are reading, even while you keep scrolling.\n\n## 简体中文\n\n## 问题修复\n\n- Antigravity 的某一轮在连接中断后自行恢复并完成了工作，不会再被标记为失败。Tivano 现在按 agy 报告的结束原因判断，把先前的错误显示为警告，并忽略 head 进程在一轮结束后被停止时 agy 额外发送的那条结果。\n- Antigravity 对话或 Hydra head 的连接彻底中断时，现在会自动在同一对话中继续，最多两次，而不是直接失败。head 在副本里的改动会保留，lead 只会收到最终结果。\n- 失败或被停止的一轮下方新增“继续”按钮，可在同一对话中接着做（支持 Antigravity、Codex 和 Claude）；失败或被停止的 Hydra head 可以在 Hydra 面板中“继续此 head”，在原会话和副本里接着做。\n- Antigravity 对话或 Hydra head 还在工作时，不会再在 30 分钟时被强行中断。Antigravity head 如果连续 30 分钟完全没有动静（包括已经改过文件，或者工具一直不返回的情况），现在由 Tivano 停止，并在汇报中标记为“已放弃”；它的改动保留在副本里。\n- 在长对话里往上翻时，不会再先变空白、再一下子冒出一大批旧消息。更早的消息会在你翻到之前大约一屏就开始加载，插入时不会挪动你正在看的内容，连续滚动时也一样。\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-11-11T10:11:40Z",
+      "tag_name": "v2.5.27",
+      "name": "Tivano 2.5.27",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v2.5.27/Tivano-2.5.27.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## Bug fixes\n\n- An Antigravity conversation that hit one error no longer fails every turn after it. agy keeps repeating a conversation's last error on every later turn; Tivano now judges each turn by what it actually streamed, so automatic retries and Continue work again, and a new error still fails the turn.\n\n## 简体中文\n\n## 问题修复\n\n- Antigravity 对话出过一次错误后，之后的每一轮不会再全部被判为失败。agy 会在之后每一轮都重复这个对话上一次的错误；Tivano 现在按每一轮实际输出的内容判断，自动重试和“继续”恢复正常，真正的新错误仍会判为失败。\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-11-11T13:10:11Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-2.5.26.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v2.5.26/Tivano-2.5.26.dmg",
-          "size": 11044600,
-          "sha256": "ee58175c0745025ef0ba0088b544c3673107e3842aa325020ce182d827465bba"
+          "name": "Tivano-2.5.27.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v2.5.27/Tivano-2.5.27.dmg",
+          "size": 11044129,
+          "sha256": "b5d732a6c71fcd307cb9ee3f62b078da76e1f118e6de9620db1d54fd6c98b698"
         }
       ]
     }
