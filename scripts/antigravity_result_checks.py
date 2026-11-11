@@ -3,8 +3,10 @@
 
 agy can report a transient model error, retry it, stream a successful reply, then
 end with status ERROR and the earlier attempt's error. Tivano used to fail those
-completed turns. The terminal decision now requires stream evidence of recovery,
-honors finished_reason, preserves launch and intentional-stop errors, and exposes
+completed turns. agy also repeats any earlier conversation error on every later
+result with finished_reason "error", even when that turn's own steps completed
+normally. The terminal decision now requires stream evidence of recovery, honors
+finished_reason, preserves launch and intentional-stop errors, and exposes
 a conservative transient-failure classifier for automatic continuation. The
 production decision and classifier are extracted and compiled against fixtures so
 this check exercises their behavior rather than only matching source text.
@@ -86,6 +88,7 @@ def check_sources():
         'reportedErrors.removeAll()',
     ])
     result = between(text, 'private func handleResult', 'private func didClose')
+    require(result, ['latestCascadeError != nil', 'rememberConversationError(trimmedResultError)'])
     if result.index('guard initContinuation == nil else') > result.index('turnActive = false'):
         fail('a pre-init result is still allowed to finish a turn')
     if result.index('let hasReply =') > result.index('streamedText = false'):
@@ -94,6 +97,7 @@ def check_sources():
     if closed.index('if isStopping') > closed.index('if turnActive'):
         fail('didClose handles the generic active-turn failure before intentional stop')
     tool = between(text, 'case "tool":', 'case "user_input", "checkpoint":')
+    require(tool, ['completedAgentResponseIndex = nil'])
     if 'latestCascadeError' in tool or 'cascadeErrorMessages' in tool:
         fail('tool ERROR steps must not be recorded as model/cascade failures')
 
@@ -115,6 +119,7 @@ func outcome(
     completedResponseIndex: Int? = nil,
     latestCascadeErrorIndex: Int? = nil,
     cascadeErrorMessages: Set<String> = [],
+    knownConversationErrors: Set<String> = [],
     resultError: String? = nil
 ) -> AntigravityTurnOutcome.TurnOutcome {{
     AntigravityTurnOutcome.turnOutcome(
@@ -126,6 +131,7 @@ func outcome(
         completedResponseIndex: completedResponseIndex,
         latestCascadeErrorIndex: latestCascadeErrorIndex,
         cascadeErrorMessages: cascadeErrorMessages,
+        knownConversationErrors: knownConversationErrors,
         resultError: resultError
     )
 }}
@@ -146,9 +152,13 @@ struct Checks {{
     static func main() {{
         let eof = "API error (attempt 1): unexpected EOF"
         let later = "API error (attempt 2): connection reset"
+        let stale = "The stream was interrupted. Please continue the task you were working on."
 
         // A recovered attempt completes despite its stale ERROR status and error.
         expect(outcome(status: "ERROR", hasReply: true, completedResponseIndex: 8,
+                       latestCascadeErrorIndex: 3, cascadeErrorMessages: [eof], resultError: eof),
+               .completed, true)
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true, completedResponseIndex: 8,
                        latestCascadeErrorIndex: 3, cascadeErrorMessages: [eof], resultError: eof),
                .completed, true)
         // Denied actions, no reply since the failure, or a blank reason (= absent).
@@ -168,6 +178,9 @@ struct Checks {{
         expect(outcome(status: "ERROR", hasReply: true, completedResponseIndex: 8,
                        latestCascadeErrorIndex: 3, cascadeErrorMessages: [eof], resultError: later),
                .failed)
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true,
+                       completedResponseIndex: nil, latestCascadeErrorIndex: 9,
+                       cascadeErrorMessages: [eof], resultError: eof), .failed)
         // Explicit terminal reasons outrank reply evidence and stale status.
         expect(outcome(status: "ERROR", finishedReason: "print_timeout", hasReply: true,
                        completedResponseIndex: 8, latestCascadeErrorIndex: 3,
@@ -177,10 +190,23 @@ struct Checks {{
                .interrupted)
         expect(outcome(status: "SUCCESS"), .completed)
         expect(outcome(status: "SUCCESS", finishedReason: "error"), .failed)
+        expect(outcome(status: "CANCELED", finishedReason: "error"), .failed)
         expect(outcome(status: "ERROR", completedResponseIndex: 8,
                        latestCascadeErrorIndex: 3, cascadeErrorMessages: [eof], resultError: eof),
                .failed)
-        // Tool failures are nonfatal and cannot supply recovery evidence or a stale error match.
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true,
+                       completedResponseIndex: 109, knownConversationErrors: [stale], resultError: stale),
+               .completed, true) // sticky error from an earlier turn.
+        // A result-only error the conversation never reported is a fresh failure.
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true,
+                       completedResponseIndex: 109, resultError: "stream idle timeout"), .failed)
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: false,
+                       completedResponseIndex: 109, resultError: stale), .failed)
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true,
+                       completedResponseIndex: nil, resultError: stale), .failed)
+        expect(outcome(status: "ERROR", finishedReason: "error", hasDeniedActions: true,
+                       hasReply: true, completedResponseIndex: 109, resultError: stale), .failed)
+        // Tool failures are nonfatal and never become a known conversation error.
         expect(outcome(status: "ERROR", hasReply: true, completedResponseIndex: 8,
                        resultError: "tool execution failed"), .failed)
         // WAITING retains its permission-denied distinction.
@@ -197,7 +223,7 @@ struct Checks {{
         precondition(!AntigravityTurnOutcome.isTransientFailure("Please sign in before retrying"))
         precondition(!AntigravityTurnOutcome.isTransientFailure("unknown flag: --effort"))
         precondition(!AntigravityTurnOutcome.isTransientFailure("model has no \\"high\\" effort"))
-        print("PASS: recovered agy turns complete; fatal results, launch/stop handling and retry classification stay conservative.")
+        print("PASS: recovered agy turns complete despite sticky result errors; fatal results, launch/stop handling and retry classification stay conservative.")
     }}
 }}
 '''
