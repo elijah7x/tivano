@@ -1,8 +1,8 @@
 // Stable edition; advances only when the owner requests a release/catch-up.
-MARKETING_VERSION = 2.5.31
+MARKETING_VERSION = 2.5.32
 // Previews replace this with the full X.Y.Z-preview.N.
 TIVANO_RELEASE_VERSION = $(MARKETING_VERSION)
-CURRENT_PROJECT_VERSION = 52
+CURRENT_PROJECT_VERSION = 53
 
 // Public Developer ID signing; no credentials are stored here.
 DEVELOPMENT_TEAM = 5WF7HRPLRX

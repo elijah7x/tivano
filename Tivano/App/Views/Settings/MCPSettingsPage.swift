@@ -843,16 +843,17 @@ private struct MCPCustomEditor: View {
 
     private func variablesSection(title: String, addLabel: String) -> some View {
         field(title) {
-            ForEach($variables) { $variable in
+            ForEach(variables) { variable in
+                let binding = variableBinding(for: variable)
                 HStack(spacing: 6) {
-                    editorField("Variable name", text: $variable.key)
+                    editorField("Variable name", text: binding.key)
                     if variable.isSecret {
-                        secureEditorField("value", text: $variable.value)
+                        secureEditorField("value", text: binding.value)
                     } else {
-                        editorField("value", text: $variable.value)
+                        editorField("value", text: binding.value)
                     }
                     Button {
-                        variable.isSecret.toggle()
+                        binding.wrappedValue.isSecret.toggle()
                     } label: {
                         Image(systemName: variable.isSecret ? "lock.fill" : "lock.open")
                             .font(.ui(.callout, weight: .medium))
@@ -890,6 +891,17 @@ private struct MCPCustomEditor: View {
                 .font(.ui(size: 10.5))
                 .foregroundStyle(Chrome.secondaryText)
         }
+    }
+
+    private func variableBinding(for variable: VariableDraft) -> Binding<VariableDraft> {
+        let id = variable.id
+        return Binding(
+            get: { variables.first(where: { $0.id == id }) ?? variable },
+            set: { newVariable in
+                guard let index = variables.firstIndex(where: { $0.id == id }) else { return }
+                variables[index] = newVariable
+            }
+        )
     }
 
     /// The draft as a server for saving. Rows whose key was

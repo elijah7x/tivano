@@ -564,10 +564,10 @@ final class LinkTextView: NSTextView {
         return true
     }
 
-    /// The last measurement, so the several `sizeThatFits` calls one layout pass makes
-    /// with the same width run the text layout once.
-    private var measuredWidth: CGFloat = 0
-    private var measuredHeight: CGFloat = 0
+    /// Up to four exact proposal widths, so alternating SwiftUI probes can reuse
+    /// measurements instead of laying out the whole string again.
+    private var measuredHeights: [CGFloat: CGFloat] = [:]
+    private var measuredWidthOrder: [CGFloat] = []
     private var needsSettleAfterResize = false
 
     /// New content; skips the layout pass when nothing changed (favicons and
@@ -587,7 +587,8 @@ final class LinkTextView: NSTextView {
                 textStorage?.setAttributedString(text)
                 Self.captureReplacements += 1
                 lastMeasuredHeight = 0
-                measuredWidth = 0
+                measuredHeights.removeAll()
+                measuredWidthOrder.removeAll()
             }
             invalidateIntrinsicContentSize()
             return
@@ -613,19 +614,26 @@ final class LinkTextView: NSTextView {
             }
             if !selection.isEmpty { selectedRanges = selection }
             lastMeasuredHeight = 0
-            measuredWidth = 0
+            measuredHeights.removeAll()
+            measuredWidthOrder.removeAll()
+            invalidateIntrinsicContentSize()
         }
-        invalidateIntrinsicContentSize()
     }
 
     func height(forWidth width: CGFloat) -> CGFloat {
         guard width > 0, let layout = layoutManager, let container = textContainer else { return 0 }
-        if width == measuredWidth { return measuredHeight }
+        // A hit leaves the container alone: resizing it discards the glyph layout, and
+        // `layout()` restores the real bounds width anyway.
+        if let height = measuredHeights[width] { return height }
         container.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
         let height = ceil(layout.usedRect(for: container).height)
-        measuredWidth = width
-        measuredHeight = height
+        if measuredWidthOrder.count == 4 {
+            let expiredWidth = measuredWidthOrder.removeFirst()
+            measuredHeights[expiredWidth] = nil
+        }
+        measuredWidthOrder.append(width)
+        measuredHeights[width] = height
         return height
     }
 
