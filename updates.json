@@ -2,18 +2,18 @@
   "schema_version": 1,
   "releases": [
     {
-      "tag_name": "v2.5.31",
-      "name": "Tivano 2.5.31",
-      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v2.5.31/Tivano-2.5.31.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## Bug fixes\n\n- Clicking a link to a local file in a reply opens it in its default app again. Relative paths such as `out/report.pdf` or `Foo.swift:12` now resolve against the chat's working directory instead of failing with macOS error -50 (#52); a link to a file that doesn't exist just beeps.\n- Selecting text in a reply and then clicking elsewhere no longer leaves a thin blue line under the first selected line.\n- Scrolling up through a long conversation now loads older messages smoothly one page at a time while keeping your reading place, instead of chaining through the entire history and jumping to the earliest message.\n- A Hydra head running on Antigravity that uses its full time budget is no longer misreported as stopped by the user; its final report now goes out cleanly, and any unlanded changes stay in its copy when the job settles.\n\n## 简体中文\n\n## 问题修复\n\n- 点击回复里指向本地文件的链接，会直接用默认应用打开。`out/report.pdf`、`Foo.swift:12` 这类相对路径现在按对话的工作目录解析，不再弹出 macOS -50 错误（#52）；文件不存在时只发出提示音。\n- 选中回复里的文字后点击别处，第一行选中文字下方不再残留一条细蓝线。\n- 在长对话里往上滚动时，更早的消息会一页一页平滑接上，阅读位置保持不变，不再一路加载完全部历史并跳到最早的那条消息。\n- 运行在 Antigravity 上的 Hydra head 用完时间预算后，不再被误报为用户停止；收尾报告现在可以正常发出，未合入的改动在任务结项时会保留在副本中。\n\n## Thanks\n\n- No outside contributors.\n",
-      "published_at": "2026-11-14T06:23:07Z",
+      "tag_name": "v2.5.32",
+      "name": "Tivano 2.5.32",
+      "body": "[Download Tivano (.dmg, Apple silicon)](https://github.com/elijah7x/tivano/releases/download/v2.5.32/Tivano-2.5.32.dmg)\n\nOpen the DMG and drag Tivano to Applications. The Source code archives below are for developers, not app installers.\n\nIf Tivano 1.0.2 or earlier reports HTTP 403 while checking updates, install this DMG manually once. Later checks use public static feeds and do not require a GitHub login.\n\n## English\n\n## Bug fixes\n\n- Removing or reordering a model preset, an MCP server variable or a project script while editing its text no longer crashes Tivano (#51).\n- Long paragraphs with links in a finished conversation are no longer re-measured over and over, which could keep the CPU busy (#51).\n\n## 简体中文\n\n## 问题修复\n\n- 编辑模型预设、MCP 服务器变量或项目脚本的文字时删除或拖动该行，Tivano 不再崩溃（#51）。\n- 已完成对话里带链接的长段落不再被反复重新测量，避免因此持续占用 CPU（#51）。\n\n## Thanks\n\n- No outside contributors.\n",
+      "published_at": "2026-11-14T08:12:04Z",
       "draft": false,
       "prerelease": false,
       "assets": [
         {
-          "name": "Tivano-2.5.31.dmg",
-          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v2.5.31/Tivano-2.5.31.dmg",
-          "size": 11031160,
-          "sha256": "b4e6244cc37f22147e7366e1745a056a7c8ae5d21cb0e62d886496e02bc971d4"
+          "name": "Tivano-2.5.32.dmg",
+          "browser_download_url": "https://github.com/elijah7x/tivano/releases/download/v2.5.32/Tivano-2.5.32.dmg",
+          "size": 11017472,
+          "sha256": "5636b230a7138afb905f4a66c8665dc45d503c77e334d59ecc324a0cc5328d7b"
         }
       ]
     }
