@@ -157,9 +157,14 @@ extension HydraPrompts {
             case .completed: ""
             case .failed: " (failed)"
             case .stopped:
-                report.stopReason == .stalled
-                    ? " (stopped by Tivano: it stalled with no progress; its copy and session are kept, so you can continue it)"
-                    : " (stopped by the user before finishing)"
+                switch report.stopReason {
+                case .stalled:
+                    " (stopped by Tivano: it stalled with no progress; its copy and session are kept, so you can continue it)"
+                case .budget:
+                    " (ran out of its time budget before finishing)"
+                case nil:
+                    " (stopped by the user before finishing)"
+                }
             case .running: ""
             }
             var effort: [String] = []
@@ -234,6 +239,9 @@ extension HydraPrompts {
         }
         if reports.contains(where: { $0.stopReason == .stalled }) {
             closing.append("A head Tivano stopped for stalling may be continued once with a smaller, more specific step, or its part given to a new head.")
+        }
+        if reports.contains(where: { $0.status == .stopped && $0.stopReason == .budget }) {
+            closing.append("A head that ran out of its time budget leaves its unfinished part for you or a new head to take over; any unlanded changes remain in its copy or recovery patch.")
         }
         closing.append("Read the flagged files first, then spot-check the rest; fix integration yourself and run the narrowest required check. Do not use git status or git diff to review this, and revert nothing: others may be editing the checkout.")
         closing.append(reportStyleRule)

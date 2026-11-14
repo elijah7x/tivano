@@ -80,12 +80,25 @@ def check_sources():
         'authHint(in: trimmedResultError)',
     ])
 
+    is_running = between(text, 'var isRunning: Bool', 'var lastOutputAt: Date?')
+    require(is_running, ['!isStopping', 'process?.isRunning'])
+
     send = between(text, 'func send(_ input: TurnInput)', 'func interrupt() async')
     require(send, [
+        '!isStopping',
+        'ProviderError.notRunning',
         'latestCascadeError = nil',
         'cascadeErrorMessages.removeAll()',
         'completedAgentResponseIndex = nil',
         'reportedErrors.removeAll()',
+    ])
+    if send.index('!isStopping') > send.index('turnActive = true'):
+        fail('send(_:) must guard against !isStopping before starting a turn')
+
+    stop_and_wait = between(text, 'func stopAndWait(timeout: TimeInterval) async', 'func stop()')
+    require(stop_and_wait, [
+        'stop()',
+        'terminateAndWait(timeout: timeout)',
     ])
     result = between(text, 'private func handleResult', 'private func didClose')
     require(result, ['latestCascadeError != nil', 'rememberConversationError(trimmedResultError)'])

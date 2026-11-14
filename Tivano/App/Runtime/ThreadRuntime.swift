@@ -484,6 +484,7 @@ final class ThreadRuntime {
     /// stopped and its next turn is its report.
     @ObservationIgnored private var headBudget: Task<Void, Never>?
     @ObservationIgnored private var headBudgetSpent = false
+    @ObservationIgnored private var headBudgetStop = false
     @ObservationIgnored private var headReportsNext = false
     /// The team's finished work is on its way to the remote (see `AppModel.autoMergeHydraWork`).
     var isHydraMerging = false {
@@ -1844,11 +1845,16 @@ final class ThreadRuntime {
                 $0.finishedAt = nil
             }
         }
+        let isFinalReport = headReportsNext
+        headReportsNext = false
+        if !isFinalReport {
+            headBudgetStop = false
+        }
         if let info = initialThread.hydra, info.kind == .tivano {
             hydraEditCount = 0
             hydraLastEventAt = .now
             app.updateHydraHead(threadID) {
-                if turns.count > 1 {
+                if turns.count > 1, !isFinalReport {
                     $0.startedAt = .now
                     $0.queuedAt = nil
                     $0.executionStartedAt = .now
@@ -1861,8 +1867,6 @@ final class ThreadRuntime {
         // A Tivano-run head gets so long for a turn, on any provider. The API sessions
         // stop themselves a little sooner from inside the turn; this is the backstop, and
         // the only stop a CLI head has.
-        let isFinalReport = headReportsNext
-        headReportsNext = false
         if initialThread.hydra?.kind == .tivano {
             let allowance = isFinalReport
                 ? HydraBudget.reportSeconds
@@ -1872,7 +1876,8 @@ final class ThreadRuntime {
                 try? await Task.sleep(for: .seconds(allowance))
                 guard let self, !Task.isCancelled, self.currentTurnID == turn.id, self.phase != .idle else { return }
                 self.headBudgetSpent = !isFinalReport
-                self.interrupt()
+                self.headBudgetStop = true
+                self.interrupt(byUser: false)
             }
         }
         saveNow()
@@ -2765,6 +2770,15 @@ final class ThreadRuntime {
 
     var isWaitingForLimit: Bool { app?.autoContinue.resumesAt[threadID] != nil }
 
+    func clearHeadBudgetStop() {
+        headBudgetStop = false
+    }
+
+    func consumeHeadBudgetStop() -> Bool {
+        defer { headBudgetStop = false }
+        return headBudgetStop
+    }
+
     /// `byUser` false is Tivano stopping a turn gone quiet (see `watchQuiet`): the thread
     /// then finishes the way a failed turn does, unread and calling for attention.
     func interrupt(byUser: Bool = true) {
@@ -2773,7 +2787,10 @@ final class ThreadRuntime {
         for draft in questionDrafts.values { draft.retire() }
         questionDrafts.removeAll()
         sendInterruptedTurnID = currentTurnID
-        if byUser { userStoppedTurnID = currentTurnID }
+        if byUser {
+            userStoppedTurnID = currentTurnID
+            headBudgetStop = false
+        }
         let turnID = currentTurnID
         interruptWatchdog?.cancel()
         interruptWatchdog = nil
@@ -3357,7 +3374,7 @@ final class ThreadRuntime {
         let epoch = sessionEpoch
         let oldSessions = sessionsAwaitingReplacement
         for old in oldSessions {
-            await old.stopAndWait(timeout: 2)
+            await old.stopAndWait(timeout: 5)
             guard sessionEpoch == epoch, !Task.isCancelled else { throw CancellationError() }
         }
         // By identity: another start may have waited on and cleared some of these meanwhile.

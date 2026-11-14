@@ -88,12 +88,7 @@ extension AppModel {
                     $0.reviewSkipped = "not run: \(ending.rawValue)"
                 }
             }
-            for head in hydraTeam(of: leadID) where head.hydra?.jobID == job.id && head.hydra?.isFinished == true {
-                guard let info = head.hydra, let copy = head.worktreePath, let base = info.baseTree else { continue }
-                let unchanged = (try? await Git(copy).currentTree()) == base
-                guard unchanged || info.landing?.landed == true else { continue }
-                releaseHydraCopy(of: head.id)
-            }
+            await releaseHydraJobCopies(of: leadID, jobID: job.id, includeCompleted: false)
             scheduleSave()
             return
         }
@@ -129,7 +124,7 @@ extension AppModel {
             $0.ending = .completed
             $0.finishedAt = .now
         }
-        releaseHydraJobCopies(of: leadID, jobID: job.id)
+        await releaseHydraJobCopies(of: leadID, jobID: job.id)
         scheduleSave()
     }
 
@@ -154,9 +149,21 @@ extension AppModel {
         }
     }
 
-    /// Releases the copies retained by finished heads of one settled job.
-    func releaseHydraJobCopies(of leadID: UUID, jobID: UUID) {
+    /// Releases the copies retained by finished heads of one settled job, keeping any
+    /// stopped or failed head whose unlanded work still sits in its copy.
+    func releaseHydraJobCopies(of leadID: UUID, jobID: UUID, includeCompleted: Bool = true) async {
         for head in hydraTeam(of: leadID) where head.hydra?.jobID == jobID && head.hydra?.isFinished == true {
+            guard let info = head.hydra, let copy = head.worktreePath, let base = info.baseTree else { continue }
+            if includeCompleted && info.status == .completed {
+                releaseHydraCopy(of: head.id)
+                continue
+            }
+            if info.landing?.landed == true {
+                releaseHydraCopy(of: head.id)
+                continue
+            }
+            let unchanged = (try? await Git(copy).currentTree()) == base
+            guard unchanged else { continue }
             releaseHydraCopy(of: head.id)
         }
     }

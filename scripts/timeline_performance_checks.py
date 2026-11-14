@@ -27,15 +27,23 @@ def declaration(marker: str) -> str:
     return SOURCE[start:end]
 
 
+def scroll_geometry_source() -> str:
+    return declaration("        .onScrollGeometryChange(for: ScrollMetrics.self, of: ScrollMetrics.init(geometry:)) {")
+
+
 def require_source(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(f"FAIL: {message}")
 
 
-wheel = declaration("    func noteWheelInput() {")
+wheel = declaration("    func noteWheelInput(")
 navigation = declaration("    func noteUserNavigation(")
 cancels_navigation = declaration("        if !preservingHistory {")
 require_source("if !preservingHistory" in navigation, "navigation must distinguish continuous scrolling from explicit jumps")
+require_source(
+    "historyReaderDelta += offsetDelta" in wheel and "historyReaderDelta +=" not in scroll_geometry_source(),
+    "a history load must take the reader's movement from wheel input, never from offset changes an anchor may have made",
+)
 require_source(
     "noteUserNavigation(preservingHistory: historyLoadPending)" in wheel,
     "wheel input must preserve an in-flight history request",
@@ -46,11 +54,72 @@ for marker in ("placementTask?.cancel()", "placementToken = nil"):
     require_source(marker not in cancels_navigation and marker in navigation,
                    f"reader input must always cancel placement corrections ({marker!r})")
 load_earlier = declaration("    private func loadEarlier(")
+cancel_history = declaration("    private func cancelHistoryRequest() {")
 settle_measurements = declaration("    private func settleMeasurements(")
-for marker in ("let anchorBlock =", "measurements.viewportFrame", "anchorID: anchor?.id", "anchorOffset: anchor?.offset ?? 0"):
+scroll_geometry = declaration("        .onScrollGeometryChange(for: ScrollMetrics.self, of: ScrollMetrics.init(geometry:)) {")
+scroll_view_probe = declaration("private struct ScrollViewProbe: NSViewRepresentable {")
+probe_view = declaration("    fileprivate final class ProbeView: NSView {")
+history_anchor_math = declaration("enum HistoryAnchorMath {")
+for marker in (
+    "let anchorBlock =",
+    "measurements.viewportFrame",
+    "anchorID: anchor?.id",
+    "anchorOffset: anchor?.offset ?? 0",
+    "historyReaderDelta = 0",
+    "historySyncShift = 0",
+):
     require_source(marker in load_earlier, f"loadEarlier must record the reader anchor ({marker!r})")
-for marker in ("historyRequest?.anchorRestored = true", "keepAnchor(anchorID, offset: request.anchorOffset", "corrections: 1"):
+require_source("historyReaderDelta = 0" in cancel_history, "cancelHistoryRequest must reset historyReaderDelta")
+require_source("historySyncShift = 0" in cancel_history, "cancelHistoryRequest must reset historySyncShift")
+for forbidden in ("lastReaderMovement <= request.requestedAt", "lastReaderMovement", "keepAnchor("):
+    require_source(
+        forbidden not in settle_measurements,
+        f"settleMeasurements must not gate or delegate history restoration through {forbidden!r}",
+    )
+for marker in (
+    "historyRequest?.anchorRestored = true",
+    "DispatchQueue.main.async",
+    "HistoryAnchorMath.restoreDelta",
+    "isRestoringHistory = true",
+    "clip.scroll(",
+    "reflectScrolledClipView",
+    "resetDrift()",
+    "historyLoadPending = false",
+    "historyReaderDelta = 0",
+    "historySyncShift = 0",
+    "updateMountedWindow(",
+):
     require_source(marker in settle_measurements, f"history measurement must restore its anchor once ({marker!r})")
+require_source(
+    settle_measurements.index("clip.scroll(") < settle_measurements.index("historyLoadPending = false"),
+    "historyLoadPending = false must run after clip.scroll restores the anchor",
+)
+for marker in (
+    "postsFrameChangedNotifications",
+    "NSView.frameDidChangeNotification",
+    "removeDocumentObserver()",
+    "guard !isSyncShifting",
+    "guard let tracking, tracking.historyLoadPending else { return }",
+    "HistoryAnchorMath.syncShift(",
+    "readerMovement: readerMovement",
+    "isSyncShifting = true",
+    "isSyncShiftingHistory = true",
+    "clip.scroll(",
+    "reflectScrolledClipView",
+    "historySyncShift +=",
+):
+    require_source(marker in probe_view, f"ProbeView must synchronously compensate unanchored history growth ({marker!r})")
+require_source(
+    "removeDocumentObserver()" in scroll_view_probe,
+    "ScrollViewProbe.dismantleNSView must remove the document frame observer",
+)
+for marker in (
+    "HistoryAnchorMath.readerDelta(",
+    "isSyncShiftingHistory",
+    "new.offset < old.offset || tracking.isUserScrolling || tracking.isCoasting",
+    "warmMarkdown(for: blocks[target..<hidden])",
+):
+    require_source(marker in scroll_geometry, f"scroll geometry handler must preserve history tracking ({marker!r})")
 print("PASS: wheel preserves history loading; history pages record and restore one reader anchor")
 
 
@@ -71,6 +140,7 @@ final class ThreadRuntime {
     func noteTimeline(shown: Bool) { shownTimelines += shown ? 1 : -1 }
 }
 '''
+swift += "\n" + history_anchor_math
 swift += "\n@MainActor\n" + declaration("private final class TimelineMeasurements")
 swift += r'''
 @MainActor
@@ -106,6 +176,155 @@ struct Checks {
     }
 
     @MainActor static func main() async {
+        let deltaH: CGFloat = 480
+        precondition(HistoryAnchorMath.readerDelta(offsetChange: 0, growth: deltaH, anchorsBottom: true) == 0,
+                     "uncompensated insertion frame must not count as reader movement")
+        precondition(HistoryAnchorMath.readerDelta(offsetChange: deltaH, growth: deltaH, anchorsBottom: true) == 0,
+                     "bottom-anchored insertion frame must subtract growth")
+        precondition(HistoryAnchorMath.readerDelta(offsetChange: deltaH - 90, growth: deltaH, anchorsBottom: true) == -90,
+                     "bottom-anchored insertion frame must preserve simultaneous upward reader scroll")
+        precondition(HistoryAnchorMath.readerDelta(offsetChange: -90, growth: deltaH, anchorsBottom: true) == -90,
+                     "uncompensated insertion frame must preserve simultaneous upward reader scroll")
+        precondition(HistoryAnchorMath.readerDelta(offsetChange: -64, growth: 0, anchorsBottom: true) == -64,
+                     "pure upward scroll frame must return offsetChange unchanged")
+        precondition(HistoryAnchorMath.readerDelta(offsetChange: 42, growth: 0, anchorsBottom: false) == 42,
+                     "pure downward scroll frame must return offsetChange unchanged")
+        precondition(HistoryAnchorMath.readerDelta(offsetChange: -64, growth: deltaH, anchorsBottom: false) == -64,
+                     "top-anchored frame must return offsetChange unchanged")
+
+        let anchorMeasure = TimelineMeasurements()
+        anchorMeasure.restoreFrames(["anchor": CGRect(x: 0, y: 200, width: 720, height: 120)])
+        let initialOffset: CGFloat = 150
+        let anchorOffset = anchorMeasure.viewportFrame("anchor", offset: initialOffset)!.minY
+        anchorMeasure.restoreFrames(["anchor": CGRect(x: 0, y: 200 + deltaH, width: 720, height: 120)])
+
+        let stationaryMinY = anchorMeasure.viewportFrame("anchor", offset: initialOffset)!.minY
+        let stationaryRestore = HistoryAnchorMath.restoreDelta(
+            anchorMinY: stationaryMinY,
+            anchorOffset: anchorOffset,
+            readerDelta: 0
+        )
+        precondition(stationaryRestore == deltaH,
+                     "stationary restoreDelta must equal inserted height deltaH, got \(stationaryRestore)")
+        precondition(anchorMeasure.viewportFrame("anchor", offset: initialOffset + stationaryRestore)!.minY == anchorOffset,
+                     "stationary restore must keep anchor at its original viewport minY")
+
+        let upwardScroll: CGFloat = -120
+        let uncompensatedOffset = initialOffset + upwardScroll
+        let uncompensatedMinY = anchorMeasure.viewportFrame("anchor", offset: uncompensatedOffset)!.minY
+        let movingRestore = HistoryAnchorMath.restoreDelta(
+            anchorMinY: uncompensatedMinY,
+            anchorOffset: anchorOffset,
+            readerDelta: upwardScroll
+        )
+        precondition(movingRestore == deltaH,
+                     "upward-scrolling restoreDelta must compensate only deltaH without pulling reader back, got \(movingRestore)")
+        let restoredOffset = uncompensatedOffset + movingRestore
+        precondition(restoredOffset == initialOffset + deltaH + upwardScroll,
+                     "restored offset must preserve upward reader scroll")
+        precondition(anchorMeasure.viewportFrame("anchor", offset: restoredOffset)!.minY == anchorOffset - upwardScroll,
+                     "upward reader scroll must move anchor down in viewport rather than yanking reader back")
+
+        let compensatedOffset = initialOffset + deltaH + upwardScroll
+        let compensatedMinY = anchorMeasure.viewportFrame("anchor", offset: compensatedOffset)!.minY
+        precondition(HistoryAnchorMath.restoreDelta(
+            anchorMinY: compensatedMinY,
+            anchorOffset: anchorOffset,
+            readerDelta: upwardScroll
+        ) == 0, "already-compensated upward scroll must have zero restoreDelta")
+
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: deltaH,
+            clipMinYChange: 0
+        ) == deltaH, "unanchored history growth must synchronously shift by growth")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: deltaH,
+            clipMinYChange: -90
+        ) == deltaH, "unanchored history growth with upward reader scroll must still shift by growth")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: deltaH,
+            clipMinYChange: deltaH
+        ) == 0, "bottom-anchored history growth must not double-shift")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: deltaH,
+            clipMinYChange: deltaH - 90
+        ) == 0, "bottom-anchored history growth with upward reader scroll must not double-shift")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: 100,
+            clipMinYChange: 20,
+            readerMovement: -80
+        ) == 0, "an anchor move hidden by coalesced upward wheel movement must not shift again")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: 100,
+            clipMinYChange: -80,
+            readerMovement: -80
+        ) == 100, "upward wheel movement without an anchor move must still shift by growth")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: false,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: deltaH,
+            clipMinYChange: 0
+        ) == 0, "non-history growth must never trigger sync shift")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: true,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: deltaH,
+            clipMinYChange: 0
+        ) == 0, "sync shift must not run while async restore is active")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: true,
+            isPinnedToBottom: false,
+            growth: deltaH,
+            clipMinYChange: 0
+        ) == 0, "sync shift must not run while nudging")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: true,
+            growth: deltaH,
+            clipMinYChange: 0
+        ) == 0, "sync shift must not run when pinned to bottom")
+        precondition(HistoryAnchorMath.syncShift(
+            historyLoadPending: true,
+            isRestoringHistory: false,
+            isNudging: false,
+            isPinnedToBottom: false,
+            growth: 1,
+            clipMinYChange: 0
+        ) == 0, "sync shift must ignore growth <= 1")
+        print("PASS: HistoryAnchorMath filters anchor growth and preserves upward reader scroll")
+
         let m = TimelineMeasurements()
         var reference: [String: CGRect] = [:]
         var fallback: CGFloat = 160

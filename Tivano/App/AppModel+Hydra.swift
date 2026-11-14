@@ -927,6 +927,8 @@ extension AppModel {
         }
         if status != .running { hydraHeadRetries[id] = nil }
         if status == .completed { HydraWatchdog.transientRetries[id] = nil }
+        let live = existingRuntime(for: id)
+        let budget = (live?.consumeHeadBudgetStop() ?? false) && !stalled && status == .interrupted
         let outcome: HydraHeadInfo.Status = switch status {
         case .completed: .completed
         case .failed: .failed
@@ -935,10 +937,9 @@ extension AppModel {
         }
         let reportNotes = info.jobID != nil && status == .completed ? HydraReportNotes.parse(summary ?? "") : nil
         // The progress the head reported while it ran lands on the record now, once.
-        let live = existingRuntime(for: id)
         updateHydraHead(id) {
             $0.status = outcome
-            $0.stopReason = stalled ? .stalled : nil
+            $0.stopReason = stalled ? .stalled : (budget ? .budget : nil)
             $0.summary = summary ?? $0.summary
             $0.finishedAt = .now
             if info.jobID != nil { $0.reportNotes = reportNotes }
@@ -1504,6 +1505,7 @@ extension AppModel {
         if !stalled {
             HydraWatchdog.stalledHeadIDs.remove(id)
             HydraWatchdog.abandonedHeadIDs.remove(id)
+            existingRuntime(for: id)?.clearHeadBudgetStop()
         }
         switch info.kind {
         case .tivano:

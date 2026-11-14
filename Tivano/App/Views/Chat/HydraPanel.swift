@@ -608,7 +608,7 @@ enum HydraStatusText {
         case .running: Chrome.localized("working")
         case .completed: Chrome.localized("done")
         case .failed: Chrome.localized("failed")
-        case .stopped: Chrome.localized(info.stopReason == .stalled ? "stalled" : "stopped")
+        case .stopped: Chrome.localized(stoppedWord(info.stopReason, capitalized: false))
         }
     }
 
@@ -621,7 +621,7 @@ enum HydraStatusText {
         case .failed:
             return "· " + Chrome.localized("failed")
         case .stopped:
-            return "· " + Chrome.localized(info.stopReason == .stalled ? "stalled" : "stopped")
+            return "· " + Chrome.localized(stoppedWord(info.stopReason, capitalized: false))
         }
     }
 
@@ -634,7 +634,15 @@ enum HydraStatusText {
         case .failed:
             return Chrome.localized("Failed") + (info.summary.map { " · " + TextCleanup.singleLine($0, limit: 80) } ?? "")
         case .stopped:
-            return Chrome.localized(info.stopReason == .stalled ? "Stalled" : "Stopped")
+            return Chrome.localized(stoppedWord(info.stopReason, capitalized: true))
+        }
+    }
+
+    private static func stoppedWord(_ reason: HydraHeadInfo.StopReason?, capitalized: Bool) -> String {
+        switch reason {
+        case .stalled: capitalized ? "Stalled" : "stalled"
+        case .budget: capitalized ? "Out of time" : "out of time"
+        case nil: capitalized ? "Stopped" : "stopped"
         }
     }
 

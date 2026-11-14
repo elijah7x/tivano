@@ -1,9 +1,9 @@
 // Development edition; version independent of release.xcconfig.
 // The app displays dev-$(MARKETING_VERSION); Apple's bundle version stays numeric.
-MARKETING_VERSION = 2.5.27
+MARKETING_VERSION = 2.5.31
 // Previews replace this with the full X.Y.Z-preview.N.
 TIVANO_RELEASE_VERSION = $(MARKETING_VERSION)
-CURRENT_PROJECT_VERSION = 285
+CURRENT_PROJECT_VERSION = 289
 
 // Use the same Developer ID team as Release; credentials stay in Keychain.
 DEVELOPMENT_TEAM = 5WF7HRPLRX
