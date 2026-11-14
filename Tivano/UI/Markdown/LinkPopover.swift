@@ -24,10 +24,10 @@ final class LinkPopover: NSObject, NSPopoverDelegate {
 
     /// Opens under `rect` (in `view`'s coordinates), the link's own bounds, so the arrow
     /// points at the words that were clicked.
-    func show(url: URL, mergeTarget: MergeRequestTarget?, relativeTo rect: NSRect, of view: NSView) {
+    func show(url: URL, linkBase: String? = nil, mergeTarget: MergeRequestTarget?, relativeTo rect: NSRect, of view: NSView) {
         if popover.isShown { popover.close() }
         let request = mergeTarget == nil ? nil : MergeRequestLink(url: url)
-        let content = LinkPopoverContent(url: url, request: request) { [weak self] request in
+        let content = LinkPopoverContent(url: url, linkBase: linkBase, request: request) { [weak self] request in
             self?.close()
             mergeTarget?.merge(request)
         }
@@ -67,6 +67,7 @@ final class LinkPopover: NSObject, NSPopoverDelegate {
 
 private struct LinkPopoverContent: View {
     let url: URL
+    let linkBase: String?
     let request: MergeRequestLink?
     let merge: @MainActor (MergeRequestLink) -> Void
 
@@ -86,7 +87,7 @@ private struct LinkPopoverContent: View {
                 PopoverDivider()
             }
             PopoverItem("Open Link", symbol: "safari") {
-                MarkdownLinkOpener.open(url)
+                MarkdownLinkOpener.open(url, base: linkBase)
             }
             PopoverItem("Copy link", symbol: "link") {
                 NSPasteboard.general.clearContents()

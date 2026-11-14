@@ -78,7 +78,7 @@ final class AntigravitySession: ProviderSession {
         spendBaselineKnown = configuration.resumeID?.isEmpty != false
     }
 
-    var isRunning: Bool { process?.isRunning ?? false }
+    var isRunning: Bool { !isStopping && (process?.isRunning ?? false) }
     var lastOutputAt: Date? { process?.lastOutputAt }
 
     private var workingDirectory: String { configuration.workingDirectory.path }
@@ -170,7 +170,7 @@ final class AntigravitySession: ProviderSession {
     }
 
     func send(_ input: TurnInput) async throws {
-        guard let process, process.isRunning else { throw ProviderError.notRunning }
+        guard !isStopping, let process, process.isRunning else { throw ProviderError.notRunning }
         runtimeMode = input.runtimeMode
         interactionMode = input.interactionMode
         if let model = input.model, !model.isEmpty { self.model = model }
@@ -209,6 +209,12 @@ final class AntigravitySession: ProviderSession {
 
     func resolveApproval(_ requestID: String, optionID: String) {}
     func answerQuestion(_ requestID: String, answers: [String: [String]]) {}
+
+    func stopAndWait(timeout: TimeInterval) async {
+        let process = process
+        stop()
+        await process?.terminateAndWait(timeout: timeout)
+    }
 
     func stop() {
         isStopping = true

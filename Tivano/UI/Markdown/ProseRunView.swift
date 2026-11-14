@@ -7,6 +7,7 @@ struct ProseRunView: View {
     @Environment(\.markdownDimmed) private var dimmed
     @Environment(\.hydraMentionPersonas) private var hydraMentionPersonas
     @Environment(\.hydraMentionTargets) private var hydraMentionTargets
+    @Environment(\.markdownLinkBase) private var markdownLinkBase
     @Environment(\.openURL) private var openURL
     @State private var linkView = WeakView()
     @State private var showsHand = false
@@ -20,7 +21,7 @@ struct ProseRunView: View {
         let linkKey = RichLink.linkAssetKey(for: sources)
         let linkBox = linkView
         let targets = hydraMentionTargets
-        ProseRunRepresentable(blocks: blocks, pointSize: scaled, dimmed: dimmed, revision: faviconRevision, mentions: hydraMentionPersonas, targets: hydraMentionTargets, onOpenHead: { url in openURL(url) }, onHost: { [weak linkBox] view in linkBox?.value = view })
+        ProseRunRepresentable(blocks: blocks, pointSize: scaled, dimmed: dimmed, revision: faviconRevision, mentions: hydraMentionPersonas, targets: hydraMentionTargets, linkBase: markdownLinkBase, onOpenHead: { url in openURL(url) }, onHost: { [weak linkBox] view in linkBox?.value = view })
             .frame(maxWidth: .infinity, alignment: .leading)
             .modifier(LinkHoverModifier(linkView: linkBox, showsHand: $showsHand, hoveredHeadID: $hoveredHeadID, personas: hydraMentionPersonas, targets: targets))
             .task(id: linkKey) { [sources, linkKey, revision = $faviconRevision] in
@@ -39,6 +40,7 @@ struct ProseRunRepresentable: NSViewRepresentable {
     var revision: Int = 0
     var mentions: [HydraPersona] = []
     var targets: [String: HydraMentionTarget] = [:]
+    var linkBase: String? = nil
     var onOpenHead: ((URL) -> Void)?
     var onHost: ((LinkTextView) -> Void)?
 
@@ -48,9 +50,12 @@ struct ProseRunRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> LinkTextView {
         let view = LinkTextView()
+        let base = linkBase ?? context.environment.markdownLinkBase
+        context.coordinator.linkBase = base
         view.delegate = context.coordinator
         view.passesProseThrough = false
         onHost?(view)
+        view.linkBase = base
         view.mergeTarget = context.environment.mergeRequestTarget
         view.selectionOwner = context.environment.markdownSelectionOwner
         return view
@@ -76,6 +81,9 @@ struct ProseRunRepresentable: NSViewRepresentable {
         }
         // Outside the render check: handlers and selection ownership must land even
         // on an update that drew nothing.
+        let base = linkBase ?? context.environment.markdownLinkBase
+        coordinator.linkBase = base
+        view.linkBase = base
         view.onOpenHead = onOpenHead
         view.mergeTarget = context.environment.mergeRequestTarget
         view.selectionOwner = context.environment.markdownSelectionOwner
@@ -89,6 +97,7 @@ struct ProseRunRepresentable: NSViewRepresentable {
     static func dismantleNSView(_ view: LinkTextView, coordinator: LinkParagraphView.Coordinator) {
         view.delegate = nil
         view.onOpenHead = nil
+        view.linkBase = nil
         view.mergeTarget = nil
         view.selectionOwner = nil
     }

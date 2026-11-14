@@ -8,6 +8,30 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.31] - 2026-11-14
+
+### English
+
+### Bug fixes
+
+- Clicking a link to a local file in a reply opens it in its default app again. Relative paths such as `out/report.pdf` or `Foo.swift:12` now resolve against the chat's working directory instead of failing with macOS error -50 (#52); a link to a file that doesn't exist just beeps.
+- Selecting text in a reply and then clicking elsewhere no longer leaves a thin blue line under the first selected line.
+- Scrolling up through a long conversation now loads older messages smoothly one page at a time while keeping your reading place, instead of chaining through the entire history and jumping to the earliest message.
+- A Hydra head running on Antigravity that uses its full time budget is no longer misreported as stopped by the user; its final report now goes out cleanly, and any unlanded changes stay in its copy when the job settles.
+
+### 简体中文
+
+### 问题修复
+
+- 点击回复里指向本地文件的链接，会直接用默认应用打开。`out/report.pdf`、`Foo.swift:12` 这类相对路径现在按对话的工作目录解析，不再弹出 macOS -50 错误（#52）；文件不存在时只发出提示音。
+- 选中回复里的文字后点击别处，第一行选中文字下方不再残留一条细蓝线。
+- 在长对话里往上滚动时，更早的消息会一页一页平滑接上，阅读位置保持不变，不再一路加载完全部历史并跳到最早的那条消息。
+- 运行在 Antigravity 上的 Hydra head 用完时间预算后，不再被误报为用户停止；收尾报告现在可以正常发出，未合入的改动在任务结项时会保留在副本中。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.5.27] - 2026-11-11
 
 ### English

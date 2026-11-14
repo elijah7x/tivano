@@ -128,7 +128,6 @@ struct ThreadTimeline: View, Equatable {
         let ids: Set<String>
         let anchorID: String?
         let anchorOffset: CGFloat
-        let requestedAt: CFTimeInterval
         var anchorRestored = false
     }
     @State private var historyRequest: HistoryRequest?
@@ -346,11 +345,15 @@ struct ThreadTimeline: View, Equatable {
         }
         .environment(\.hydraMentionPersonas, hydraMentionPersonas)
         .environment(\.hydraMentionTargets, hydraMentionTargets)
-        // A head's name in the prose opens the head's chat; every other link keeps the
-        // system's handling.
+        .environment(\.markdownLinkBase, workingDirectory)
+        // A head's name in the prose opens the head's chat; every other link resolves
+        // local paths against the chat's working directory.
         .environment(\.openURL, OpenURLAction { url in
-            guard let headID = HydraMentionTarget.threadID(in: url) else { return .systemAction }
-            model.openThread(headID)
+            if let headID = HydraMentionTarget.threadID(in: url) {
+                model.openThread(headID)
+                return .handled
+            }
+            MarkdownLinkOpener.open(url, base: workingDirectory)
             return .handled
         })
     }
@@ -422,7 +425,7 @@ struct ThreadTimeline: View, Equatable {
     /// Brings more older blocks into the window: one page, or up to `count`. The bottom
     /// stays held while they measure, then the reader's block returns to its old viewport
     /// offset once rather than letting the inserted page carry the viewport away.
-    private func loadEarlier(in blocks: [DisplayBlock], to count: Int? = nil) {
+    private func loadEarlier(in blocks: [DisplayBlock], to count: Int? = nil, source: StaticString = "load") {
         guard !historyLoadPending else { return }
         let start = windowStartIndex(in: blocks)
         // `count` is how many of the newest blocks to keep; with no count, one more page
@@ -441,8 +444,11 @@ struct ThreadTimeline: View, Equatable {
         historyRequest = HistoryRequest(threadID: runtime.threadID, navigation: tracking.navigationGeneration,
                                         generation: historyGeneration, measurementGeneration: measurements.generation,
                                         ids: Set(blocks[target..<start].map(\.id)), anchorID: anchor?.id,
-                                        anchorOffset: anchor?.offset ?? 0, requestedAt: CACurrentMediaTime())
+                                        anchorOffset: anchor?.offset ?? 0)
         tracking.historyLoadPending = true
+        tracking.historyReaderDelta = 0
+        tracking.historySyncShift = 0
+        tracking.syncProbeBaseline()
         anchorsBottomOnGrowth = true
         warmMarkdown(for: blocks[target..<start])
         windowStartID = blocks[target].id
@@ -452,12 +458,38 @@ struct ThreadTimeline: View, Equatable {
             mountedWindow = MountedWindow(lowerID: blocks[target].id, upperID: window.upperID)
         }
         tracking.requestMeasurementPass()
+        #if DEBUG
+        if TimelineTrace.isEnabled {
+            tracking.traceHistoryLoad(
+                source: source,
+                windowStartBefore: start,
+                windowStartAfter: target,
+                hidden: target,
+                anchorID: anchor?.id,
+                anchorOffset: anchor?.offset ?? 0
+            )
+        }
+        #endif
     }
 
     private func cancelHistoryRequest() {
+        #if DEBUG
+        // Wheel ticks route through navigationAction when idle; emit only when cancelling a request.
+        if TimelineTrace.isEnabled, historyRequest != nil || tracking.historyLoadPending {
+            tracking.traceHistoryCancel(
+                source: "cancel",
+                anchorID: historyRequest?.anchorID,
+                historyReaderDelta: tracking.historyReaderDelta
+            )
+        }
+        #endif
         historyGeneration += 1
         historyRequest = nil
         tracking.historyLoadPending = false
+        tracking.historyReaderDelta = 0
+        tracking.historySyncShift = 0
+        tracking.pendingSyncShift = 0
+        tracking.isSyncShiftingHistory = false
         anchorsBottomOnGrowth = tracking.isPinnedToBottom
     }
 
@@ -470,20 +502,160 @@ struct ThreadTimeline: View, Equatable {
                 cancelHistoryRequest()
                 return
             }
+            guard !request.anchorRestored else { return }
             let existing = Set(blocks.map(\.id))
             guard request.ids.intersection(existing).allSatisfy({ measurements.frames[$0] != nil }) else { return }
-            guard tracking.placementToken == nil else { return }
-            // A reader who kept scrolling while the page measured has moved on from the
-            // captured offset; the bottom anchor already held their rows, so restoring would
-            // pull them back.
-            if !request.anchorRestored, !tracking.isPinnedToBottom, let anchorID = request.anchorID,
-               tracking.lastReaderMovement <= request.requestedAt {
-                historyRequest?.anchorRestored = true
-                keepAnchor(anchorID, offset: request.anchorOffset, scrollFirst: false, corrections: 1)
+            if let anchorID = request.anchorID, existing.contains(anchorID), measurements.frames[anchorID] == nil {
                 return
             }
+            guard tracking.placementToken == nil else { return }
+            if !tracking.isPinnedToBottom, let anchorID = request.anchorID, existing.contains(anchorID) {
+                historyRequest?.anchorRestored = true
+                DispatchQueue.main.async {
+                    guard request.threadID == runtime.threadID,
+                          request.navigation == tracking.navigationGeneration,
+                          request.generation == historyGeneration,
+                          request.measurementGeneration == measurements.generation else {
+                        #if DEBUG
+                        if TimelineTrace.isEnabled {
+                            let reason: StaticString
+                            if request.threadID != runtime.threadID {
+                                reason = "threadChanged"
+                            } else if request.navigation != tracking.navigationGeneration {
+                                reason = "navigationChanged"
+                            } else if request.generation != historyGeneration {
+                                reason = "generationChanged"
+                            } else {
+                                reason = "measurementInvalidated"
+                            }
+                            let clipMinY = tracking.probe?.enclosingScrollView?.contentView.bounds.minY
+                            tracking.traceHistoryRestore(
+                                source: "async",
+                                restoreDelta: nil,
+                                historyReaderDelta: tracking.historyReaderDelta,
+                                beforeY: clipMinY,
+                                afterY: clipMinY,
+                                movedY: 0,
+                                skipped: true,
+                                reason: reason
+                            )
+                        }
+                        #endif
+                        return
+                    }
+                    var restoredOffset = tracking.offset + tracking.pendingSyncShift
+                    #if DEBUG
+                    let traceEnabled = TimelineTrace.isEnabled
+                    let traceReaderDelta = traceEnabled ? tracking.historyReaderDelta : 0
+                    var traceDelta: CGFloat?
+                    var traceBeforeY = traceEnabled ? tracking.probe?.enclosingScrollView?.contentView.bounds.minY : nil
+                    var traceAfterY = traceBeforeY
+                    var traceMovedY: CGFloat = 0
+                    var traceSkipped = true
+                    var traceReason: StaticString?
+                    if traceEnabled {
+                        if tracking.placementToken != nil {
+                            traceReason = "placementActive"
+                        } else if tracking.isPinnedToBottom {
+                            traceReason = "pinnedToBottom"
+                        } else {
+                            traceReason = "missingAnchorFrame"
+                        }
+                    }
+                    #endif
+                    if tracking.placementToken == nil, !tracking.isPinnedToBottom,
+                       let frame = measurements.viewportFrame(anchorID, offset: tracking.offset + tracking.pendingSyncShift) {
+                        let restoreDelta = HistoryAnchorMath.restoreDelta(
+                            anchorMinY: frame.minY,
+                            anchorOffset: request.anchorOffset,
+                            readerDelta: tracking.historyReaderDelta
+                        )
+                        #if DEBUG
+                        if traceEnabled {
+                            traceDelta = restoreDelta
+                            traceReason = abs(restoreDelta) <= 0.5 ? "withinThreshold" : "noScrollView"
+                        }
+                        #endif
+                        if abs(restoreDelta) > 0.5, let scroll = tracking.probe?.enclosingScrollView {
+                            tracking.isRestoringHistory = true
+                            let clip = scroll.contentView
+                            let beforeY = clip.bounds.minY
+                            let beforeTrackingOffset = tracking.offset
+                            let beforeOffset = beforeTrackingOffset + tracking.pendingSyncShift
+                            let target = NSRect(origin: NSPoint(x: clip.bounds.minX, y: beforeY + restoreDelta), size: clip.bounds.size)
+                            clip.scroll(to: clip.constrainBoundsRect(target).origin)
+                            scroll.reflectScrolledClipView(clip)
+                            let movedY = clip.bounds.minY - beforeY
+                            #if DEBUG
+                            if traceEnabled {
+                                traceBeforeY = beforeY
+                                traceAfterY = clip.bounds.minY
+                                traceMovedY = movedY
+                                traceSkipped = false
+                                traceReason = nil
+                            }
+                            #endif
+                            restoredOffset = tracking.offset == beforeTrackingOffset ? beforeOffset + movedY : tracking.offset
+                            tracking.resetDrift()
+                            if abs(movedY) <= 0.5 || tracking.offset != beforeTrackingOffset {
+                                tracking.isRestoringHistory = false
+                            } else {
+                                DispatchQueue.main.async { tracking.isRestoringHistory = false }
+                            }
+                        }
+                    }
+                    #if DEBUG
+                    if traceEnabled {
+                        tracking.traceHistoryRestore(
+                            source: "async",
+                            restoreDelta: traceDelta,
+                            historyReaderDelta: traceReaderDelta,
+                            beforeY: traceBeforeY,
+                            afterY: traceAfterY,
+                            movedY: traceMovedY,
+                            skipped: traceSkipped,
+                            reason: traceReason
+                        )
+                    }
+                    #endif
+                    historyRequest = nil
+                    tracking.historyLoadPending = false
+                    tracking.historyReaderDelta = 0
+                    tracking.historySyncShift = 0
+                    anchorsBottomOnGrowth = tracking.isPinnedToBottom
+                    if tracking.isPinnedToBottom { scheduleBottomSnap() }
+                    updateMountedWindow(in: blocks, offset: restoredOffset, height: viewportHeight)
+                    updateJumpButton()
+                }
+                return
+            }
+            #if DEBUG
+            if TimelineTrace.isEnabled {
+                let settleClipY = tracking.probe?.enclosingScrollView?.contentView.bounds.minY
+                let settleReason: StaticString
+                if tracking.isPinnedToBottom {
+                    settleReason = "pinnedToBottom"
+                } else if request.anchorID == nil {
+                    settleReason = "noAnchor"
+                } else {
+                    settleReason = "anchorRemoved"
+                }
+                tracking.traceHistoryRestore(
+                    source: "settle",
+                    restoreDelta: nil,
+                    historyReaderDelta: tracking.historyReaderDelta,
+                    beforeY: settleClipY,
+                    afterY: settleClipY,
+                    movedY: 0,
+                    skipped: true,
+                    reason: settleReason
+                )
+            }
+            #endif
             historyRequest = nil
             tracking.historyLoadPending = false
+            tracking.historyReaderDelta = 0
+            tracking.historySyncShift = 0
             anchorsBottomOnGrowth = tracking.isPinnedToBottom
             if tracking.isPinnedToBottom { scheduleBottomSnap() }
         }
@@ -733,7 +905,7 @@ struct ThreadTimeline: View, Equatable {
                     // time, so scrolling back never stops at a button; the pill is still
                     // there to tap for anyone who gets to it first.
                     Button {
-                        loadEarlier(in: blocks)
+                        loadEarlier(in: blocks, source: "button")
                     } label: {
                         Label("Show \(hidden) earlier messages", systemImage: "chevron.up")
                             .font(.chat(.callout))
@@ -747,7 +919,7 @@ struct ThreadTimeline: View, Equatable {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, TimelineMetrics.rowSpacing)
                     .onScrollVisibilityChange(threshold: 0.1) { isVisible in
-                        if isVisible { loadEarlier(in: blocks) }
+                        if isVisible { loadEarlier(in: blocks, source: "pill") }
                     }
                 }
                 // Eager, not lazy: rows of varying height at the visible edge sent a lazy
@@ -798,18 +970,19 @@ struct ThreadTimeline: View, Equatable {
             .background(alignment: .top) {
                 ScrollViewProbe(
                     usesTimelineTopFade: usesTimelineTopFade,
+                    tracking: tracking,
                     onResolve: { view in
                         tracking.probe = view
                         #if DEBUG
                         CaptureTimelineScrolling.bind(view, geometry: {
                             (tracking.offset, max(0, tracking.offset + tracking.distanceFromBottom))
                         }) { y in
-                            tracking.noteWheelInput()
+                            tracking.noteWheelInput(offsetDelta: y - tracking.offset)
                             position.scrollTo(y: y)
                         }
                         #endif
                     },
-                    onWheel: { tracking.noteWheelInput() }
+                    onWheel: { tracking.noteWheelInput(offsetDelta: $0) }
                 )
                     .frame(width: 0, height: 0)
             }
@@ -899,6 +1072,7 @@ struct ThreadTimeline: View, Equatable {
         .onScrollGeometryChange(for: ScrollMetrics.self, of: ScrollMetrics.init(geometry:)) { old, new in
             scrollChrome.update(travel: new.travel)
             tracking.noteGeometry(offset: new.offset, distanceFromBottom: new.distanceFromBottom, travel: new.travel)
+            tracking.syncProbeBaseline()
             #if DEBUG
             tracking.traceGeometry(new.containerHeight)
             #endif
@@ -908,10 +1082,16 @@ struct ThreadTimeline: View, Equatable {
             // never the reader scrolling, and never a reason to freeze the rows.
             let nudging = tracking.isNudging
             tracking.noteNudgeSeen()
+            let syncShifting = tracking.isSyncShiftingHistory
+            if syncShifting {
+                tracking.isSyncShiftingHistory = false
+                tracking.pendingSyncShift = 0
+            }
+            let restoring = tracking.isRestoringHistory || syncShifting
             let wheelInput = tracking.hasRecentWheelInput
             // Only scroll input or an active scroll phase freezes the rows; layout
             // following new text under a resting reader does not.
-            if !nudging, new.offset != old.offset,
+            if !nudging, !restoring, new.offset != old.offset,
                tracking.isUserScrolling || tracking.isCoasting || wheelInput {
                 noteScrollMovement()
             }
@@ -920,28 +1100,34 @@ struct ThreadTimeline: View, Equatable {
             // unpin a growing reply before the bottom anchor caught up. Require an actual
             // scroll phase or wheel input in this scroll view. Wheel ticks still count
             // when text grows in the same frame, and never borrow another pane's input.
-            let anchorMove = anchorsBottomOnGrowth ? new.contentHeight - old.contentHeight : 0
-            let readerMoved = abs((new.offset - old.offset) - anchorMove) > 1
-            if readerMoved, tracking.isUserScrolling || tracking.isCoasting || wheelInput {
+            let delta = HistoryAnchorMath.readerDelta(
+                offsetChange: new.offset - old.offset,
+                growth: new.contentHeight - old.contentHeight,
+                anchorsBottom: anchorsBottomOnGrowth
+            )
+            let readerMoved = abs(delta) > 1
+            if !nudging, !restoring, readerMoved,
+               tracking.isUserScrolling || tracking.isCoasting || wheelInput {
                 tracking.noteReaderMovement()
             }
-            let scrolled = tracking.isUserScrolling
+            let scrolled = !restoring && (tracking.isUserScrolling
                 || (!nudging && wheelInput && readerMoved
-                    && new.containerHeight == old.containerHeight && !tracking.isCoasting)
+                    && new.containerHeight == old.containerHeight && !tracking.isCoasting))
             guard tracking.placementToken == nil else { return }
             if hidden > 0, new.containerHeight > 0 {
                 if new.travel < new.containerHeight * 2 {
                     let target = max(0, hidden - TimelineWindow.page)
                     warmMarkdown(for: blocks[target..<hidden])
                 }
-                if new.travel < new.containerHeight, !historyLoadPending {
-                    loadEarlier(in: blocks)
+                if new.travel < new.containerHeight, !historyLoadPending,
+                   new.offset < old.offset || tracking.isUserScrolling || tracking.isCoasting {
+                    loadEarlier(in: blocks, source: "geometry")
                 }
             }
             settleMeasurements(in: blocks)
             updateMountedWindow(in: blocks, offset: new.offset, height: new.containerHeight)
             let atRest = !tracking.isUserScrolling && !tracking.isCoasting
-            if atRest, !scrolled {
+            if atRest, !scrolled, !restoring {
                 // The content changed shape under a resting reader and an anchor moved the
                 // offset to follow: a turn folded, rows arrived or left, history landed
                 // above. The lazy stack hears nothing of that and keeps the rows it had built
@@ -985,7 +1171,7 @@ struct ThreadTimeline: View, Equatable {
                 let pinned = new.distanceFromBottom < 48
                 if pinned != tracking.isPinnedToBottom { tracking.isPinnedToBottom = pinned }
                 if !historyLoadPending, pinned != anchorsBottomOnGrowth { anchorsBottomOnGrowth = pinned }
-            } else if (tracking.isPinnedToBottom || old.distanceFromBottom <= 1), atRest, abs(new.distanceFromBottom) > 1 {
+            } else if (tracking.isPinnedToBottom || old.distanceFromBottom <= 1), atRest, !restoring, abs(new.distanceFromBottom) > 1 {
                 // Pinned, at rest, and not at the end: the content grew or reflowed to a new
                 // width, the chat box took height, or the scroll view lost its place (rows
                 // measured after it anchored, a thread opened mid-animation) and is showing
@@ -1017,7 +1203,7 @@ struct ThreadTimeline: View, Equatable {
             guard !Task.isCancelled else { return }
             // The window lands above the viewport over the next frames: still arriving.
             tracking.holdEnd(for: 1.0)
-            loadEarlier(in: blocks, to: TimelineWindow.initial)
+            loadEarlier(in: blocks, to: TimelineWindow.initial, source: "open")
             // A thread that opened on nothing (its first rows never laid out where the
             // bottom anchor put the viewport) is caught a beat from now.
             tracking.armBlankWatch("open")
@@ -1674,6 +1860,15 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     @ObservationIgnored var navigationAction: () -> Void = {}
     @ObservationIgnored var layoutAction: () -> Void = {}
     @ObservationIgnored var historyLoadPending = false
+    @ObservationIgnored var historyReaderDelta: CGFloat = 0
+    @ObservationIgnored var historySyncShift: CGFloat = 0
+    @ObservationIgnored var pendingSyncShift: CGFloat = 0
+    @ObservationIgnored var isSyncShiftingHistory = false
+    @ObservationIgnored var isRestoringHistory = false
+
+    func syncProbeBaseline() {
+        (probe as? ScrollViewProbe.ProbeView)?.syncDocumentBaseline()
+    }
     @ObservationIgnored var warmedMarkdownThreadID: UUID?
     @ObservationIgnored var warmedMarkdownPages: Set<String> = []
     private(set) var measurementRequest = 0
@@ -1694,8 +1889,12 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// enough for the deferred geometry callback, rather than guessing from layout.
     var hasRecentWheelInput: Bool { CACurrentMediaTime() - lastWheelInputAt < 0.15 }
 
-    func noteWheelInput() {
+    /// `offsetDelta` is how far this input moves the offset. During a history load it is
+    /// the reader's own movement: the offset alone cannot tell it apart from an anchor
+    /// that may or may not have absorbed the inserted page in the same frame.
+    func noteWheelInput(offsetDelta: CGFloat = 0) {
         lastWheelInputAt = CACurrentMediaTime()
+        if historyLoadPending, !isRestoringHistory { historyReaderDelta += offsetDelta }
         noteUserNavigation(preservingHistory: historyLoadPending)
     }
 
@@ -2372,6 +2571,13 @@ fileprivate enum TimelineTrace {
         structural(owner, event: "refresh.arm", source: source, disposition: "capped", suppressed: skipped)
     }
 
+    fileprivate enum HistoryEvent {
+        case load(windowStartBefore: Int, windowStartAfter: Int, hidden: Int, anchorID: String?, anchorOffset: CGFloat)
+        case restore(restoreDelta: CGFloat?, historyReaderDelta: CGFloat, movedY: CGFloat, skipped: Bool, reason: StaticString?)
+        case cancel(anchorID: String?, historyReaderDelta: CGFloat)
+        case syncShift(growth: CGFloat, movedY: CGFloat, skipped: Bool, reason: StaticString?)
+    }
+
     fileprivate static func structural(
         _ owner: TimelineScrollTracking,
         event: StaticString,
@@ -2380,7 +2586,8 @@ fileprivate enum TimelineTrace {
         beforeY: CGFloat? = nil,
         afterY: CGFloat? = nil,
         originY: CGFloat? = nil,
-        suppressed: Int? = nil
+        suppressed: Int? = nil,
+        history: HistoryEvent? = nil
     ) {
         guard isEnabled else { return }
         let key = ObjectIdentifier(owner)
@@ -2406,7 +2613,8 @@ fileprivate enum TimelineTrace {
             beforeY: beforeY,
             afterY: afterY,
             originY: originY,
-            suppressed: suppressed
+            suppressed: suppressed,
+            history: history
         )
     }
 
@@ -2434,11 +2642,12 @@ fileprivate enum TimelineTrace {
         originY: CGFloat? = nil,
         entered: Int? = nil,
         left: Int? = nil,
-        suppressed: Int? = nil
+        suppressed: Int? = nil,
+        history: HistoryEvent? = nil
     ) {
         emit { seq in
             var line = String()
-            line.reserveCapacity(480)
+            line.reserveCapacity(560)
             line.append("{\"t\":")
             line.append(String(millis()))
             line.append(",\"seq\":")
@@ -2520,6 +2729,74 @@ fileprivate enum TimelineTrace {
                 line.append(",\"suppressed\":")
                 line.append(String(suppressed))
             }
+            if let history {
+                switch history {
+                case .load(let windowStartBefore, let windowStartAfter, let hidden, let anchorID, let anchorOffset):
+                    line.append(",\"windowStartBefore\":")
+                    line.append(String(windowStartBefore))
+                    line.append(",\"windowStartAfter\":")
+                    line.append(String(windowStartAfter))
+                    line.append(",\"hidden\":")
+                    line.append(String(hidden))
+                    line.append(",\"anchorID\":")
+                    appendStringOrNull(anchorID, to: &line)
+                    line.append(",\"anchorOffset\":")
+                    line.append(num(anchorOffset))
+                case .restore(let restoreDelta, let historyReaderDelta, let movedY, let skipped, let reason):
+                    if beforeY == nil {
+                        line.append(",\"beforeY\":null")
+                    }
+                    if afterY == nil {
+                        line.append(",\"afterY\":null")
+                    }
+                    line.append(",\"restoreDelta\":")
+                    if let restoreDelta {
+                        line.append(num(restoreDelta))
+                    } else {
+                        line.append("null")
+                    }
+                    line.append(",\"historyReaderDelta\":")
+                    line.append(num(historyReaderDelta))
+                    line.append(",\"movedY\":")
+                    line.append(num(movedY))
+                    line.append(",\"skipped\":")
+                    line.append(flag(skipped))
+                    line.append(",\"reason\":")
+                    if let reason {
+                        line.append("\"")
+                        line.append(text(reason))
+                        line.append("\"")
+                    } else {
+                        line.append("null")
+                    }
+                case .cancel(let anchorID, let historyReaderDelta):
+                    line.append(",\"anchorID\":")
+                    appendStringOrNull(anchorID, to: &line)
+                    line.append(",\"historyReaderDelta\":")
+                    line.append(num(historyReaderDelta))
+                case .syncShift(let growth, let movedY, let skipped, let reason):
+                    if beforeY == nil {
+                        line.append(",\"beforeY\":null")
+                    }
+                    if afterY == nil {
+                        line.append(",\"afterY\":null")
+                    }
+                    line.append(",\"growth\":")
+                    line.append(num(growth))
+                    line.append(",\"movedY\":")
+                    line.append(num(movedY))
+                    line.append(",\"skipped\":")
+                    line.append(flag(skipped))
+                    line.append(",\"reason\":")
+                    if let reason {
+                        line.append("\"")
+                        line.append(text(reason))
+                        line.append("\"")
+                    } else {
+                        line.append("null")
+                    }
+                }
+            }
             line.append("}")
             return line
         }
@@ -2571,6 +2848,30 @@ fileprivate enum TimelineTrace {
     private static func text(_ value: StaticString) -> String {
         value.withUTF8Buffer { String(decoding: $0, as: UTF8.self) }
     }
+
+    private static func appendStringOrNull(_ value: String?, to line: inout String) {
+        guard let value else {
+            line.append("null")
+            return
+        }
+        line.append("\"")
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": line.append("\\\"")
+            case "\\": line.append("\\\\")
+            case "\n": line.append("\\n")
+            case "\r": line.append("\\r")
+            case "\t": line.append("\\t")
+            default:
+                if scalar.value < 0x20 {
+                    line.append(String(format: "\\u%04x", locale: posix, scalar.value))
+                } else {
+                    line.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        line.append("\"")
+    }
 }
 
 extension TimelineScrollTracking {
@@ -2601,6 +2902,95 @@ extension TimelineScrollTracking {
             beforeY: beforeY,
             afterY: afterY,
             originY: originY
+        )
+    }
+
+    fileprivate func traceHistoryLoad(
+        source: StaticString,
+        windowStartBefore: Int,
+        windowStartAfter: Int,
+        hidden: Int,
+        anchorID: String?,
+        anchorOffset: CGFloat
+    ) {
+        guard TimelineTrace.isEnabled else { return }
+        TimelineTrace.structural(
+            self,
+            event: "history.load",
+            source: source,
+            history: .load(
+                windowStartBefore: windowStartBefore,
+                windowStartAfter: windowStartAfter,
+                hidden: hidden,
+                anchorID: anchorID,
+                anchorOffset: anchorOffset
+            )
+        )
+    }
+
+    fileprivate func traceHistoryRestore(
+        source: StaticString,
+        restoreDelta: CGFloat?,
+        historyReaderDelta: CGFloat,
+        beforeY: CGFloat?,
+        afterY: CGFloat?,
+        movedY: CGFloat,
+        skipped: Bool,
+        reason: StaticString?
+    ) {
+        guard TimelineTrace.isEnabled else { return }
+        TimelineTrace.structural(
+            self,
+            event: "history.restore",
+            source: source,
+            beforeY: beforeY,
+            afterY: afterY,
+            history: .restore(
+                restoreDelta: restoreDelta,
+                historyReaderDelta: historyReaderDelta,
+                movedY: movedY,
+                skipped: skipped,
+                reason: reason
+            )
+        )
+    }
+
+    fileprivate func traceHistoryCancel(
+        source: StaticString,
+        anchorID: String?,
+        historyReaderDelta: CGFloat
+    ) {
+        guard TimelineTrace.isEnabled else { return }
+        TimelineTrace.structural(
+            self,
+            event: "history.cancel",
+            source: source,
+            history: .cancel(anchorID: anchorID, historyReaderDelta: historyReaderDelta)
+        )
+    }
+
+    fileprivate func traceHistorySyncShift(
+        source: StaticString,
+        growth: CGFloat,
+        beforeY: CGFloat?,
+        afterY: CGFloat?,
+        movedY: CGFloat,
+        skipped: Bool,
+        reason: StaticString?
+    ) {
+        guard TimelineTrace.isEnabled else { return }
+        TimelineTrace.structural(
+            self,
+            event: "history.syncShift",
+            source: source,
+            beforeY: beforeY,
+            afterY: afterY,
+            history: .syncShift(
+                growth: growth,
+                movedY: movedY,
+                skipped: skipped,
+                reason: reason
+            )
         )
     }
 
@@ -2657,8 +3047,9 @@ private struct ContinuationSourceLabel: View {
 /// from here. Panels leave `usesTimelineTopFade` false.
 private struct ScrollViewProbe: NSViewRepresentable {
     var usesTimelineTopFade = false
+    var tracking: TimelineScrollTracking
     let onResolve: (NSView) -> Void
-    let onWheel: () -> Void
+    let onWheel: (CGFloat) -> Void
 
     final class Coordinator {
         var fade: TimelineTopFade?
@@ -2684,6 +3075,7 @@ private struct ScrollViewProbe: NSViewRepresentable {
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
         let probe = nsView as? ProbeView
         probe?.removeWheelMonitor()
+        probe?.removeDocumentObserver()
         coordinator.fade?.detach()
         probe?.fade = nil
     }
@@ -2692,21 +3084,34 @@ private struct ScrollViewProbe: NSViewRepresentable {
     private func bind(_ probe: ProbeView, fade: TimelineTopFade?) {
         let resolve = onResolve
         probe.fade = fade
+        probe.tracking = tracking
         probe.usesTimelineTopFade = usesTimelineTopFade
         probe.onResolve = { view in
             resolve(view)
             (view as? ProbeView)?.syncTopFade()
         }
         probe.onWheel = onWheel
-        if probe.window != nil { probe.syncTopFade() }
+        if probe.window != nil {
+            probe.syncTopFade()
+            probe.syncDocumentObserver()
+        }
     }
 
     fileprivate final class ProbeView: NSView {
         var onResolve: (NSView) -> Void = { _ in }
-        var onWheel: () -> Void = {}
+        var onWheel: (CGFloat) -> Void = { _ in }
         var usesTimelineTopFade = false
         var fade: TimelineTopFade?
+        weak var tracking: TimelineScrollTracking?
         private var wheelMonitor: Any?
+        private var frameObserver: NSObjectProtocol?
+        private weak var observedDocumentView: NSView?
+        private var enabledDocumentFramePosts = false
+        private var lastDocumentHeight: CGFloat = 0
+        private var lastClipMinY: CGFloat = 0
+        /// Wheel movement since the last document-frame observation, in offset points.
+        private var wheelSinceObservation: CGFloat = 0
+        private var isSyncShifting = false
         #if DEBUG
         var captureScroll: ((CGFloat) -> Void)?
         var captureGeometry: (() -> (offset: CGFloat, range: CGFloat))?
@@ -2719,6 +3124,137 @@ private struct ScrollViewProbe: NSViewRepresentable {
         func removeWheelMonitor() {
             if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
             wheelMonitor = nil
+        }
+
+        func removeDocumentObserver() {
+            if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+            frameObserver = nil
+            if enabledDocumentFramePosts, let observedDocumentView {
+                observedDocumentView.postsFrameChangedNotifications = false
+            }
+            enabledDocumentFramePosts = false
+            observedDocumentView = nil
+        }
+
+        func syncDocumentObserver() {
+            guard window != nil, let scrollView = enclosingScrollView,
+                  let documentView = scrollView.documentView else {
+                removeDocumentObserver()
+                return
+            }
+            guard observedDocumentView !== documentView || frameObserver == nil else { return }
+            removeDocumentObserver()
+            if !documentView.postsFrameChangedNotifications {
+                documentView.postsFrameChangedNotifications = true
+                enabledDocumentFramePosts = true
+            }
+            observedDocumentView = documentView
+            lastDocumentHeight = documentView.frame.height
+            lastClipMinY = scrollView.contentView.bounds.minY
+            // queue: nil runs synchronously during AppKit layout before the frame is committed.
+            frameObserver = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification,
+                object: documentView,
+                queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.documentFrameDidChange()
+                }
+            }
+        }
+
+        func syncDocumentBaseline() {
+            guard let scrollView = enclosingScrollView,
+                  let documentView = scrollView.documentView else { return }
+            if observedDocumentView !== documentView { syncDocumentObserver() }
+            lastDocumentHeight = documentView.frame.height
+            lastClipMinY = scrollView.contentView.bounds.minY
+        }
+
+        private func documentFrameDidChange() {
+            guard !isSyncShifting,
+                  let scrollView = enclosingScrollView,
+                  let documentView = scrollView.documentView,
+                  documentView === observedDocumentView else { return }
+            let newHeight = documentView.frame.height
+            let clip = scrollView.contentView
+            let beforeY = clip.bounds.minY
+            let growth = newHeight - lastDocumentHeight
+            let clipMinYChange = beforeY - lastClipMinY
+            let readerMovement = wheelSinceObservation
+            wheelSinceObservation = 0
+            lastDocumentHeight = newHeight
+            lastClipMinY = beforeY
+            guard let tracking, tracking.historyLoadPending else { return }
+            guard growth > 1 else { return }
+            let shift = HistoryAnchorMath.syncShift(
+                historyLoadPending: tracking.historyLoadPending,
+                isRestoringHistory: tracking.isRestoringHistory,
+                isNudging: tracking.isNudging,
+                isPinnedToBottom: tracking.isPinnedToBottom,
+                growth: growth,
+                clipMinYChange: clipMinYChange,
+                readerMovement: readerMovement
+            )
+            guard shift > 0 else {
+                #if DEBUG
+                if TimelineTrace.isEnabled {
+                    let reason: StaticString
+                    if tracking.isRestoringHistory {
+                        reason = "restoringHistory"
+                    } else if tracking.isNudging {
+                        reason = "nudging"
+                    } else if tracking.isPinnedToBottom {
+                        reason = "pinnedToBottom"
+                    } else {
+                        reason = "alreadyAnchored"
+                    }
+                    tracking.traceHistorySyncShift(
+                        source: "layout",
+                        growth: growth,
+                        beforeY: beforeY,
+                        afterY: beforeY,
+                        movedY: 0,
+                        skipped: true,
+                        reason: reason
+                    )
+                }
+                #endif
+                return
+            }
+            let wasSyncShifting = tracking.isSyncShiftingHistory
+            tracking.isSyncShiftingHistory = true
+            isSyncShifting = true
+            defer { isSyncShifting = false }
+            let target = NSRect(origin: NSPoint(x: clip.bounds.minX, y: beforeY + shift), size: clip.bounds.size)
+            clip.scroll(to: clip.constrainBoundsRect(target).origin)
+            scrollView.reflectScrolledClipView(clip)
+            let afterY = clip.bounds.minY
+            lastDocumentHeight = documentView.frame.height
+            lastClipMinY = afterY
+            let movedY = afterY - beforeY
+            if abs(movedY) > 0.5 {
+                tracking.historySyncShift += movedY
+                if tracking.isSyncShiftingHistory {
+                    tracking.pendingSyncShift += movedY
+                }
+                tracking.resetDrift()
+            } else if !wasSyncShifting {
+                tracking.isSyncShiftingHistory = false
+            }
+            #if DEBUG
+            if TimelineTrace.isEnabled {
+                tracking.traceHistorySyncShift(
+                    source: "layout",
+                    growth: growth,
+                    beforeY: beforeY,
+                    afterY: afterY,
+                    movedY: movedY,
+                    skipped: abs(movedY) <= 0.5,
+                    reason: abs(movedY) <= 0.5 ? "unmoved" : nil
+                )
+            }
+            #endif
         }
 
         /// AppKit delivers these view callbacks on the main thread.
@@ -2744,6 +3280,7 @@ private struct ScrollViewProbe: NSViewRepresentable {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             removeWheelMonitor()
+            removeDocumentObserver()
             guard window != nil else {
                 let fade = self.fade
                 MainActor.assumeIsolated { fade?.detach() }
@@ -2752,6 +3289,7 @@ private struct ScrollViewProbe: NSViewRepresentable {
             onResolve(self)
             let fade = self.fade
             MainActor.assumeIsolated { fade?.relayout() }
+            syncDocumentObserver()
             // AppKit local monitors observe input before dispatch and return it unchanged.
             // https://developer.apple.com/documentation/appkit/nsevent/addlocalmonitorforevents(matching:handler:)
             wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
@@ -2766,7 +3304,12 @@ private struct ScrollViewProbe: NSViewRepresentable {
                 #if DEBUG
                 MainActor.assumeIsolated { CaptureTimelineScrolling.noteWheel() }
                 #endif
-                onWheel()
+                // Positive deltas move content down, toward the top. Line-based wheels
+                // scroll by the scroll view's line height per unit.
+                let points = event.hasPreciseScrollingDeltas
+                    ? event.scrollingDeltaY : event.scrollingDeltaY * scrollView.verticalLineScroll
+                wheelSinceObservation -= points
+                onWheel(-points)
                 return event
             }
         }
@@ -3654,6 +4197,48 @@ enum TimelineWindow {
     /// The most blocks the eager stack holds while the reader follows the end; past it the
     /// window drops back to `initial`.
     static let eagerLimit = 96
+}
+
+enum HistoryAnchorMath {
+    static func readerDelta(offsetChange: CGFloat, growth: CGFloat, anchorsBottom: Bool) -> CGFloat {
+        if anchorsBottom, growth > 1, abs(offsetChange - growth) < abs(offsetChange) {
+            return offsetChange - growth
+        }
+        return offsetChange
+    }
+
+    /// Synchronous shift during AppKit layout when an earlier page grows the document view
+    /// during a pending history load without SwiftUI's bottom anchor moving the clip origin.
+    static func syncShift(
+        historyLoadPending: Bool,
+        isRestoringHistory: Bool,
+        isNudging: Bool,
+        isPinnedToBottom: Bool,
+        growth: CGFloat,
+        clipMinYChange: CGFloat,
+        readerMovement: CGFloat = 0
+    ) -> CGFloat {
+        guard historyLoadPending,
+              !isRestoringHistory,
+              !isNudging,
+              !isPinnedToBottom,
+              growth > 1 else {
+            return 0
+        }
+        // The clip can move by the reader's wheel and the bottom anchor in one interval;
+        // only the part the reader did not make tells whether the anchor absorbed growth.
+        let anchorMove = clipMinYChange - readerMovement
+        if abs(anchorMove - growth) < abs(anchorMove) {
+            return 0
+        }
+        return growth
+    }
+
+    /// `viewportFrame` maps content y to `frame.minY + topInset - offset`, so positive `readerDelta`
+    /// (increasing `offset`, content moving up) lowers the anchor's expected `minY` to `anchorOffset - readerDelta`.
+    static func restoreDelta(anchorMinY: CGFloat, anchorOffset: CGFloat, readerDelta: CGFloat) -> CGFloat {
+        anchorMinY - (anchorOffset - readerDelta)
+    }
 }
 
 /// Per-turn facts computed once per timeline pass, so rows never scan the thread to

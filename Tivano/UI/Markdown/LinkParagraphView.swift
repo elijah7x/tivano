@@ -17,6 +17,7 @@ struct LinkParagraphView: NSViewRepresentable {
     var revision: Int = 0
     var mentions: [HydraPersona] = []
     var targets: [String: HydraMentionTarget] = [:]
+    var linkBase: String? = nil
     var onOpenHead: ((URL) -> Void)?
 
     /// Receives the text view, so the hover that sets the cursor can ask it what is under
@@ -26,7 +27,10 @@ struct LinkParagraphView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> LinkTextView {
         let view = LinkTextView()
+        let base = linkBase ?? context.environment.markdownLinkBase
+        context.coordinator.linkBase = base
         view.delegate = context.coordinator
+        view.linkBase = base
         view.mergeTarget = context.environment.mergeRequestTarget
         view.selectionOwner = context.environment.markdownSelectionOwner
         view.passesProseThrough = !context.environment.markdownBlockSelection
@@ -36,6 +40,9 @@ struct LinkParagraphView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: LinkTextView, context: Context) {
+        let base = linkBase ?? context.environment.markdownLinkBase
+        context.coordinator.linkBase = base
+        view.linkBase = base
         view.selectionOwner = context.environment.markdownSelectionOwner
         view.passesProseThrough = !context.environment.markdownBlockSelection
         view.onOpenHead = onOpenHead
@@ -82,6 +89,7 @@ struct LinkParagraphView: NSViewRepresentable {
     /// hand-off, which holds the thread's runtime: drop both when it goes away.
     static func dismantleNSView(_ view: LinkTextView, coordinator: Coordinator) {
         view.delegate = nil
+        view.linkBase = nil
         view.mergeTarget = nil
         view.selectionOwner = nil
         view.streamVeil.detach(view)
@@ -101,13 +109,14 @@ struct LinkParagraphView: NSViewRepresentable {
         var lastMentions: [String] = []
         var lastTargets: [String: HydraMentionTarget] = [:]
         var lastHeads: [String: URL] = [:]
+        var linkBase: String?
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             if let url = link as? URL {
-                MarkdownLinkOpener.open(url)
+                MarkdownLinkOpener.open(url, base: linkBase)
                 return true
             }
             if let string = link as? String, let url = URL(string: string) {
-                MarkdownLinkOpener.open(url)
+                MarkdownLinkOpener.open(url, base: linkBase)
                 return true
             }
             return false
@@ -256,23 +265,15 @@ struct LinkParagraphView: NSViewRepresentable {
 }
 
 enum MarkdownLinkOpener {
-    static func open(_ url: URL) {
-        guard url.scheme == nil, url.host == nil, url.query == nil, url.fragment == nil,
-              url.path.hasPrefix("/") else {
-            NSWorkspace.shared.open(url)
-            return
+    static func open(_ url: URL, base: String?) {
+        switch MarkdownLinkTarget.resolve(url, base: base) {
+        case .web(let u):
+            NSWorkspace.shared.open(u)
+        case .file(let u):
+            NSWorkspace.shared.open(u)
+        case .missing:
+            NSSound.beep()
         }
-
-        var path = url.path
-        if !FileManager.default.fileExists(atPath: path),
-           let colon = path.lastIndex(of: ":"),
-           let line = Int(path[path.index(after: colon)...]), line > 0 {
-            let filePath = String(path[..<colon])
-            var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: filePath, isDirectory: &isDirectory),
-               !isDirectory.boolValue { path = filePath }
-        }
-        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 }
 
@@ -295,6 +296,10 @@ private struct MergeRequestTargetKey: EnvironmentKey {
     static let defaultValue: MergeRequestTarget? = nil
 }
 
+private struct MarkdownLinkBaseKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
 extension EnvironmentValues {
     /// Identity of the enclosing message menu; unrelated to the rendered text or frame.
     @Entry var markdownSelectionOwner: UUID? = nil
@@ -302,6 +307,11 @@ extension EnvironmentValues {
     var mergeRequestTarget: MergeRequestTarget? {
         get { self[MergeRequestTargetKey.self] }
         set { self[MergeRequestTargetKey.self] = newValue }
+    }
+
+    var markdownLinkBase: String? {
+        get { self[MarkdownLinkBaseKey.self] }
+        set { self[MarkdownLinkBaseKey.self] = newValue }
     }
 }
 
@@ -323,6 +333,8 @@ final class LinkTextView: NSTextView {
     /// Receives a merge or pull request link when its popover's Merge row is chosen. Nil
     /// leaves Merge off every link's popover.
     var mergeTarget: MergeRequestTarget?
+
+    var linkBase: String?
 
     /// Value-only identity supplied by the message menu, never a row or runtime reference.
     var selectionOwner: UUID?
@@ -507,13 +519,48 @@ final class LinkTextView: NSTextView {
         presentLinkPopover(for: event) ? nil : super.menu(for: event)
     }
 
+    // Half-point line spacing leaves bottom selection pixels stranded on partial redraws.
+    override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
+        guard !rect.isEmpty, !rect.isInfinite, !rect.isNull else {
+            super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
+            return
+        }
+        var dirty = bounds.intersection(rect.insetBy(dx: -1, dy: -2))
+        guard !dirty.isEmpty else {
+            super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
+            return
+        }
+        if window != nil {
+            dirty = backingAlignedRect(dirty, options: .alignAllEdgesOutward)
+        }
+        super.setNeedsDisplay(dirty, avoidAdditionalLayout: flag)
+    }
+
+    // Half-point line spacing leaves bottom selection pixels stranded when clearing selection.
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        let hadSelection = selectedRange().length > 0
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
+        if hadSelection && selectedRange().length == 0 {
+            needsDisplay = true
+        }
+    }
+
+    // Half-point line spacing leaves active selection pixels on resign; keep selection for Copy.
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            needsDisplay = true
+        }
+        return resigned
+    }
+
     private func presentLinkPopover(for event: NSEvent) -> Bool {
         let point = convert(event.locationInWindow, from: nil)
         guard let (url, range) = linkAndRange(at: point), let layoutManager, let textContainer else { return false }
         let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
         if rect.isEmpty { rect = NSRect(x: point.x, y: point.y, width: 1, height: 1) }
-        LinkPopover.shared.show(url: url, mergeTarget: mergeTarget, relativeTo: rect, of: self)
+        LinkPopover.shared.show(url: url, linkBase: linkBase, mergeTarget: mergeTarget, relativeTo: rect, of: self)
         return true
     }
 

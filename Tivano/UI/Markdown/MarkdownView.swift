@@ -1193,6 +1193,7 @@ struct InlineText: View {
     @Environment(\.markdownStreaming) private var streaming
     @Environment(\.hydraMentionPersonas) private var hydraMentionPersonas
     @Environment(\.hydraMentionTargets) private var hydraMentionTargets
+    @Environment(\.markdownLinkBase) private var markdownLinkBase
     @Environment(\.openURL) private var openURL
     @State private var faviconRevision = 0
     /// The link paragraph's text view, for the hover that sets the cursor.
@@ -1237,7 +1238,7 @@ struct InlineText: View {
             // paragraph (and its styled text) alive after it scrolls away.
             let linkBox = linkView
             let targets = hydraMentionTargets
-            LinkParagraphView(source: source, pointSize: scaled, codePointSize: TypeScale.shared.code(max(9, scaled - CGFloat(TypeScale.shared.content - TypeScale.stockContent) - 1)), dimmed: dimmed, streaming: streaming, revision: faviconRevision, mentions: hydraMentionPersonas, targets: hydraMentionTargets, onOpenHead: { url in openURL(url) }, onHost: { [weak linkBox] view in linkBox?.value = view })
+            LinkParagraphView(source: source, pointSize: scaled, codePointSize: TypeScale.shared.code(max(9, scaled - CGFloat(TypeScale.shared.content - TypeScale.stockContent) - 1)), dimmed: dimmed, streaming: streaming, revision: faviconRevision, mentions: hydraMentionPersonas, targets: hydraMentionTargets, linkBase: markdownLinkBase, onOpenHead: { url in openURL(url) }, onHost: { [weak linkBox] view in linkBox?.value = view })
                 .frame(maxWidth: hugsContent ? nil : .infinity, alignment: .leading)
                 .alignmentGuide(.firstTextBaseline) { _ in ascender }
                 .alignmentGuide(.lastTextBaseline) { $0.height - lineHeight + ascender }

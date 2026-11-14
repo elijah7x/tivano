@@ -7,6 +7,9 @@ ROOT = Path(__file__).resolve().parents[1]
 HYDRA = ROOT / 'Tivano/App/AppModel+Hydra.swift'
 HYDRA2 = ROOT / 'Tivano/App/AppModel+Hydra2.swift'
 PANEL = ROOT / 'Tivano/App/Views/Chat/HydraPanel.swift'
+RUNTIME = ROOT / 'Tivano/App/Runtime/ThreadRuntime.swift'
+MODELS = ROOT / 'Tivano/Core/Models/Hydra.swift'
+PROMPTS = ROOT / 'Tivano/Core/Models/HydraPrompts+V2.swift'
 
 
 def function_body(text, marker):
@@ -38,6 +41,9 @@ def main():
     hydra = HYDRA.read_text(encoding='utf-8')
     hydra2 = HYDRA2.read_text(encoding='utf-8')
     panel = PANEL.read_text(encoding='utf-8')
+    runtime = RUNTIME.read_text(encoding='utf-8')
+    models = MODELS.read_text(encoding='utf-8')
+    prompts = PROMPTS.read_text(encoding='utf-8')
 
     body = function_body(hydra, 'func hydraHeadTurnFinished(_ head: ChatThread, status: TurnStatus)')
     if body is None:
@@ -77,6 +83,88 @@ def main():
             'Continue head item': 'Chrome.localized("Continue head")',
             'manual continuation action': 'model.continueFailedHydraHead(head.id)',
         }, 'HydraPanel.panelMenu()', failures)
+
+    start_turn = function_body(runtime, 'private func startTurn(')
+    if start_turn is None:
+        failures.append('could not extract startTurn(); update the extraction marker')
+    else:
+        require_markers(start_turn, {
+            'headBudget non-user interrupt': 'self.interrupt(byUser: false)',
+            'headBudget stop flag': 'self.headBudgetStop = true',
+            'final-report start preservation': 'if turns.count > 1, !isFinalReport',
+        }, 'startTurn()', failures)
+
+    stop_reason = function_body(models, 'enum StopReason:')
+    if stop_reason is None:
+        failures.append('could not extract HydraHeadInfo.StopReason; update the extraction marker')
+    else:
+        require_markers(stop_reason, {
+            'stalled case': 'case stalled',
+            'budget case': 'case budget',
+        }, 'HydraHeadInfo.StopReason', failures)
+
+    finish_head = function_body(hydra, 'func finishHydraHead(')
+    if finish_head is None:
+        failures.append('could not extract finishHydraHead(); update the extraction marker')
+    else:
+        require_markers(finish_head, {
+            'budget stop consumption': 'consumeHeadBudgetStop()',
+            'budget StopReason assignment': '$0.stopReason = stalled ? .stalled : (budget ? .budget : nil)',
+        }, 'finishHydraHead()', failures)
+
+    stop_head = function_body(hydra, 'func stopHydraHead(')
+    if stop_head is None:
+        failures.append('could not extract stopHydraHead(); update the extraction marker')
+    else:
+        require_markers(stop_head, {
+            'manual stop clears budget flag': 'clearHeadBudgetStop()',
+        }, 'stopHydraHead()', failures)
+
+    report_message = function_body(prompts, 'static func v2ReportMessage(')
+    if report_message is None:
+        failures.append('could not extract v2ReportMessage(); update the extraction marker')
+    else:
+        require_markers(report_message, {
+            'budget stopped case': 'case .budget:',
+            'budget outcome wording': 'ran out of its time budget before finishing',
+            'user-only stop closing guard': '$0.status == .stopped && $0.stopReason == nil',
+            'budget closing guidance': '$0.status == .stopped && $0.stopReason == .budget',
+        }, 'v2ReportMessage()', failures)
+        budget_pos = report_message.find('case .budget:')
+        nil_pos = report_message.find('case nil:')
+        user_stopped_pos = report_message.find('stopped by the user before finishing')
+        if budget_pos >= 0 and nil_pos >= 0 and user_stopped_pos >= 0:
+            if budget_pos < user_stopped_pos < nil_pos:
+                failures.append('v2ReportMessage() must not emit "stopped by the user" for StopReason.budget')
+        elif user_stopped_pos < 0 or nil_pos < 0:
+            failures.append('v2ReportMessage() is missing the user-stopped nil branch')
+
+    status_text = function_body(panel, 'enum HydraStatusText')
+    if status_text is None:
+        failures.append('could not extract HydraStatusText; update the extraction marker')
+    else:
+        require_markers(status_text, {
+            'budget status case': 'case .budget:',
+            'budget footer label': '"Out of time"',
+            'budget short/long label': '"out of time"',
+        }, 'HydraStatusText', failures)
+
+    settle_job = function_body(hydra2, 'func settleHydraJob(')
+    release_copies = function_body(hydra2, 'func releaseHydraJobCopies(')
+    if settle_job is None:
+        failures.append('could not extract settleHydraJob(); update the extraction marker')
+    else:
+        require_markers(settle_job, {
+            'completed branch releases via filtered helper': 'await releaseHydraJobCopies(of: leadID, jobID: job.id)',
+        }, 'settleHydraJob()', failures)
+    if release_copies is None:
+        failures.append('could not extract releaseHydraJobCopies(); update the extraction marker')
+    else:
+        require_markers(release_copies, {
+            'completed status check': 'info.status == .completed',
+            'landed check': 'info.landing?.landed == true',
+            'unchanged tree check': '(try? await Git(copy).currentTree()) == base',
+        }, 'releaseHydraJobCopies()', failures)
 
     if failures:
         for failure in failures:

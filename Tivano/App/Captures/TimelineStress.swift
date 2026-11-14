@@ -18,6 +18,7 @@ enum TimelineStress {
 
     private static let longThreadID = WebsiteCaptures.composerThreadID
     private static let shortThreadID = WebsiteCaptures.freshThreadID
+    private static let fastHistoryThreadID = WebsiteCaptures.ID.diffPopover
 
     static func run(model: AppModel) async {
         guard let output = CaptureRun.outputDirectory else { return }
@@ -72,7 +73,505 @@ enum TimelineStress {
         exit(missingStills.isEmpty ? 0 : 1)
     }
 
+    static func runHistory(model: AppModel) async {
+        guard CaptureRun.isEnabled, let output = CaptureRun.outputDirectory else { return }
+        phases.removeAll()
+        missingStills.removeAll()
+        await model.bootstrap()
+        guard model.isLibraryLoaded, !model.threads.isEmpty else {
+            WebsiteCaptures.log("stress library failed to load")
+            exit(1)
+        }
+        deadline = Date.now.addingTimeInterval(budgetSeconds)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(budgetSeconds))
+            WebsiteCaptures.log("stress out of time, quitting")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        model.settings.hasSeenHydraIntro = true
+        model.settings.hydraEnabled = false
+        WebsiteCaptures.log("history-scroll start \(output.path)")
+
+        let stage = Stage(model: model)
+        stage.show(size: NSSize(width: 1320, height: 860))
+        await stage.ensureActive()
+        guard let window = appWindow(), NSApp.isActive, window.isKeyWindow else {
+            note("blocked", "foreground desktop unavailable; unlock the host before running")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        guard let content = try? await SCShareableContent.currentProcess, !content.displays.isEmpty else {
+            note("blocked", "no capturable display for this process")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        if model.sidebar.isVisible { model.sidebar.toggle() }
+        // Keep the target thread unmounted while seeding so opening it starts on the
+        // initial tail window (12 blocks, 48 hidden) rather than the live-append path.
+        model.selectedThreadID = nil
+        try? await Task.sleep(for: .milliseconds(300))
+        let recorder = Recorder(output: output, stage: stage)
+
+        await historyScroll(model, recorder, stage)
+
+        note("done", "quitting")
+        saveReport(listFiles: true)
+        exit(missingStills.isEmpty ? 0 : 1)
+    }
+
     // MARK: - Phases
+
+    private static func historyScroll(_ model: AppModel, _ recorder: Recorder, _ stage: Stage) async {
+        let seeded = await seedHistory(
+            model,
+            threadID: shortThreadID,
+            count: 60,
+            noteName: "history-seed",
+            minSecondsLeft: 50
+        )
+        guard seeded > 0, secondsLeft() > 40 else {
+            note("history-open", "skipped after seeding \(seeded) turns, \(Int(secondsLeft()))s left")
+            return
+        }
+
+        guard let openedSlow = await openAndSettleHistory(
+            model,
+            threadID: shortThreadID,
+            recorder: recorder,
+            stage: stage,
+            shotName: "history-bottom",
+            noteName: "history-open",
+            turnsSeeded: seeded,
+            minSecondsLeft: 38
+        ) else { return }
+        let window = openedSlow.window
+        let scroll = openedSlow.scroll
+
+        let calibration = await calibrateUpwardWheel(window: window, scroll: scroll)
+        let directWheel = calibration.direct
+        let upSign = calibration.upSign
+        let wheelMode = calibration.mode
+
+        // Return to the exact bottom before step 1 so slow scroll starts cleanly at Turn 60.
+        var resetSteps = 0
+        while let gap = bottomGap(scroll), gap > 4, resetSteps < 8, secondsLeft() > 35 {
+            await burst(-upSign * 160, times: 3, window: window, scroll: scroll, direct: directWheel)
+            resetSteps += 1
+        }
+        try? await Task.sleep(for: .milliseconds(250))
+
+        let baselineViewport = max(240, unobstructedViewportRect(in: scroll).height)
+        var prevDocHeight = Int((scroll.documentView?.bounds.height ?? 0).rounded())
+        let estimatedPageHeight = max(
+            Double(baselineViewport) * 1.2,
+            Double(prevDocHeight) * Double(TimelineWindow.page) / Double(TimelineWindow.initial)
+        )
+        let twoPageThreshold = Int((estimatedPageHeight * 2.0).rounded())
+
+        let slowStop = RecordingStop()
+        let slowMaxSeconds = max(10.0, secondsLeft() - 24)
+        let slowRecording = Task { await recordWindow("history-slow", seconds: slowMaxSeconds, stop: slowStop) }
+        let startWait = Date.now.addingTimeInterval(1.5)
+        while !slowStop.started, Date.now < startWait {
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+
+        var slowSteps = 0
+        var totalGrowth = 0
+        var maxStepGrowth = 0
+        var stepsToTop: Int?
+
+        for step in 1...40 {
+            guard secondsLeft() > 28 else {
+                note("history-slow-budget", "stopped before step \(step), \(Int(secondsLeft()))s left")
+                break
+            }
+            guard let liveWindow = appWindow(), let liveScroll = timelineScroll(in: liveWindow) else {
+                note("history-slow-abort", "lost timeline scroll view at step \(step)")
+                break
+            }
+            let viewport = max(240, unobstructedViewportRect(in: liveScroll).height)
+            let tickPixels = Int32(max(24, (viewport * 0.2).rounded())) * upSign
+            for tick in 0..<3 {
+                sendWheel(tickPixels, window: liveWindow, scroll: liveScroll, direct: directWheel)
+                if tick < 2 { try? await Task.sleep(for: .milliseconds(20)) }
+            }
+            let settleMs = secondsLeft() > 75 ? 360 : 180
+            try? await Task.sleep(for: .milliseconds(settleMs))
+
+            let offset = scrollOffset(liveScroll)
+            let docHeight = Int((liveScroll.documentView?.bounds.height ?? 0).rounded())
+            let growth = docHeight - prevDocHeight
+            prevDocHeight = docHeight
+            slowSteps = step
+            totalGrowth += growth
+            if growth > maxStepGrowth { maxStepGrowth = growth }
+
+            let topTurn = visibleTopTurn(in: liveScroll).map(String.init) ?? "unknown"
+            let shotName = String(format: "history-slow-%02d", step)
+            await shoot(recorder, stage, shotName)
+            note(shotName, "step=\(step) offset=\(offset) docHeight=\(docHeight) growth=\(growth) topTurn=\(topTurn) wheel=\(wheelMode)")
+
+            if offset == 0, mountedLowestTurn(in: liveScroll) == 1 {
+                try? await Task.sleep(for: .milliseconds(120))
+                let settledOffset = scrollOffset(liveScroll)
+                let settledHeight = Int((liveScroll.documentView?.bounds.height ?? 0).rounded())
+                if settledOffset == 0, settledHeight == docHeight {
+                    stepsToTop = step
+                    break
+                }
+            }
+        }
+
+        try? await Task.sleep(for: .milliseconds(150))
+        slowStop.stopped = true
+        await slowRecording.value
+
+        var fastEvents = 0
+        var fastTopTurnText = "skipped"
+
+        if secondsLeft() > 22 {
+            // Keep the second thread unmounted while seeding so opening it starts on the
+            // initial tail window (12 blocks, 48 hidden), matching the slow-scroll opening.
+            model.selectedThreadID = nil
+            try? await Task.sleep(for: .milliseconds(300))
+
+            let fastSeeded = await seedHistory(
+                model,
+                threadID: fastHistoryThreadID,
+                count: 60,
+                noteName: "history-fast-seed",
+                minSecondsLeft: 14
+            )
+            if fastSeeded > 0,
+               let openedFast = await openAndSettleHistory(
+                   model,
+                   threadID: fastHistoryThreadID,
+                   recorder: recorder,
+                   stage: stage,
+                   shotName: "history-fast-bottom",
+                   noteName: "history-fast-open",
+                   turnsSeeded: fastSeeded,
+                   minSecondsLeft: 12
+               ) {
+                let fastWindow = openedFast.window
+                let fastScroll = openedFast.scroll
+
+                let fastStop = RecordingStop()
+                let fastMaxSeconds = max(12.0, secondsLeft() - 4)
+                let fastRecording = Task { await recordWindow("history-fast", seconds: fastMaxSeconds, stop: fastStop) }
+                let fastWait = Date.now.addingTimeInterval(1.5)
+                while !fastStop.started, Date.now < fastWait {
+                    try? await Task.sleep(for: .milliseconds(40))
+                }
+                try? await Task.sleep(for: .milliseconds(120))
+
+                let fastTick = upSign * 44
+                for _ in 0..<400 {
+                    guard secondsLeft() > 5 else { break }
+                    sendWheel(fastTick, window: fastWindow, scroll: fastScroll, direct: directWheel)
+                    fastEvents += 1
+                    try? await Task.sleep(for: .milliseconds(16))
+                    if fastEvents.isMultiple(of: 5),
+                       let topTurn = visibleTopTurn(in: fastScroll),
+                       topTurn <= 20 {
+                        break
+                    }
+                }
+
+                let settleSeconds = min(1.0, max(0, secondsLeft() - 3))
+                if settleSeconds > 0.05 {
+                    try? await Task.sleep(for: .seconds(settleSeconds))
+                }
+                fastStop.stopped = true
+                await fastRecording.value
+
+                let fastEndOffset = scrollOffset(fastScroll)
+                let fastEndHeight = Int((fastScroll.documentView?.bounds.height ?? 0).rounded())
+                let fastEndGap = bottomGap(fastScroll) ?? -1
+                let fastEndTopTurn = visibleTopTurn(in: fastScroll)
+                let fastEndLowestTurn = mountedLowestTurn(in: fastScroll)
+                let reachedTurn1 = fastEndTopTurn == 1 || (fastEndOffset == 0 && fastEndLowestTurn == 1)
+                fastTopTurnText = fastEndTopTurn.map(String.init) ?? "unknown"
+                let fastLowestTurnText = fastEndLowestTurn.map(String.init) ?? "unknown"
+
+                await shoot(recorder, stage, "history-fast-end")
+                note(
+                    "history-fast-scroll",
+                    "events=\(fastEvents) intervalMs=16 topTurn=\(fastTopTurnText) lowestTurn=\(fastLowestTurnText) endOffset=\(fastEndOffset) docHeight=\(fastEndHeight) endGap=\(fastEndGap) reachedTurn1=\(reachedTurn1 ? "true" : "false") wheel=\(wheelMode)"
+                )
+            } else {
+                note("history-fast-scroll", "skipped after seeding \(fastSeeded) turns, \(Int(secondsLeft()))s left")
+            }
+        } else {
+            note("history-fast-scroll", "skipped, \(Int(secondsLeft()))s left")
+        }
+
+        let avgGrowth = slowSteps > 0 ? Double(totalGrowth) / Double(slowSteps) : 0
+        let cascade = maxStepGrowth > twoPageThreshold
+        let topStepsText = stepsToTop.map(String.init) ?? "not-reached"
+        let summaryDetail = String(
+            format: "slowSteps=%d avgGrowth=%.1fpt maxStepGrowth=%dpt twoPageThreshold=%dpt suspectedCascade=%@ stepsToTop=%@ fastEvents=%d fastTopTurn=%@ wheel=%@",
+            slowSteps, avgGrowth, maxStepGrowth, twoPageThreshold,
+            cascade ? "true" : "false", topStepsText, fastEvents, fastTopTurnText, wheelMode
+        )
+        WebsiteCaptures.log("stress history-summary: \(summaryDetail)")
+        phases.append([
+            "name": "history-summary",
+            "detail": summaryDetail,
+            "slowSteps": String(slowSteps),
+            "avgGrowthPt": String(format: "%.1f", avgGrowth),
+            "maxStepGrowthPt": String(maxStepGrowth),
+            "estimatedPageHeightPt": String(Int(estimatedPageHeight.rounded())),
+            "twoPageThresholdPt": String(twoPageThreshold),
+            "suspectedCascade": cascade ? "true" : "false",
+            "stepsToTop": topStepsText,
+            "fastEvents": String(fastEvents),
+            "fastTopTurn": fastTopTurnText,
+            "wheelMode": wheelMode,
+        ])
+        saveReport(listFiles: false)
+    }
+
+    private static func openAndSettleHistory(
+        _ model: AppModel,
+        threadID: UUID,
+        recorder: Recorder,
+        stage: Stage,
+        shotName: String,
+        noteName: String,
+        turnsSeeded: Int,
+        minSecondsLeft: TimeInterval
+    ) async -> (window: NSWindow, scroll: NSScrollView)? {
+        model.selectedThreadID = threadID
+        // Let ThreadTimeline's initial `.task` finish its 250ms open page + 1.6s window settle.
+        try? await Task.sleep(for: .milliseconds(2100))
+
+        let settleDeadline = Date.now.addingTimeInterval(3.0)
+        var settledChecks = 0
+        while Date.now < settleDeadline, secondsLeft() > minSecondsLeft {
+            if let window = appWindow(), let scroll = timelineScroll(in: window),
+               let docHeight = scroll.documentView?.bounds.height,
+               docHeight > scroll.bounds.height * 1.5,
+               let gap = bottomGap(scroll), gap <= 8 {
+                settledChecks += 1
+                if settledChecks >= 2 { break }
+            } else {
+                settledChecks = 0
+            }
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+
+        guard let window = appWindow(), let scroll = timelineScroll(in: window) else {
+            let summary = appWindow().map(scrollSummary) ?? "no window"
+            note(noteName, "no timeline scroll view (\(summary))")
+            return nil
+        }
+
+        let openOffset = scrollOffset(scroll)
+        let openHeight = Int((scroll.documentView?.bounds.height ?? 0).rounded())
+        let openGap = bottomGap(scroll) ?? -1
+        let openTopTurn = visibleTopTurn(in: scroll).map(String.init) ?? "unknown"
+        let openLowestTurn = mountedLowestTurn(in: scroll).map(String.init) ?? "unknown"
+        await shoot(recorder, stage, shotName)
+        note(noteName, "turns=\(turnsSeeded) offset=\(openOffset) docHeight=\(openHeight) gap=\(openGap) topTurn=\(openTopTurn) lowestTurn=\(openLowestTurn)")
+        return (window, scroll)
+    }
+
+    private static func seedHistory(
+        _ model: AppModel,
+        threadID: UUID,
+        count: Int,
+        noteName: String,
+        minSecondsLeft: TimeInterval
+    ) async -> Int {
+        let runtime = model.runtime(for: threadID)
+        let ready = Date.now.addingTimeInterval(5)
+        while runtime.isLoadingHistory, Date.now < ready {
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+        var seeded = 0
+        for turn in 1...count {
+            guard secondsLeft() > minSecondsLeft else { break }
+            await speak(
+                runtime,
+                id: "history-\(turn)",
+                user: historyQuestion(turn),
+                answer: historyAnswer(turn)
+            )
+            seeded = turn
+        }
+        note(noteName, "\(seeded) of \(count) turns on \(threadID.uuidString) running=\(runtime.isRunning)")
+        return seeded
+    }
+
+    private static func historyQuestion(_ turn: Int) -> String {
+        if !turn.isMultiple(of: 2) {
+            return "Turn \(turn) - question: Does row \(turn) keep the 14pt top inset?"
+        } else if turn.isMultiple(of: 4) {
+            return "Turn \(turn) - question: Walk the anchor math and inset alignment for page check \(turn), then show the constraint lines."
+        } else {
+            return "Turn \(turn) - question: Summarize the strip spacing and clip bounds behavior on check \(turn)."
+        }
+    }
+
+    private static func historyAnswer(_ turn: Int) -> String {
+        if !turn.isMultiple(of: 2) {
+            return "Turn \(turn) - answer: Keep 14pt on the top edge of row \(turn) so it matches the leading inset."
+        }
+        if turn.isMultiple(of: 4) {
+            return [
+                "Turn \(turn) - answer: Long layout note for check \(turn). When an older page lands above the viewport, the anchor row returns to its prior viewport offset minus any wheel movement recorded in flight.",
+                "",
+                "- `attachmentInset` stays 14pt on both top and leading edges",
+                "- `restoreDelta` subtracts `readerDelta` accumulated from wheel input",
+                "- `mountedWindow` keeps offscreen blocks in measured spacers",
+                "",
+                "Paragraph A (turn \(turn)). Measuring newly inserted rows while holding the bottom anchor avoids pushing visible text out from under a resting reader, and the single restore pass moves the clip view once all row frames in the page report.",
+                "",
+                "Paragraph B (turn \(turn)). Keeping prose widths stable across the column prevents secondary height churn after the history page settles.",
+                "",
+                "```swift",
+                "let delta = HistoryAnchorMath.restoreDelta(",
+                "    anchorMinY: frame.minY,",
+                "    anchorOffset: request.anchorOffset,",
+                "    readerDelta: tracking.historyReaderDelta",
+                ")",
+                "```",
+                "",
+                "Turn \(turn) - answer closing: clip restoration finishes before clearing `historyLoadPending` on check \(turn).",
+            ].joined(separator: "\n")
+        }
+        return [
+            "Turn \(turn) - answer: Medium check \(turn) keeps the strip inset even on both edges while scrolling upward.",
+            "",
+            "- leading edge uses 14pt padding",
+            "- top edge matches the 14pt inset instead of stack spacing",
+            "- scroll anchor stays pinned only within 48pt of the end",
+            "",
+            "Turn \(turn) - answer note: verify the pill clears smoothly once earlier rows mount above row \(turn).",
+        ].joined(separator: "\n")
+    }
+
+    private static func calibrateUpwardWheel(
+        window: NSWindow,
+        scroll: NSScrollView
+    ) async -> (direct: Bool, upSign: Int32, mode: String) {
+        let startGap = bottomGap(scroll) ?? 0
+        for candidateSign: Int32 in [1, -1] {
+            let delta = candidateSign * 160
+            guard let probe = wheelEvent(window: window, scroll: scroll, deltaY: delta) else { continue }
+            probe.cgEvent?.postToPid(getpid())
+            try? await Task.sleep(for: .milliseconds(60))
+            for _ in 0..<2 {
+                if let extra = wheelEvent(window: window, scroll: scroll, deltaY: delta) {
+                    extra.cgEvent?.postToPid(getpid())
+                }
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            try? await Task.sleep(for: .milliseconds(140))
+            let gap = bottomGap(scroll) ?? startGap
+            if gap > startGap + 12 {
+                note("history-wheel", "pid-posted sign=\(candidateSign) gap \(startGap)->\(gap) window=\(window.windowNumber)")
+                return (false, candidateSign, "pid-posted")
+            }
+        }
+        let afterPosted = bottomGap(scroll) ?? startGap
+        for candidateSign: Int32 in [1, -1] {
+            let delta = candidateSign * 160
+            guard let probe = wheelEvent(window: window, scroll: scroll, deltaY: delta) else { continue }
+            scroll.scrollWheel(with: probe)
+            try? await Task.sleep(for: .milliseconds(40))
+            scroll.scrollWheel(with: probe)
+            try? await Task.sleep(for: .milliseconds(140))
+            let directGap = bottomGap(scroll) ?? afterPosted
+            if directGap > afterPosted + 12 {
+                note("history-wheel", "direct-fallback sign=\(candidateSign) postedGap=\(afterPosted) directGap=\(directGap)")
+                return (true, candidateSign, "direct-fallback")
+            }
+        }
+        note("history-wheel", "unmoved startGap=\(startGap) afterPosted=\(afterPosted)")
+        return (true, 1, "direct-fallback-unmoved")
+    }
+
+    private static func sendWheel(_ deltaY: Int32, window: NSWindow, scroll: NSScrollView, direct: Bool) {
+        guard let event = wheelEvent(window: window, scroll: scroll, deltaY: deltaY) else { return }
+        if direct {
+            scroll.scrollWheel(with: event)
+        } else {
+            event.cgEvent?.postToPid(getpid())
+        }
+    }
+
+    private static func scrollOffset(_ scroll: NSScrollView) -> Int {
+        max(0, Int((scroll.contentView.bounds.minY + scroll.contentInsets.top).rounded()))
+    }
+
+    private static func unobstructedViewportRect(in scroll: NSScrollView) -> NSRect {
+        let visible = scroll.documentVisibleRect
+        let insets = scroll.contentInsets
+        let height = visible.height - insets.top - insets.bottom
+        guard height > 60 else { return visible }
+        return NSRect(x: visible.minX, y: visible.minY + insets.top, width: visible.width, height: height)
+    }
+
+    private static func visibleTopTurn(in scroll: NSScrollView) -> Int? {
+        guard let document = scroll.documentView else { return nil }
+        let viewport = unobstructedViewportRect(in: scroll)
+        var lowest: Int?
+        for view in findAll(NSTextView.self, in: document) {
+            guard !(view is ComposerNSTextView),
+                  !view.isHiddenOrHasHiddenAncestor,
+                  view.bounds.width > 1, view.bounds.height > 1 else { continue }
+            let frame = view.convert(view.bounds, to: document)
+            let overlap = frame.intersection(viewport)
+            guard !overlap.isNull, !overlap.isEmpty, overlap.height > 2, overlap.width > 2 else { continue }
+            for turn in parseTurnNumbers(in: view.string) {
+                if let current = lowest {
+                    if turn < current { lowest = turn }
+                } else {
+                    lowest = turn
+                }
+            }
+        }
+        return lowest
+    }
+
+    private static func mountedLowestTurn(in scroll: NSScrollView) -> Int? {
+        guard let document = scroll.documentView else { return nil }
+        var lowest: Int?
+        for view in findAll(NSTextView.self, in: document) {
+            guard !(view is ComposerNSTextView),
+                  !view.isHiddenOrHasHiddenAncestor,
+                  view.bounds.width > 1, view.bounds.height > 1 else { continue }
+            for turn in parseTurnNumbers(in: view.string) {
+                if let current = lowest {
+                    if turn < current { lowest = turn }
+                } else {
+                    lowest = turn
+                }
+            }
+        }
+        return lowest
+    }
+
+    private static func parseTurnNumbers(in text: String) -> [Int] {
+        var numbers: [Int] = []
+        var remainder = text[...]
+        while let range = remainder.range(of: "Turn ") {
+            let afterTurn = remainder[range.upperBound...]
+            let digits = afterTurn.prefix { $0.isWholeNumber && $0.isASCII }
+            if !digits.isEmpty {
+                let afterDigits = afterTurn[digits.endIndex...]
+                if afterDigits.hasPrefix(" -"), let value = Int(digits) {
+                    numbers.append(value)
+                }
+            }
+            remainder = afterTurn
+        }
+        return numbers
+    }
 
     /// Three finished turns: a short pair, a long markdown body, then a short closer,
     /// so the column rests on mixed row heights.
@@ -437,7 +936,12 @@ enum TimelineStress {
 
     private static func timelineScroll(in window: NSWindow) -> NSScrollView? {
         findAll(NSScrollView.self, in: window.contentView)
-            .filter { !($0.documentView is ComposerNSTextView) && $0.bounds.height > 120 && $0.bounds.width > 200 }
+            .filter {
+                !$0.isHiddenOrHasHiddenAncestor
+                    && !($0.documentView is ComposerNSTextView)
+                    && $0.bounds.height > 120
+                    && $0.bounds.width > 200
+            }
             .max { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }
     }
 
@@ -571,9 +1075,16 @@ enum TimelineStress {
 
     // MARK: - Record
 
+    @MainActor
+    private final class RecordingStop {
+        var started = false
+        var stopped = false
+    }
+
     // Window-only ScreenCaptureKit recording preserves the one-frame motion that
     // the five-second stills miss. It never includes other applications or audio.
-    private static func recordWindow(_ name: String, seconds: Double) async {
+    private static func recordWindow(_ name: String, seconds: Double, stop: RecordingStop? = nil) async {
+        defer { stop?.started = true }
         guard let window = appWindow(), let output = CaptureRun.outputDirectory else { return }
         do {
             let content = try await SCShareableContent.currentProcess
@@ -597,14 +1108,24 @@ enum TimelineStress {
             let stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: target), configuration: configuration, delegate: nil)
             try stream.addRecordingOutput(recording)
             try await stream.startCapture()
+            stop?.started = true
             WebsiteCaptures.log("stress \(name) recording start window=\(window.windowNumber)")
-            try? await Task.sleep(for: .seconds(seconds))
+            let recordStart = Date.now
+            if let stop {
+                while !stop.stopped, Date.now.timeIntervalSince(recordStart) < seconds, secondsLeft() > 3 {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            } else {
+                try? await Task.sleep(for: .seconds(seconds))
+            }
+            let recordedSeconds = Date.now.timeIntervalSince(recordStart)
             try await stream.stopCapture()
             let end = Date.now.addingTimeInterval(5)
             while !completion.finished, Date.now < end {
                 try? await Task.sleep(for: .milliseconds(50))
             }
-            note(name, completion.error ?? (completion.finished ? "recorded \(seconds)s" : "recording completion timed out"))
+            let durationText = stop == nil ? "\(seconds)s" : String(format: "%.1fs", recordedSeconds)
+            note(name, completion.error ?? (completion.finished ? "recorded \(durationText)" : "recording completion timed out"))
         } catch {
             note(name, "recording failed: \(error.localizedDescription)")
         }

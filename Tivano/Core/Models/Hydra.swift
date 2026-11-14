@@ -340,6 +340,7 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
 
     enum StopReason: String, Codable, Hashable, Sendable {
         case stalled
+        case budget
     }
 
     /// The head's place in the roster: its name, colour and shape.
@@ -455,7 +456,7 @@ struct HydraHeadInfo: Codable, Hashable, Sendable {
         // stopped, never as completed: a lead told a head is done when nobody knows what
         // became of it would answer the user for a team that never came back.
         status = container.value(.status, default: .stopped)
-        stopReason = try container.decodeIfPresent(StopReason.self, forKey: .stopReason)
+        stopReason = container.value(.stopReason, default: nil)
         summary = container.value(.summary, default: nil)
         activity = container.value(.activity, default: nil)
         toolCalls = container.value(.toolCalls, default: 0)

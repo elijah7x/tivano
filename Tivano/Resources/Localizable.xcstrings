@@ -14962,6 +14962,17 @@
         }
       }
     },
+    "Out of time" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超时"
+          }
+        }
+      }
+    },
     "Own copy" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24440,6 +24451,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "可选：%@"
+          }
+        }
+      }
+    },
+    "out of time" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超时"
           }
         }
       }
