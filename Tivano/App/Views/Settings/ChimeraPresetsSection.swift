@@ -18,12 +18,13 @@ struct ChimeraPresetsSection: View {
                     // A plain stack preserves row identity and zIndex while rows change slots.
                     // Keep the add row outside the reorderable stack.
                     VStack(spacing: 0) {
-                        ForEach($settings.chimeraPresets) { $preset in
+                        ForEach(settings.chimeraPresets) { preset in
+                            let binding = presetBinding(for: preset)
                             let isDragged = drag.id == preset.id
                             VStack(spacing: 0) {
                                 ChromeRowDivider().opacity(preset.id == settings.chimeraPresets.first?.id || isDragged ? 0 : 1)
                                 ChimeraPresetRow(
-                                    preset: $preset,
+                                    preset: binding,
                                     isDragged: isDragged,
                                     onDragChanged: { translation in dragChanged(preset.id, translation: translation) },
                                     onDragEnded: { dragEnded() },
@@ -68,6 +69,17 @@ struct ChimeraPresetsSection: View {
                 .foregroundStyle(Chrome.secondaryText)
                 .padding(.horizontal, 4)
         }
+    }
+
+    private func presetBinding(for preset: ChimeraPreset) -> Binding<ChimeraPreset> {
+        let id = preset.id
+        return Binding(
+            get: { model.settings.chimeraPresets.first(where: { $0.id == id }) ?? preset },
+            set: { newPreset in
+                guard let index = model.settings.chimeraPresets.firstIndex(where: { $0.id == id }) else { return }
+                model.settings.chimeraPresets[index] = newPreset
+            }
+        )
     }
 
     private func dragChanged(_ id: ChimeraPreset.ID, translation: CGFloat) {

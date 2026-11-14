@@ -8,6 +8,26 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.32] - 2026-11-14
+
+### English
+
+### Bug fixes
+
+- Removing or reordering a model preset, an MCP server variable or a project script while editing its text no longer crashes Tivano (#51).
+- Long paragraphs with links in a finished conversation are no longer re-measured over and over, which could keep the CPU busy (#51).
+
+### 简体中文
+
+### 问题修复
+
+- 编辑模型预设、MCP 服务器变量或项目脚本的文字时删除或拖动该行，Tivano 不再崩溃（#51）。
+- 已完成对话里带链接的长段落不再被反复重新测量，避免因此持续占用 CPU（#51）。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.5.31] - 2026-11-14
 
 ### English

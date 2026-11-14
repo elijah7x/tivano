@@ -1737,11 +1737,12 @@ private struct ScriptsEditor: View {
                 .foregroundStyle(Chrome.secondaryText)
             ScrollView {
                 VStack(spacing: 10) {
-                    ForEach($scripts) { $script in
+                    ForEach(scripts) { script in
+                        let binding = scriptBinding(for: script)
                         ChromeCard {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
-                                    TextField("Name", text: $script.name)
+                                    TextField("Name", text: binding.name)
                                         .textFieldStyle(.roundedBorder)
                                     Button(role: .destructive) {
                                         let id = script.id
@@ -1751,7 +1752,7 @@ private struct ScriptsEditor: View {
                                     }
                                     .buttonStyle(.borderless)
                                 }
-                                TextField("Command", text: $script.command)
+                                TextField("Command", text: binding.command)
                                     .textFieldStyle(.roundedBorder)
                                     .font(.ui(.callout, design: .monospaced))
                                     // A script with no command used to be dropped on save
@@ -1762,7 +1763,7 @@ private struct ScriptsEditor: View {
                                                 .strokeBorder(Chrome.danger.opacity(0.65), lineWidth: 1)
                                         }
                                     }
-                                Toggle("Run when a worktree is created", isOn: $script.runOnWorktreeCreate)
+                                Toggle("Run when a worktree is created", isOn: binding.runOnWorktreeCreate)
                                     .toggleStyle(.checkbox)
                             }
                             .padding(14)
@@ -1794,6 +1795,17 @@ private struct ScriptsEditor: View {
         .padding(20)
         .frame(width: 580, height: 460)
         .onAppear { scripts = model.project(projectID)?.scripts ?? [] }
+    }
+
+    private func scriptBinding(for script: ProjectScript) -> Binding<ProjectScript> {
+        let id = script.id
+        return Binding(
+            get: { scripts.first(where: { $0.id == id }) ?? script },
+            set: { newScript in
+                guard let index = scripts.firstIndex(where: { $0.id == id }) else { return }
+                scripts[index] = newScript
+            }
+        )
     }
 
     /// A script with nothing to run. Saving is held until every row has a command.
