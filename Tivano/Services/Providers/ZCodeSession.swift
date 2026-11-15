@@ -279,7 +279,7 @@ final class ZCodeSession: ProviderSession {
         }
         if let id, completedTurns.contains(id) { return }
         if let id, let turnID, id != turnID { return }
-        if let error = payload["error"], error.object != nil, let id, id == turnID {
+        if type != "tool.updated", type != "turn.completed", let error = payload["error"], error.object != nil, let id, id == turnID {
             finishTurn(id, status: .failed, error: error["message"]?.string ?? AppText.localized("ZCode reported an error."))
             return
         }
@@ -302,7 +302,17 @@ final class ZCodeSession: ProviderSession {
             if let usage = payload["usage"], let input = usage["inputTokens"]?.int, let output = usage["outputTokens"]?.int {
                 turnUsage = (input, output, usage["cacheReadTokens"]?.int ?? 0)
             }
-            finishTurn(id, status: .completed, error: nil)
+            let resultType = payload["resultType"]?.string
+            if resultType == "cancelled" {
+                finishTurn(id, status: .interrupted, error: nil)
+            } else if resultType?.hasPrefix("error_") == true || payload["error"]?.object != nil {
+                let message = payload["error"]?["message"]?.string
+                    ?? payload["error"]?.string
+                    ?? payload["errorMessage"]?.string
+                finishTurn(id, status: .failed, error: message ?? AppText.localized("ZCode reported an error."))
+            } else {
+                finishTurn(id, status: .completed, error: nil)
+            }
         default: break
         }
     }

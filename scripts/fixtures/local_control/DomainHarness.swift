@@ -324,8 +324,6 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
             (ProviderError.notInstalled(.codex), "not_installed"),
             (ProviderError.notInstalled(.deepseek), "authentication"),
             (ProviderError.notRunning, "provider_or_transport"),
-            (TypeSafeAPI.Failure.authRejected, "authentication"),
-            (TypeSafeAPI.Failure.rateLimited, "usage_limit"),
             (ClaudeAccountValidationError.settingsConflict, "authentication"),
             (ClaudeAccountValidationError.identityChanged, "provider_or_transport"),
             (ResetCreditError.codexUnavailable, "not_installed"),

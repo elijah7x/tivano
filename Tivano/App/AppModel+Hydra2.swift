@@ -62,8 +62,7 @@ extension AppModel {
             reviewAccepted: nil,
             reviewSkipped: nil,
             baseTrees: baseTrees,
-            merge: nil,
-            decisions: settings.isDecisionsEnabled
+            merge: nil
         )
         updateThread(leadID) { $0.hydraJobs.append(job) }
         return job.id

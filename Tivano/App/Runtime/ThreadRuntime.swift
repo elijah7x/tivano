@@ -779,6 +779,8 @@ final class ThreadRuntime {
     @ObservationIgnored private(set) var hydraCurrentTurnTouchedPaths: Set<String> = []
 
     @ObservationIgnored private var switchedCodexAccount = false
+    @ObservationIgnored private var lostBackgroundWakeCount = 0
+    @ObservationIgnored private var backgroundTaskFinishedSinceTurn = false
 
     /// The Codex account the running session signed in with, which may differ from the one now selected.
     var codexAccountInUse: UUID? { sessionSignature?.codexAccount }
@@ -1544,6 +1546,31 @@ final class ThreadRuntime {
         sendContinuation(after: turnID, text: text)
     }
 
+    private static let lostBackgroundWakeMessage = "Your previous Claude session ended while these background tasks were still running, so they were stopped: %@. Check their actual state (outputs, processes, artifacts) and rerun whatever is still needed, then continue the task and report the result."
+
+    /// Wakes an ordinary Claude thread after its CLI exited between turns with background
+    /// tasks still running, capped so repeated crashes do not loop.
+    private func wakeAfterLostBackgroundTasks(_ lost: [String]) {
+        guard !isVoiceOrchestrator,
+              let thread, !thread.isArchived,
+              thread.hydra == nil,
+              thread.provider == .claude,
+              lostBackgroundWakeCount < 2 else { return }
+        lostBackgroundWakeCount += 1
+        let captured = turns.last?.id
+        // Any stop while loading bumps the epoch, and a discarded or archived thread is gone:
+        // either way the user has moved on and the wake must not restart Claude.
+        let epoch = sessionEpoch
+        let message = String(format: Self.lostBackgroundWakeMessage, lost.joined(separator: ", "))
+        Task {
+            await ensureLoaded()
+            guard sessionEpoch == epoch, app?.existingRuntime(for: threadID) === self,
+                  self.thread?.isArchived == false,
+                  phase == .idle, !isReverting, turns.last?.id == captured, currentTurnID == nil else { return }
+            await startTurn(text: message, attachments: [], backgroundWake: true)
+        }
+    }
+
     /// `flushesIfIdle` is false when `startTurn` puts back a prompt it could not start:
     /// flushing it would hand it straight back to the same refusal, a loop that never yields.
     func enqueueFollowUp(text: String, attachments: [Attachment], flushesIfIdle: Bool = true) {
@@ -1694,7 +1721,7 @@ final class ThreadRuntime {
         }
     }
 
-    private func startTurn(text: String, attachments: [Attachment], hydraHeads: [Int]? = nil, hydraBrief: Bool = false, externalTurnID: UUID? = nil) async {
+    private func startTurn(text: String, attachments: [Attachment], hydraHeads: [Int]? = nil, hydraBrief: Bool = false, externalTurnID: UUID? = nil, backgroundWake: Bool = false) async {
         clearPromptPrediction()
         #if DEBUG
         // Preview buttons must never reach a provider.
@@ -1711,14 +1738,17 @@ final class ThreadRuntime {
             do { try validateExternalSubmission(externalTurnID, idle: true) }
             catch { failExternalBeforeTurn(externalTurnID, error: error); return }
         } else {
-            if externalSubmission != nil { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false); return }
+            if externalSubmission != nil {
+                if !backgroundWake { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
+                return
+            }
             // A UI turn may wait for an archive; external control does not archive.
             await providerHistoryOperation?.value
         }
         if !hydraBrief && (hydraStartupPending || app?.thread(threadID)?.hydra?.pendingProjectReference != nil) {
             // External submissions reject races instead of joining the UI's queue.
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)); return }
-            enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false)
+            if !backgroundWake { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             if !hydraStartupPending, let summary = app?.thread(threadID)?.hydra?.summary,
                !entries.contains(where: { entry in
                    if case .notice(let notice) = entry.item.content { return notice.level == .error && notice.message == summary }
@@ -1730,7 +1760,7 @@ final class ThreadRuntime {
         }
         guard phase == .idle, !isReverting else {
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)) }
-            else { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
+            else if !backgroundWake { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             return
         }
         guard let app, var initialThread = app.thread(threadID) else {
@@ -1759,7 +1789,10 @@ final class ThreadRuntime {
                 failExternalBeforeTurn(externalTurnID, error: error as? ControlFailure ?? ControlFailure(code: .directoryUnavailable))
             } else if hydraBrief {
                 app.finishHydraHead(threadID, status: .failed, summary: error.localizedDescription, startupFailure: true)
-            } else { retainUnsentMessage(text: text, attachments: attachments); appendNotice(.error, error.localizedDescription) }
+            } else {
+                if !backgroundWake { retainUnsentMessage(text: text, attachments: attachments) }
+                appendNotice(.error, error.localizedDescription)
+            }
             return
         }
         if hydraBrief && initialThread.hydra?.status != .running {
@@ -1768,20 +1801,23 @@ final class ThreadRuntime {
         }
         guard !initialThread.isArchived else {
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .archived)) }
-            else { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
+            else if !backgroundWake { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             return
         }
         if hydraBrief { hydraStartupPending = false }
         guard await app.beginThreadTurnAsync(threadID) else {
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .persistence)) }
             else if hydraBrief { app.finishHydraHead(threadID, status: .failed, summary: Chrome.localized("Could not save the library"), startupFailure: true) }
-            else { retainUnsentMessage(text: text, attachments: attachments); appendNotice(.error, Chrome.localized("Could not save the library")) }
+            else {
+                if !backgroundWake { retainUnsentMessage(text: text, attachments: attachments) }
+                appendNotice(.error, Chrome.localized("Could not save the library"))
+            }
             return
         }
         // The first turn's save is awaited, so another turn may have opened meanwhile.
         guard phase == .idle, !isReverting else {
             if let externalTurnID { failExternalBeforeTurn(externalTurnID, error: ControlFailure(code: .busy)) }
-            else { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
+            else if !backgroundWake { enqueueFollowUp(text: text, attachments: attachments, flushesIfIdle: false) }
             return
         }
         if let thread, thread.pendingProviderSwitch != nil, continuation?.isProviderHandoff != true,
@@ -1831,6 +1867,9 @@ final class ThreadRuntime {
         // `hydraHeads == nil` marks a turn of the user's own: it starts the request's
         // delegation budget over. Turns carrying head reports or a refusal notice continue it.
         hydraBudget.beginTurn(userAuthored: hydraHeads == nil && !continuesHydraJob)
+        if hydraHeads == nil, !hydraBrief, !backgroundWake {
+            lostBackgroundWakeCount = 0
+        }
         providerLastWarning = nil
         if hydraJobID != nil, !hydraBrief, initialThread.hydra == nil {
             hydraLedgerTurn = hydraHeads == nil ? .request : (hydraHeads?.isEmpty == true ? .review : .report)
@@ -3347,8 +3386,15 @@ final class ThreadRuntime {
     /// it closes. Its handler is cleared a turn of the loop later, because a session that
     /// is ending usually says so from inside that very handler.
     private func releaseSession(stop: Bool) {
+        if stop, !backgroundTasks.isEmpty, persistenceEnabled {
+            appendNotice(.info, String(
+                format: Chrome.localized("Stopped background tasks with the session: %@."),
+                backgroundTasks.joined(separator: ", ")
+            ))
+        }
         questions.removeAll()
         backgroundTasks = []
+        backgroundTaskFinishedSinceTurn = false
         opensTurnAfterFinish = false
         deferredBackgroundTurnEvents.removeAll()
         sessionEpoch += 1
@@ -3523,20 +3569,7 @@ final class ThreadRuntime {
     }
 
     private func stampHydraUserTurn(app: AppModel, turnID: UUID, text: String, attachments: [String], requestPending: Bool = false) async {
-        let leadReply = requestPending ? "" : entries.last(where: {
-            if case .assistant = $0.item.content { return true }
-            return false
-        }).flatMap { entry -> String? in
-            guard case .assistant(let message) = entry.item.content else { return nil }
-            return message.text
-        } ?? ""
         if let job = app.openHydraJob(of: threadID), job.id == hydraJobID {
-            if !requestPending, app.hydraJobRunsDecisions(job.id, of: threadID) {
-                app.runHydraDecision(
-                    HydraDecisionRequests.followUp(request: job.request, leadReply: leadReply, message: text),
-                    leadID: threadID, jobID: job.id, meta: ["sameJob": .bool(true)]
-                )
-            }
             var packet = hydraJobPacketRequest ?? HydraHandoffPacket(request: job.request)
             if !requestPending { packet.request += "\n\nFollow-up from the user: " + text }
             packet.attachments += attachments
@@ -3545,14 +3578,6 @@ final class ThreadRuntime {
             return
         }
         hydraJobPacketRequest = HydraHandoffPacket(request: text, attachments: attachments)
-        if !requestPending, let previous = app.thread(threadID)?.hydraJobs.last,
-           previous.decisions == true, (!previous.heads.isEmpty || previous.reviewFindings != nil),
-           app.hydraJobRunsDecisions(previous.id, of: threadID) {
-            app.runHydraDecision(
-                HydraDecisionRequests.followUp(request: previous.request, leadReply: leadReply, message: text),
-                leadID: threadID, jobID: previous.id, meta: ["sameJob": .bool(false)]
-            )
-        }
         hydraJobID = await app.beginHydraJob(for: threadID, turnID: turnID, request: text)
     }
 
@@ -3591,9 +3616,14 @@ final class ThreadRuntime {
             }
         }
         // Pi has no background tasks: it resumes after a failed run, and its retry notices say so.
+        let finishedTask = backgroundTaskFinishedSinceTurn
+        backgroundTaskFinishedSinceTurn = false
         if isVoiceOrchestrator || thread?.provider == .pi { return }
         let name = thread?.provider.displayName ?? Chrome.localized("The agent")
-        appendNotice(.info, String(format: Chrome.localized("%@ picked the work back up after a background task finished."), name))
+        let format = finishedTask
+            ? Chrome.localized("%@ picked the work back up after a background task finished.")
+            : Chrome.localized("%@ picked the work back up on its own.")
+        appendNotice(.info, String(format: format, name))
     }
 
     private func handle(_ event: ProviderEvent) {
@@ -3629,6 +3659,9 @@ final class ThreadRuntime {
             }
             saveNow()
         case .backgroundTasks(let descriptions):
+            if descriptions.count < backgroundTasks.count {
+                backgroundTaskFinishedSinceTurn = true
+            }
             backgroundTasks = descriptions
             if descriptions.isEmpty { app?.publishDeferredResult(threadID) }
         case .messageDelta(let id, let text):
@@ -3734,9 +3767,10 @@ final class ThreadRuntime {
             Task { await finishTurn(status: status, turnID: turnID, error: error) }
             if status == .completed { requestProviderTitle() }
         case .exited(let error):
-            let backgroundStopped = !backgroundTasks.isEmpty
+            let lost = backgroundTasks
             backgroundTasks = []
-            if backgroundStopped { app?.publishDeferredResult(threadID, status: .failed) }
+            backgroundTaskFinishedSinceTurn = false
+            if !lost.isEmpty { app?.publishDeferredResult(threadID, status: .failed) }
             flushDeltas()
             // A session that exits while it starts is reported by its `start()` throwing:
             // `ensureSession` starts over where it can, and otherwise the turn ends with
@@ -3753,6 +3787,13 @@ final class ThreadRuntime {
                 let failure = error ?? String(format: Chrome.localized("%@ stopped unexpectedly."), name)
                 appendNotice(.error, failure)
                 Task { await finishTurn(status: .failed, turnID: turnID, error: failure) }
+            } else if !lost.isEmpty {
+                let name = thread?.provider.displayName ?? Chrome.localized("The agent")
+                appendNotice(.error, String(
+                    format: Chrome.localized("%@ exited while background tasks were still running: %@. They were stopped."),
+                    name, lost.joined(separator: ", ")
+                ))
+                wakeAfterLostBackgroundTasks(lost)
             }
         case .tokenSpend(let spend):
             // A provider sub-agent's spend is not this thread's own, as before. Hydra heads
@@ -4253,12 +4294,10 @@ final class ThreadRuntime {
         guard let jobID = (kind == .review ? hydraReviewJobID : nil) ?? hydraJobID else { return }
         var calls: [ToolCall] = []
         var reply = ""
-        var userText = ""
         for entry in entries where entry.item.turnID == turnID {
             switch entry.item.content {
             case .tool(let call): calls.append(call)
             case .assistant(let message): reply = message.text
-            case .user(let message): userText = message.text
             default: break
             }
         }
@@ -4278,14 +4317,6 @@ final class ThreadRuntime {
             if built { job.leadBuilt = true }
             if kind != .request { job.leadEditsAfterReports += edits }
             if kind == .review { job.reviewAccepted = (job.reviewAccepted ?? 0) + accepted }
-        }
-        if kind == .review, app.hydraJobRunsDecisions(jobID, of: threadID) {
-            let reviewFindings = app.thread(threadID)?.hydraJobs.first(where: { $0.id == jobID })?.reviewFindings
-            if let request = HydraDecisionRequests.reviewDisposition(
-                review: userText, leadReply: reply, findings: reviewFindings ?? 0
-            ) {
-                app.runHydraDecision(request, leadID: threadID, jobID: jobID)
-            }
         }
         if kind == .review { hydraReviewJobID = nil }
     }
@@ -4399,16 +4430,6 @@ final class ThreadRuntime {
             }
             fresh.task = delegation.task.trimmed.isEmpty ? "\(earlierName)'s part" : delegation.task
             fresh.prompt = HydraPrompts.v2EarlierHeadBrief(name: earlierName, prompt: delegation.prompt)
-            if let earlierJob = earlier.hydra?.jobID, app.hydraJobRunsDecisions(earlierJob, of: threadID) {
-                app.runHydraDecision(
-                    HydraDecisionRequests.continuation(
-                        task: earlier.hydra?.task ?? delegation.task,
-                        previousReport: earlier.hydra?.summary ?? "", brief: delegation.prompt
-                    ),
-                    leadID: threadID, jobID: earlierJob, headID: earlier.id,
-                    meta: ["via": .string("redispatch"), "newJobID": .string(jobID.uuidString)]
-                )
-            }
             return fresh
         }
     }
@@ -4752,9 +4773,6 @@ final class ThreadRuntime {
             guard let batch = hydraBatches[next.batchID] else { continue }
             let packet = batch.packet
             if let headID = next.continueHeadID, let name = delegation.continueHead, let packet {
-                let previous = app.thread(headID)?.hydra
-                let previousTask = previous?.task
-                let previousReport = previous?.summary
                 let previousBatch = app.thread(headID)?.hydra?.batchID
                 app.updateHydraHead(headID) { $0.batchID = next.batchID }
                 hydraBatches[next.batchID]?.pending.insert(headID)
@@ -4776,15 +4794,6 @@ final class ThreadRuntime {
                             record.continuations = 1
                             job.heads.append(record)
                         }
-                    }
-                    if app.hydraJobRunsDecisions(jobID, of: threadID) {
-                        app.runHydraDecision(
-                            HydraDecisionRequests.continuation(
-                                task: previousTask ?? delegation.task,
-                                previousReport: previousReport ?? "", brief: delegation.prompt
-                            ),
-                            leadID: threadID, jobID: jobID, headID: headID, meta: ["via": .string("continue")]
-                        )
                     }
                 }
                 continue

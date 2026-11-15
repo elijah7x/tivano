@@ -355,7 +355,7 @@ enum CommandCodeAPI {
         ModelOption(id: "gpt-5.6-sol", name: "GPT-5.6 Sol", detail: "OpenAI · latest frontier model for general complex work", efforts: efforts(for: "gpt-5.6-sol")),
         ModelOption(id: "gpt-5.6-luna", name: "GPT-5.6 Luna", detail: "OpenAI · fast and efficient model", efforts: efforts(for: "gpt-5.6-luna")),
         ModelOption(id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash", detail: "Google · newest Gemini Flash, improved core reasoning", efforts: efforts(for: "google/gemini-3.8-flash")),
-        ModelOption(id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", detail: "Open Source · fast hybrid-attention reasoning", efforts: efforts(for: "deepseek/deepseek-v4-flash")),
+        ModelOption(id: "deepseek/deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash", detail: "Open Source · fast hybrid-attention reasoning", efforts: efforts(for: "deepseek/deepseek-v4.1-flash")),
         ModelOption(id: "moonshotai/kimi-k3", name: "Kimi K3", detail: "Open Source · long-horizon coding & knowledge work with 1M context", efforts: efforts(for: "moonshotai/kimi-k3")),
         ModelOption(id: "zai-org/glm-5.3", name: "GLM 5.3", detail: "Open Source · frontier coding with emergent cyber capabilities", efforts: efforts(for: "zai-org/glm-5.3")),
     ]

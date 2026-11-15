@@ -46,6 +46,8 @@ Verified against vendor documentation on 2026-10-16 (ZCode row: 2026-10-28).
 | Pi | Pi CLI | Set up in Pi | Configured inside Pi (OAuth logins, API keys, custom endpoints); models arrive as `provider/model` | https://pi.dev/docs/latest/providers |
 | Kimi Code | Kimi Code CLI | Kimi membership or API key | Kimi Code OAuth membership, Console keys, or Platform pay-as-you-go keys | https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html |
 | omp | omp CLI | Set up in omp | Configured inside omp (subscription logins, API keys, custom providers); models are `provider/model-id` | https://omp.sh/docs/providers |
+| DeepSeek Harness | dsh CLI | API key | DeepSeek account or API key in external DSH home (`DSH_HOME`, otherwise `~/.dsh`, `records[deepseek-account-platform/default]`); default-home login opens the installed app and custom-home login uses a web-login process (no CLI login command), driven over ACP by `dsh` | https://www.deepseek.com/en/harness/, https://github.com/deepseek-ai/deepseek-harness, and npm `@deepseek-ai/dsh` |
+| MiniMax Code | MiniMax Code CLI | Token Plan or API key | CLI-owned credentials via `mcode`: Token Plan login (`mcode login` / `mcode login --region global`) or BYOK/API key (`mcode provider set-minimax-key`, persisted in `config.yaml`); runs `@minimax-ai/code` over `mcode acp` | https://agent.minimax.io/docs/cli/quick-start, https://agent.minimax.io/docs/changelog.md, and npm `@minimax-ai/code` |
 | ZCode | ZCode CLI | GLM Coding Plan | Uses the GLM Coding Plan key configured for the Z.ai provider (no separate `zcode login`); the CLI is bundled inside the ZCode desktop app (`ZCode.app/Contents/Resources/glm/zcode.cjs`) and models come from the Coding Plan endpoint by region | https://zcode.z.ai |
 
 

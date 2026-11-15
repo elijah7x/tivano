@@ -120,6 +120,106 @@ for marker in (
     "warmMarkdown(for: blocks[target..<hidden])",
 ):
     require_source(marker in scroll_geometry, f"scroll geometry handler must preserve history tracking ({marker!r})")
+
+scroll_tracking = declaration("final class TimelineScrollTracking: ScrollActivityReporter {")
+reader_interacting = declaration("    var isReaderInteracting: Bool {")
+for marker in ("isUserScrolling", "hasRecentWheelInput", "isTrackpadHeld", "lastWheelEventAt < 8"):
+    require_source(marker in reader_interacting and "var isReaderInteracting" in scroll_tracking,
+                   f"isReaderInteracting must cover drags, wheels and a bounded trackpad hold ({marker!r})")
+require_source(
+    "lastReaderMovementAt" in wheel,
+    "noteWheelInput must refresh lastReaderMovementAt on non-zero wheel deltas",
+)
+for marker in ("event.phase", "event.momentumPhase", "isTrackpadHeld", "lastWheelEventAt"):
+    require_source(marker in probe_view, f"ProbeView wheel monitor must track trackpad phase ({marker!r})")
+
+note_phase = declaration("    func notePhase(_ phase: ScrollPhase) {")
+interacting_branch = declaration("                if phase == .interacting {")
+require_source(
+    interacting_branch in note_phase,
+    "notePhase must branch on .interacting in phaseWatch",
+)
+require_source(
+    "phaseStartedAt >= 3.0" not in interacting_branch,
+    "notePhase must not apply the 3.0s ceiling to .interacting",
+)
+require_source(
+    "isTrackpadHeld" in interacting_branch and "lastWheelEventAt" in interacting_branch,
+    "notePhase .interacting timeout must require !isTrackpadHeld or lastWheelEventAt fallback",
+)
+require_source(
+    "phaseStartedAt >= 3.0" in note_phase,
+    "notePhase must retain the 3.0s ceiling for coasting phases",
+)
+
+schedule_bottom_snap = declaration("    private func scheduleBottomSnap() {")
+require_source(
+    "!tracking.isReaderInteracting" in schedule_bottom_snap,
+    "scheduleBottomSnap must guard on !tracking.isReaderInteracting",
+)
+last_entry_handler = declaration("        .onChange(of: lastEntryID) {")
+require_source(
+    "!tracking.isReaderInteracting" in last_entry_handler,
+    "lastEntryID handler must guard on !tracking.isReaderInteracting",
+)
+area_growth_handler = declaration("        .onChange(of: scrollState.areaGrowthRequest) {")
+require_source(
+    "!tracking.isReaderInteracting" in area_growth_handler,
+    "areaGrowthRequest handler must guard on !tracking.isReaderInteracting",
+)
+
+is_running_handler = declaration("        .onChange(of: runtime.isRunning) { _, running in")
+note_phase_idle_guard = declaration("            if !tracking.isTrackpadHeld, !(tracking.isUserScrolling && !tracking.isCoasting) {")
+require_source(
+    "tracking.notePhase(.idle)" in note_phase_idle_guard and note_phase_idle_guard in is_running_handler,
+    "isRunning handler must guard tracking.notePhase(.idle) with !tracking.isTrackpadHeld",
+)
+require_source(
+    is_running_handler.count("tracking.notePhase(.idle)") == 1,
+    "isRunning handler must not call tracking.notePhase(.idle) without an isTrackpadHeld guard",
+)
+require_source(
+    "!tracking.isReaderInteracting" in is_running_handler,
+    "isRunning handler must skip forced scroll/pin while the reader is interacting",
+)
+require_source(
+    "tracking.animatedNavigation = true" in is_running_handler,
+    "isRunning handler must set tracking.animatedNavigation before animated scrollTo",
+)
+follow_end = declaration("    private func followEnd() {")
+require_source(
+    "tracking.animatedNavigation = true" in follow_end,
+    "followEnd must set tracking.animatedNavigation before scrollTo",
+)
+
+scrolled_pin_branch = declaration(
+    "            } else if scrolled {\n                // Only the reader's own scrolling"
+)
+require_source(
+    scrolled_pin_branch in scroll_geometry,
+    "scroll geometry handler must contain the scrolled pin/unpin branch",
+)
+require_source(
+    "delta < -0.1" in scrolled_pin_branch,
+    "scrolled branch must unpin only on the reader's own upward motion",
+)
+for handler in (last_entry_handler, area_growth_handler):
+    require_source("distanceFromBottom < 48" not in handler,
+                   "new rows and area growth must not re-pin a reader who scrolled up within 48pt")
+    require_source("tracking.distanceFromBottom <= 1" in handler and "distanceFromBottom <= 8" not in handler,
+                   "new rows and area growth re-pin only a reader already at the end, never one who just scrolled up")
+require_source(
+    "lastReaderMovementAt) >= 8.0" in interacting_branch,
+    "a continuously moving non-wheel drag must not hit the lost-event timeout",
+)
+require_source(
+    "distanceFromBottom < 48" not in scrolled_pin_branch,
+    "scrolled branch must not keep pinning within a 48pt band",
+)
+require_source(
+    "tracking.isReaderInteracting" in scrolled_pin_branch and "distanceFromBottom <= 8" in scrolled_pin_branch,
+    "scrolled branch must unpin on upward reader movement and re-pin only within 8pt",
+)
 print("PASS: wheel preserves history loading; history pages record and restore one reader anchor")
 
 

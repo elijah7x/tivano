@@ -474,6 +474,10 @@ enum WebsiteCaptures {
             await TimelineStress.runHistory(model: model)
             return
         }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--held-drag") {
+            await TimelineStress.runHeldDrag(model: model)
+            return
+        }
         // `--timeline-stress` is the chat-timeline jitter run. Without it, the product
         // scenes run exactly as before. Both stay on this process's `--website-captures` isolation.
         if CommandLine.arguments.contains("--timeline-stress") {

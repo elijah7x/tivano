@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import QuartzCore
 import ScreenCaptureKit
 
 /// Chat-timeline jitter stress for a `--website-captures` process.
@@ -118,6 +119,46 @@ enum TimelineStress {
         note("done", "quitting")
         saveReport(listFiles: true)
         exit(missingStills.isEmpty ? 0 : 1)
+    }
+
+    static func runHeldDrag(model: AppModel) async {
+        guard CaptureRun.isEnabled, let output = CaptureRun.outputDirectory else { return }
+        phases.removeAll()
+        missingStills.removeAll()
+        await model.bootstrap()
+        guard model.isLibraryLoaded, !model.threads.isEmpty else {
+            WebsiteCaptures.log("stress library failed to load")
+            exit(1)
+        }
+        deadline = Date.now.addingTimeInterval(budgetSeconds)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(budgetSeconds))
+            WebsiteCaptures.log("stress out of time, quitting")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        model.settings.hasSeenHydraIntro = true
+        model.settings.hydraEnabled = false
+        WebsiteCaptures.log("held-drag start \(output.path)")
+
+        let stage = Stage(model: model)
+        stage.show(size: NSSize(width: 1320, height: 860))
+        await stage.ensureActive()
+        guard let window = appWindow(), NSApp.isActive, window.isKeyWindow else {
+            note("blocked", "foreground desktop unavailable; unlock the host before running")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        if model.sidebar.isVisible { model.sidebar.toggle() }
+        // Keep the target thread unmounted while seeding so opening it starts pinned at the end.
+        model.selectedThreadID = nil
+        try? await Task.sleep(for: .milliseconds(300))
+
+        let passed = await heldDrag(model, output: output)
+
+        note("done", "quitting (\(passed ? "PASS" : "FAIL"))")
+        saveReport(listFiles: true)
+        exit(passed ? 0 : 1)
     }
 
     // MARK: - Phases
@@ -334,12 +375,773 @@ enum TimelineStress {
         saveReport(listFiles: false)
     }
 
-    private static func openAndSettleHistory(
+    private enum HeldDragRouting: String {
+        case pid = "pid"
+        case appQueue = "app-queue"
+        case externalHid = "external-hid"
+    }
+
+    private struct HeldDragPoint: Codable {
+        let x: Double
+        let y: Double
+    }
+
+    private struct HeldDragReady: Codable {
+        let pid: Int32
+        let windowNumber: Int
+        let point: HeldDragPoint
+        let upSign: Int32
+        let readyAt: Double
+        let readyAtWallClock: Double
+    }
+
+    private struct HeldDragObservedEvent: Encodable {
+        let time: Double
+        let phase: UInt
+        let momentumPhase: UInt
+        let scrollingDeltaY: Double
+        let windowNumber: Int
+    }
+
+    private struct HeldDragSamplesReport: Encodable {
+        let samples: [HeldDragSample]
+        let observedEvents: [HeldDragObservedEvent]
+    }
+
+    @MainActor
+    private final class HeldDragObservedBuffer {
+        struct RawEvent {
+            let date: Date
+            let phase: NSEvent.Phase
+            let momentumPhase: NSEvent.Phase
+            let deltaY: Double
+            let windowNumber: Int
+        }
+
+        var events: [RawEvent] = []
+    }
+
+    private struct HeldDragSample: Encodable {
+        let time: Double
+        let stage: String
+        let offset: Double
+        let docHeight: Double
+        let visibleHeight: Double
+        let distanceFromBottom: Double
+        let topTurn: Int?
+    }
+
+    private static func heldDrag(_ model: AppModel, output: URL) async -> Bool {
+        let seeded = await seedHistory(
+            model,
+            threadID: shortThreadID,
+            count: 24,
+            noteName: "held-drag-seed",
+            minSecondsLeft: 40
+        )
+        guard seeded > 0, secondsLeft() > 32 else {
+            note("held-drag-open", "skipped after seeding \(seeded) turns, \(Int(secondsLeft()))s left")
+            return false
+        }
+        guard let opened = await settleHistoryWindow(
+            model,
+            threadID: shortThreadID,
+            maxGap: 2,
+            noteName: "held-drag-open",
+            turnsSeeded: seeded,
+            minSecondsLeft: 28
+        ) else { return false }
+        let window = opened.window
+        let scroll = opened.scroll
+
+        guard verifyPhasedWheelRoundTrip(window: window, scroll: scroll) else { return false }
+
+        let forceExternalHID = CommandLine.arguments.contains("--held-drag-hid")
+        let routing: HeldDragRouting
+        if forceExternalHID {
+            routing = .externalHid
+            note("held-drag-route", "external-hid")
+        } else if let detected = await detectHeldDragRouting(window: window, scroll: scroll) {
+            routing = detected
+        } else {
+            routing = .externalHid
+            note("held-drag-route", "external-hid")
+        }
+
+        let upSign: Int32
+        if routing == .externalHid {
+            // In-app event posting cannot reach the local monitor with a window, so use the
+            // AppKit convention: positive scrollWheel deltaY scrolls content toward the top.
+            upSign = 1
+            note("held-drag-calibrate", "upSign=1 mode=external-hid (AppKit positive-deltaY convention)")
+        } else {
+            guard let calibrated = await calibratePhasedUpwardSign(window: window, scroll: scroll, routing: routing) else {
+                return false
+            }
+            upSign = calibrated
+        }
+
+        guard let startGap = bottomGap(scroll), startGap <= 4 else {
+            note("held-drag-pinned", "not pinned at bottom before streaming (gap=\(bottomGap(scroll).map(String.init) ?? "nil"))")
+            return false
+        }
+        note("held-drag-pinned", "pinned at end gap=\(startGap) routing=\(routing.rawValue) upSign=\(upSign)")
+
+        let runtime = model.runtime(for: shortThreadID)
+        let pieces = heldDragStreamPieces(count: 115)
+        let streamID = "held-drag-stream"
+        runtime.rehearseTurn("Continue streaming details while the reader holds the trackpad.")
+        note("held-drag-stream-start", "pieces=\(pieces.count) intervalMs=180 loop=\(routing == .externalHid) running=\(runtime.isRunning)")
+
+        let loopStream = routing == .externalHid
+        // `--held-drag-quiet-hold` holds the reply still while fingers are down, so the run
+        // isolates the drag timeouts from growth (fast growth alone leaves any follow band).
+        let quietHold = CommandLine.arguments.contains("--held-drag-quiet-hold")
+        let streamGate = HeldDragStreamGate()
+        let streamTask = Task { @MainActor in
+            var index = 0
+            while !Task.isCancelled, secondsLeft() > 3 {
+                if !loopStream, index >= pieces.count { break }
+                if streamGate.paused {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    continue
+                }
+                runtime.rehearse(.messageDelta(id: streamID, text: pieces[index % pieces.count]))
+                index += 1
+                try? await Task.sleep(for: .milliseconds(180))
+            }
+        }
+        defer { streamTask.cancel() }
+
+        try? await Task.sleep(for: .seconds(2.0))
+        let preHoldGap = bottomGap(scroll) ?? -1
+        note("held-drag-pre-hold", "streamed=2.0s gap=\(preHoldGap) running=\(runtime.isRunning)")
+
+        if routing == .externalHid {
+            return await runExternalHidHeldDrag(
+                window: window,
+                scroll: scroll,
+                runtime: runtime,
+                streamID: streamID,
+                streamTask: streamTask,
+                streamGate: streamGate,
+                quietHold: quietHold,
+                upSign: upSign,
+                output: output
+            )
+        }
+
+        let sampleOrigin = Date.now
+        var samples: [HeldDragSample] = []
+
+        @discardableResult
+        func recordSample(stage: String) -> HeldDragSample? {
+            guard let sample = captureHeldDragSample(scroll: scroll, since: sampleOrigin, stage: stage) else { return nil }
+            samples.append(sample)
+            return sample
+        }
+
+        func sampleFor(stage: String, seconds: TimeInterval, perTick: (() -> Bool)? = nil) async -> Bool {
+            let stageEnd = Date.now.addingTimeInterval(seconds)
+            while Date.now < stageEnd, secondsLeft() > 4 {
+                if let perTick, !perTick() { return false }
+                _ = recordSample(stage: stage)
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            return true
+        }
+
+        if quietHold { streamGate.paused = true }
+        guard sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.mayBegin.rawValue) else {
+            return false
+        }
+        note("held-drag-may-begin", "sent deltaY=0 phase=mayBegin")
+        _ = await sampleFor(stage: "mayBegin", seconds: 0.05)
+
+        guard sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.began.rawValue) else {
+            return false
+        }
+        note("held-drag-began", "sent deltaY=0 phase=began")
+        _ = recordSample(stage: "began")
+        try? await Task.sleep(for: .milliseconds(16))
+
+        let dragDelta = upSign * 2
+        note("held-drag-up-1", "sending deltaY=\(dragDelta) every ~16ms for 1.5s")
+        guard await sampleFor(stage: "drag1", seconds: 1.5, perTick: {
+            sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: dragDelta, phase: CGScrollPhase.changed.rawValue)
+        }) else { return false }
+        note("held-drag-up-1-done", "gap=\(bottomGap(scroll).map(String.init) ?? "nil") topTurn=\(visibleTopTurn(in: scroll).map(String.init) ?? "nil")")
+
+        // Exceeds the old 2s/3s timeouts while fingers stay on the trackpad with no wheel events.
+        note("held-drag-pause", "resting 3.0s with no wheel events")
+        _ = await sampleFor(stage: "pause", seconds: 3.0)
+        note("held-drag-pause-done", "gap=\(bottomGap(scroll).map(String.init) ?? "nil") topTurn=\(visibleTopTurn(in: scroll).map(String.init) ?? "nil")")
+
+        note("held-drag-up-2", "sending deltaY=\(dragDelta) every ~16ms for 1.5s")
+        guard await sampleFor(stage: "drag2", seconds: 1.5, perTick: {
+            sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: dragDelta, phase: CGScrollPhase.changed.rawValue)
+        }) else { return false }
+        note("held-drag-up-2-done", "gap=\(bottomGap(scroll).map(String.init) ?? "nil") topTurn=\(visibleTopTurn(in: scroll).map(String.init) ?? "nil")")
+
+        guard sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.ended.rawValue) else {
+            return false
+        }
+        streamGate.paused = false
+        note("held-drag-ended", "sent deltaY=0 phase=ended")
+        _ = recordSample(stage: "ended")
+        try? await Task.sleep(for: .milliseconds(16))
+
+        note("held-drag-post-ended", "streaming 4.0s with no input")
+        _ = await sampleFor(stage: "postEnded", seconds: 4.0)
+        note("held-drag-post-ended-done", "gap=\(bottomGap(scroll).map(String.init) ?? "nil") running=\(runtime.isRunning)")
+
+        streamTask.cancel()
+        await finish(runtime, id: streamID)
+
+        return evaluateHeldDrag(
+            samples: samples,
+            observedEvents: [],
+            routing: routing,
+            upSign: upSign,
+            output: output,
+            requireCompleteSequence: false,
+            sequenceComplete: true
+        )
+    }
+
+    private static func captureHeldDragSample(
+        scroll: NSScrollView,
+        since origin: Date,
+        stage: String
+    ) -> HeldDragSample? {
+        guard let document = scroll.documentView else { return nil }
+        let visible = scroll.documentVisibleRect
+        let docHeight = Double(document.bounds.height)
+        let offset = Double(visible.minY)
+        let visibleHeight = Double(visible.height)
+        return HeldDragSample(
+            time: Date.now.timeIntervalSince(origin),
+            stage: stage,
+            offset: offset,
+            docHeight: docHeight,
+            visibleHeight: visibleHeight,
+            distanceFromBottom: docHeight - offset - visibleHeight,
+            topTurn: visibleTopTurn(in: scroll)
+        )
+    }
+
+    private static func runExternalHidHeldDrag(
+        window: NSWindow,
+        scroll: NSScrollView,
+        runtime: ThreadRuntime,
+        streamID: String,
+        streamTask: Task<Void, Never>,
+        streamGate: HeldDragStreamGate,
+        quietHold: Bool,
+        upSign: Int32,
+        output: URL
+    ) async -> Bool {
+        let buffer = HeldDragObservedBuffer()
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            guard event.window === window else { return event }
+            buffer.events.append(HeldDragObservedBuffer.RawEvent(
+                date: Date.now,
+                phase: event.phase,
+                momentumPhase: event.momentumPhase,
+                deltaY: Double(event.scrollingDeltaY),
+                windowNumber: event.window?.windowNumber ?? event.windowNumber
+            ))
+            return event
+        }
+        defer {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        let point = timelineCGPoint(window: window, scroll: scroll)
+        let ready = HeldDragReady(
+            pid: getpid(),
+            windowNumber: window.windowNumber,
+            point: HeldDragPoint(x: Double(point.x), y: Double(point.y)),
+            upSign: upSign,
+            readyAt: CACurrentMediaTime(),
+            readyAtWallClock: Date().timeIntervalSince1970
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let readyData = try? encoder.encode(ready) else {
+            note("held-drag-ready", "failed to encode held-drag-ready.json")
+            streamTask.cancel()
+            await finish(runtime, id: streamID)
+            return false
+        }
+        do {
+            try readyData.write(to: output.appendingPathComponent("held-drag-ready.json"), options: .atomic)
+        } catch {
+            note("held-drag-ready", "failed to write held-drag-ready.json: \(error.localizedDescription)")
+            streamTask.cancel()
+            await finish(runtime, id: streamID)
+            return false
+        }
+        note(
+            "held-drag-ready",
+            String(
+                format: "pid=%d window=%d point=(%.1f,%.1f) upSign=%d",
+                getpid(), window.windowNumber, point.x, point.y, upSign
+            )
+        )
+
+        let waitStart = Date.now
+        let waitDeadline = waitStart.addingTimeInterval(30.0)
+        while Date.now < waitDeadline, secondsLeft() > 8 {
+            if buffer.events.contains(where: { !$0.phase.isEmpty }) { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        guard let firstPhased = buffer.events.first(where: { !$0.phase.isEmpty }) else {
+            note(
+                "held-drag-hid-wait",
+                "failed: no phased scrollWheel event matched window=\(window.windowNumber) within 30s (windowEvents=\(buffer.events.count))"
+            )
+            streamTask.cancel()
+            await finish(runtime, id: streamID)
+            return false
+        }
+
+        let sampleOrigin = firstPhased.date
+        if quietHold { streamGate.paused = true }
+        note("held-drag-quiet-hold", quietHold ? "stream paused while held" : "off")
+        note(
+            "held-drag-hid-started",
+            String(format: "first phased event phase=%lu after %.2fs", firstPhased.phase.rawValue, firstPhased.date.timeIntervalSince(waitStart))
+        )
+
+        var samples: [HeldDragSample] = []
+        let holdDeadline = Date.now.addingTimeInterval(20.0)
+        var endEvent: HeldDragObservedBuffer.RawEvent?
+        while Date.now < holdDeadline, secondsLeft() > 6 {
+            if let sample = captureHeldDragSample(scroll: scroll, since: sampleOrigin, stage: "hid") {
+                samples.append(sample)
+            }
+            if let foundEnd = buffer.events.first(where: {
+                $0.date >= firstPhased.date && ($0.phase.contains(.ended) || $0.phase.contains(.cancelled))
+            }) {
+                endEvent = foundEnd
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+
+        if let endEvent {
+            note("held-drag-ended", "observed phase=\(endEvent.phase.rawValue) events=\(buffer.events.count)")
+            streamGate.paused = false
+            note("held-drag-post-ended", "streaming 4.0s with no input")
+            let postDeadline = Date.now.addingTimeInterval(4.0)
+            while Date.now < postDeadline, secondsLeft() > 4 {
+                if let sample = captureHeldDragSample(scroll: scroll, since: sampleOrigin, stage: "postEnded") {
+                    samples.append(sample)
+                }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            note("held-drag-post-ended-done", "gap=\(bottomGap(scroll).map(String.init) ?? "nil") running=\(runtime.isRunning)")
+        } else {
+            note("held-drag-hid-ended", "failed: timed out after 20s waiting for ended/cancelled phase (events=\(buffer.events.count))")
+        }
+
+        streamTask.cancel()
+        await finish(runtime, id: streamID)
+
+        let observedEvents = buffer.events.map { event in
+            HeldDragObservedEvent(
+                time: event.date.timeIntervalSince(sampleOrigin),
+                phase: event.phase.rawValue,
+                momentumPhase: event.momentumPhase.rawValue,
+                scrollingDeltaY: event.deltaY,
+                windowNumber: event.windowNumber
+            )
+        }.sorted { $0.time < $1.time }
+
+        let derived = deriveHeldDragStages(samples: samples, observedEvents: observedEvents)
+        return evaluateHeldDrag(
+            samples: derived.samples,
+            observedEvents: observedEvents,
+            routing: .externalHid,
+            upSign: upSign,
+            output: output,
+            requireCompleteSequence: true,
+            sequenceComplete: derived.sequenceComplete
+        )
+    }
+
+    private static func deriveHeldDragStages(
+        samples: [HeldDragSample],
+        observedEvents: [HeldDragObservedEvent]
+    ) -> (samples: [HeldDragSample], sequenceComplete: Bool) {
+        let phased = observedEvents.filter { $0.phase != 0 }
+        guard let holdStartIdx = phased.firstIndex(where: {
+            let phase = NSEvent.Phase(rawValue: $0.phase)
+            return phase.contains(.mayBegin) || phase.contains(.began)
+        }) else {
+            return (samples, false)
+        }
+        let holdStartTime = phased[holdStartIdx].time
+        let holdEndIdx = phased[holdStartIdx...].firstIndex(where: {
+            let phase = NSEvent.Phase(rawValue: $0.phase)
+            return phase.contains(.ended) || phase.contains(.cancelled)
+        })
+        let holdEndTime = holdEndIdx.map { phased[$0].time }
+
+        let heldLastIdx = holdEndIdx ?? (phased.count - 1)
+        var pauses: [(start: Double, end: Double)] = []
+        if heldLastIdx > holdStartIdx {
+            for idx in holdStartIdx..<heldLastIdx {
+                let start = phased[idx].time
+                let end = phased[idx + 1].time
+                if end - start > 1.0 {
+                    pauses.append((start: start, end: end))
+                }
+            }
+        }
+
+        let heldSlice = phased[holdStartIdx...heldLastIdx]
+        let beganTime = heldSlice.first(where: { NSEvent.Phase(rawValue: $0.phase).contains(.began) })?.time
+        let firstChangedTime = heldSlice.first(where: { NSEvent.Phase(rawValue: $0.phase).contains(.changed) })?.time
+        let endedSampleIdx = holdEndTime.flatMap { endTime in samples.firstIndex(where: { $0.time >= endTime }) }
+
+        let derived = samples.enumerated().map { idx, sample in
+            let t = sample.time
+            let stage: String
+            if t < holdStartTime {
+                stage = "preHold"
+            } else if let endedSampleIdx, idx > endedSampleIdx {
+                stage = "postEnded"
+            } else if let endedSampleIdx, idx == endedSampleIdx {
+                stage = "ended"
+            } else if pauses.contains(where: { t > $0.start && t < $0.end }) {
+                stage = "pause"
+            } else if let firstChangedTime, t >= firstChangedTime {
+                if let firstPause = pauses.first, t >= firstPause.end {
+                    stage = "drag2"
+                } else {
+                    stage = "drag1"
+                }
+            } else if let beganTime, t >= beganTime {
+                stage = "began"
+            } else {
+                stage = "mayBegin"
+            }
+            return HeldDragSample(
+                time: sample.time,
+                stage: stage,
+                offset: sample.offset,
+                docHeight: sample.docHeight,
+                visibleHeight: sample.visibleHeight,
+                distanceFromBottom: sample.distanceFromBottom,
+                topTurn: sample.topTurn
+            )
+        }
+
+        // Both drag bursts around one pause long enough to outlast the old 2s stillness timeout.
+        let fullPause = pauses.first { $0.end - $0.start >= 2.8 }
+        let drag1Seen = fullPause.map { pause in heldSlice.contains { NSEvent.Phase(rawValue: $0.phase).contains(.changed) && $0.time <= pause.start } } ?? false
+        let drag2Seen = fullPause.map { pause in heldSlice.contains { NSEvent.Phase(rawValue: $0.phase).contains(.changed) && $0.time >= pause.end } } ?? false
+        let sequenceComplete = holdEndTime != nil && firstChangedTime != nil && drag1Seen && drag2Seen
+        return (derived, sequenceComplete)
+    }
+
+    private static func evaluateHeldDrag(
+        samples: [HeldDragSample],
+        observedEvents: [HeldDragObservedEvent],
+        routing: HeldDragRouting,
+        upSign: Int32,
+        output: URL,
+        requireCompleteSequence: Bool,
+        sequenceComplete: Bool
+    ) -> Bool {
+        let samplesFile = "held-drag-samples.json"
+        let report = HeldDragSamplesReport(samples: samples, observedEvents: observedEvents)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let encoded = try? encoder.encode(report) {
+            try? encoded.write(to: output.appendingPathComponent(samplesFile), options: .atomic)
+        }
+
+        let holdStages: Set<String> = ["mayBegin", "began", "drag1", "pause", "drag2", "ended"]
+        guard samples.count >= 2 else {
+            note("held-drag-verdict", "verdict=FAIL insufficient samples=\(samples.count) routing=\(routing.rawValue)")
+            return false
+        }
+        var snapBackViolations = 0
+        var maxSnapDrop = 0.0
+        for index in 1..<samples.count {
+            let prev = samples[index - 1]
+            let curr = samples[index]
+            guard holdStages.contains(prev.stage), holdStages.contains(curr.stage) else { continue }
+            let drop = prev.distanceFromBottom - curr.distanceFromBottom
+            if drop > 2.0 {
+                snapBackViolations += 1
+                if drop > maxSnapDrop { maxSnapDrop = drop }
+            }
+        }
+
+        let drag1StartIndex = samples.firstIndex(where: { $0.stage == "drag1" }) ?? samples.count
+        let firstAwayIndex = samples.indices.first(where: { $0 >= drag1StartIndex && samples[$0].distanceFromBottom > 1.0 })
+        let leftBottom = firstAwayIndex != nil
+        var returnToBottomViolations = 0
+        if let firstAwayIndex {
+            for index in (firstAwayIndex + 1)..<samples.count where samples[index].distanceFromBottom <= 1.0 {
+                returnToBottomViolations += 1
+            }
+        }
+
+        let pauseSamples = samples.filter { $0.stage == "pause" }
+        var pauseTopJumpViolations = 0
+        var pauseOffsetSpan = 0.0
+        if let pauseStart = pauseSamples.first?.time {
+            let settledPause = pauseSamples.filter { $0.time - pauseStart >= 0.05 }
+            let checkedPause = settledPause.isEmpty ? pauseSamples : settledPause
+            if let baselineOffset = checkedPause.first?.offset {
+                let baselineTopTurn = checkedPause.compactMap(\.topTurn).first
+                var minOffset = baselineOffset
+                var maxOffset = baselineOffset
+                for sample in checkedPause {
+                    if sample.offset < minOffset { minOffset = sample.offset }
+                    if sample.offset > maxOffset { maxOffset = sample.offset }
+                    let turnChanged = baselineTopTurn != nil && sample.topTurn != nil && sample.topTurn != baselineTopTurn
+                    let offsetJumped = abs(sample.offset - baselineOffset) > 4.0
+                    if turnChanged || offsetJumped {
+                        pauseTopJumpViolations += 1
+                    }
+                }
+                pauseOffsetSpan = maxOffset - minOffset
+            }
+        }
+
+        let docGrowth = (samples.last?.docHeight ?? 0) - (samples.first?.docHeight ?? 0)
+        let minGapAfterAway = firstAwayIndex.flatMap { idx in samples[idx...].map(\.distanceFromBottom).min() } ?? -1
+        let maxGap = samples.map(\.distanceFromBottom).max() ?? -1
+        let passed = snapBackViolations == 0
+            && returnToBottomViolations == 0
+            && pauseTopJumpViolations == 0
+            && leftBottom
+            && docGrowth > 20
+            && (!requireCompleteSequence || sequenceComplete)
+
+        let verdict = passed ? "PASS" : "FAIL"
+        let detail = String(
+            format: "verdict=%@ routing=%@ upSign=%d samples=%d observedEvents=%d sequenceComplete=%@ snapBackViolations=%d maxSnapDrop=%.2fpt returnToBottomViolations=%d leftBottom=%@ pauseTopJumpViolations=%d pauseOffsetSpan=%.2fpt minGapAfterAway=%.2fpt maxGap=%.2fpt docGrowth=%.1fpt",
+            verdict, routing.rawValue, upSign, samples.count, observedEvents.count,
+            sequenceComplete ? "true" : "false", snapBackViolations, maxSnapDrop,
+            returnToBottomViolations, leftBottom ? "true" : "false", pauseTopJumpViolations,
+            pauseOffsetSpan, minGapAfterAway, maxGap, docGrowth
+        )
+        WebsiteCaptures.log("stress held-drag-verdict: \(detail)")
+        phases.append([
+            "name": "held-drag-verdict",
+            "verdict": verdict,
+            "detail": detail,
+            "routingMode": routing.rawValue,
+            "upSign": String(upSign),
+            "samples": String(samples.count),
+            "observedEvents": String(observedEvents.count),
+            "sequenceComplete": sequenceComplete ? "true" : "false",
+            "samplesFile": samplesFile,
+            "snapBackViolations": String(snapBackViolations),
+            "maxSnapDropPt": String(format: "%.2f", maxSnapDrop),
+            "returnToBottomViolations": String(returnToBottomViolations),
+            "leftBottom": leftBottom ? "true" : "false",
+            "pauseTopJumpViolations": String(pauseTopJumpViolations),
+            "pauseOffsetSpanPt": String(format: "%.2f", pauseOffsetSpan),
+            "minGapAfterAwayPt": String(format: "%.2f", minGapAfterAway),
+            "maxGapPt": String(format: "%.2f", maxGap),
+            "docGrowthPt": String(format: "%.1f", docGrowth),
+        ])
+        saveReport(listFiles: false)
+        return passed
+    }
+
+    private static func verifyPhasedWheelRoundTrip(window: NSWindow, scroll: NSScrollView) -> Bool {
+        let expected: [(raw: UInt32, phase: NSEvent.Phase, name: String)] = [
+            (CGScrollPhase.mayBegin.rawValue, .mayBegin, "mayBegin"),
+            (CGScrollPhase.began.rawValue, .began, "began"),
+            (CGScrollPhase.changed.rawValue, .changed, "changed"),
+            (CGScrollPhase.ended.rawValue, .ended, "ended"),
+        ]
+        for item in expected {
+            guard let built = phasedWheelEvent(window: window, scroll: scroll, deltaY: item.raw == CGScrollPhase.changed.rawValue ? 2 : 0, phase: item.raw) else {
+                note("held-drag-phase-check", "failed to build \(item.name) event")
+                return false
+            }
+            if built.ns.phase != item.phase || !built.ns.momentumPhase.isEmpty || !built.ns.hasPreciseScrollingDeltas {
+                note(
+                    "held-drag-phase-check",
+                    "mismatch for \(item.name): got phase=\(built.ns.phase.rawValue) expected=\(item.phase.rawValue) momentum=\(built.ns.momentumPhase.rawValue) precise=\(built.ns.hasPreciseScrollingDeltas)"
+                )
+                return false
+            }
+        }
+        note("held-drag-phase-check", "verified mayBegin/began/changed/ended round-trip")
+        return true
+    }
+
+    @MainActor
+    private final class RoutingProbe {
+        var sawEvent = false
+        var matchedWindow = false
+        var matchedPhase = false
+        var observedWindowNumber: Int?
+
+        func reset() {
+            sawEvent = false
+            matchedWindow = false
+            matchedPhase = false
+            observedWindowNumber = nil
+        }
+    }
+
+    private static func detectHeldDragRouting(window: NSWindow, scroll: NSScrollView) async -> HeldDragRouting? {
+        let probe = RoutingProbe()
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            probe.sawEvent = true
+            probe.observedWindowNumber = event.window?.windowNumber ?? event.windowNumber
+            if event.window === window { probe.matchedWindow = true }
+            if event.phase == .mayBegin { probe.matchedPhase = true }
+            return event
+        }
+        defer {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        guard let pidProbe = phasedWheelEvent(window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.mayBegin.rawValue) else {
+            note("held-drag-route", "failed to build probe event")
+            return nil
+        }
+        pidProbe.cg.postToPid(getpid())
+        let pidDeadline = Date.now.addingTimeInterval(0.3)
+        while Date.now < pidDeadline, !(probe.sawEvent && probe.matchedWindow && probe.matchedPhase) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        if probe.sawEvent && probe.matchedWindow && probe.matchedPhase {
+            if let endProbe = phasedWheelEvent(window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.ended.rawValue) {
+                endProbe.cg.postToPid(getpid())
+                try? await Task.sleep(for: .milliseconds(60))
+            }
+            note("held-drag-route", "mode=pid window=\(window.windowNumber)")
+            return .pid
+        }
+
+        probe.reset()
+        guard let queueProbe = phasedWheelEvent(window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.mayBegin.rawValue) else {
+            note("held-drag-route", "failed to build app-queue probe event")
+            return nil
+        }
+        NSApp.postEvent(queueProbe.ns, atStart: false)
+        let queueDeadline = Date.now.addingTimeInterval(0.3)
+        while Date.now < queueDeadline, !(probe.sawEvent && probe.matchedWindow && probe.matchedPhase) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        if probe.sawEvent && probe.matchedWindow && probe.matchedPhase {
+            if let endProbe = phasedWheelEvent(window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.ended.rawValue) {
+                NSApp.postEvent(endProbe.ns, atStart: false)
+                try? await Task.sleep(for: .milliseconds(60))
+            }
+            note("held-drag-route", "mode=app-queue window=\(window.windowNumber)")
+            return .appQueue
+        }
+
+        note(
+            "held-drag-route",
+            "failed: neither pid nor app-queue delivered phased scrollWheel to local monitor (sawEvent=\(probe.sawEvent) matchedWindow=\(probe.matchedWindow) matchedPhase=\(probe.matchedPhase) observedWin=\(probe.observedWindowNumber.map(String.init) ?? "nil") expectedWin=\(window.windowNumber))"
+        )
+        return nil
+    }
+
+    private static func calibratePhasedUpwardSign(
+        window: NSWindow,
+        scroll: NSScrollView,
+        routing: HeldDragRouting
+    ) async -> Int32? {
+        let startGap = bottomGap(scroll) ?? 0
+        for candidateSign: Int32 in [1, -1] {
+            let delta = candidateSign * 120
+            _ = sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.began.rawValue)
+            for _ in 0..<3 {
+                _ = sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: delta, phase: CGScrollPhase.changed.rawValue)
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            _ = sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.ended.rawValue)
+            try? await Task.sleep(for: .milliseconds(150))
+            let gap = bottomGap(scroll) ?? startGap
+            if gap > startGap + 12 {
+                var resetSteps = 0
+                while let current = bottomGap(scroll), current > 2, resetSteps < 10 {
+                    _ = sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.began.rawValue)
+                    for _ in 0..<3 {
+                        _ = sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: -candidateSign * 160, phase: CGScrollPhase.changed.rawValue)
+                        try? await Task.sleep(for: .milliseconds(16))
+                    }
+                    _ = sendPhasedWheel(routing: routing, window: window, scroll: scroll, deltaY: 0, phase: CGScrollPhase.ended.rawValue)
+                    try? await Task.sleep(for: .milliseconds(120))
+                    resetSteps += 1
+                }
+                // Let recent wheel input and scroll phase settle before starting the run.
+                try? await Task.sleep(for: .milliseconds(400))
+                note("held-drag-calibrate", "upSign=\(candidateSign) mode=\(routing.rawValue) probeGap \(startGap)->\(gap) resetGap=\(bottomGap(scroll).map(String.init) ?? "nil")")
+                return candidateSign
+            }
+        }
+        note("held-drag-calibrate", "failed: viewport did not move under \(routing.rawValue) (startGap=\(startGap))")
+        return nil
+    }
+
+    @discardableResult
+    private static func sendPhasedWheel(
+        routing: HeldDragRouting,
+        window: NSWindow,
+        scroll: NSScrollView,
+        deltaY: Int32,
+        phase: UInt32
+    ) -> Bool {
+        guard let built = phasedWheelEvent(window: window, scroll: scroll, deltaY: deltaY, phase: phase) else {
+            note("held-drag-phase-check", "failed to build event deltaY=\(deltaY) phase=\(phase)")
+            return false
+        }
+        let expected: NSEvent.Phase = switch phase {
+        case CGScrollPhase.mayBegin.rawValue: .mayBegin
+        case CGScrollPhase.began.rawValue: .began
+        case CGScrollPhase.changed.rawValue: .changed
+        case CGScrollPhase.ended.rawValue: .ended
+        default: []
+        }
+        guard built.ns.phase == expected else {
+            note("held-drag-phase-check", "phase mismatch raw=\(phase) got=\(built.ns.phase.rawValue) expected=\(expected.rawValue)")
+            return false
+        }
+        switch routing {
+        case .pid:
+            built.cg.postToPid(getpid())
+        case .appQueue:
+            NSApp.postEvent(built.ns, atStart: false)
+        case .externalHid:
+            return false
+        }
+        return true
+    }
+
+    private static func heldDragStreamPieces(count: Int) -> [String] {
+        (1...count).map { index in
+            if index.isMultiple(of: 6) {
+                "\n\n### Stream step \(index)\n\n"
+            } else if index.isMultiple(of: 3) {
+                "Streamed sentence \(index) grows the active reply below the held viewport so any snap back toward the end shows up immediately. "
+            } else {
+                "Line \(index): keeping the reader anchored on an earlier turn while the bottom of the timeline keeps appending markdown text. "
+            }
+        }
+    }
+
+    private static func settleHistoryWindow(
         _ model: AppModel,
         threadID: UUID,
-        recorder: Recorder,
-        stage: Stage,
-        shotName: String,
+        maxGap: Int,
         noteName: String,
         turnsSeeded: Int,
         minSecondsLeft: TimeInterval
@@ -354,7 +1156,7 @@ enum TimelineStress {
             if let window = appWindow(), let scroll = timelineScroll(in: window),
                let docHeight = scroll.documentView?.bounds.height,
                docHeight > scroll.bounds.height * 1.5,
-               let gap = bottomGap(scroll), gap <= 8 {
+               let gap = bottomGap(scroll), gap <= maxGap {
                 settledChecks += 1
                 if settledChecks >= 2 { break }
             } else {
@@ -374,9 +1176,30 @@ enum TimelineStress {
         let openGap = bottomGap(scroll) ?? -1
         let openTopTurn = visibleTopTurn(in: scroll).map(String.init) ?? "unknown"
         let openLowestTurn = mountedLowestTurn(in: scroll).map(String.init) ?? "unknown"
-        await shoot(recorder, stage, shotName)
         note(noteName, "turns=\(turnsSeeded) offset=\(openOffset) docHeight=\(openHeight) gap=\(openGap) topTurn=\(openTopTurn) lowestTurn=\(openLowestTurn)")
         return (window, scroll)
+    }
+
+    private static func openAndSettleHistory(
+        _ model: AppModel,
+        threadID: UUID,
+        recorder: Recorder,
+        stage: Stage,
+        shotName: String,
+        noteName: String,
+        turnsSeeded: Int,
+        minSecondsLeft: TimeInterval
+    ) async -> (window: NSWindow, scroll: NSScrollView)? {
+        guard let settled = await settleHistoryWindow(
+            model,
+            threadID: threadID,
+            maxGap: 8,
+            noteName: noteName,
+            turnsSeeded: turnsSeeded,
+            minSecondsLeft: minSecondsLeft
+        ) else { return nil }
+        await shoot(recorder, stage, shotName)
+        return settled
     }
 
     private static func seedHistory(
@@ -972,17 +1795,40 @@ enum TimelineStress {
         return [narrow, wide, mid, squat]
     }
 
-    private static func wheelEvent(window: NSWindow, scroll: NSScrollView, deltaY: Int32) -> NSEvent? {
-        guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: deltaY, wheel2: 0, wheel3: 0) else { return nil }
+    private static func timelineCGPoint(window: NSWindow, scroll: NSScrollView) -> CGPoint {
         let bounds = scroll.convert(scroll.bounds, to: nil)
         let point = NSPoint(x: bounds.midX, y: bounds.midY)
         let screenPoint = window.convertToScreen(NSRect(origin: point, size: .zero)).origin
-        cg.location = CGPoint(x: screenPoint.x, y: CGDisplayBounds(CGMainDisplayID()).height - screenPoint.y)
+        return CGPoint(x: screenPoint.x, y: CGDisplayBounds(CGMainDisplayID()).height - screenPoint.y)
+    }
+
+    private static func buildWheelCGEvent(window: NSWindow, scroll: NSScrollView, deltaY: Int32) -> CGEvent? {
+        guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: deltaY, wheel2: 0, wheel3: 0) else { return nil }
+        cg.location = timelineCGPoint(window: window, scroll: scroll)
         cg.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(getpid()))
         cg.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
         cg.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
-        guard let event = NSEvent(cgEvent: cg), event.type == .scrollWheel else { return nil }
+        return cg
+    }
+
+    private static func wheelEvent(window: NSWindow, scroll: NSScrollView, deltaY: Int32) -> NSEvent? {
+        guard let cg = buildWheelCGEvent(window: window, scroll: scroll, deltaY: deltaY),
+              let event = NSEvent(cgEvent: cg), event.type == .scrollWheel else { return nil }
         return event
+    }
+
+    private static func phasedWheelEvent(
+        window: NSWindow,
+        scroll: NSScrollView,
+        deltaY: Int32,
+        phase: UInt32
+    ) -> (cg: CGEvent, ns: NSEvent)? {
+        guard let cg = buildWheelCGEvent(window: window, scroll: scroll, deltaY: deltaY) else { return nil }
+        cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase))
+        cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+        cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        guard let ns = NSEvent(cgEvent: cg), ns.type == .scrollWheel else { return nil }
+        return (cg, ns)
     }
 
     private static func burst(_ deltaY: Int32, times: Int, window: NSWindow, scroll: NSScrollView, direct: Bool) async {
@@ -1188,3 +2034,8 @@ enum TimelineStress {
     }
 }
 #endif
+
+@MainActor
+private final class HeldDragStreamGate {
+    var paused = false
+}

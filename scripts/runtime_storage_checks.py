@@ -128,7 +128,6 @@ def diagnostic_source():
                    "    private static func maintainReports()", "    private static func trimReports("):
         swift += declaration(WATCH, marker) + "\n"
     swift += "}\n"
-    swift += declaration(ROOT / "Tivano/Services/Store/DecisionLedger.swift", "actor DecisionLedger {") + "\n"
     swift += "enum Storage {}\n" + (ROOT / "Tivano/Services/Store/Storage+Diagnostics.swift").read_text()
     return swift + DIAGNOSTIC_CHECKS
 
@@ -148,7 +147,6 @@ func reportDirectory() throws -> DiagnosticDirectory {
     }
     return result
 }
-func ledgerFile(_ name: String) -> URL { DecisionLedger.directory.appendingPathComponent(name) }
 
 @main struct Checks {
     static func main() async {
@@ -168,17 +166,12 @@ func ledgerFile(_ name: String) -> URL { DecisionLedger.directory.appendingPathC
             let unknown = HangWatchdog.reportsFolder().appendingPathComponent("hang-not-a-date.txt")
             let temporary = HangWatchdog.reportsFolder().appendingPathComponent(".hang-in-progress.tmp")
             try Fixture.write(unknown); try Fixture.write(temporary)
-            try Fixture.write(ledgerFile("ledger.jsonl"), Data("{}\n".utf8))
-            try Fixture.write(ledgerFile("ledger.1.jsonl"), Data("{}\n{}\n".utf8))
-            let ledgerUnknown = ledgerFile("recovery.jsonl")
-            try Fixture.write(ledgerUnknown)
             let usage = try await Storage.measureDiagnostics()
-            try require(usage == RuntimeStorageUsage(totalBytes: 29, cleanableBytes: 13), "Statistics include unknown/current files or omit candidates")
+            try require(usage == RuntimeStorageUsage(totalBytes: 20, cleanableBytes: 7), "Statistics include unknown/current files or omit candidates")
             try await Storage.clearDiagnostics()
             try require(Fixture.exists(newest) && !Fixture.exists(older), "Cleanup did not preserve newest report")
-            try require(Fixture.exists(ledgerFile("ledger.jsonl")) && !Fixture.exists(ledgerFile("ledger.1.jsonl")), "Cleanup removed current ledger or retained previous")
-            try require([unknown, temporary, ledgerUnknown].allSatisfy(Fixture.exists), "Unknown/in-progress files were removed")
-            try require(try await Storage.measureDiagnostics() == RuntimeStorageUsage(totalBytes: 16, cleanableBytes: 0), "Post-cleanup statistics disagree")
+            try require([unknown, temporary].allSatisfy(Fixture.exists), "Unknown/in-progress files were removed")
+            try require(try await Storage.measureDiagnostics() == RuntimeStorageUsage(totalBytes: 13, cleanableBytes: 0), "Post-cleanup statistics disagree")
         case "report-count":
             var created: [URL] = []
             for i in 0..<14 { created.append(try report(i, age: Double(14 - i) * 60)) }
@@ -206,44 +199,6 @@ func ledgerFile(_ name: String) -> URL { DecisionLedger.directory.appendingPathC
             let latest = try report(1, size: HangWatchdog.reportByteLimit + 1)
             try HangWatchdog.trimReports(in: reportDirectory())
             try require(!Fixture.exists(latest), "Automatic retention kept an oversized report beyond the byte limit")
-        case "ledger-rotation":
-            let ledger = DecisionLedger.shared
-            await ledger.append(.string("seed"))
-            try Fixture.bytes(ledgerFile("ledger.jsonl"), DecisionLedger.fileLimit - 1)
-            await ledger.append(.string("next"))
-            let before = try await ledger.measureDiagnostics()
-            try require(before.cleanableBytes == DecisionLedger.fileLimit - 1, "Ledger did not rotate at byte boundary")
-            let current = try Data(contentsOf: ledgerFile("ledger.jsonl"))
-            await ledger.append(.string(String(repeating: "x", count: Int(DecisionLedger.fileLimit))))
-            try require(try Data(contentsOf: ledgerFile("ledger.jsonl")) == current, "Oversized record modified current ledger")
-            try require(try await ledger.measureDiagnostics() == before, "Oversized record rotated/deleted history")
-            await ledger.append(.string("after"))
-            let lines = try String(contentsOf: ledgerFile("ledger.jsonl"), encoding: .utf8).split(separator: "\n")
-            try require(lines.count == 2 && lines.allSatisfy { JSONValue.parse(String($0)) != nil }, "Oversized record left a partial JSONL entry")
-        case "ledger-age":
-            try Fixture.write(ledgerFile("ledger.jsonl"), Data("{}\n".utf8))
-            try Fixture.write(ledgerFile("ledger.1.jsonl"))
-            try Fixture.age(ledgerFile("ledger.jsonl"), DecisionLedger.previousMaxAge + 60)
-            try Fixture.age(ledgerFile("ledger.1.jsonl"), DecisionLedger.previousMaxAge + 60)
-            let ledger = DecisionLedger.shared
-            let usage = try await ledger.measureDiagnostics()
-            try require(usage == RuntimeStorageUsage(totalBytes: 3), "Age maintenance must expire previous, not current ledger")
-        case "ledger-exact-limit":
-            // JSON quotes plus newline account for three bytes.
-            await DecisionLedger.shared.append(.string(String(repeating: "x", count: Int(DecisionLedger.fileLimit) - 3)))
-            try require(try await DecisionLedger.shared.measureDiagnostics() == RuntimeStorageUsage(totalBytes: DecisionLedger.fileLimit), "Exact-limit record was dropped")
-        case "partial-failure":
-            _ = try report(3, age: 1)
-            let removed = try report(2, age: 2)
-            try Fixture.write(ledgerFile("ledger.jsonl"), Data("{}\n".utf8))
-            let outside = Fixture.root.appendingPathComponent("outside-sentinel")
-            try Fixture.write(outside)
-            try FileManager.default.createSymbolicLink(at: ledgerFile("ledger.1.jsonl"), withDestinationURL: outside)
-            try await expectAsyncError("partial cleanup failure must propagate") { try await Storage.clearDiagnostics() }
-            try require(!Fixture.exists(removed), "Fixture did not exercise partial completion")
-            try require(try Data(contentsOf: outside) == Data("fixture".utf8), "Partial failure touched link target")
-            try require(Fixture.exists(ledgerFile("ledger.jsonl")), "Partial failure removed active ledger")
-            try await expectAsyncError("measurement must not turn unreadable ledger into zero") { _ = try await Storage.measureDiagnostics() }
         case "links-and-names":
             let directory = try reportDirectory()
             let outside = Fixture.root.appendingPathComponent("outside-sentinel")
@@ -301,32 +256,12 @@ func ledgerFile(_ name: String) -> URL { DecisionLedger.directory.appendingPathC
             try expectError("byte total overflow") { _ = try DiagnosticDirectory.totalBytes([a, b]) }
         case "capture-isolation":
             let unrelated = try Fixture.directory("unrelated-library")
-            let sentinel = unrelated.appendingPathComponent("ledger.1.jsonl")
+            let sentinel = unrelated.appendingPathComponent("hang-1970-01-01T00-00-00Z.txt")
             try Fixture.write(sentinel)
             _ = try report(2, age: 1); _ = try report(1, age: 2)
-            await DecisionLedger.shared.append(.string("fixture"))
             try await Storage.clearDiagnostics()
             try require(HangWatchdog.reportsFolder().path.hasPrefix(CaptureRun.storageRoot!.path + "/"), "Reports escaped Capture root")
-            try require(DecisionLedger.directory.path.hasPrefix(CaptureRun.storageRoot!.path + "/"), "Ledger escaped Capture root")
             try require(try Data(contentsOf: sentinel) == Data("fixture".utf8), "Capture touched unrelated fixture library")
-        case "concurrent-ledger":
-            let ledger = DecisionLedger.shared
-            await ledger.append(.string("seed"))
-            try Fixture.bytes(ledgerFile("ledger.jsonl"), DecisionLedger.fileLimit - 8)
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                for i in 0..<200 {
-                    group.addTask { await ledger.append(.string("record-\(i)")) }
-                    group.addTask { try await ledger.clearDiagnostics() }
-                    group.addTask {
-                        let usage = try await ledger.measureDiagnostics()
-                        try require(usage.totalBytes >= usage.cleanableBytes && usage.cleanableBytes >= 0, "Concurrent ledger measurement inconsistent")
-                    }
-                }
-                try await group.waitForAll()
-            }
-            let text = try String(contentsOf: ledgerFile("ledger.jsonl"), encoding: .utf8)
-            let lines = text.split(separator: "\n")
-            try require(text.hasSuffix("\n") && lines.count == 200 && lines.allSatisfy { JSONValue.parse(String($0)) != nil }, "Concurrent cleanup lost/truncated current records")
         case "concurrent-reports":
             _ = try report(0)
             try await withThrowingTaskGroup(of: Void.self) { group in
@@ -892,10 +827,9 @@ UI_STATE_CASES = ["ui-stale-measurement", "ui-cancelled-measurement", "ui-cleanu
 
 DIAGNOSTIC_CASES = [
     "diagnostic-accounting", "report-count", "report-age", "report-capacity",
-    "report-latest-aged", "report-latest-oversize", "ledger-rotation", "ledger-age",
-    "ledger-exact-limit", "partial-failure", "links-and-names", "ancestor-symlink",
+    "report-latest-aged", "report-latest-oversize", "links-and-names", "ancestor-symlink",
     "permissions", "stale-snapshot", "overflow", "capture-isolation",
-    "concurrent-ledger", "concurrent-reports",
+    "concurrent-reports",
 ]
 UPDATER_CASES = [
     "updater-versions", "updater-installer", "updater-busy", "updater-unknown",

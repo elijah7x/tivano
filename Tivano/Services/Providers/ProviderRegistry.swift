@@ -298,9 +298,6 @@ final class ProviderRegistry {
     static let antigravitySeed: [ModelOption] = [
         ModelOption(id: "gemini-4-argon", name: "Gemini 4 Argon", efforts: ["low", "medium", "high"], defaultEffort: "medium"),
         ModelOption(id: "gemini-3.8-flash", name: "Gemini 3.8 Flash", efforts: ["low", "medium", "high"], defaultEffort: "high", isDefault: true),
-        ModelOption(id: "gemini-3.7-flash", name: "Gemini 3.7 Flash", efforts: ["low", "medium", "high"], defaultEffort: "high"),
-        ModelOption(id: "gemini-3.6-flash", name: "Gemini 3.6 Flash", efforts: ["low", "medium", "high"], defaultEffort: "high"),
-        ModelOption(id: "gemini-3.1-pro", name: "Gemini 3.1 Pro", efforts: ["low", "high"], defaultEffort: "high"),
         ModelOption(id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 (Thinking)", efforts: []),
         ModelOption(id: "claude-opus-4-6-thinking", name: "Claude Opus 4.6 (Thinking)", efforts: []),
         ModelOption(id: "gpt-oss-120b", name: "GPT-OSS 120B", efforts: ["medium"], defaultEffort: "medium"),
@@ -368,7 +365,7 @@ final class ProviderRegistry {
         }
         if initialCatalogs[.meta]?.isEmpty ?? true { initialCatalogs[.meta] = Self.metaSeed }
         if initialCatalogs[.zai]?.isEmpty ?? true { initialCatalogs[.zai] = Self.zaiSeed }
-        if initialCatalogs[.antigravity]?.isEmpty ?? true || initialCatalogs[.antigravity]?.contains(where: { $0.id.hasSuffix("-high") || $0.id.hasSuffix("-medium") || $0.id.hasSuffix("-low") }) == true {
+        if initialCatalogs[.antigravity]?.isEmpty ?? true || initialCatalogs[.antigravity]?.contains(where: { row in AntigravitySession.efforts.contains { row.id.hasSuffix("-\($0)") } }) == true {
             initialCatalogs[.antigravity] = Self.antigravitySeed
         }
         if initialCatalogs[.copilot]?.isEmpty ?? true { initialCatalogs[.copilot] = [Self.copilotAuto] }
@@ -487,6 +484,9 @@ final class ProviderRegistry {
                 ?? environment["XDG_DATA_HOME"].flatMap { $0.isEmpty ? nil : ($0 as NSString).appendingPathComponent("gh") }
                 ?? (LoginEnvironment.homeDirectory as NSString).appendingPathComponent(".local/share/gh")
             return [URL(fileURLWithPath: dataDirectory).appendingPathComponent("copilot/copilot")]
+        case .cursor:
+            let home = LoginEnvironment.homeDirectory
+            return [URL(fileURLWithPath: "\(home)/.local/bin/cursor-agent")]
         case .commandcode:
             // npm's global bin under a user prefix, plus the CLI's other names: `cmd` is
             // the documented alias, `command-code` and `commandcode` the package's own.
@@ -573,8 +573,6 @@ final class ProviderRegistry {
         // OpenCode takes its MCP servers as config content in the environment,
         // so the connected servers reach it without a line written into its config files.
         if provider == .opencode { environment.merge(MCPSessionOverrides.opencodeEnvironment()) { _, new in new } }
-        // The CLI reads system settings from that path, so the connected servers reach it without a line in `~/.gemini/settings.json`.
-        if provider == .antigravity, let path = MCPProviderConfig.geminiSettingsPath() { environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = path }
         return environment
     }
 

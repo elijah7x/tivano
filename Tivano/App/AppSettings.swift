@@ -194,7 +194,6 @@ final class AppSettings {
         static let alphaVoiceEnabled = "alphaVoiceEnabled"
         static let promptPredictionsEnabled = "promptPredictionsEnabled"
         static let alphaChimeraEnabled = "alphaChimeraEnabled"
-        static let alphaDecisionsEnabled = "alphaDecisionsEnabled"
         static let externalControlEnabled = "externalControlEnabled"
         static let remoteMCPEnabled = "remoteMCPEnabled"
         static let controlLeftAlpha = "controlLeftAlpha"
@@ -212,6 +211,8 @@ final class AppSettings {
         static let disabledProviders = "disabledProviders"
         static let unmonitoredProviders = "unmonitoredProviderUpdates"
         static let showsProviderUsage = "showsProviderUsage"
+        static let checksCLIUpdates = "checksCLIUpdates"
+        static let showsProviderBinaryPaths = "showsProviderBinaryPaths"
         static let models = "lastModels"
         static let efforts = "lastEfforts"
         static let openCodeProviderMigrated = "openCodeProviderMigrated"
@@ -441,8 +442,6 @@ final class AppSettings {
 
     var isVoiceEnabled: Bool { voiceEnabled }
 
-    /// Labs decision model shadow points (docs/hydra-decisions.md).
-    /// Read once per Hydra job and checked again before every call.
     var alphaChimeraEnabled: Bool {
         didSet {
             defaults.set(alphaChimeraEnabled, forKey: Key.alphaChimeraEnabled)
@@ -452,18 +451,12 @@ final class AppSettings {
 
     var isChimeraEnabled: Bool { alphaEnabled && alphaChimeraEnabled }
 
-    var alphaDecisionsEnabled: Bool {
-        didSet { defaults.set(alphaDecisionsEnabled, forKey: Key.alphaDecisionsEnabled) }
-    }
-
     /// Suggest the next message after a reply when text generation is enabled.
     var promptPredictionsEnabled: Bool {
         didSet { defaults.set(promptPredictionsEnabled, forKey: Key.promptPredictionsEnabled) }
     }
 
     var isPromptPredictionsEnabled: Bool { promptPredictionsEnabled && textGeneration != .off }
-
-    var isDecisionsEnabled: Bool { alphaEnabled && alphaDecisionsEnabled }
 
     /// Dedicated, default-false permission. Installing the command never changes it.
     var externalControlEnabled: Bool {
@@ -831,6 +824,14 @@ final class AppSettings {
         didSet { defaults.set(showsProviderUsage, forKey: Key.showsProviderUsage) }
     }
 
+    var checksCLIUpdates: Bool {
+        didSet { defaults.set(checksCLIUpdates, forKey: Key.checksCLIUpdates) }
+    }
+
+    var showsProviderBinaryPaths: Bool {
+        didSet { defaults.set(showsProviderBinaryPaths, forKey: Key.showsProviderBinaryPaths) }
+    }
+
     private(set) var lastModels: [String: String] {
         didSet { defaults.set(lastModels, forKey: Key.models) }
     }
@@ -1053,7 +1054,6 @@ final class AppSettings {
         promptPredictionsEnabled = defaults.object(forKey: Key.promptPredictionsEnabled) as? Bool ?? true
         alphaChimeraEnabled = defaults.bool(forKey: Key.alphaChimeraEnabled)
         HydraPrompts.acceptsChimeraFence = storedAlphaEnabled && defaults.bool(forKey: Key.alphaChimeraEnabled)
-        alphaDecisionsEnabled = defaults.bool(forKey: Key.alphaDecisionsEnabled)
         // Local control and Remote MCP used to need Alpha too; keep what was in effect.
         var storedExternalControl = defaults.bool(forKey: Key.externalControlEnabled)
         var storedRemoteMCP = defaults.bool(forKey: Key.remoteMCPEnabled)
@@ -1111,6 +1111,8 @@ final class AppSettings {
         disabledProviders = defaults.stringArray(forKey: Key.disabledProviders) ?? []
         unmonitoredProviders = defaults.stringArray(forKey: Key.unmonitoredProviders) ?? []
         showsProviderUsage = defaults.object(forKey: Key.showsProviderUsage) as? Bool ?? true
+        checksCLIUpdates = defaults.object(forKey: Key.checksCLIUpdates) as? Bool ?? false
+        showsProviderBinaryPaths = defaults.object(forKey: Key.showsProviderBinaryPaths) as? Bool ?? false
         lastModels = defaults.dictionary(forKey: Key.models) as? [String: String] ?? [:]
         lastEfforts = defaults.dictionary(forKey: Key.efforts) as? [String: String] ?? [:]
         lastHydraPairID = defaults.string(forKey: Key.lastHydraPair).flatMap(UUID.init(uuidString:))
@@ -1529,12 +1531,7 @@ final class AppSettings {
     }
 
     func monitorsUpdates(_ provider: ProviderKind) -> Bool {
-        !unmonitoredProviders.contains(provider.rawValue)
-    }
-
-    func setMonitorsUpdates(_ monitors: Bool, for provider: ProviderKind) {
-        unmonitoredProviders.removeAll { $0 == provider.rawValue }
-        if !monitors { unmonitoredProviders.append(provider.rawValue) }
+        checksCLIUpdates
     }
 
     func lastModel(for provider: ProviderKind) -> String? {

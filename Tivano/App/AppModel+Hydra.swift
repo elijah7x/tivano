@@ -982,21 +982,6 @@ extension AppModel {
                 job.heads[index].notes = reportNotes
                 job.heads[index].followedReportFormat = status == .completed ? reportNotes != nil : nil
             }
-            if outcome == .completed, hydraJobRunsDecisions(jobID, of: parentID) {
-                let ownedFiles = thread(parentID)?.hydraJobs.first(where: { $0.id == jobID })?
-                    .heads.first(where: { $0.headID == id })?.files ?? []
-                let landed = landing ?? finished.landing
-                let request = HydraDecisionRequests.headReport(
-                    task: finished.task,
-                    ownedFiles: ownedFiles,
-                    landedFiles: landed?.landed == true ? landed?.files.map(\.path) ?? [] : [],
-                    conflicts: landed?.conflicts.count ?? 0,
-                    report: summary ?? "",
-                    notes: reportNotes,
-                    followedReportFormat: reportNotes != nil
-                )
-                runHydraDecision(request, leadID: parentID, jobID: jobID, headID: id)
-            }
         }
         let leadRuntime = runtime(for: parentID)
         let copyPath = info.hasOwnCopy ? head.worktreePath : nil

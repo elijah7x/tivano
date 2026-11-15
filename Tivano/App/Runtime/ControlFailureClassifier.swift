@@ -13,13 +13,6 @@ enum ControlFailureClassifier {
                 break
             }
         }
-        if let error = error as? TypeSafeAPI.Failure {
-            switch error {
-            case .missingKey, .authRejected: return failure("authentication")
-            case .rateLimited: return failure("usage_limit")
-            default: return failure("provider_or_transport")
-            }
-        }
         if let error = error as? ClaudeAccountValidationError {
             switch error {
             case .authentication, .settingsConflict: return failure("authentication")

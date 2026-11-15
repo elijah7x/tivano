@@ -87,7 +87,7 @@ struct MCPSettingsPage: View {
                 }
             }
             .disabled(!model.mcp.isConfigurationLoaded)
-            Text("Connected servers reach every provider when a thread starts: the CLIs at launch, the API models through Tivano itself.")
+            Text("Connected servers reach every provider except Antigravity when a thread starts: the CLIs at launch, the API models through Tivano itself. Antigravity's CLI only reads its own global MCP settings.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
             if query.trimmed.isEmpty || "Remote MCP".localizedCaseInsensitiveContains(query.trimmed) || Chrome.localized("Remote MCP").localizedCaseInsensitiveContains(query.trimmed) {
@@ -135,7 +135,7 @@ private struct MCPLeadCard: View {
                         VStack(alignment: .leading, spacing: 8) {
                             fact(symbol: "lock.fill", text: "Keys stay in your Keychain")
                             fact(symbol: "arrow.uturn.backward", text: "Disconnect to go back to your own setup")
-                            fact(symbol: "sparkles", text: "Every provider, whatever the model")
+                            fact(symbol: "sparkles", text: "Every provider except Antigravity, whatever the model")
                         }
                         .padding(14)
                     }

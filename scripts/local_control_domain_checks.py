@@ -88,7 +88,6 @@ def main():
         declaration(text, "enum AppText {"),
         "extension String {\n" + declaration(text, "    var trimmed:") + "\n}",
         "extension HydraHeadInfo {\n" + declaration("Tivano/Core/Models/Hydra.swift", "    enum Status:") + "\n}",
-        "enum TypeSafeAPI {\n" + declaration("Tivano/Services/Providers/TypeSafeAPI.swift", "    enum Failure:") + "\n}",
         declaration("Tivano/Services/Providers/ClaudeAccountCredentials.swift", "enum ClaudeCredentialError:"),
         declaration("Tivano/Services/Providers/PlanLimits.swift", "enum ResetCreditError:"),
         "extension ProviderKind { var displayName: String { rawValue } }",

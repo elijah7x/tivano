@@ -219,33 +219,6 @@ struct ProviderUpdateAction: View {
     }
 }
 
-struct ProviderUpdateMonitoringRow: View {
-    let state: ProviderUpdateViewState
-    @Binding var isOn: Bool
-
-    var body: some View {
-        ChromeRow(title: "Check for updates", detail: detail) {
-            SettingsSwitch(isOn: $isOn)
-                .accessibilityLabel(Text(verbatim: Chrome.localized("Check for updates")))
-        }
-    }
-
-    /// `ChromeRow` looks the detail up again. Format the whole sentence first; the command
-    /// stays a value, and a second lookup of that sentence misses and leaves it unchanged.
-    private var detail: String {
-        let checks = Chrome.localized(isOn
-            ? "Check this CLI for updates every six hours. Installation starts only when you choose Update."
-            : "Automatic checks are off. You can still check manually.")
-        if state.customBinaryPath {
-            return String(format: Chrome.localized("%@ A custom executable is not updated by Tivano."), checks)
-        }
-        if !state.channelKnown {
-            return String(format: Chrome.localized("%@ The install channel is unknown, so Tivano will not update it."), checks)
-        }
-        return checks
-    }
-}
-
 private func providerUpdateText(_ value: String?) -> String? {
     guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
     return trimmed
