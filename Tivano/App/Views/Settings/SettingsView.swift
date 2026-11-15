@@ -86,7 +86,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "zcode", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
         case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting", "remote mcp", "remote", "远程"]
         case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
-        case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "实验室", "实验", "jev", "typesafe", "decision", "决策"]
+        case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "实验室", "实验"]
         case .shortcuts: ["keyboard", "keys"]
         case .archive: ["storage", "space", "disk", "worktree", "worktrees", "build", "cache", "clean", "archive", "archived", "restore", "存储", "空间", "归档", "清理", "缓存"]
         case .keepsakes: ["keepsake", "early supporter", "信物"]
@@ -1226,7 +1226,11 @@ private struct ProvidersSettingsPage: View {
         VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
             ProviderSelectionSection(settings: settings)
             if !enabled.isEmpty {
-                StickySidebarRow(alignment: .providerCardTop, spacing: Chrome.sectionSpacing) { select in
+                StickySidebarRow(
+                    alignment: .providerCardTop,
+                    spacing: Chrome.sectionSpacing,
+                    sidebarWidth: ProviderListColumn.railWidth
+                ) { select in
                     ProviderListColumn(providers: visible, selected: selected) { provider in
                         select { selection = provider }
                     }
@@ -1248,6 +1252,11 @@ private struct ProvidersSettingsPage: View {
         }
         .task {
             await model.providers.checkCLIUpdates(freshness: ProviderRegistry.cliCheckFreshnessOnOpen)
+        }
+        .onChange(of: settings.checksCLIUpdates) { _, _ in
+            for provider in ProviderKind.allCases {
+                model.providers.cliMonitoringChanged(provider)
+            }
         }
     }
 }
@@ -1282,14 +1291,112 @@ private extension VerticalAlignment {
 }
 
 private struct ProviderListColumn: View {
+    static let railButtonSize: CGFloat = Chrome.rowHeight
+    static let railWidth: CGFloat = Chrome.listInset * 2 + railButtonSize
+    static let railStatusDotSize: CGFloat = 5
+    private static let expandedWidth: CGFloat = 200
+    private static let collapseDelay: Duration = .milliseconds(120)
+
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     let providers: [ProviderKind]
     let selected: ProviderKind?
     let select: (ProviderKind?) -> Void
 
+    @State private var isHoveringRail = false
+    @State private var isHoveringOverlay = false
+    @State private var isExpanded = false
+    @State private var collapseTask: Task<Void, Never>?
+    @State private var railHeight: CGFloat = 0
+    @State private var scrollIsolator = ProviderSelectorScrollIsolator()
+
+    private var isHovering: Bool { isHoveringRail || isHoveringOverlay }
+
+    private var groupedProviders: [(group: ProviderGroup, providers: [ProviderKind])] {
+        ProviderGroup.allCases.compactMap { group in
+            let matched = group.providers.filter { providers.contains($0) }
+            return matched.isEmpty ? nil : (group, matched)
+        }
+    }
+
     var body: some View {
-        // One card: All, then each group under a small in-card label.
+        railCard
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { railHeight = $0 }
+            .alignmentGuide(.providerCardTop) { $0[.top] }
+            .background {
+                ProviderSelectorProbe { view in
+                    scrollIsolator.railView = view
+                }
+            }
+            .onHover { hovering in
+                isHoveringRail = hovering
+                handleHoverChange()
+            }
+            .overlay(alignment: .topLeading) {
+                if isExpanded {
+                    expandedCard
+                        .geometryGroup()
+                        .onHover { hovering in
+                            isHoveringOverlay = hovering
+                            handleHoverChange()
+                        }
+                        .transition(overlayTransition)
+                }
+            }
+            .animation(nil, value: providers)
+            .onChange(of: isHovering) { _, hovering in
+                scrollIsolator.setMonitoring(hovering)
+            }
+            .onDisappear {
+                scrollIsolator.setMonitoring(false)
+                collapseTask?.cancel()
+                collapseTask = nil
+                isHoveringRail = false
+                isHoveringOverlay = false
+                isExpanded = false
+            }
+    }
+
+    private var railCard: some View {
         ChromeCard {
+            VStack(spacing: 0) {
+                ProviderRailButton(
+                    title: Chrome.localized("All providers"),
+                    status: nil,
+                    isSelected: selected == nil,
+                    action: { select(nil) }
+                ) {
+                    SidebarSymbol("square.grid.2x2")
+                        .foregroundStyle(Chrome.primaryText.opacity(selected == nil ? 1 : 0.92))
+                }
+                ForEach(groupedProviders, id: \.group.id) { entry in
+                    Divider()
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 4)
+                        .accessibilityHidden(true)
+                    ForEach(entry.providers) { provider in
+                        ProviderRailButton(
+                            title: provider.displayName,
+                            status: visibleStatus(provider),
+                            isSelected: selected == provider,
+                            action: { select(provider) }
+                        ) {
+                            ProviderIcon(provider: provider, size: Chrome.symbolSize)
+                        }
+                    }
+                }
+            }
+            .padding(Chrome.listInset)
+            .opacity(isExpanded ? 0 : 1)
+            .accessibilityHidden(isExpanded)
+        }
+    }
+
+    private var expandedCard: some View {
+        let shape = RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
+        return ChromeCard {
+            ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
                 SidebarRow(title: "All providers", isSelected: selected == nil,
                            action: { select(nil) }) {
@@ -1305,26 +1412,62 @@ private struct ProviderListColumn: View {
                         .padding(.top, 12)
                         .padding(.bottom, 4)
                 } else {
-                    ForEach(ProviderGroup.allCases) { group in
-                        let grouped = group.providers.filter { providers.contains($0) }
-                        if !grouped.isEmpty {
-                            Text(verbatim: Chrome.localized(group.title))
-                                .font(.ui(.subheadline, weight: .semibold))
-                                .foregroundStyle(Chrome.secondaryText)
-                                .padding(.horizontal, Chrome.rowHorizontalPadding)
-                                .padding(.top, 12)
-                                .padding(.bottom, 4)
-                                .accessibilityAddTraits(.isHeader)
-                            ForEach(grouped) { provider in
-                                row(provider)
-                            }
+                    ForEach(groupedProviders, id: \.group.id) { entry in
+                        Text(verbatim: Chrome.localized(entry.group.title))
+                            .font(.ui(.subheadline, weight: .semibold))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .padding(.horizontal, Chrome.rowHorizontalPadding)
+                            .padding(.top, 12)
+                            .padding(.bottom, 4)
+                            .accessibilityAddTraits(.isHeader)
+                        ForEach(entry.providers) { provider in
+                            row(provider)
                         }
                     }
                 }
             }
             .padding(Chrome.listInset)
+            .background {
+                ProviderSelectorProbe { view in
+                    scrollIsolator.scrollProbeView = view
+                }
+            }
+            }
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .alignmentGuide(.providerCardTop) { $0[.top] }
+        // Group titles make the menu taller than the rail; keep it within the rail's height
+        // (which the sticky column positions) and scroll the rest.
+        .frame(width: Self.expandedWidth, height: railHeight)
+        .floatingGlass(shape)
+        .shadow(
+            color: .black.opacity(performanceMode ? 0 : 0.28),
+            radius: performanceMode ? 0 : 10,
+            y: performanceMode ? 0 : 4
+        )
+    }
+
+    private var overlayTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .opacity
+            .combined(with: .scale(scale: 0.97, anchor: .topLeading))
+            .combined(with: .offset(x: -4))
+    }
+
+    private func handleHoverChange() {
+        if isHovering {
+            collapseTask?.cancel()
+            collapseTask = nil
+            if !isExpanded {
+                withAnimation(Chrome.hover) { isExpanded = true }
+            }
+        } else if isExpanded {
+            collapseTask?.cancel()
+            collapseTask = Task { @MainActor in
+                try? await Task.sleep(for: Self.collapseDelay)
+                guard !Task.isCancelled, !isHovering else { return }
+                withAnimation(Chrome.hover) { isExpanded = false }
+            }
+        }
     }
 
     private func row(_ provider: ProviderKind) -> some View {
@@ -1333,14 +1476,18 @@ private struct ProviderListColumn: View {
                    action: { select(provider) }) {
             ProviderIcon(provider: provider, size: Chrome.symbolSize)
         } accessory: { _ in
-            if !model.providers.status(provider).isChecking {
-                let status = listStatus(provider)
+            if let status = visibleStatus(provider) {
                 Circle()
                     .fill(status.color)
                     .frame(width: 6, height: 6)
                     .accessibilityLabel(Text(verbatim: Chrome.localized(status.title)))
             }
         }
+    }
+
+    private func visibleStatus(_ provider: ProviderKind) -> ProviderListStatus? {
+        guard !model.providers.status(provider).isChecking else { return nil }
+        return listStatus(provider)
     }
 
     private func listStatus(_ provider: ProviderKind) -> ProviderListStatus {
@@ -1351,6 +1498,188 @@ private struct ProviderListColumn: View {
         case .available, .failed: return .attention
         default: return .ready
         }
+    }
+}
+
+private struct ProviderSelectorProbe: NSViewRepresentable {
+    let onResolve: @MainActor (NSView?) -> Void
+
+    func makeNSView(context: Context) -> ProbeView {
+        ProbeView(onResolve: onResolve)
+    }
+
+    func updateNSView(_ nsView: ProbeView, context: Context) {
+        nsView.onResolve = onResolve
+        nsView.report()
+    }
+
+    final class ProbeView: NSView {
+        var onResolve: @MainActor (NSView?) -> Void
+
+        init(onResolve: @escaping @MainActor (NSView?) -> Void) {
+            self.onResolve = onResolve
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            report()
+        }
+
+        func report() {
+            onResolve(window == nil ? nil : self)
+        }
+    }
+}
+
+@MainActor
+private final class ProviderSelectorScrollIsolator {
+    weak var railView: NSView?
+    weak var scrollProbeView: NSView?
+    private nonisolated(unsafe) var monitor: Any?
+    private var hasActiveGesture = false
+
+    deinit {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+    }
+
+    func setMonitoring(_ active: Bool) {
+        if active {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self else { return event }
+                // Local monitors run on the main thread; the event never leaves it.
+                nonisolated(unsafe) let wheel = event
+                let consumed = MainActor.assumeIsolated { self.handleScrollWheel(wheel) == nil }
+                return consumed ? nil : event
+            }
+        } else {
+            hasActiveGesture = false
+            guard let monitor else { return }
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    private func handleScrollWheel(_ event: NSEvent) -> NSEvent? {
+        let overlayScroll = activeScrollView(in: event.window)
+        let activeWindow = railView?.window ?? overlayScroll?.window
+        guard let activeWindow, event.window === activeWindow else { return event }
+        guard isPointInSelector(event.locationInWindow, window: activeWindow, overlayScroll: overlayScroll) else {
+            return event
+        }
+        guard let overlayScroll else {
+            hasActiveGesture = false
+            return nil
+        }
+        if shouldForwardWheel(event, to: overlayScroll) {
+            overlayScroll.scrollWheel(with: event)
+        }
+        return nil
+    }
+
+    private func activeScrollView(in window: NSWindow?) -> NSScrollView? {
+        guard let scroll = scrollProbeView?.enclosingScrollView,
+              !scroll.isHiddenOrHasHiddenAncestor,
+              let scrollWindow = scroll.window,
+              window == nil || scrollWindow === window else { return nil }
+        return scroll
+    }
+
+    private func isPointInSelector(_ point: NSPoint, window: NSWindow, overlayScroll: NSScrollView?) -> Bool {
+        containsWindowPoint(point, in: railView, window: window)
+            || containsWindowPoint(point, in: overlayScroll, window: window)
+    }
+
+    private func containsWindowPoint(_ point: NSPoint, in view: NSView?, window: NSWindow) -> Bool {
+        guard let view, view.window === window, !view.isHiddenOrHasHiddenAncestor, !view.bounds.isEmpty else {
+            return false
+        }
+        return view.bounds.contains(view.convert(point, from: nil))
+    }
+
+    /// Prevent `NSScrollView.scrollWheel(with:)` from forwarding excess scroll up the responder
+    /// chain into the Settings page's outer scroll view when at an edge or unscrollable.
+    private func shouldForwardWheel(_ event: NSEvent, to scrollView: NSScrollView) -> Bool {
+        guard let document = scrollView.documentView else { return false }
+        let clip = scrollView.contentView.bounds
+        let doc = document.bounds
+        guard doc.height > clip.height + 0.5 else {
+            hasActiveGesture = false
+            return false
+        }
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+            let wasActive = hasActiveGesture
+            hasActiveGesture = false
+            return wasActive
+        }
+        let deltaY = event.scrollingDeltaY
+        guard deltaY != 0 else { return false }
+        let flipped = document.isFlipped
+        let atTop = flipped ? (clip.minY <= doc.minY + 0.5) : (clip.maxY >= doc.maxY - 0.5)
+        let atBottom = flipped ? (clip.maxY >= doc.maxY - 0.5) : (clip.minY <= doc.minY + 0.5)
+        if (deltaY > 0 && atTop) || (deltaY < 0 && atBottom) {
+            return false
+        }
+        if !event.phase.isEmpty {
+            hasActiveGesture = true
+        }
+        return true
+    }
+}
+
+private struct ProviderRailButton<Icon: View>: View {
+    let title: String
+    let status: ProviderListStatus?
+    let isSelected: Bool
+    let action: () -> Void
+    @ViewBuilder let icon: () -> Icon
+
+    @State private var isHovering = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+        Button(action: action) {
+            icon()
+                .frame(width: Chrome.iconSize, height: Chrome.iconSize)
+                .frame(width: ProviderListColumn.railButtonSize, height: ProviderListColumn.railButtonSize)
+                .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .help(Text(verbatim: title))
+        .accessibilityLabel(Text(verbatim: title))
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .background {
+            shape
+                .fill(fill)
+                .animation(Chrome.hover, value: isSelected)
+                .animation(Chrome.hover, value: isHovering)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if let status {
+                Circle()
+                    .fill(status.color)
+                    .frame(width: ProviderListColumn.railStatusDotSize, height: ProviderListColumn.railStatusDotSize)
+                    .padding((ProviderListColumn.railButtonSize - Chrome.iconSize) / 2)
+                    .allowsHitTesting(false)
+                    .accessibilityLabel(Text(verbatim: Chrome.localized(status.title)))
+            }
+        }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+    }
+
+    private var fill: Color {
+        if isSelected { return Chrome.overlay(0.12) }
+        if isHovering { return Chrome.overlay(0.06) }
+        return .clear
     }
 }
 
@@ -1572,18 +1901,15 @@ private struct ProviderSettingsSection: View {
                             }
                         }
                     }
-                    if let updateState {
-                        ChromeRowDivider()
-                        ProviderUpdateMonitoringRow(state: updateState, isOn: Binding(
-                            get: { settings.monitorsUpdates(provider) },
-                            set: { settings.setMonitorsUpdates($0, for: provider) }
-                        ))
-                        ChromeRowDivider()
-                        ChromeRow(title: "Binary path", detail: status.executable?.path) {
-                            TextField("", text: $binaryPath, prompt: Text(provider.executableName))
-                                .textFieldStyle(.roundedBorder)
-                                .font(.ui(size: 12, design: .monospaced))
-                                .frame(width: 200)
+                    if updateState != nil {
+                        if settings.showsProviderBinaryPaths {
+                            ChromeRowDivider()
+                            ChromeRow(title: "Binary path", detail: status.executable?.path) {
+                                TextField("", text: $binaryPath, prompt: Text(provider.executableName))
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.ui(size: 12, design: .monospaced))
+                                    .frame(width: 200)
+                            }
                         }
                         if !status.isInstalled {
                             ChromeRowDivider()
@@ -1672,9 +1998,6 @@ private struct ProviderSettingsSection: View {
                 await registry.refresh(provider)
                 await registry.loadCatalog(provider, force: true)
             }
-        }
-        .onChange(of: settings.monitorsUpdates(provider)) { _, _ in
-            registry.cliMonitoringChanged(provider)
         }
         .onChange(of: settings.isEnabled(provider)) { _, enabled in
             registry.cliMonitoringChanged(provider)

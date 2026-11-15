@@ -144,8 +144,8 @@ struct ThreadTimeline: View, Equatable {
     @State private var mountedWindow: MountedWindow?
     @State private var measurements = TimelineMeasurements()
     /// The runtime's unattended-turn token as this view last saw it (see
-    /// `ThreadRuntime.autoStartedTurnToken`). Nil until the first turn this view sees
-    /// start, so a view that appears mid-conversation reads its next turn as a send.
+    /// `ThreadRuntime.autoStartedTurnToken`). Seeded on appear so an auto-started turn
+    /// after mounting while idle counts as unattended.
     @State private var seenAutoStartedTurnToken: Int?
     /// Changes to rebuild the lazy stack from scratch: the second repair for a viewport
     /// the stack has built nothing for (see `repairLayout`).
@@ -417,7 +417,7 @@ struct ThreadTimeline: View, Equatable {
         let generation = tracking.navigationGeneration
         DispatchQueue.main.async {
             tracking.bottomSnapPending = false
-            guard tracking.placementToken == nil, generation == tracking.navigationGeneration, !tracking.isUserScrolling, abs(tracking.distanceFromBottom) > 1 else { return }
+            guard tracking.placementToken == nil, generation == tracking.navigationGeneration, !tracking.isReaderInteracting, abs(tracking.distanceFromBottom) > 1 else { return }
             withTransaction(Self.unanimated) { position.scrollTo(edge: .bottom) }
         }
     }
@@ -1011,6 +1011,9 @@ struct ThreadTimeline: View, Equatable {
         .onAppear {
             tracking.setColumnShown(columnIsShown, on: runtime)
             tracking.holdEnd(for: 1.5)
+            if seenAutoStartedTurnToken == nil {
+                seenAutoStartedTurnToken = runtime.autoStartedTurnToken
+            }
         }
         .coordinateSpace(name: "timelineViewport")
         .scrollIndicators(.never)
@@ -1126,7 +1129,7 @@ struct ThreadTimeline: View, Equatable {
             }
             settleMeasurements(in: blocks)
             updateMountedWindow(in: blocks, offset: new.offset, height: new.containerHeight)
-            let atRest = !tracking.isUserScrolling && !tracking.isCoasting
+            let atRest = !tracking.isReaderInteracting && !tracking.isCoasting
             if atRest, !scrolled, !restoring {
                 // The content changed shape under a resting reader and an anchor moved the
                 // offset to follow: a turn folded, rows arrived or left, history landed
@@ -1168,9 +1171,15 @@ struct ThreadTimeline: View, Equatable {
             } else if scrolled {
                 // Only the reader's own scrolling decides whether the timeline follows new text.
                 // Guarded, so measuring the scroll position never touches anything a body reads.
-                let pinned = new.distanceFromBottom < 48
-                if pinned != tracking.isPinnedToBottom { tracking.isPinnedToBottom = pinned }
-                if !historyLoadPending, pinned != anchorsBottomOnGrowth { anchorsBottomOnGrowth = pinned }
+                // `delta` excludes anchor growth, so text arriving under a top anchor never
+                // reads as the reader leaving the end; any upward motion does, however slow.
+                if tracking.isReaderInteracting, new.distanceFromBottom > 0.5, delta < -0.1 {
+                    if tracking.isPinnedToBottom { tracking.isPinnedToBottom = false }
+                    if !historyLoadPending, anchorsBottomOnGrowth { anchorsBottomOnGrowth = false }
+                } else if new.distanceFromBottom < old.distanceFromBottom, new.distanceFromBottom <= 8 {
+                    if !tracking.isPinnedToBottom { tracking.isPinnedToBottom = true }
+                    if !historyLoadPending, !anchorsBottomOnGrowth { anchorsBottomOnGrowth = true }
+                }
             } else if (tracking.isPinnedToBottom || old.distanceFromBottom <= 1), atRest, !restoring, abs(new.distanceFromBottom) > 1 {
                 // Pinned, at rest, and not at the end: the content grew or reflowed to a new
                 // width, the chat box took height, or the scroll view lost its place (rows
@@ -1252,9 +1261,11 @@ struct ThreadTimeline: View, Equatable {
                 Task { await warmMarkdown() }
                 return
             }
-            // Whatever phase the last scroll was left in (a coast whose end never came)
-            // is over: the turn's own scroll below must not be read as its continuation.
-            tracking.notePhase(.idle)
+            if !tracking.isTrackpadHeld, !(tracking.isUserScrolling && !tracking.isCoasting) {
+                // Whatever phase the last scroll was left in (a coast whose end never came)
+                // is over: the turn's own scroll below must not be read as its continuation.
+                tracking.notePhase(.idle)
+            }
             let wasAtEnd = tracking.isPinnedToBottom
             // A turn nothing was sent for is not the reader's send: for a reader who scrolled
             // up it is a row arriving like any other, and the jump button tells them about it,
@@ -1262,7 +1273,7 @@ struct ThreadTimeline: View, Equatable {
             // for a reader already at the end, still brings them down.
             let unattended = seenAutoStartedTurnToken.map { $0 != runtime.autoStartedTurnToken } ?? false
             seenAutoStartedTurnToken = runtime.autoStartedTurnToken
-            if wasAtEnd || !unattended {
+            if !tracking.isReaderInteracting, wasAtEnd || !unattended {
                 tracking.noteUserNavigation()
                 let far = tracking.distanceFromBottom > Self.farJump(viewportHeight)
                 mountTail(in: blocks)
@@ -1273,6 +1284,7 @@ struct ThreadTimeline: View, Equatable {
                     // From far up it lands at once too (see `farJump`).
                     withTransaction(Self.unanimated) { position.scrollTo(edge: .bottom) }
                 } else {
+                    tracking.animatedNavigation = true
                     withAnimation(.easeOut(duration: 0.25)) { position.scrollTo(edge: .bottom) }
                 }
             }
@@ -1314,8 +1326,8 @@ struct ThreadTimeline: View, Equatable {
             // end keeps the end, snapped unanimated as the area grows, and a reader who
             // scrolled up to read is left exactly where they are. Mid-resize this waits for
             // the settle, like the geometry branch above.
-            guard !liveResize.isActive, tracking.placementToken == nil else { return }
-            guard tracking.isPinnedToBottom || tracking.distanceFromBottom < 48 else { return }
+            guard !liveResize.isActive, tracking.placementToken == nil, !tracking.isReaderInteracting else { return }
+            guard tracking.isPinnedToBottom || tracking.distanceFromBottom <= 1 else { return }
             tracking.isPinnedToBottom = true
             anchorsBottomOnGrowth = true
             guard abs(tracking.distanceFromBottom) > 1 else { return }
@@ -1332,9 +1344,9 @@ struct ThreadTimeline: View, Equatable {
             // inside an existing row stays with the pinned machinery above; this is for
             // new rows only. A reader whose pin flag went stale while they sat at the end
             // is followed by the distance they hold as well.
-            guard tracking.placementToken == nil, !historyLoadPending, !tracking.isUserScrolling else { return }
+            guard tracking.placementToken == nil, !historyLoadPending, !tracking.isReaderInteracting else { return }
             let isQuestion = lastEntryID?.hasPrefix("question-") == true
-            guard tracking.isPinnedToBottom || tracking.distanceFromBottom < 48 || isQuestion else { return }
+            guard tracking.isPinnedToBottom || tracking.distanceFromBottom <= 1 || isQuestion else { return }
             // A reader following a long run lets the oldest rows go, above the viewport, so
             // the eager stack stays bounded; they come back as history on the way up.
             if visible.count > TimelineWindow.eagerLimit {
@@ -1681,6 +1693,7 @@ struct ThreadTimeline: View, Equatable {
         guard tracking.placementToken == nil else { return }
         tracking.isPinnedToBottom = true
         anchorsBottomOnGrowth = true
+        tracking.animatedNavigation = true
         position.scrollTo(edge: .bottom)
         // The glide is a scroll like any other: the shimmers and the card's staves rest,
         // and streamed rows are flushed at the scrolling pace, so its frames are its own.
@@ -1884,16 +1897,30 @@ final class TimelineScrollTracking: ScrollActivityReporter {
         }
     }
     @ObservationIgnored private var lastWheelInputAt: CFTimeInterval = -.infinity
+    @ObservationIgnored var isTrackpadHeld = false
+    @ObservationIgnored var lastWheelEventAt: CFTimeInterval = -.infinity
 
     /// Wheel scrolling can arrive without a SwiftUI scroll phase. Keep its input long
     /// enough for the deferred geometry callback, rather than guessing from layout.
     var hasRecentWheelInput: Bool { CACurrentMediaTime() - lastWheelInputAt < 0.15 }
 
+    /// A hold whose `.ended` went to another window would otherwise block following for
+    /// good; 8s without any wheel event releases it, as in `notePhase`.
+    var isReaderInteracting: Bool {
+        isUserScrolling || hasRecentWheelInput
+            || (isTrackpadHeld && CACurrentMediaTime() - lastWheelEventAt < 8)
+    }
+
     /// `offsetDelta` is how far this input moves the offset. During a history load it is
     /// the reader's own movement: the offset alone cannot tell it apart from an anchor
     /// that may or may not have absorbed the inserted page in the same frame.
     func noteWheelInput(offsetDelta: CGFloat = 0) {
-        lastWheelInputAt = CACurrentMediaTime()
+        let now = CACurrentMediaTime()
+        lastWheelInputAt = now
+        lastWheelEventAt = now
+        if offsetDelta != 0 {
+            lastReaderMovementAt = now
+        }
         if historyLoadPending, !isRestoringHistory { historyReaderDelta += offsetDelta }
         noteUserNavigation(preservingHistory: historyLoadPending)
     }
@@ -2116,6 +2143,8 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// withdrawn, mid-drag or mid-coast alike, so the app never goes on hearing it scroll.
     func endActivity() {
         lastWheelInputAt = -.infinity
+        lastWheelEventAt = -.infinity
+        isTrackpadHeld = false
         settleWatch?.cancel()
         settleWatch = nil
         phaseWatch?.cancel()
@@ -2139,12 +2168,13 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// A phase's end is not always delivered: content growing under an animated scroll
     /// cuts it short, and the app going to the back mid-flick loses the last event. Left
     /// as reported, the timeline would count itself as moving for good and never snap or
-    /// repair again. A coast whose reader has not moved the offset for 400ms is over,
-    /// whatever was said (content growing under a held end moves the offset too, and used
-    /// to keep a cut-short coast alive for as long as a turn streamed: no snap, no repair,
-    /// and a running turn the reader could not see until the thread was reopened); a drag
-    /// whose finger has not moved for 2s is taken as lost the same way. Three seconds is
-    /// the ceiling on any phase. The layout gets checked once it is over.
+    /// repair again. A coast whose reader has not moved the offset for 400ms (or 3s since
+    /// phase start) is over, whatever was said (content growing under a held end moves the
+    /// offset too, and used to keep a cut-short coast alive for as long as a turn streamed:
+    /// no snap, no repair, and a running turn the reader could not see until the thread was
+    /// reopened). An interactive drag drops the 3s ceiling and ends only once fingers have
+    /// lifted and movement stops for 2s, or after 8s with no wheel event at all as a
+    /// lost-event fallback. The layout gets checked once it is over.
     func notePhase(_ phase: ScrollPhase) {
         if phase == .interacting { noteUserNavigation(preservingHistory: historyLoadPending) }
         if phase == .idle { animatedNavigation = false }
@@ -2158,15 +2188,22 @@ final class TimelineScrollTracking: ScrollActivityReporter {
         lastOffsetChangeAt = now
         lastReaderMovementAt = now
         phaseStartedAt = now
-        let still: CFTimeInterval = phase == .interacting ? 2.0 : 0.4
         phaseWatch = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
                 guard let self, !Task.isCancelled else { return }
                 let now = CACurrentMediaTime()
-                guard now - lastReaderMovementAt >= still || now - phaseStartedAt >= 3.0 else { continue }
+                let timedOut: Bool
+                if phase == .interacting {
+                    timedOut = (!isTrackpadHeld && now - lastReaderMovementAt >= 2.0)
+                        || now - max(lastWheelEventAt, phaseStartedAt, lastReaderMovementAt) >= 8.0
+                } else {
+                    timedOut = now - lastReaderMovementAt >= 0.4 || now - phaseStartedAt >= 3.0
+                }
+                guard timedOut else { continue }
                 isUserScrolling = false
                 isCoasting = false
+                isTrackpadHeld = false
                 if let reported = reportedTimeline, !isReaderScrolling {
                     ScrollActivity.shared.setScrolling(false, timeline: reported)
                 }
@@ -3296,11 +3333,26 @@ private struct ScrollViewProbe: NSViewRepresentable {
                 // Hidden columns stay attached and retain their app-wide monitor.
                 // Skip them before hit-testing the whole window for every wheel event.
                 guard let self, !isHiddenOrHasHiddenAncestor, let scrollView = enclosingScrollView,
-                      event.window === window, event.scrollingDeltaY != 0,
+                      event.window === window,
                       let content = window?.contentView, let parent = content.superview else { return event }
                 let point = parent.convert(event.locationInWindow, from: nil)
                 let hit = content.hitTest(point)
-                guard Self.routesVerticalWheel(from: hit, to: scrollView) else { return event }
+                let routesToTimeline = Self.routesVerticalWheel(from: hit, to: scrollView)
+                if let tracking, routesToTimeline || tracking.isTrackpadHeld {
+                    let phase = event.phase
+                    let momentumPhase = event.momentumPhase
+                    tracking.lastWheelEventAt = CACurrentMediaTime()
+                    if momentumPhase.isEmpty {
+                        if phase.contains(.mayBegin) || phase.contains(.began) || phase.contains(.changed) {
+                            tracking.isTrackpadHeld = true
+                        } else if phase.contains(.ended) || phase.contains(.cancelled) {
+                            tracking.isTrackpadHeld = false
+                        }
+                    } else {
+                        tracking.isTrackpadHeld = false
+                    }
+                }
+                guard routesToTimeline, event.scrollingDeltaY != 0 else { return event }
                 #if DEBUG
                 MainActor.assumeIsolated { CaptureTimelineScrolling.noteWheel() }
                 #endif

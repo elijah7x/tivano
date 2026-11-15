@@ -109,7 +109,6 @@ extension AppModel {
         guard !patch.trimmed.isEmpty else {
             return skip(skippedNonGitChanges ? "not applicable: not a Git checkout" : "no changes")
         }
-        let decisionPatch = hydraJobRunsDecisions(jobID, of: leadID) ? patch : nil
         if patch.count > 80_000 {
             let notice = "\n\n[Patch truncated to 80,000 characters.]"
             patch = String(patch.prefix(80_000 - notice.count)) + notice
@@ -125,36 +124,6 @@ extension AppModel {
             if let uncertain = notes.uncertain { fields.append("Uncertain \(uncertain)") }
             if !fields.isEmpty { noteLines.append("\(info.persona.name): \(fields.joined(separator: " / "))") }
         }
-        var decisionStats: Task<[DiffFileStat], Never>?
-        let requestText = job.request
-        if let decisionPatch {
-            let leadReply = runtime.entries.last(where: {
-                if case .assistant = $0.item.content { return true }
-                return false
-            }).flatMap { entry -> String? in
-                guard case .assistant(let message) = entry.item.content else { return nil }
-                return message.text
-            } ?? ""
-            let headFlags = noteLines
-            let heads = jobHeads.count
-            let leadBuilt = job.leadBuilt
-            let leadEditsAfterReports = job.leadEditsAfterReports
-            decisionStats = Task.detached(priority: .utility) {
-                guard await self.hydraJobRunsDecisions(jobID, of: leadID) else { return [] }
-                let files = DiffStats.files(inPatch: decisionPatch)
-                let request = HydraDecisionRequests.preReview(
-                    request: requestText,
-                    leadReply: leadReply,
-                    headFlags: headFlags,
-                    heads: heads,
-                    leadBuilt: leadBuilt,
-                    leadEditsAfterReports: leadEditsAfterReports,
-                    files: files
-                )
-                await self.runHydraDecision(request, leadID: leadID, jobID: jobID)
-                return files
-            }
-        }
         let prompt = HydraPrompts.v2ReviewPrompt(request: job.request, notes: noteLines.joined(separator: "\n"), patch: patch)
         let findings: String
         switch await TextGeneration.review(prompt, engine: selected.engine, directory: checkout) {
@@ -169,28 +138,6 @@ extension AppModel {
         updateHydraJob(jobID, of: leadID) {
             $0.reviewEngine = selected.reviewer
             $0.reviewFindings = findingCount
-        }
-        if hydraJobRunsDecisions(jobID, of: leadID), let decisionStats {
-            Task.detached(priority: .utility) {
-                let files = await decisionStats.value
-                let findingPaths = findingCount == 0 ? [] : DiffStats.mentionedPaths(files, in: findings)
-                await MainActor.run {
-                    guard self.hydraJobRunsDecisions(jobID, of: leadID) else { return }
-                    self.recordHydraDecisionOutcome(
-                        leadID: leadID, jobID: jobID, reviewer: selected.reviewer,
-                        findings: findingCount, findingPaths: findingPaths
-                    )
-                    if findingCount > 0 {
-                        let parts = HydraDecisionRequests.splitFindings(findings)
-                        if let request = HydraDecisionRequests.reviewFindings(request: requestText, files: files, findings: parts) {
-                            self.runHydraDecision(request, leadID: leadID, jobID: jobID, meta: [
-                                "reviewer": .string(selected.reviewer),
-                                "findingPaths": .array(parts.prefix(8).map { .array(DiffStats.mentionedPaths(files, in: $0).map(JSONValue.string)) }),
-                            ])
-                        }
-                    }
-                }
-            }
         }
         guard findingCount > 0 else { return .skipped }
         let text = HydraPrompts.v2ReviewMessage(reviewer: selected.reviewer, findings: findings)

@@ -89,7 +89,8 @@ enum ZCodeCLI {
         for key in ["memoryEnabled", "askUserQuestionAutoResolutionEnabled"] {
             if let value = settings?[key]?.bool { result[key] = .bool(value) }
         }
-        if let mode = settings?["toolSearchMode"]?.string, ["auto", "native", "local", "off"].contains(mode) {
+        // ZCode's app-runtime-preferences schema rejects "native" even though setting.json allows it.
+        if let mode = settings?["toolSearchMode"]?.string, ["auto", "local", "off"].contains(mode) {
             result["toolSearchMode"] = .string(mode)
         }
         return .object(result)

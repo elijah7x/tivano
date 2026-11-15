@@ -860,8 +860,8 @@ final class AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(600))
                 guard !Task.isCancelled, let self, self.selectedThreadID != id, let runtime = self.runtimes[id] else { return }
-                // A turn still working keeps its session; check again after the next interval.
-                guard !runtime.isRunning, self.voice.threadID != id else { continue }
+                // A turn still working or waiting on background tasks keeps its session; check again after the next interval.
+                guard !runtime.isRunning, runtime.backgroundTasks.isEmpty, self.voice.threadID != id else { continue }
                 runtime.stopSession()
                 if self.releaseIdleRuntime(id) { return }
                 for _ in 0..<3 {

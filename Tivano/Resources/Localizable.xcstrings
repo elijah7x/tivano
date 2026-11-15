@@ -1,6 +1,61 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%lld accounts need sign-in" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个账号需重新登录"
+          }
+        }
+      }
+    },
+    "1 account needs sign-in" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个账号需重新登录"
+          }
+        }
+      }
+    },
+    "Accounts" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账号"
+          }
+        }
+      }
+    },
+    "Check installed CLIs for updates every six hours. Installation starts only when you choose Update." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每六小时检查已安装 CLI 的更新；仅在你点击“更新”后安装。"
+          }
+        }
+      }
+    },
+    "Login expired" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录已过期"
+          }
+        }
+      }
+    },
     "No providers available." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -63,6 +118,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "按 Tab 键接受"
+          }
+        }
+      }
+    },
+    "Show each CLI's executable path and a field to override it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在各服务商卡片中显示 CLI 的可执行文件路径和覆盖输入框。"
+          }
+        }
+      }
+    },
+    "Show executable paths" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示可执行文件路径"
           }
         }
       }
@@ -1321,94 +1398,6 @@
         }
       }
     },
-    "Decision model (Jev)" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "决策模型（Jev）"
-          }
-        }
-      }
-    },
-    "Decisions ledger" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "决策账本"
-          }
-        }
-      }
-    },
-    "Every judgment and its outcome, kept on this Mac. Read it with scripts/hydra_eval.py decisions." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "每次判断及其结果都保存在这台 Mac 上。可用 scripts/hydra_eval.py decisions 读取。"
-          }
-        }
-      }
-    },
-    "Paste your key" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "粘贴密钥"
-          }
-        }
-      }
-    },
-    "Shadow test: asks TypeSafe Jev to judge head reports and each job before its review, and keeps the judgments on this Mac beside what happened next. Hydra itself does not change. Sends the request, head reports, the lead's replies, review findings and changed file paths with line counts; never diffs or file contents, though the text can quote code. Off stops calls at once; on applies from the next request." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "影子测试：请 TypeSafe Jev 评判子智能体的汇报，并在每个任务进入审查前作出判断；判断和之后的实际结果都保存在这台 Mac 上。Hydra 本身的行为不变。会发送用户请求、子智能体汇报、主智能体的回复、审查意见，以及改动文件的路径和增删行数；不发送 diff 或文件内容，但文字中可能引用代码。关闭后立即停止调用；开启后从下一次请求起生效。"
-          }
-        }
-      }
-    },
-    "Stored in your Keychain for this edition. Get one at typesafe.ai." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存在当前版本的钥匙串中。可在 typesafe.ai 获取。"
-          }
-        }
-      }
-    },
-    "The Keychain did not take the key: %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "钥匙串未能保存该密钥：%@"
-          }
-        }
-      }
-    },
-    "TypeSafe API key" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "TypeSafe API 密钥"
-          }
-        }
-      }
-    },
     "Code" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2543,6 +2532,17 @@
         }
       }
     },
+    "%@ exited while background tasks were still running: %@. They were stopped." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 在后台任务仍在运行时退出：%2$@。这些后台任务已停止。"
+          }
+        }
+      }
+    },
     "%@ failed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2693,6 +2693,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "后台任务完成后，%@ 已继续工作。"
+          }
+        }
+      }
+    },
+    "%@ picked the work back up on its own." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已自行继续工作。"
           }
         }
       }
@@ -7416,13 +7427,13 @@
         }
       }
     },
-    "Connected servers reach every provider when a thread starts: the CLIs at launch, the API models through Tivano itself." : {
+    "Connected servers reach every provider except Antigravity when a thread starts: the CLIs at launch, the API models through Tivano itself. Antigravity's CLI only reads its own global MCP settings." : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "对话启动时，已连接的服务器会提供给所有服务商：命令行工具在启动时加载，API 模型则通过 Tivano 自身调用。"
+            "value" : "对话启动时，已连接的服务器会提供给除 Antigravity 外的所有服务商：命令行工具在启动时加载，API 模型则通过 Tivano 自身调用。Antigravity 的 CLI 只读取它自己的全局 MCP 设置。"
           }
         }
       }
@@ -9836,13 +9847,13 @@
         }
       }
     },
-    "Every provider, whatever the model" : {
+    "Every provider except Antigravity, whatever the model" : {
       "extractionState" : "manual",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "适用于所有服务商和模型"
+            "value" : "适用于除 Antigravity 外的所有服务商和模型"
           }
         }
       }
@@ -18907,6 +18918,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 后停止"
+          }
+        }
+      }
+    },
+    "Stopped background tasks with the session: %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已随会话停止后台任务：%@。"
           }
         }
       }

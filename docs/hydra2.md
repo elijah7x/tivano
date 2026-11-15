@@ -8,7 +8,7 @@
 - Hydra 2 替换派发决策、交接、回报、返工和审查流程，并改变完成 head 的副本保留时机；副本创建、增量落地、合并和 watchdog 的底层算法继续复用。
 - Hydra 不受 Alpha 总开关约束，没有版本切换或各环节独立开关。Settings › Hydra 的标题旁显示低调的 `2.0` 标签，侧栏仍称 Hydra；页面提供 `Delegation tilt`（`Restrained` / `Proactive` / `Aggressive`），合并开关为 `Commit and merge automatically when done`（完成后自动提交并合并）。head profile 编辑入口保留在 Settings，规则可见、可编辑。
 - job 账本不再写入 `mode`；评估时缺少该字段按 v2 解读，v1 从未写入 job 账本。早期 v2 记录缺少的其他字段表示未知，不把未知改写为零或 false。
-- 决策模型的影子点位（Alpha，TypeSafe Jev）在 Hydra job 上运行，仍需 Alpha 总开关与自身开关同时开启，见 [hydra-decisions.md](hydra-decisions.md)。
+- 决策模型（TypeSafe Jev）的影子测试已于 2026-11-14 移除，详见 [hydra-decisions.md](hydra-decisions.md)。
 
 ## 基线说明了什么
 

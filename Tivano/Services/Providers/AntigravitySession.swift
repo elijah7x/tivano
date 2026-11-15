@@ -67,7 +67,7 @@ final class AntigravitySession: ProviderSession {
     private var reportedErrors: Set<String> = []
 
     /// Reasoning efforts `agy --effort` accepts.
-    static let efforts = ["low", "medium", "high"]
+    static let efforts = ["low", "medium", "high", "xhigh", "max"]
 
     init(configuration: SessionConfiguration) {
         self.configuration = configuration
@@ -99,12 +99,10 @@ final class AntigravitySession: ProviderSession {
             "--print-timeout", "0",
             "--add-dir", workingDirectory,
         ]
-        // Scoping to the connected servers happens through the generated settings
-        // file `ProviderRegistry` hands the CLI in `GEMINI_CLI_SYSTEM_SETTINGS_PATH`:
-        // it lists those servers and no others, so the user's own stay untouched.
-        // `agy` has no `--allowed-mcp-server-names` flag (that one is Claude's) and
-        // its flag parser exits 2 with usage text on an unknown flag, which killed
-        // every Antigravity session as soon as one MCP server was connected.
+        // `agy` 1.5.9 reads MCP servers only from the user's global
+        // `~/.gemini/config/mcp_config.json` and has no per-session MCP flag or
+        // environment variable, so Tivano's connected servers are not passed to
+        // Antigravity. `agy` also exits 2 with usage text on unknown flags.
         let (resolvedModel, resolvedEffort) = Self.normalize(model: model, effort: effort, catalog: Self.addingSeedRows(configuration.modelCatalog, seed: ProviderRegistry.antigravitySeed))
         if let resolvedModel, !resolvedModel.isEmpty { arguments += ["--model", resolvedModel] }
         if let resolvedEffort, !resolvedEffort.isEmpty { arguments += ["--effort", resolvedEffort] }
@@ -649,13 +647,13 @@ final class AntigravitySession: ProviderSession {
     }
 
     static func parseModelRow(slug: String, name: String) -> ParsedModelRow {
-        for effort in ["high", "medium", "low"] {
+        // Longest suffix first so `-xhigh` is not parsed as `-x` + `high`.
+        for effort in ["medium", "xhigh", "high", "low", "max"] {
             if slug.hasSuffix("-\(effort)") {
                 let baseSlug = String(slug.dropLast(effort.count + 1))
                 var baseName = name
-                let suffix = " (\(effort.capitalized))"
-                if baseName.hasSuffix(suffix) {
-                    baseName = String(baseName.dropLast(suffix.count))
+                if let range = baseName.range(of: " (\(effort))", options: [.anchored, .backwards, .caseInsensitive]) {
+                    baseName = String(baseName[..<range.lowerBound])
                 }
                 return ParsedModelRow(baseSlug: baseSlug, baseName: baseName, effort: effort)
             }
@@ -735,9 +733,9 @@ final class AntigravitySession: ProviderSession {
     // MARK: - Catalog
 
     /// `agy models` prints `slug<TAB>Name` rows on stdout (progress goes to
-    /// stderr). Rows with effort variants (-high, -medium, -low) are collapsed
-    /// into a single base model entry whose supported efforts are toggled via
-    /// the reasoning effort slider.
+    /// stderr). Rows with effort variants (-low, -medium, -high, -xhigh, -max)
+    /// are collapsed into a single base model entry whose supported efforts are
+    /// toggled via the reasoning effort slider.
     static func listModels(executable: URL, environment: [String: String]) async throws -> [ModelOption] {
         async let modelsFetch: ShellResult = try Shell.run(executable, ["models"], environment: environment, timeout: 30)
         // The default model is a print-mode read too, so it is skipped offline like the limits.
@@ -785,7 +783,7 @@ final class AntigravitySession: ProviderSession {
         var list: [ModelOption] = []
         for baseSlug in order {
             guard let data = grouped[baseSlug] else { continue }
-            let sortedEfforts = ["low", "medium", "high"].filter { data.efforts.contains($0) }
+            let sortedEfforts = efforts.filter { data.efforts.contains($0) }
             let defaultEffort = sortedEfforts.contains("high") ? "high" : sortedEfforts.last
             list.append(ModelOption(
                 id: baseSlug,

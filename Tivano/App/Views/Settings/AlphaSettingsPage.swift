@@ -48,21 +48,6 @@ struct AlphaSettingsPage: View {
                     .padding(.horizontal, 4)
             }
         }
-        ChromeSection(title: "Hydra") {
-            ChromeCard {
-                ChromeRow(title: "Decision model (Jev)", detail: "Shadow test: asks TypeSafe Jev to judge head reports and each job before its review, and keeps the judgments on this Mac beside what happened next. Hydra itself does not change. Sends the request, head reports, the lead's replies, review findings and changed file paths with line counts; never diffs or file contents, though the text can quote code. Off stops calls at once; on applies from the next request.") {
-                    SettingsSwitch(isOn: $settings.alphaDecisionsEnabled)
-                        .accessibilityLabel(Text("Decision model (Jev)"))
-                }
-                if settings.alphaDecisionsEnabled {
-                    ChromeRowDivider()
-                    TypeSafeKeyRow()
-                    ChromeRowDivider()
-                    DecisionLedgerRow()
-                }
-            }
-        }
-        .modifier(AlphaGated(isOn: settings.alphaEnabled))
         ChromeSection(title: "Chimera") {
             ChromeCard {
                 ChromeRow(title: "Chimera", detail: "The lead assigns roles mid-conversation and you pick each role's model. Switch on to add Chimera under Hydra in the sidebar.") {
@@ -88,64 +73,5 @@ private struct AlphaGated: ViewModifier {
             .disabled(!isOn)
             .opacity(isOn ? 1 : 0.5)
             .animation(.smooth(duration: 0.2), value: isOn)
-    }
-}
-
-private struct TypeSafeKeyRow: View {
-    @State private var key = ""
-    @State private var showsKey = false
-    @State private var loaded = false
-    @State private var storeError: String?
-
-    var body: some View {
-        ChromeRow(title: "TypeSafe API key", detail: storeError.map {
-            String(format: Chrome.localized("The Keychain did not take the key: %@"), $0)
-        } ?? "Stored in your Keychain for this edition. Get one at typesafe.ai.") {
-            HStack(spacing: 8) {
-                Group {
-                    if showsKey {
-                        TextField("", text: $key, prompt: Text("Paste your key"))
-                    } else {
-                        SecureField("", text: $key, prompt: Text("Paste your key"))
-                    }
-                }
-                .textFieldStyle(.roundedBorder)
-                .font(.ui(size: 12, design: .monospaced))
-                .frame(width: 200)
-                Button {
-                    showsKey.toggle()
-                } label: {
-                    Image(systemName: showsKey ? "eye.slash" : "eye")
-                        .font(.ui(size: 12))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Chrome.secondaryText)
-                .help(Text(verbatim: Chrome.localized(showsKey ? "Hide the API key" : "Show the API key")))
-                .accessibilityLabel(Text(verbatim: Chrome.localized(showsKey ? "Hide the API key" : "Show the API key")))
-            }
-            .disabled(!loaded)
-        }
-        .task {
-            guard !loaded else { return }
-            key = await Task.detached { TypeSafeAPI.readKey() ?? "" }.value
-            loaded = true
-        }
-        .onChange(of: key) { _, newValue in
-            guard loaded else { return }
-            storeError = TypeSafeAPI.storeKey(newValue)
-        }
-    }
-}
-
-private struct DecisionLedgerRow: View {
-    var body: some View {
-        ChromeRow(title: "Decisions ledger", detail: "Every judgment and its outcome, kept on this Mac. Read it with scripts/hydra_eval.py decisions.") {
-            Button {
-                NSWorkspace.shared.open(DecisionLedger.directory)
-            } label: {
-                Text("Show in Finder").frame(height: Chrome.rowButtonLabelHeight)
-            }
-            .buttonStyle(.glass)
-        }
     }
 }

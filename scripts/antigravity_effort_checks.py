@@ -68,6 +68,13 @@ def check_sources():
         line = session[session.rfind('\n', 0, start):session.find('\n', start)]
         if 'catalog:' not in line:
             fail(f'normalize call site does not pass the catalog: {line.strip()!r}')
+    efforts_match = re.search(r'static\s+let\s+efforts\s*=\s*\[([^\]]+)\]', session)
+    if not efforts_match:
+        fail(f'{SESSION.relative_to(ROOT)}: static let efforts is missing')
+    efforts = re.findall(r'"([^"]+)"', efforts_match.group(1))
+    for level in ('xhigh', 'max'):
+        if level not in efforts:
+            fail(f'static let efforts must include {level!r}, got {efforts!r}')
 
     runtime = source(RUNTIME)
     catalog = runtime.find('modelCatalog:')
@@ -86,6 +93,13 @@ def check_sources():
              'without it treats Argon as unknown')
     if SEED_ROW not in registry[seed:seed + 2000]:
         fail(f'antigravitySeed gemini-4-argon row changed shape: expected {SEED_ROW!r}')
+    seed_end = registry.find('\n    ]', seed)
+    if seed_end < 0:
+        fail(f'{REGISTRY.relative_to(ROOT)}: antigravitySeed closing bracket not found')
+    seed_block = registry[seed:seed_end]
+    for removed_id in ('gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.1-pro'):
+        if removed_id in seed_block:
+            fail(f'antigravitySeed still contains removed model {removed_id!r}')
 
 
 def fixture(block):
@@ -135,6 +149,18 @@ func expect(_ result: (model: String?, effort: String?), _ model: String?, _ eff
         // Legacy effort suffixes still collapse onto the base slug.
         expect(AntigravityNormalization.normalize(model: "gemini-3.8-flash-high", effort: nil, catalog: catalog),
                "gemini-3.8-flash", "high")
+        let hydrogen = ModelOption(id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen",
+                                   efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high")
+        let parsedXHigh = AntigravityNormalization.parseModelRow(slug: "gemini-4-hydrogen-xhigh", name: "Gemini 4 Hydrogen (XHigh)")
+        precondition(parsedXHigh.baseSlug == "gemini-4-hydrogen" && parsedXHigh.baseName == "Gemini 4 Hydrogen" && parsedXHigh.effort == "xhigh",
+                     "xhigh suffix must collapse before high, got \(parsedXHigh)")
+        let parsedMax = AntigravityNormalization.parseModelRow(slug: "gemini-4-hydrogen-max", name: "Gemini 4 Hydrogen (Max)")
+        precondition(parsedMax.baseSlug == "gemini-4-hydrogen" && parsedMax.baseName == "Gemini 4 Hydrogen" && parsedMax.effort == "max",
+                     "max suffix must collapse, got \(parsedMax)")
+        expect(AntigravityNormalization.normalize(model: "gemini-4-hydrogen-xhigh", effort: nil, catalog: [hydrogen]),
+               "gemini-4-hydrogen", "xhigh")
+        expect(AntigravityNormalization.normalize(model: "gemini-4-hydrogen-max", effort: nil, catalog: [hydrogen]),
+               "gemini-4-hydrogen", "max")
         // The two known adjustments hold inside the row's efforts.
         expect(AntigravityNormalization.normalize(model: "gemini-3.1-pro", effort: "medium", catalog: catalog),
                "gemini-3.1-pro", "high")

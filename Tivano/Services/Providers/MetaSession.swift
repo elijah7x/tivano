@@ -40,8 +40,8 @@ final class MetaSession: OpenAICompatibleSession {
         switch effort {
         case "minimal", "low", "medium", "high", "xhigh": return effort
         case "max":
-            // Only muse-spark-1.3 itself accepts "max"; a thread saved at max
-            // that moves to any other model must not send it.
+            // Only muse-spark-1.3, muse-wonder*, and muse-ember* accept "max"; a thread
+            // saved at max that moves to another Spark model must not send it.
             return MetaAPI.efforts(for: model ?? "muse-spark-1.3").contains("max") ? "max" : "xhigh"
         case "extra-high": return "xhigh"
         default: return nil

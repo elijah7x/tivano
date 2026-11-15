@@ -347,6 +347,8 @@ final class ClaudeSession: ProviderSession {
                             self.onEvent?(.modeChanged(.build))
                         } catch {
                             guard !self.hasClosed, !self.isStopping else { return }
+                            // The exit reported below carries the lost tasks; see `didClose`.
+                            self.backgroundTasks.removeAll()
                             self.stop()
                             self.onEvent?(.exited(error: error.localizedDescription))
                         }
@@ -834,7 +836,9 @@ final class ClaudeSession: ProviderSession {
 
     private func didClose() {
         guard !hasClosed else { return }
-        clearBackgroundTasks()
+        // An exit that is reported carries its lost background tasks to the runtime, which
+        // names them and wakes the agent; clearing them first left it nothing to report.
+        if !isStopping, isStarted { backgroundTasks.removeAll() } else { clearBackgroundTasks() }
         hasClosed = true
         let tail = process?.errorTail ?? ""
         // The result's own error names the failure better than the stderr tail can.

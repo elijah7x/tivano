@@ -66,6 +66,7 @@ struct StickySidebarRow<Sidebar: View, Detail: View>: View {
                 }
                 .modifier(StickySidebarOffset(topInset: context?.topInset,
                                              maxShift: max(0, rowFrame.height - sidebarHeight)))
+                .zIndex(1)
             detail()
         }
         .onGeometryChange(for: CGRect.self, of: {

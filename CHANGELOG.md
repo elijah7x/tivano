@@ -8,6 +8,56 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [2.5.41] - 2026-11-15
+
+### English
+
+### New features
+
+- Meta's Muse Wonder 1.0 and Muse Ember 1.0 appear in the model list, with image input and max reasoning effort.
+- Antigravity offers xhigh and max reasoning effort; models that list those levels no longer show up as extra rows.
+
+### Bug fixes
+
+- Scrolling up with the trackpad while a reply streams in, such as an automatic Hydra review, no longer fights you or jumps back to the bottom: following stops as soon as you move up, holding your fingers still no longer counts as letting go, and a starting turn no longer interrupts your scroll.
+- A ZCode turn that was cancelled or stopped with an error is no longer shown as completed, one failing tool no longer ends the whole turn, and ZCode starts when its tool search is set to Native.
+- Cursor is found at ~/.local/bin/cursor-agent even when that folder is not on your PATH.
+- Command Code's built-in model list offers DeepSeek V4.1 Flash in place of the retired V4 Flash.
+- A Claude chat you leave while its background commands run (builds, checks, packaging, polling) keeps its session until they finish, instead of being closed after ten minutes and silently killing them. If the session still ends with tasks running, the chat says which ones stopped and Claude picks the work back up on its own unless you stop or archive the chat first; a session stopped on purpose says which tasks went with it, and the "picked the work back up after a background task finished" notice only appears when one actually finished.
+
+### Refinements
+
+- Settings › Providers is more compact: choosing providers opens inside its card instead of a popover; the provider list shrinks to an icon rail that floats out over the page on hover, and scrolling over it no longer scrolls the page; update checks and executable paths are one switch each above the cards (both off by default), and each provider's accounts fold into one row showing the active account and its usage.
+- Alpha › Hydra no longer offers the decision model (Jev) shadow test. It never changed how Hydra works; its judgments are no longer sent to TypeSafe or written to disk. Existing ledger files and the TypeSafe key in your Keychain are left in place.
+- Settings › MCP says connected servers do not reach Antigravity, whose CLI reads only its own global MCP settings; Tivano no longer writes a settings file Antigravity ignores.
+- Antigravity's built-in model list drops the retired Gemini 3.7 Flash, Gemini 3.6 Flash and Gemini 3.1 Pro.
+
+### 简体中文
+
+### 新功能
+
+- Meta 的 Muse Wonder 1.0 与 Muse Ember 1.0 出现在模型列表中，支持图片输入和 max 推理强度。
+- Antigravity 可选 xhigh 与 max 推理强度；带这些档位的模型不再多出单独的一行。
+
+### 问题修复
+
+- 回复正在输出时（例如 Hydra 自动审查），用触控板往上拉不再和你抢页面、也不会跳回底部：一往上移就停止跟随，手指按住不动不再被当成已经松开，新一轮开始时也不会打断你的滚动。
+- ZCode 中被取消或因错误结束的一轮不再显示为已完成，单个工具出错不再结束整轮；工具搜索设为「原生」时 ZCode 也能正常启动。
+- Cursor 装在 ~/.local/bin/cursor-agent 时，即使该目录不在 PATH 中也能找到。
+- Command Code 内置模型列表以 DeepSeek V4.1 Flash 取代已下线的 V4 Flash。
+- 离开一个仍在运行后台命令（构建、检查、打包、轮询）的 Claude 对话后，会话会保留到这些命令结束，不再在十分钟后被关闭并悄悄杀掉它们。若会话仍在任务运行中结束，对话里会写明哪些任务被停止，Claude 会自行接着工作（期间若你停止或归档对话则不会）；主动停止会话时也会写明一并停止的任务；「后台任务完成后已继续工作」只在任务真正完成时显示。
+
+### 优化改进
+
+- 「设置 › 服务商」更紧凑：选择服务商直接在卡片内展开，不再弹出；服务商列表平时只显示图标栏，悬停时浮层展开、不挤占右侧，在其上滚动不再带动页面；检查更新与可执行文件路径改为卡片上方的全局开关（默认关闭）；各服务商的账号收拢为一行，显示当前账号与额度，可展开查看全部。
+- 「实验室 › Hydra」不再提供决策模型（Jev）影子测试。它从未改变过 Hydra 的运行方式；相关判断也不再发送给 TypeSafe 或写入磁盘。现有的账本文件和钥匙串中的 TypeSafe 密钥会保留在原处。
+- 「设置 › MCP」写明已连接的服务器不会提供给 Antigravity——它的 CLI 只读取自己的全局 MCP 设置；Tivano 不再写入 Antigravity 不读取的设置文件。
+- Antigravity 内置模型列表移除已下线的 Gemini 3.7 Flash、Gemini 3.6 Flash 与 Gemini 3.1 Pro。
+
+### Thanks
+
+- No outside contributors.
+
 ## [2.5.32] - 2026-11-14
 
 ### English

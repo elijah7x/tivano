@@ -152,31 +152,10 @@ enum MCPProviderConfig {
         return (.array(servers), skipped)
     }
 
-    static func gemini(_ servers: [MCPResolvedServer]) -> JSONValue {
-        var entries: [String: JSONValue] = [:]
-        for server in servers {
-            if server.isRemote {
-                entries[server.id] = .object([
-                    "httpUrl": .string(server.url ?? ""),
-                    "headers": .object(server.headers.mapValues(JSONValue.string)),
-                ])
-            } else {
-                var entry: [String: JSONValue] = [
-                    "command": .string(server.command ?? ""),
-                    "args": .array(server.args.map(JSONValue.string)),
-                ]
-                if !server.env.isEmpty {
-                    entry["env"] = .object(server.env.mapValues(JSONValue.string))
-                }
-                entries[server.id] = .object(entry)
-            }
-        }
-        return .object(["mcpServers": .object(entries)])
-    }
-
     static func writeAll(_ servers: [MCPResolvedServer]) {
+        try? FileManager.default.removeItem(at: legacyGeminiSettingsURL)
         if servers.isEmpty {
-            for url in [MCPPaths.claudeConfigURL, MCPPaths.codexConfigURL, MCPPaths.copilotConfigURL, geminiSettingsURL] {
+            for url in [MCPPaths.claudeConfigURL, MCPPaths.codexConfigURL, MCPPaths.copilotConfigURL] {
                 try? FileManager.default.removeItem(at: url)
             }
             return
@@ -184,7 +163,6 @@ enum MCPProviderConfig {
         write(claude(servers), to: MCPPaths.claudeConfigURL)
         write(codex(servers), to: MCPPaths.codexConfigURL)
         write(copilot(servers), to: MCPPaths.copilotConfigURL)
-        write(gemini(servers), to: geminiSettingsURL)
     }
 
     // An entry here switches that server off for the session by name. Only the server's own name may be used,
@@ -251,12 +229,8 @@ enum MCPProviderConfig {
         return parsed.compactString
     }
 
-    static func geminiSettingsPath() -> String? {
-        guard serversPresent(in: geminiSettingsURL, key: "mcpServers") else { return nil }
-        return geminiSettingsURL.path
-    }
-
-    private static let geminiSettingsURL = MCPPaths.directory.appendingPathComponent("gemini-settings.json")
+    // Earlier builds wrote `gemini-settings.json` for Antigravity; `writeAll` cleans up stale copies.
+    private static let legacyGeminiSettingsURL = MCPPaths.directory.appendingPathComponent("gemini-settings.json")
 
     private static func write(_ value: JSONValue, to url: URL) {
         MCPPaths.writePrivate(value.data(pretty: true), to: url)

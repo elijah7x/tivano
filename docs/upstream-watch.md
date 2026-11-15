@@ -43,6 +43,7 @@ Tivano 编排的外部 agent CLI 一旦重写或破坏性变更，会直接伤�
 - `Provider.loginCommand` 与 auth/status 输出文本及格式。已知格式约定：Codex `login status` 的登录判定需兼容 0.164.0 起 API-key 路径的 `API key configured - {key}` 文案（旧为 `Logged in using an API key`）；OpenCode `auth list` 已表格化，Tivano 兼容 legacy `●` 行与 V2 三列表行，长期更稳做法是读 `~/.local/share/opencode/auth.json`。
 - CLI 参数 / 子命令、ACP 会话与协议方法（Tivano 经 ACP 驱动 cursor-agent、opencode、grok、devin、kimi、dsh、mcode）。
 - **ZCode（脆弱私有路径）**：可执行发现指向 app 内 `ZCode.app/Contents/Resources/glm/zcode.cjs`（/Applications 与 ~/Applications）——桌面 app 更新若重组 Resources 即断，版本流里盯这条；无 `zcode login`，认证复用 `.zai` 的 GLM Coding Plan key（key 变更联动刷新 zcode 状态）；模型目录按区域（z.ai / open.bigmodel.cn）走 Coding Plan 端点；subagent 展示依赖其输出结构（dev-2.1.18 起）。Z.ai 端点与限额面由 P2 覆盖。
+- **Antigravity（per-session MCP 机制）**：目前 `agy` 仅读取全局 `~/.gemini/config/mcp_config.json`，无 per-session MCP flag 或配置路径环境变量（2026-11-15 实测 agy 1.5.9 确认）。盯住 `agy` 是否新增 per-session MCP 机制（如 `--mcp-config` 类参数或 MCP 配置路径环境变量）；一旦出现，将 Tivano 已连接的 MCP 服务器重新接入 Antigravity。
 - config 路径（如 `~/.grok/auth.json`、`~/.commandcode/auth.json`、`~/.minimax/config.yaml`、`DSH_HOME`）。
 - 模型 id 与目录规则：live 模型列表是唯一可信源；Command Code 等目录随官方 catalog 漂移，解析需容忍未知 id。
 - 计划限额口径、运行时要求（Codex 含 app-server 会话、计划窗口与 banked resets）。

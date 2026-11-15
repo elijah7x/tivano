@@ -164,8 +164,6 @@ struct HydraJobRecord: Codable, Hashable, Identifiable, Sendable {
     /// How the job ended; nil while open, and on records from before this existed.
     var ending: HydraJobEnding?
     var merge: MergeOutcome?
-    /// Whether the job ran the Labs decision points (docs/hydra-decisions.md); nil on records from before.
-    var decisions: Bool?
 
     var isOpen: Bool { finishedAt == nil }
 }
@@ -240,6 +238,5 @@ extension HydraJobRecord {
         baseTrees = container.value(.baseTrees, default: nil)
         ending = container.value(.ending, default: nil)
         merge = container.value(.merge, default: nil)
-        decisions = container.value(.decisions, default: nil)
     }
 }
