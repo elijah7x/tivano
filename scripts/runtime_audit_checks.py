@@ -32,7 +32,7 @@ def methods(file: str, *markers: str) -> str:
     return "\n".join(declaration(PROVIDERS / file, marker) for marker in markers) + "\n"
 
 
-swift = "import Foundation\nimport CoreFoundation\n"
+swift = "import Foundation\nimport CoreFoundation\nimport OSLog\n"
 swift += (ROOT / "Tivano/Core/Support/JSONValue.swift").read_text()
 swift += r'''
 // Dependencies outside the send lifecycle are in-memory fixtures. Gates ignore
@@ -326,6 +326,7 @@ actor MCPHub {
     var failed: Set<String> = []
     var generation = UUID()
     var shuttingDown = false
+    static let log = Logger(subsystem: "dev.tivano.Tivano", category: "mcp-hub")
     func install(_ specs: [String: MCPServerSpec]) { self.specs = specs }
     nonisolated static func readSpecs() -> [String: MCPServerSpec] { ["fresh": MCPServerSpec()] }
 '''

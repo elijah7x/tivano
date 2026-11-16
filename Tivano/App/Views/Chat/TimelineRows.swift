@@ -18,10 +18,10 @@ enum MergeStageText {
 /// rather than widening it.
 enum TimelineMetrics {
     /// The gap between any two consecutive rows in the timeline.
-    static let rowSpacing: CGFloat = 20
+    static let rowSpacing: CGFloat = 24
     /// The gap between a reply's paragraphs (`MarkdownView`'s block spacing), also kept
     /// between the replies of a folded turn: with its steps folded away they read as one answer.
-    static let paragraphSpacing = TypeScale.proseParagraphSpacing
+    @MainActor static var paragraphSpacing: CGFloat { TypeScale.proseParagraphSpacing }
     /// The room a message keeps for its hover line (copy, revert). Reserved inside
     /// the row so showing the controls never moves text, then subtracted from the
     /// row's own height so they fill the gap below instead of adding to it.
@@ -95,6 +95,7 @@ struct UserMessageRow: View {
     /// Whether the message can be edited right now, which rewinds its turn. Decided by the
     /// timeline, which reads the provider and the turn list once for every row.
     let canRevert: Bool
+    var turnHasOutput = false
 
     @Environment(\.revealTimelineEnd) private var revealBox
     @Environment(\.timelineBlockID) private var blockID
@@ -131,7 +132,7 @@ struct UserMessageRow: View {
         if case .user(let message) = entry.item.content, message.isFromHydra {
             HydraReportRow(message: message)
         } else if case .user(let message) = entry.item.content, message.isHydraBrief {
-            HydraBriefRow(message: message, entry: entry, runtime: runtime)
+            HydraBriefRow(message: message, entry: entry, runtime: runtime, hasOutput: turnHasOutput)
         } else if case .user(let message) = entry.item.content {
             // Which message is open for editing is the thread's, so the editor survives
             // the row: leaving the thread closes the popover only, and the row coming
@@ -172,13 +173,14 @@ struct UserMessageRow: View {
                     // The user's own words render like the answers do: a domain types as a link
                     // with its favicon in front. `hugsContent` keeps the bubble hugging its text
                     // instead of filling the row.
+                    let bubbleSize = TypeScale.shared.content(13)
                     InlineText(promptExpanded ? parts.body : preview, hugsContent: true)
-                        .font(.system(size: TypeScale.shared.content(13)))
+                        .font(TypeScale.shared.serif ? Font(ThemeTypeface.nsFont(size: bubbleSize) as CTFont) : .system(size: bubbleSize))
                         .textSelection(.enabled)
                         .padding(.leading, 14)
                         // The tail hangs past the body; the text keeps its inset from the body.
                         .padding(.trailing, 14 + UserBubble.tail)
-                        .padding(.vertical, 9)
+                        .padding(.vertical, 10)
                         .background(.tint.opacity(0.14), in: UserBubble())
                 }
                 if preview != parts.body {
@@ -299,6 +301,23 @@ struct HydraReportRow: View {
     let message: UserMessage
 
     @State private var isShowingReport = false
+    @State private var digestCache = DigestCache()
+
+    /// Caches the parsed digest by source text so `body` and the pre-warm `.task`
+    /// never parse the same report twice.
+    @MainActor
+    private final class DigestCache {
+        private var text: String?
+        private var digest: HydraReportDigest?
+
+        func parse(_ text: String) -> HydraReportDigest {
+            if self.text == text, let digest { return digest }
+            let parsed = HydraReportDigest.parse(text)
+            self.text = text
+            self.digest = parsed
+            return parsed
+        }
+    }
 
     var body: some View {
         let personas = (message.hydraHeads ?? []).map(HydraRoster.persona(at:))
@@ -309,7 +328,7 @@ struct HydraReportRow: View {
         // short human summary with the heads first, never the file-heavy detail.
         let parts = message.text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
         let review = Self.review(in: message.text)
-        let title = review.map { String(format: Chrome.localized("Independent review by %@"), $0.reviewer) } ?? (personas.isEmpty ? Self.withoutTrailingStop(String(parts.first ?? "Hydra")) : Self.reportSummary(names: names, text: message.text))
+        let title = review.map { String(format: Chrome.localized("Independent review by %@"), $0.reviewer) } ?? (personas.isEmpty ? Self.withoutTrailingStop(parts.first.map(String.init) ?? Chrome.localized("Sub-agents")) : Self.reportSummary(names: names, text: message.text, digest: digestCache.parse(message.text)))
         let body = review?.findings ?? (personas.isEmpty ? String(parts.count > 1 ? parts[1] : "").trimmed : message.text)
         // A merge note puts the merge request's address on the body's first line: that becomes
         // a link on the pill, and the chevron stays only for what the note says after it.
@@ -382,7 +401,7 @@ struct HydraReportRow: View {
         // heads' report is read one head at a time, so it is each head's body that warms.
         .task(id: body) {
             guard !details.isEmpty else { return }
-            let texts = personas.isEmpty ? [body] : HydraReportDigest.parse(body).heads.map(\.body)
+            let texts = personas.isEmpty ? [body] : digestCache.parse(body).heads.map(\.body)
             try? await MarkdownView.warm(texts)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -397,8 +416,8 @@ struct HydraReportRow: View {
         let header = lines.first ?? ""
         let prefix = "[Hydra] Review: an independent review by "
         let reviewer = header.hasPrefix(prefix)
-            ? String(header.dropFirst(prefix.count)).components(separatedBy: " of this job").first ?? "Hydra"
-            : "Hydra"
+            ? String(header.dropFirst(prefix.count)).components(separatedBy: " of this job").first ?? Chrome.localized("Sub-agents")
+            : Chrome.localized("Sub-agents")
         let body = lines.dropFirst().joined(separator: "\n").trimmed
         let bodyLines = body.components(separatedBy: "\n")
         if let separator = bodyLines.indices.first(where: { index in
@@ -420,13 +439,12 @@ struct HydraReportRow: View {
     /// one tap away in the popover. "Hank is done", "Hank and Walter are done"; a head
     /// whose `## Name: task (failed)` section says otherwise is named with its outcome
     /// instead, so a failure never hides behind "done".
-    private static func reportSummary(names: [String], text: String) -> String {
-        let digest = HydraReportDigest.parse(text)
+    private static func reportSummary(names: [String], text: String, digest: HydraReportDigest) -> String {
         let flagged = digest.heads.filter { $0.flags.flagsSomething }
         if let head = flagged.first {
             return flagged.count == 1
                 ? String(format: Chrome.localized("%@ reported open points"), head.name)
-                : String(format: Chrome.localized("%d heads reported open points"), flagged.count)
+                : String(format: Chrome.localized("%d sub-agents reported open points"), flagged.count)
         }
         if digest.heads.contains(where: \.reportFormatMissing) { return Chrome.localized("Report format not followed.") }
         let outcomes = reportOutcomes(in: text)
@@ -590,14 +608,13 @@ private struct FinishedHeadPill: View {
 /// left to right, masked to the content itself. Still when reduced motion is on.
 private struct HydraShimmer: ViewModifier {
     @Environment(\.chatColumnIsShown) private var columnIsShown
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var width: CGFloat = 0
 
     /// One pass of the band, from off the left edge to off the right.
     private static let sweep: TimeInterval = 1.8
 
     func body(content: Content) -> some View {
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || performanceMode {
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             content
         } else {
             // The band lives in a layer the size of the text and is masked to the text
@@ -641,22 +658,14 @@ struct HydraBriefRow: View {
     let message: UserMessage
     let entry: TimelineEntry
     let runtime: ThreadRuntime
+    var hasOutput = false
 
     @State private var isShowingBrief = false
-    /// Whether the brief's turn has output, as of an entry count: the row re-evaluates far
-    /// more often than the timeline grows, so the scan runs once per count and is replayed.
-    @State private var scanned: (count: Int, value: Bool)?
 
     var body: some View {
         let persona = runtime.thread?.hydra?.persona ?? HydraRoster.persona(at: 0)
-        // The brief's turn has produced nothing of its own yet: no entry past the brief
-        // itself on the same turn means the head is still cooking.
-        let count = runtime.entries.count
-        let hasOutput: Bool = if let scanned, scanned.count == count {
-            scanned.value
-        } else {
-            entry.turnID != nil && runtime.entries.contains { $0.turnID == entry.turnID && $0.id != entry.id }
-        }
+        // Whether the brief's turn has another entry arrives as a precomputed flag from
+        // `TimelineMeta`, so this row never subscribes to `runtime.entries`.
         let cooking = !hasOutput && runtime.isRunning
         let title = cooking
             ? String(format: Chrome.localized("%@ is starting to cook…"), persona.name)
@@ -703,10 +712,6 @@ struct HydraBriefRow: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 96)
         .accessibilityElement(children: .contain)
-        // The scan the body just made, kept for the evaluations until the count moves.
-        .onChange(of: count, initial: true) { _, _ in
-            if scanned?.count != count { scanned = (count, hasOutput) }
-        }
     }
 }
 
@@ -775,7 +780,6 @@ struct HydraDelegationBlock: View {
     @Environment(\.hydraWaitsForBlockEnd) private var waitsForBlockEnd
     let json: String
     var sent = false
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     var body: some View {
         let reading = Self.reading(of: json)
@@ -824,7 +828,7 @@ struct HydraDelegationBlock: View {
         .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: TimelineMetrics.pillRadius, style: .continuous))
         .overlay {
             // Out: one wave of the accent flows through the card, as through the heads panel.
-            if !performanceMode, sent {
+            if sent {
                 DotFieldSweep(tint: Chrome.accentNSColor)
                     .clipShape(RoundedRectangle(cornerRadius: TimelineMetrics.pillRadius, style: .continuous))
                     .transition(.opacity)
@@ -874,7 +878,7 @@ struct HydraDelegationBlock: View {
     /// "Summoning heads" while the briefs still stream; once the block has closed, how many
     /// are going (or went) out, the one head by name when the lead named it.
     private static func title(for delegations: [HydraDelegation], streaming: Bool, sent: Bool) -> String {
-        if streaming || delegations.isEmpty { return Chrome.localized("Summoning heads") }
+        if streaming || delegations.isEmpty { return Chrome.localized("Starting sub-agents") }
         let continuations = delegations.filter { $0.continueHead != nil }
         if let continuation = continuations.first {
             // `sent` marks the block consumed, before continuation acceptance is known.
@@ -883,13 +887,13 @@ struct HydraDelegationBlock: View {
             }
             let newHeads = delegations.count - continuations.count
             if newHeads == 0 { return String(format: Chrome.localized("Sending %d continuations"), continuations.count) }
-            return String(format: Chrome.localized("Sending %d new heads and %d continuations"), newHeads, continuations.count)
+            return String(format: Chrome.localized("Sending %d new sub-agents and %d continuations"), newHeads, continuations.count)
         }
         if delegations.count == 1 {
-            if let persona = persona(named: delegations[0].name) { return String(format: Chrome.localized(sent ? "Summoned %@" : "Summoning %@"), persona.name) }
-            return Chrome.localized(sent ? "Summoned a head" : "Summoning a head")
+            if let persona = persona(named: delegations[0].name) { return String(format: Chrome.localized(sent ? "Started %@" : "Starting %@"), persona.name) }
+            return Chrome.localized(sent ? "Started a sub-agent" : "Starting a sub-agent")
         }
-        return String(format: Chrome.localized(sent ? "Summoned %d heads" : "Summoning %d heads"), delegations.count)
+        return String(format: Chrome.localized(sent ? "Started %d sub-agents" : "Starting %d sub-agents"), delegations.count)
     }
 
     /// The roster persona the lead announced for an entry, when it is a roster name.
@@ -941,7 +945,7 @@ private struct HydraMergeOutcome {
 
     init(_ message: UserMessage) {
         let parts = message.text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
-        title = HydraReportRow.withoutTrailingStop(String(parts.first ?? "Hydra"))
+        title = HydraReportRow.withoutTrailingStop(parts.first.map(String.init) ?? Chrome.localized("Sub-agents"))
         body = String(parts.count > 1 ? parts[1] : "").trimmed
         link = HydraReportRow.leadingURL(in: body)
         details = link == nil ? body : HydraReportRow.withoutFirstLine(body)
@@ -1444,86 +1448,12 @@ struct WorkGroup: View {
     let runtime: ThreadRuntime
     var workingDirectory: String?
     var startsCollapsed = false
-    @State private var fallbackCollapsed: Bool
-    @State private var fallbackShowsAll = false
-    @AppStorage("workGroupStyle", store: CaptureRun.defaults ?? .standard) private var workGroupStyle = "tree"
-    @Environment(\.revealTimelineEnd) private var revealBox
-    @Environment(\.timelineBlockID) private var blockID
-    private var disclosureID: String { blockID + "/work/" + (entries.first.map { "\($0.id)" } ?? "") }
-    private var isCollapsed: Bool {
-        get { revealBox?.presentation.disclosures[disclosureID + "/collapsed"] ?? fallbackCollapsed }
-        nonmutating set {
-            if let revealBox { revealBox.presentation.disclosures[disclosureID + "/collapsed"] = newValue }
-            else { fallbackCollapsed = newValue }
-        }
-    }
-    private var showsAll: Bool {
-        get { revealBox?.presentation.disclosures[disclosureID + "/all"] ?? fallbackShowsAll }
-        nonmutating set {
-            if let revealBox { revealBox.presentation.disclosures[disclosureID + "/all"] = newValue }
-            else { fallbackShowsAll = newValue }
-        }
-    }
-
-    init(entries: [TimelineEntry], runtime: ThreadRuntime, workingDirectory: String? = nil, startsCollapsed: Bool = false) {
-        self.entries = entries
-        self.runtime = runtime
-        self.workingDirectory = workingDirectory
-        self.startsCollapsed = startsCollapsed
-        _fallbackCollapsed = State(initialValue: startsCollapsed)
-    }
 
     var body: some View {
         if entries.count == 1, let only = entries.first {
             ToolRow(entry: only, runtime: runtime, workingDirectory: workingDirectory)
-        } else if workGroupStyle == "tree" {
-            ActivityTreeGroup(entries: entries, runtime: runtime, workingDirectory: workingDirectory, startsCollapsed: startsCollapsed)
         } else {
-            VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
-                Button {
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    if isCollapsed {
-                        withTransaction(transaction) {
-                            isCollapsed = false
-                        }
-                        revealBox?.action()
-                    } else {
-                        withTransaction(transaction) {
-                            isCollapsed = true
-                        }
-                    }
-                } label: {
-                    HStack(spacing: TimelineMetrics.iconSpacing) {
-                        Image(systemName: WorkGroupSummary.symbol(for: entries))
-                            .font(.chat(.caption))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .frame(width: TimelineMetrics.iconWidth)
-                        Text(WorkGroupSummary.text(for: entries))
-                            .foregroundStyle(Chrome.secondaryText)
-                        Image(systemName: "chevron.right")
-                            .font(.chat(.caption2, weight: .semibold))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .rotationEffect(.degrees(isCollapsed ? 0 : 90))
-                    }
-                    .font(.chat(.callout))
-                    .padding(.trailing, 12)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help(Text(verbatim: Chrome.localized(isCollapsed ? "Show these steps" : "Hide these steps")))
-                .accessibilityLabel(Text(verbatim: Chrome.localized(isCollapsed ? "Show these steps" : "Hide these steps")))
-                if !isCollapsed {
-                    WorkSteps(entries: entries, runtime: runtime, workingDirectory: workingDirectory, showsAll: Binding(get: { showsAll }, set: { showsAll = $0 }))
-                }
-            }
-            .onChange(of: startsCollapsed) { _, collapsed in
-                // One-way: arriving reply text collapses the group, but a group
-                // the reader opened never snaps shut on its own.
-                if collapsed, revealBox?.presentation.disclosures[disclosureID + "/collapsed"] == nil {
-                    isCollapsed = true
-                }
-            }
+            ActivityTreeGroup(entries: entries, runtime: runtime, workingDirectory: workingDirectory, startsCollapsed: startsCollapsed)
         }
     }
 }
@@ -1626,16 +1556,6 @@ enum WorkGroupSummary {
             return String(head).lowercased() + String(part.dropFirst())
         }
         return ([parts[0]] + rest).joined(separator: Chrome.localized(", "))
-    }
-
-    static func symbol(for entries: [TimelineEntry]) -> String {
-        let kinds = Set(entries.compactMap { entry -> ToolCall.Kind? in
-            guard case .tool(let call) = entry.item.content else { return nil }
-            return call.kind
-        })
-        let order: [ToolCall.Kind] = [.edit, .read, .command, .search, .web, .mcp, .agent, .other]
-        guard let first = order.first(where: { kinds.contains($0) }) else { return "wrench.and.screwdriver" }
-        return ToolPresentation.symbol(for: first)
     }
 
     private static func label(for kind: ToolCall.Kind, running: Bool) -> String {
@@ -1770,7 +1690,7 @@ struct ToolRow: View {
 
     /// What the departing row says: on its way, out, or never sent.
     private static func departureLabel(for call: ToolCall, name: String?, task: String) -> String {
-        let who = name ?? Chrome.localized("a head")
+        let who = name ?? Chrome.localized("a sub-agent")
         let template = switch call.status {
         case .running: "Sending out %@"
         case .failed: "Could not send out %@"
@@ -1880,7 +1800,7 @@ struct ToolRow: View {
     }
 
     private func helpText(opensDiff: Bool, opensImage: Bool, opensHead: Bool, showsOutput: Bool) -> String {
-        if opensHead { return Chrome.localized("Show the head's steps") }
+        if opensHead { return Chrome.localized("Show the sub-agent's steps") }
         if opensDiff { return Chrome.localized("Show this change") }
         if opensImage { return Chrome.localized("Show the image") }
         guard showsOutput else { return "" }
@@ -2623,6 +2543,7 @@ struct TurnFinishedBlock: View {
     let chronological: Bool
     let continueAction: (() -> Void)?
     let continueDisabled: Bool
+    var turnHasOutput = true
 
     @Environment(\.timelineBlockID) private var blockID
     @State private var fallbackExpanded: Bool
@@ -2643,7 +2564,7 @@ struct TurnFinishedBlock: View {
             : String(format: Chrome.localized("Show %lld earlier steps (%lld hidden)"), next, hidden)
     }
 
-    init(runtime: ThreadRuntime, turnID: UUID, summary: TurnSummary, userEntries: [TimelineEntry], content: [TimelineEntry], workingDirectory: String?, canUndo: Bool, chronological: Bool, continueAction: (() -> Void)?, continueDisabled: Bool) {
+    init(runtime: ThreadRuntime, turnID: UUID, summary: TurnSummary, userEntries: [TimelineEntry], content: [TimelineEntry], workingDirectory: String?, canUndo: Bool, chronological: Bool, continueAction: (() -> Void)?, continueDisabled: Bool, turnHasOutput: Bool = true) {
         self.runtime = runtime
         self.turnID = turnID
         self.summary = summary
@@ -2654,19 +2575,45 @@ struct TurnFinishedBlock: View {
         self.chronological = chronological
         self.continueAction = continueAction
         self.continueDisabled = continueDisabled
+        self.turnHasOutput = turnHasOutput
         _fallbackExpanded = State(initialValue: chronological)
     }
     @Environment(\.revealTimelineEnd) private var revealBox
     /// What the body last derived from the turn, keyed on identities, image-carrying tools
-    /// and the fold. Written after the body (see the `onChange` below), never in it.
-    @State private var derived: (key: DerivedKey, value: Derived)?
+    /// and the fold. An object, so hits compare in place without allocating key arrays.
+    @State private var derivedCache = DerivedCache()
 
     /// Images can arrive on an existing tool entry after the turn has folded.
-    private struct DerivedKey: Equatable {
-        var ids: [ObjectIdentifier]
-        var imageEntries: [ObjectIdentifier]
-        var expanded: Bool
-        var stepLimit: Int
+    @MainActor
+    private final class DerivedCache {
+        private var key: [(id: ObjectIdentifier, hasImages: Bool)] = []
+        private var expanded = false
+        private var stepLimit = 0
+        private var derived: Derived?
+
+        func resolve(content: [TimelineEntry], expanded: Bool, stepLimit: Int) -> Derived {
+            if let derived, expanded == self.expanded, stepLimit == self.stepLimit, matches(content) {
+                return derived
+            }
+            let next = Derived(content: content, expanded: expanded, stepLimit: stepLimit)
+            key = content.map { (ObjectIdentifier($0), TimelineGroup.hasImages($0)) }
+            self.expanded = expanded
+            self.stepLimit = stepLimit
+            self.derived = next
+            return next
+        }
+
+        private func matches(_ content: [TimelineEntry]) -> Bool {
+            guard content.count == key.count else { return false }
+            for (index, entry) in content.enumerated() {
+                let cached = key[index]
+                guard ObjectIdentifier(entry) == cached.id,
+                      TimelineGroup.hasImages(entry) == cached.hasImages else {
+                    return false
+                }
+            }
+            return true
+        }
     }
 
     @State private var legacyChanges: FileChangeSummary?
@@ -2734,18 +2681,12 @@ struct TurnFinishedBlock: View {
 
     /// Two replies in a row are one answer with its steps folded away, a paragraph apart;
     /// a plan or a notice keeps the row gap.
-    private static func conversationGap(after previous: TimelineEntry, before entry: TimelineEntry) -> CGFloat {
+    @MainActor private static func conversationGap(after previous: TimelineEntry, before entry: TimelineEntry) -> CGFloat {
         previous.kind == .assistant && entry.kind == .assistant ? TimelineMetrics.paragraphSpacing : TimelineMetrics.rowSpacing
     }
 
     var body: some View {
-        let key = DerivedKey(
-            ids: content.map(ObjectIdentifier.init),
-            imageEntries: content.filter(TimelineGroup.hasImages).map(ObjectIdentifier.init),
-            expanded: isExpanded,
-            stepLimit: stepLimit
-        )
-        let derived = (self.derived?.key == key ? self.derived?.value : nil) ?? Derived(content: content, expanded: isExpanded, stepLimit: stepLimit)
+        let derived = derivedCache.resolve(content: content, expanded: isExpanded, stepLimit: stepLimit)
         let showsHeads = !derived.headEntries.isEmpty
         let showsImages = !derived.imageEntries.isEmpty
         // The files as the turn's own diff saw them, or as an older turn's were worked out
@@ -2756,7 +2697,7 @@ struct TurnFinishedBlock: View {
         let showsBody = showsHeads || showsImages || hasFiles || derived.hasResponse || showsSteps
         VStack(alignment: .leading, spacing: 0) {
             ForEach(userEntries) { entry in
-                UserMessageRow(entry: entry, runtime: runtime, canRevert: canUndo)
+                UserMessageRow(entry: entry, runtime: runtime, canRevert: canUndo, turnHasOutput: turnHasOutput)
                     .padding(.bottom, TimelineMetrics.rowSpacing)
             }
             HStack(spacing: 8) {
@@ -2894,10 +2835,6 @@ struct TurnFinishedBlock: View {
             }
             }
         }
-        // The derivation the body just made, kept for the evaluations until the key moves.
-        .onChange(of: key, initial: true) { _, _ in
-            if self.derived?.key != key { self.derived = (key, derived) }
-        }
         .task(id: turnID) {
             guard summary.changes == nil, summary.filesChanged > 0 || derived.hasEdits else { return }
             let files = await runtime.parsedDiff(selection: turnID)
@@ -2967,12 +2904,12 @@ private struct TurnFileCard: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-                .help("Revert this turn's files and conversation")
+                .help("Revert from this turn")
                 .popover(isPresented: $isConfirmingRevert, arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Revert up to this point?")
+                        Text("Revert this turn and everything after it?")
                             .font(.chat(size: 14, weight: .semibold))
-                        Text("Files go back to how they were before this turn, and the turn leaves the conversation.")
+                        Text("Files go back to how they were before this turn, and this turn and anything after it leave the conversation.")
                             .font(.chat(.callout))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)

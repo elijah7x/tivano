@@ -12,7 +12,7 @@ struct ChimeraCastingBadgeRow: View {
     var body: some View {
         if let casting = runtime.chimeraCasting {
             ChatBadge(
-                title: Chrome.localized("Casting"),
+                title: Chrome.localized("Assign models"),
                 caption: String(format: Chrome.localized("%d roles waiting for a model"), casting.rows.count),
                 needsAttention: true,
                 isPresented: $isPresented,
@@ -69,7 +69,7 @@ struct ChimeraCastingSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Casting")
+                Text("Assign models")
                     .font(.ui(.body, weight: .semibold))
                     .foregroundStyle(Chrome.primaryText)
                 Text("Pick a model for each role. Nothing starts until you send.")

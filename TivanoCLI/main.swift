@@ -13,7 +13,7 @@ private enum CLIText {
     }()
     static func localized(_ key: String) -> String { bundle.localizedString(forKey: key, value: key, table: "Localizable") }
     static let usage = """
-    Tivano local control (the app must already be running and manually enabled in Settings › General).
+    Tivano local control (the app must already be running and manually enabled in Settings › Connections).
     Commands: info | providers | projects | threads | thread UUID | history UUID
       create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]
       send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]
@@ -21,7 +21,7 @@ private enum CLIText {
       interrupt UUID --turn UUID
       operation INSTANCE/UUID/TIMESTAMP
       settings get | settings set textGeneration automatic|claude|codex|off
-      settings set antiSlopEnabled|performanceMode|showsSkylight true|false
+      settings set weatherWindow true|false
     List flags: --limit N --cursor TOKEN
     Thread flags: --archive active|archived|all --role normal|helper|head|all
       --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]
@@ -72,7 +72,9 @@ private struct Arguments {
 
 private enum CLI {
     static let edition: ControlEdition = {
-        #if DEBUG
+        #if TIVANO_PREVIEW
+        .preview
+        #elseif DEBUG
         .dev
         #else
         .release
@@ -118,7 +120,7 @@ private enum CLI {
             if let data = try? LocalControl.encoder().encode(ControlResponse(error: failure)) {
                 FileHandle.standardError.write(data + Data([10]))
             }
-            FileHandle.standardError.write(Data((CLIText.localized("Open the correct edition of Tivano yourself and enable Local control in Settings › General. Use --help for syntax. Never blindly retry a write after a disconnect.") + "\n").utf8))
+            FileHandle.standardError.write(Data((CLIText.localized("Open the correct edition of Tivano yourself and enable Local control in Settings › Connections. Use --help for syntax. Never blindly retry a write after a disconnect.") + "\n").utf8))
             return 2
         }
     }
@@ -184,10 +186,11 @@ private enum CLI {
             if values == ["get"] { return .settingsGet }
             guard values.count == 3, values[0] == "set", let key = ControlSettingKey(rawValue: values[1]) else { throw ControlFailure(code: .invalidRequest) }
             let value: ControlSettingValue
-            if key == .textGeneration {
+            switch key {
+            case .textGeneration:
                 guard let choice = ControlTextGeneration(rawValue: values[2]) else { throw ControlFailure(code: .invalidRequest) }
                 value = .textGeneration(choice)
-            } else {
+            case .weatherWindow:
                 guard ["true", "false"].contains(values[2]) else { throw ControlFailure(code: .invalidRequest) }
                 value = .bool(values[2] == "true")
             }

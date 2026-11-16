@@ -90,9 +90,6 @@ struct MCPSettingsPage: View {
             Text("Connected servers reach every provider except Antigravity when a thread starts: the CLIs at launch, the API models through Tivano itself. Antigravity's CLI only reads its own global MCP settings.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
-            if query.trimmed.isEmpty || "Remote MCP".localizedCaseInsensitiveContains(query.trimmed) || Chrome.localized("Remote MCP").localizedCaseInsensitiveContains(query.trimmed) {
-                ChromeSection(title: "Remote MCP") { ChromeCard { RemoteMCPSettingsRows() } }
-            }
         }
         .onChange(of: model.mcp.states) { previous, current in
             guard !reduceMotion else { return }

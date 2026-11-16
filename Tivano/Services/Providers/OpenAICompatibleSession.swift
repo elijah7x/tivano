@@ -341,7 +341,7 @@ class OpenAICompatibleSession: ProviderSession {
                 let round = try await streamOneRound(model: currentModel, effort: input.effort)
                 reportUsage(round)
                 if round.statusCode == 401 || (round.rawError?.localizedCaseInsensitiveContains("invalid") == true && round.rawError?.localizedCaseInsensitiveContains("key") == true) {
-                    throw ProviderError.failed(String(format: AppText.localized("%@ rejected the API key. Check it in Settings › Providers › %@."), config.title, config.title))
+                    throw ProviderError.failed(String(format: AppText.localized("%@ rejected the API key. Check it in Settings › Provider management › %@."), config.title, config.title))
                 }
                 if let error = round.rawError, !error.isEmpty {
                     throw ProviderError.failed(friendlyError(error, statusCode: round.statusCode))
@@ -695,7 +695,7 @@ class OpenAICompatibleSession: ProviderSession {
                 if !sawReasoning { sawReasoning = true }
                 onEvent?(.reasoningDelta(id: thoughtID, text: think))
             case .toolCall(let index, let id, let name, let args):
-                var acc = accumulators[index] ?? Accumulator()
+                var acc = accumulators.removeValue(forKey: index) ?? Accumulator()
                 if !id.isEmpty { acc.id = id }
                 if !name.isEmpty { acc.name = name }
                 acc.arguments += args
@@ -805,12 +805,18 @@ class OpenAICompatibleSession: ProviderSession {
                 await handleJSON(json)
                 return true
             }
-            let payload = pending.isEmpty ? data : pending + "\n" + data
+            if pending.isEmpty {
+                pending = data.utf8.count <= 16 * 1024 * 1024 ? data : ""
+                return true
+            }
+            var payload = pending
+            pending = ""
+            payload += "\n"
+            payload += data
             guard let json = JSONValue.parse(payload) else {
                 pending = payload.utf8.count <= 16 * 1024 * 1024 ? payload : ""
                 return true
             }
-            pending = ""
             await handleJSON(json)
             return true
         }

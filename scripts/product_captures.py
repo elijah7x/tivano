@@ -42,12 +42,12 @@ WINDOW_SIZES = {
     "capture-threads": (960, 600),
     "capture-recipes": (960, 600),
     "capture-panels": (1280, 800),
-    "capture-theme-tokyoNight": (960, 600),
-    "capture-theme-gruvbox": (960, 600),
-    "capture-theme-catppuccinLatte": (960, 600),
+    "capture-theme-nightOwl": (960, 600),
+    "capture-theme-claude": (960, 600),
+    "capture-theme-catppuccin": (960, 600),
     "capture-theme-rosePine": (960, 600),
 }
-THEME_ORDER = ["tokyoNight", "gruvbox", "catppuccinLatte", "rosePine"]
+THEME_ORDER = ["nightOwl", "claude", "catppuccin", "rosePine"]
 
 
 def reject_source_path(path, source_roots):

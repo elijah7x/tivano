@@ -3,12 +3,16 @@ import Foundation
 /// Row patches for `dsh --profile acp --patch`.
 /// Row ids are dsh internals and can change between versions.
 enum DshPatches {
+    private static let disableOnlyIDRegex = try! NSRegularExpression(pattern: #"^- id: \S+$"#)
+    private static let delegationRowNameRegex = try! NSRegularExpression(pattern: #"^@deepseek-ai/dsh-(tool-subagent|tool-workflow|tool-goal|command-goal|agent-team|tool-agent-team)([-/].*)?$"#)
+    private static let dumpRowHeaderRegex = try! NSRegularExpression(pattern: #"^\s*- id: \S+\s*$"#)
+
     static func disableOnlyIDs(_ content: String) -> Set<String> {
         var ids = Set<String>()
         var entry: [String] = []
         func finishEntry() {
             guard entry.count == 2, entry[1] == "  disabled: true",
-                  entry[0].range(of: #"^- id: \S+$"#, options: .regularExpression) != nil else { return }
+                  disableOnlyIDRegex.firstMatch(in: entry[0], range: NSRange(entry[0].startIndex..., in: entry[0])) != nil else { return }
             ids.insert(String(entry[0].dropFirst("- id: ".count)))
         }
         for line in content.split(whereSeparator: \.isNewline) {
@@ -31,7 +35,7 @@ enum DshPatches {
         var disabled: String?
         func finishRow() {
             guard let row, let name, disabled != "true",
-                  name.range(of: #"^@deepseek-ai/dsh-(tool-subagent|tool-workflow|tool-goal|command-goal)([-/].*)?$"#, options: .regularExpression) != nil,
+                  delegationRowNameRegex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil,
                   seen.insert(row.id).inserted else { return }
             rows.append(row.id)
         }
@@ -39,7 +43,8 @@ enum DshPatches {
             let clean = line.trimmingCharacters(in: .whitespaces)
             if clean.isEmpty || clean.hasPrefix("#") { continue }
             let indent = String(line.prefix(while: { $0.isWhitespace }))
-            let isRow = line.range(of: #"^\s*- id: \S+\s*$"#, options: .regularExpression) != nil
+            let lineText = String(line)
+            let isRow = dumpRowHeaderRegex.firstMatch(in: lineText, range: NSRange(lineText.startIndex..., in: lineText)) != nil
             if let current = row, indent.count <= current.indent.count || isRow {
                 finishRow()
                 row = nil
@@ -66,10 +71,12 @@ enum DshPatches {
         return rows
     }
 
+    // `tools.config.mode` is rejected since 0.2.1-rc.2; the executor rows choose native or PTC.
     static let ptc = #"""
-    - id: tools
-      config:
-        mode: ptc
+    - id: tool-executor-native
+      disabled: true
+    - id: tool-executor-ptc
+      disabled: false
     
     """#
 
@@ -106,9 +113,10 @@ enum DshPatches {
       disabled: true
     - id: tool-web
       disabled: true
-    - id: tools
-      config:
-        mode: native
+    - id: agent-team
+      disabled: true
+    - id: tool-agent-team
+      disabled: true
     - id: system-prompt
       config:
         includeHarnessIdentity: false
@@ -203,6 +211,10 @@ enum DshPatches {
     - id: command-goal
       disabled: true
     - id: tool-goal
+      disabled: true
+    - id: agent-team
+      disabled: true
+    - id: tool-agent-team
       disabled: true
     
     """#

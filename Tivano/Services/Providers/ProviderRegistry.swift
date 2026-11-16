@@ -30,102 +30,6 @@ struct ProviderStatus: Equatable, Sendable {
     }
 }
 
-enum DshIntegrationConfiguration {
-    static var isEnabled: Bool {
-        #if DEBUG
-        CaptureRun.isEnabled && (CommandLine.arguments.contains("--dsh-integration-probe")
-            || CommandLine.arguments.contains("--dsh-offline-native-probe"))
-        #else
-        false
-        #endif
-    }
-
-    static var isOfflineHydra: Bool {
-        isEnabled && CommandLine.arguments.contains("--dsh-offline-hydra-probe")
-    }
-
-    static var isOfflineNative: Bool {
-        isEnabled && CommandLine.arguments.contains("--dsh-offline-native-probe")
-    }
-
-    struct Paths {
-        let executable: URL
-        let home: URL
-    }
-
-    static var paths: Paths? {
-        guard isEnabled else { return nil }
-        let arguments = CommandLine.arguments
-        func path(_ flag: String) -> URL? {
-            guard arguments.filter({ $0 == flag }).count == 1,
-                  let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1),
-                  arguments[index + 1].hasPrefix("/") else { return nil }
-            return URL(fileURLWithPath: arguments[index + 1]).standardizedFileURL.resolvingSymlinksInPath()
-        }
-        guard let executable = path("--dsh-test-executable"), let home = path("--dsh-test-home"),
-              let binary = try? executable.resourceValues(forKeys: [.isRegularFileKey]), binary.isRegularFile == true,
-              FileManager.default.isExecutableFile(atPath: executable.path),
-              let directory = try? home.resourceValues(forKeys: [.isDirectoryKey]), directory.isDirectory == true else { return nil }
-        guard let output = CaptureRun.outputDirectory?.standardizedFileURL.resolvingSymlinksInPath() else { return nil }
-        if isOfflineNative {
-            let temporary = URL(fileURLWithPath: "/private/tmp", isDirectory: true).resolvingSymlinksInPath()
-            let environment = ProcessInfo.processInfo.environment
-            guard !isOfflineHydra, output.deletingLastPathComponent() == temporary,
-                  output.lastPathComponent.hasPrefix("tivano-dsh-app-native-"),
-                  home == output.appendingPathComponent("dsh-home"),
-                  !executable.path.hasPrefix(output.path + "/"),
-                  let processHome = environment["HOME"], let dshHome = environment["DSH_HOME"],
-                  URL(fileURLWithPath: processHome).resolvingSymlinksInPath() == output.appendingPathComponent("home"),
-                  URL(fileURLWithPath: dshHome).resolvingSymlinksInPath() == home else { return nil }
-        } else if isOfflineHydra {
-            // Canonical descendants only: symlinks cannot point this offline fixture at the account or installed CLI.
-            let ownerHome = FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path
-            guard output.path != "/", output.path != ownerHome,
-                  !ownerHome.hasPrefix(output.path + "/"),
-                  home.path.hasPrefix(output.path + "/"),
-                  executable.path.hasPrefix(output.path + "/"),
-                  !executable.path.hasPrefix(home.path + "/") else { return nil }
-        } else {
-            guard home.path != output.path,
-                  !home.path.hasPrefix(output.path + "/"),
-                  !output.path.hasPrefix(home.path + "/") else { return nil }
-        }
-        return Paths(executable: executable, home: home)
-    }
-
-    static var environment: [String: String] {
-        guard let paths, let root = CaptureRun.storageRoot else { return [:] }
-        if isOfflineNative {
-            guard let output = CaptureRun.outputDirectory?.resolvingSymlinksInPath(),
-                  let data = try? Data(contentsOf: output.appendingPathComponent("manifest.json")),
-                  let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-                  manifest["fixture"] == "tivano-dsh-app-native-v1",
-                  let port = manifest["port"].flatMap(Int.init), (1024...65535).contains(port),
-                  FileManager.default.fileExists(atPath: output.appendingPathComponent("started").path) else { return [:] }
-            return ["HOME": output.appendingPathComponent("home").path,
-                    "DSH_HOME": paths.home.path, "TMPDIR": output.appendingPathComponent("tmp").path,
-                    "PATH": paths.executable.deletingLastPathComponent().path + ":/opt/homebrew/bin:/usr/bin:/bin",
-                    "LANG": "en_US.UTF-8", "SHELL": "/bin/sh", "TERM": "dumb",
-                    "DEEPSEEK_API_KEY": "offline-fixture-only", "DSH_TELEMETRY_DISABLED": "1",
-                    "DEEPSEEK_BASE_URL": "http://127.0.0.1:\(port)/anthropic",
-                    "NO_PROXY": "127.0.0.1,localhost",
-                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"]
-        }
-        let home = root.appendingPathComponent("probe-home", isDirectory: true)
-        let temporary = root.appendingPathComponent("probe-tmp", isDirectory: true)
-        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-        // An allowlist, not a filtered login environment: no shell hooks or injected auth.
-        return [
-            "HOME": home.path, "TMPDIR": temporary.path,
-            "PATH": paths.executable.deletingLastPathComponent().path + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-            "LANG": "en_US.UTF-8", "TERM": "dumb", "SHELL": "/bin/sh",
-            "DSH_HOME": paths.home.path,
-            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
-        ]
-    }
-}
-
 /// Finds provider CLIs, checks their sign-in state and caches their model catalogs.
 @MainActor
 @Observable
@@ -193,7 +97,6 @@ final class ProviderRegistry {
     @ObservationIgnored var cliCheckGeneration: [ProviderKind: UUID] = [:]
     @ObservationIgnored var cliUpdateTasks: [String: CLITrackedTask<Bool>] = [:]
     @ObservationIgnored var cliUpdateRequesters: [String: ProviderKind] = [:]
-    @ObservationIgnored var cliRecoveryLocks: Set<String> = []
     @ObservationIgnored var cliRefreshPending: [String: String] = [:]
     @ObservationIgnored var cliCheckCache: [ProviderKind: CLICheckCache] = [:]
     @ObservationIgnored var cliCheckLoop: Task<Void, Never>?
@@ -332,8 +235,7 @@ final class ProviderRegistry {
            let data = UserDefaults.standard.data(forKey: cacheKey),
            let cached = try? JSONDecoder().decode([String: [ModelOption]].self, from: data) {
             for (key, list) in cached {
-                guard key != "opencodeGo", !(key == "opencode" && cached["opencodeGo"] != nil),
-                      let provider = ProviderKind(rawValue: key) else { continue }
+                guard let provider = ProviderKind(rawValue: key) else { continue }
                 if provider == .dsh, list.contains(where: { $0.name == $0.id || $0.name.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") }) { continue }
                 // A list cached before the scales were ordered may still run high to low
                 // (Grok's did); the slider reads them low to high, so they are put right here.
@@ -353,7 +255,6 @@ final class ProviderRegistry {
            let data = UserDefaults.standard.data(forKey: catalogDatesKey),
            let raw = try? JSONDecoder().decode([String: Double].self, from: data) {
             for (key, seconds) in raw {
-                guard key != "opencodeGo", !(key == "opencode" && raw["opencodeGo"] != nil) else { continue }
                 if let provider = ProviderKind(rawValue: key) { catalogFetchedAt[provider] = Date(timeIntervalSince1970: seconds) }
             }
         }
@@ -434,14 +335,10 @@ final class ProviderRegistry {
     /// `bootstrap()` probes the providers (see `AppDelegate`), so a strict read there found
     /// no pair and no provider: every one of them read as missing.
     func countsAsInstalled(_ provider: ProviderKind) -> Bool {
-        if DshIntegrationConfiguration.isEnabled { return status(provider).isInstalled }
         return statuses[provider]?.isInstalled ?? true
     }
 
     func status(_ provider: ProviderKind) -> ProviderStatus {
-        if DshIntegrationConfiguration.isEnabled {
-            return provider == .dsh ? (statuses[provider] ?? ProviderStatus()) : ProviderStatus()
-        }
         // A capture run never probes the CLIs (see `refresh`), and reads as a Mac with every
         // provider installed and signed in, so the pairs and pickers show what they offer.
         if CaptureRun.isEnabled {
@@ -451,9 +348,6 @@ final class ProviderRegistry {
     }
 
     func executable(for provider: ProviderKind) -> URL? {
-        if DshIntegrationConfiguration.isEnabled {
-            return provider == .dsh ? DshIntegrationConfiguration.paths?.executable : nil
-        }
         guard !provider.isAPIKeyBased else { return nil }
         let custom = settings.binaryPath(for: provider)
         if provider == .zcode {
@@ -524,13 +418,11 @@ final class ProviderRegistry {
     }
 
     func environment(for provider: ProviderKind) -> [String: String] {
-        guard !DshIntegrationConfiguration.isEnabled else { return baseEnvironment(for: provider) }
         return environment(for: provider, account: accounts.activeAccount(for: provider))
     }
 
     func environment(for provider: ProviderKind, account: ProviderAccount?) -> [String: String] {
         var environment = baseEnvironment(for: provider)
-        guard !DshIntegrationConfiguration.isEnabled else { return environment }
         if provider == .claude, account?.isDefault == true {
             environment.removeValue(forKey: "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST")
         }
@@ -552,9 +444,6 @@ final class ProviderRegistry {
     }
 
     func baseEnvironment(for provider: ProviderKind) -> [String: String] {
-        if DshIntegrationConfiguration.isEnabled {
-            return provider == .dsh ? DshIntegrationConfiguration.environment : [:]
-        }
         var environment = LoginEnvironment.current
         if let directory = executable(for: provider)?.deletingLastPathComponent().path,
            let path = environment["PATH"],
@@ -585,9 +474,6 @@ final class ProviderRegistry {
     /// browser, then a fresh status check and usage read, so the numbers follow the new login
     /// without a trip to Terminal. Returns the CLI's message when it failed, nil on success.
     func signIn(_ provider: ProviderKind) async -> String? {
-        guard !DshIntegrationConfiguration.isEnabled else {
-            return AppText.localized("DeepSeek Harness sign-in did not finish. Try again.")
-        }
         if provider == .claude {
             guard !CaptureRun.isEnabled, let account = accounts.activeAccount(for: .claude),
                   !account.requiresClaudeActivation, !account.requiresClaudeCleanup else {
@@ -634,7 +520,6 @@ final class ProviderRegistry {
     /// for each signed-in account only while the page shows them and reloads the live catalogs.
     /// Claude keeps its seed catalog until a user-started session reports live models.
     func refreshEverything() async {
-        guard !DshIntegrationConfiguration.isEnabled else { return }
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -666,8 +551,6 @@ final class ProviderRegistry {
     private static let probeWidth = 4
 
     func refreshAll() async {
-        // The integration runner owns its deadlines and serializes its probes.
-        guard !DshIntegrationConfiguration.isEnabled else { return }
         let providers = ProviderKind.allCases
         var next = 0
         await withTaskGroup(of: Void.self) { group in
@@ -691,13 +574,6 @@ final class ProviderRegistry {
     }
 
     func refresh(_ provider: ProviderKind) async {
-        if DshIntegrationConfiguration.isEnabled {
-            guard provider == .dsh, let executable = executable(for: provider) else { return }
-            let version = await Self.version(executable, environment(for: provider))
-            // Credential contents belong to dsh. A version check is not evidence of login.
-            setStatus(ProviderStatus(executable: executable, version: version, auth: .unknown), for: provider)
-            return
-        }
         guard !CaptureRun.isEnabled else { return }
         if provider == .claude {
             guard let account = accounts.activeAccount(for: .claude),
@@ -741,7 +617,7 @@ final class ProviderRegistry {
             let auth: ProviderStatus.Auth = settings.apiKey(for: .zai).isEmpty
                 ? .signedOut : .signedIn(AppText.localized("GLM Coding Plan key"))
             let authMessage = auth == .signedOut
-                ? AppText.localized("ZCode signs in with your GLM Coding Plan key. Add it in Settings › Providers › Z.ai.") : nil
+                ? AppText.localized("ZCode signs in with your GLM Coding Plan key. Add it in Settings › Provider management › Z.ai.") : nil
             setStatus(ProviderStatus(executable: executable, version: ZCodeCLI.version(entry: executable), auth: auth,
                                      authMessage: authMessage, catalogError: statuses[provider]?.catalogError), for: provider)
             return
@@ -760,7 +636,7 @@ final class ProviderRegistry {
         guard provider != .claude || accounts.selectionRevision == observedRevision else { return }
         guard provider != .dsh || (dshRevision == dshAuthenticationRevision && !Task.isCancelled) else { return }
         let authMessage = provider == .dsh && auth == .signedOut
-            ? AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings › Providers › DeepSeek.")
+            ? AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings › Provider management › DeepSeek.")
             : nil
         setStatus(ProviderStatus(executable: executable, version: version, auth: auth, authMessage: authMessage, catalogError: statuses[provider]?.catalogError), for: provider)
     }
@@ -893,34 +769,8 @@ final class ProviderRegistry {
             || text.contains("update codex")
     }
 
-    /// Retained for error-recovery callers. Recovery never authorizes an installation.
-    @discardableResult
-    func updateCLIIfDue(_ provider: ProviderKind, force: Bool = false) async -> Bool {
-        return false
-    }
-
-    /// The version the installed CLI reports, or nil when it cannot be read.
-    func installedCLIVersion(_ provider: ProviderKind) async -> String? {
-        if provider == .claude {
-            guard !CaptureRun.isEnabled, let account = accounts.activeAccount(for: .claude),
-                  !account.requiresClaudeActivation, !account.requiresClaudeCleanup else { return nil }
-        }
-        if DshIntegrationConfiguration.isEnabled {
-            guard provider == .dsh, let executable = executable(for: provider) else { return nil }
-            return await Self.version(executable, environment(for: provider))
-        }
-        await LoginEnvironment.load()
-        if provider == .claude {
-            guard let account = accounts.activeAccount(for: .claude),
-                  !account.requiresClaudeActivation, !account.requiresClaudeCleanup else { return nil }
-        }
-        guard let executable = executable(for: provider) else { return nil }
-        let raw = await cliCommandRunner.readVersion(executable, CLIInstallEnvironment.current)
-        return Self.readableCLIVersion(raw)
-    }
-
     func loadCatalog(_ provider: ProviderKind, force: Bool = false) async {
-        guard !CaptureRun.isEnabled || (DshIntegrationConfiguration.isEnabled && provider == .dsh && DshIntegrationConfiguration.paths != nil) else { return }
+        guard !CaptureRun.isEnabled else { return }
         if provider == .claude {
             // Real sessions deliver their catalog; discovery must not run user hooks or MCP.
             if models(for: .claude).isEmpty { updateCatalog(Self.claudeSeed, for: .claude) }
@@ -1025,7 +875,7 @@ final class ProviderRegistry {
                 dshCatalogTask = nil
             }
         }
-        if !DshIntegrationConfiguration.isEnabled { await LoginEnvironment.load() }
+        await LoginEnvironment.load()
         guard dshCatalogGeneration == generation, !Task.isCancelled else { return }
         guard let executable = executable(for: .dsh) else {
             setDshCatalogError(AppText.localized("DeepSeek Harness is not installed or its binary path is unavailable."))

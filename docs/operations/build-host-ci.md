@@ -47,6 +47,8 @@ each `poll` or `run`:
 | `tivano.ci.owned` | `false` | Must be exactly `true` (case-insensitive) to modify this checkout |
 | `tivano.ci.gui` | `true` | Include `--gui`; accepts `true` or `false` |
 | `tivano.ci.timeout` | `10800` | Positive verification timeout in seconds |
+| `tivano.ci.notify` | unset | Optional shell command run after finished records (`pass`, `fail`, `stale`) and >3 consecutive fetch errors (30s timeout) |
+| `tivano.ci.repair-metal` | `false` | `true` lets each run reinstall Xcode's Metal Toolchain (~800 MB) when an Xcode update removed it; without it the app build fails in SwiftTerm's shaders with `missing Metal Toolchain` (manual fix: `xcodebuild -downloadComponent MetalToolchain`) |
 
 Create a user LaunchAgent plist in `~/Library/LaunchAgents/` with the template
 below. Replace the XML-escaped placeholders with actual values. Use the same
@@ -107,10 +109,15 @@ git -C '<owner-repository>' config tivano.ci.label '<launch-agent-label>'
 
 These keys are consumed by `scripts/ci_gate.py`. `ci_gate.py kick [rev]` queues
 that exact commit with `thor_ci.py request` and starts the launch agent with
-`launchctl kickstart`, so the run gets the agent's session and PATH; the next
-poll checks queued commits before the branch tip. SSH must work without
-interactive prompts in both directions: build host → owner for fetch, and
-owner → build host for status.
+`launchctl kickstart`, so the run gets the agent's session and PATH, and reports
+whether the build host was idle (started) or busy (queued behind the running
+SHA). `ci_gate.py rerun [rev] --only a,b` uses the same path to queue a
+per-check rerun for a failed commit whose build passed. `poll` drains queued
+requests and the configured branch tip in a loop while holding the lock until
+nothing new remains. `ci_gate.py check --wait` tolerates up to 5 consecutive SSH
+failures before aborting and prints state changes with elapsed time once per
+change. SSH must work without interactive prompts in both directions: build host
+→ owner for fetch, and owner → build host for status.
 
 ## Results and manual commands
 
@@ -126,12 +133,13 @@ variable alone does not propagate to SSH sessions.
 <artifact-root>/ci-results/<full-sha>.json
 <artifact-root>/ci-results/<full-sha>.log
 <artifact-root>/ci-results/latest.json
+<artifact-root>/ci-results/latest-error.json
 <artifact-root>/ci-results/poll.log
 ```
 
 JSON is written through a temporary file and atomic replacement. Records contain
-`sha`, `subject`, `state`, and UTC ISO-8601 `started_at`. Final records add
-`finished_at`, elapsed `seconds`, `verify_exit` (null if unavailable),
+`sha`, `subject`, `state`, UTC ISO-8601 `started_at`, `pid`, and `host`. Final
+records add `finished_at`, elapsed `seconds`, `verify_exit` (null if unavailable),
 `artifacts` (null if unavailable), `failed`, and `environment` with
 `sw_vers`, `swift` (the first compiler-version line), and `git`. Failures include
 `reason`. `failed` includes `build` and all checks whose summary status is neither
@@ -139,10 +147,17 @@ JSON is written through a temporary file and atomic replacement. Records contain
 log locates `summary.json`; missing or invalid summaries fail the run even if
 verification exits zero. The original verification artifacts stay at that path.
 
+When the nearest first-parent `pass` ancestor within 30 commits has an identical
+`environment`, the diff only touches `CHANGELOG.md` or version keys in
+`config/dev.xcconfig`/`config/release.xcconfig`, and no `verify.py` `CHECKS`
+trigger matches those paths, `thor_ci.py` records a `pass` with `reused_from`
+and `reason: version/changelog-only diff` without running `verify.py`.
+
 ```sh
 TIVANO_CI_REPO='<ci-checkout>' /usr/bin/python3 '<executor-directory>/thor_ci.py' poll
 git -C '<ci-checkout>' fetch owner --prune
 TIVANO_CI_REPO='<ci-checkout>' /usr/bin/python3 '<executor-directory>/thor_ci.py' run '<full-sha>'
+TIVANO_CI_REPO='<ci-checkout>' /usr/bin/python3 '<executor-directory>/thor_ci.py' run '<full-sha>' --only 'check_a,check_b'
 TIVANO_CI_REPO='<ci-checkout>' /usr/bin/python3 '<executor-directory>/thor_ci.py' run '<full-sha>' --force
 TIVANO_CI_REPO='<ci-checkout>' /usr/bin/python3 '<executor-directory>/thor_ci.py' status '<full-sha>'
 TIVANO_CI_REPO='<ci-checkout>' /usr/bin/python3 '<executor-directory>/thor_ci.py' latest
@@ -150,29 +165,69 @@ TIVANO_CI_REPO='<ci-checkout>' /usr/bin/python3 '<executor-directory>/thor_ci.py
 
 `run` uses an already-fetched commit and never fetches. Both `poll` and `run`
 skip existing `pass`/`fail` records; `run --force` replaces the selected commit's
-record and log with a fresh attempt. No result records are deleted automatically.
-`latest` contains the most recently started/completed run, including `running`.
+record and log with a fresh attempt. `run --only a,b` reruns only those checks
+with `verify.py --only a,b --skip-build [--gui]` for a `fail` record whose build
+passed, merges the new check statuses into `summary.json` and the record,
+appends `reruns` history (`check`, `old_status`, `new_status`, `time`), and marks
+the record `pass` only when every check in the merged summary is `PASS` or
+`not selected`. No result records are deleted automatically. `latest` contains the
+most recently started/completed run, including `running`.
 
 `status` accepts exactly 40 hexadecimal characters and prints one JSON line:
 `sha`, `state` (`pass`, `fail`, `running`, or `missing`), plus any recorded
-`finished_at`, `started_at`, `failed`, `reason`, `artifacts`, and `environment`.
-A missing record is exactly `{"sha":"<full-sha>","state":"missing"}`. Valid
-status requests always exit zero; usage errors exit 2. Unreadable/invalid records
-return `fail` with a diagnostic `reason`. `latest` prints the full latest record,
-or `{"state":"missing"}` when none exists.
+`finished_at`, `started_at`, `failed`, `reason`, `artifacts`, `environment`,
+`reused_from`, `reruns`, and `latest_error` (when `latest-error.json` exists).
+A missing record without an active error is `{"sha":"<full-sha>","state":"missing"}`.
+Valid status requests always exit zero; usage errors exit 2. Unreadable/invalid
+records return `fail` with a diagnostic `reason`. `latest` prints the full latest
+record, or `{"state":"missing"}` when none exists.
 
-## Offline hosts and interrupted runs
+## Disk placement and retention
+
+Keep `<ci-checkout>`, the build-host repository and `<worktrees-dir>` on the
+internal disk: external and removable volumes require separate Removable Volumes
+consent for every responsible process that touches them (see the Privacy prompts
+section of `docs/operations/product-captures.md`). External disks are for
+archives that no running process needs.
+
+A host-local janitor (a launch agent outside the repository, configured per host)
+prunes disposable data after tasks:
+
+- In `private-artifacts/verify/`, keep the newest few runs intact and reduce
+  older runs to `summary.json` and the top-level `*.log` files (per-check
+  subdirectories are scratch homes and caches).
+- Remove a task worktree's `build.noindex/` once nothing in it changed for 24
+  hours (rebuildable).
+- The CI checkout's own `build.noindex/` caches under fixed names are reused
+  across runs and are not pruned by age.
+- Never delete worktrees, source, capture archives under
+  `private-artifacts/product-captures/`, stress result directories or release
+  evidence.
+- Log a warning when free space on the internal disk drops below a threshold.
+
+## Offline hosts, errors, notifications and interrupted runs
 
 A nonblocking lock at `ci-results/.lock` prevents overlapping runs. A busy
-invocation prints `busy` and exits zero. When the owner is offline or fetch fails,
-`poll` appends one timestamped line to `poll.log` and exits zero without using
-an older remote-tracking commit. The next launchd tick retries. Completed
-verification failures are retained and require a new commit or `run --force`.
+invocation prints `busy` and exits zero. When the owner is offline or fetch
+fails, `poll` appends one timestamped line to `poll.log`, writes
+`latest-error.json` (`time`, `message`), and exits without using an older
+remote-tracking commit. Unreachable queued requests are also kept with an error
+note and recorded in `latest-error.json` until resolved or older than 24 hours.
+Completed verification failures are retained and require a new commit,
+`run --only`, or `run --force`.
 
-Verification runs at niceness 10. A timeout kills the verification process group
-and its descendants, then records failure. SIGTERM or Ctrl-C records
-`reason: interrupted`. On the next locked invocation, abandoned `running`
-records older than the configured timeout plus 600 seconds become failures with
-`reason: stale`. A busy executor does not mark records stale. `poll`/`run` exit 1
-for a new verification failure or setup error; the JSON result is the release
-gate's source of truth.
+If `tivano.ci.notify` is configured on the build host, `thor_ci.py` runs that
+shell command (30s timeout) with `TIVANO_CI_STATE`, `TIVANO_CI_SHA`,
+`TIVANO_CI_SUBJECT`, `TIVANO_CI_FAILED`, and `TIVANO_CI_REASON` after every
+finished record (`pass`, `fail`, `stale`) and on fetch errors lasting more than
+3 consecutive polls. Notification failures are logged to `poll.log` and never
+change a run result.
+
+Verification runs at normal scheduling priority. A timeout kills the
+verification process group and its descendants, then records failure. SIGTERM or
+Ctrl-C records `reason: interrupted`. On the next locked invocation, `expire_stale`
+marks abandoned `running` records `stale` as soon as the recorded `pid` is gone
+or the lock is not held (with `timeout + 600` seconds kept as a backstop). A
+busy executor does not mark records stale. `poll`/`run` exit 1 for a new
+verification failure or setup error; the JSON result is the release gate's source
+of truth.

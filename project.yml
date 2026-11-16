@@ -4,7 +4,20 @@ options:
   deploymentTarget:
     macOS: "26.0"
   developmentLanguage: en
+  knownRegions:
+    - Base
+    - en
+    - fr
+    - ja
+    - ko
+    - zh-Hans
+    - zh-Hant
   createIntermediateGroups: true
+  defaultConfig: Debug
+configs:
+  Debug: debug
+  Release: release
+  Preview: release
 packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
@@ -23,6 +36,7 @@ targets:
     configFiles:
       Debug: config/dev.xcconfig
       Release: config/release.xcconfig
+      Preview: config/preview.xcconfig
     sources:
       - path: Tivano
         type: syncedFolder
@@ -73,17 +87,26 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Developer ID Application
           CODE_SIGN_ENTITLEMENTS: config/release.entitlements
+        Preview:
+          PRODUCT_NAME: "Tivano Preview"
+          PRODUCT_BUNDLE_IDENTIFIER: dev.tivano.Tivano.preview
+          INFOPLIST_KEY_CFBundleDisplayName: "Tivano Preview"
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIconPreview
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Developer ID Application
+          CODE_SIGN_ENTITLEMENTS: config/release.entitlements
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) TIVANO_PREVIEW"
   TivanoCLI:
     type: tool
     platform: macOS
     configFiles:
       Debug: config/dev.xcconfig
       Release: config/release.xcconfig
+      Preview: config/preview.xcconfig
     sources:
       - path: TivanoCLI
       - path: Tivano/Core/Models/LocalControl.swift
       - path: Tivano/Services/Control/ControlSocket.swift
-      - path: Tivano/Services/Control/ControlClient.swift
     settings:
       base:
         PRODUCT_NAME: tivano-control
@@ -100,3 +123,6 @@ targets:
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: dev.tivano.Tivano.CLI.dev
+        Preview:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.tivano.Tivano.CLI.preview
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) TIVANO_PREVIEW"

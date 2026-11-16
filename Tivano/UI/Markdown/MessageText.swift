@@ -7,10 +7,11 @@ import Foundation
 /// view it used to hold, which left with the whole-reply drag mode; this enum is all that
 /// stayed.
 enum MessageText {
+    @MainActor
     static func plain(_ markdown: String) -> String {
         var lines: [String] = []
         var first = true
-        for block in MarkdownParser.parse(markdown) {
+        for block in MarkdownView.blocks(for: markdown) {
             if !first { lines.append("") }
             first = false
             append(block, to: &lines)

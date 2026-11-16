@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         let windows = WindowManager.shared
         model = windows.model
+        AppIconManager.shared.apply(choice: windows.model.settings.appIconChoice, style: windows.model.settings.themeStyle)
         #if DEBUG
         if CaptureRun.isEnabled {
             Task { await WebsiteCaptures.run(model: windows.model) }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local dev merge gate. Use --list to inspect selection without running checks."""
+"""Local dev merge gate. Default mode runs matched fast checks and builds the app only when app-build inputs changed. Use --slow for matched slow checks, --all for all offline checks plus build, or --list to inspect selection without running checks."""
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -113,6 +113,9 @@ CHECKS = (
     check('antigravity_result_checks', 'fast', (), 60, SWIFT,
           (*paths(PROVIDERS, 'AntigravitySession.swift'),), 'none (read-only)'),
     check('pi_catalog_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'PiCLI.swift'),), 'none (read-only)'),
+    check('upstream_channel_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'CLIUpdates.swift ACPSession.swift PiSession.swift'),), 'none (read-only)'),
+    check('dsh_patch_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'DshPatches.swift DshMarketplaceBootstrap.swift ACPSession.swift'),), 'none (read-only)'),
+    check('codex_protocol_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'CodexSession.swift'),), 'none (read-only)'),
     check('zcode_protocol_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'ZCodeCLI.swift ZCodeSession.swift'),), 'none (read-only)'),
     check('meta_model_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'MetaAPI.swift MetaSession.swift'),), 'none (read-only)'),
     check('turn_continue_checks', 'fast', (), 60, (), ('Tivano/App/Runtime/ThreadRuntime.swift', 'Tivano/App/Runtime/AutoContinue.swift', 'Tivano/App/Views/Chat/TimelineRows.swift', 'Tivano/App/Views/Chat/ThreadTimeline.swift', 'Tivano/Resources/Localizable.xcstrings'), 'none (read-only)'),
@@ -121,9 +124,36 @@ CHECKS = (
            'Tivano/App/Views/Chat/HydraPanel.swift', 'Tivano/App/Runtime/ThreadRuntime.swift',
            'Tivano/Core/Models/Hydra.swift', 'Tivano/Core/Models/HydraPrompts+V2.swift'),
           'none (read-only)'),
+    check('first_send_checks', 'fast', (), 60, (),
+          ('Tivano/App/Runtime/ThreadRuntime.swift', 'Tivano/App/AppModel.swift'),
+          'none (read-only)'),
     check('markdown_link_checks', 'fast', (), 240, SWIFT,
           ('Tivano/UI/Markdown/MarkdownLinkTarget.swift',
            'Tivano/UI/Markdown/LinkParagraphView.swift')),
+    check('markdown_typography_checks', 'fast', (), 120, SWIFT,
+          ('Tivano/UI/Theme/TypeScale.swift',
+           'Tivano/UI/Markdown/MarkdownView.swift',
+           'Tivano/UI/Markdown/ProseRunView.swift',
+           'Tivano/UI/Markdown/LinkParagraphView.swift',
+           'Tivano/App/Views/Chat/TimelineRows.swift')),
+    check('weather_window_checks', 'fast', (), 120, SWIFT,
+          ('Tivano/Core/Models/HeroWeather.swift',
+           'Tivano/Core/Models/ThreadActivityStatus.swift',
+           'Tivano/Core/Models/Timeline.swift',
+           'Tivano/App/AppModel+Weather.swift',
+           'Tivano/App/Views/Layout/GlobalWeatherLayer.swift',
+           'Tivano/UI/Common/WeatherCanvas.swift',
+           'Tivano/UI/Theme/ThemeStyle.swift',
+           'Tivano/App/AppSettings.swift')),
+    check('ci_runner_checks', 'fast', (), 300, ('git',),
+          ('scripts/thor_ci.py', 'scripts/ci_gate.py', 'scripts/verify.py'), 'temporary directory'),
+    check('workspace_mode_checks', 'fast', (), 180, (*SWIFT, 'git'),
+          ('Tivano/Core/Models/Provider.swift', 'Tivano/App/AppSettings.swift',
+           'Tivano/App/AppModel.swift', 'Tivano/App/Runtime/ThreadRuntime.swift',
+           'Tivano/App/QuickChat/QuickChatPanel.swift',
+           'Tivano/App/Views/Settings/ConversationSettingsPage.swift',
+           'Tivano/Resources/Localizable.xcstrings'),
+          'temporary directory'),
     check('runtime_storage_checks', 'slow', (), 7200, (*SWIFT, 'unprivileged'),
           (*paths(SUPPORT, 'HangWatchdog.swift JSONValue.swift ISO8601.swift RuntimeStorageUsage.swift '
                   'CaptureRun.swift StoragePaths.swift Text.swift'),
@@ -139,8 +169,8 @@ CHECKS = (
           'fresh external directory'),
     check('local_control_checks', 'slow', ('{short}',), 1200, (*SWIFT, 'arm64', 'short-socket-path'),
           ('scripts/fixtures/local_control/', 'Tivano/Core/Models/LocalControl.swift',
-           *paths('Tivano/Services/Control/', 'ControlSocket.swift ControlClient.swift ControlLedger.swift ControlCLIInstaller.swift'),
-           'Tivano/Services/Store/ControlHistoryReader.swift', 'TivanoCLI/main.swift',
+           *paths('Tivano/Services/Control/', 'ControlSocket.swift ControlLedger.swift ControlCLIInstaller.swift'),
+           'Tivano/Services/Store/ControlHistoryReader.swift', 'TivanoCLI/main.swift', 'TivanoCLI/ControlClient.swift',
            'Tivano/Resources/Localizable.xcstrings'), 'fresh /tmp/tvlc-*/lc directory'),
     check('dsh_adapter_stress', 'slow', (), 3000, (*SWIFT, '/usr/bin/sandbox-exec'),
           ('scripts/fixtures/dsh_adapter/', *ACP_SOURCES), 'build.noindex/dsh-adapter/run-*'),
@@ -170,9 +200,22 @@ CHECKS = (
            'Tivano/UI/Common/AttachmentPreview.swift', 'Tivano/UI/Common/AttachmentThumbnail.swift',
            'Tivano/App/Views/Composer/QuestionTab.swift', 'Tivano/App/Views/Composer/ComposerView.swift',
            'Tivano/UI/Chrome/Popovers.swift', 'Tivano/UI/Chrome/Chrome.swift',
-           'Tivano/UI/Theme/AppTheme.swift', 'Tivano/UI/Theme/TypeScale.swift',
+           'Tivano/UI/Theme/AppTheme.swift', 'Tivano/UI/Theme/ThemeStyle.swift', 'Tivano/UI/Theme/TypeScale.swift',
            *paths(SUPPORT, 'ThumbnailCache.swift RecentCache.swift Text.swift'),
            'Tivano/Core/Models/Requests.swift', 'Tivano/Services/Providers/ProviderSession.swift')),
+)
+
+
+GLOBAL_TRIGGERS = ('project.yml', 'Tivano.xcodeproj/', 'scripts/verify.py')
+APP_BUILD_TRIGGERS = (
+    'Tivano/',
+    'TivanoCLI/',
+    'project.yml',
+    'Tivano.xcodeproj/',
+    'config/',
+    'LICENSE',
+    'THIRD_PARTY_NOTICES.md',
+    'TRADEMARK.md',
 )
 
 
@@ -185,8 +228,7 @@ def matches(path, trigger):
 
 
 def selection(args, changed):
-    broad = [p for p in changed if any(matches(p, t) for t in
-             ('project.yml', 'Tivano.xcodeproj/', 'scripts/verify.py'))]
+    broad = [p for p in changed if any(matches(p, t) for t in GLOBAL_TRIGGERS)]
     selected = {}
     for item in CHECKS:
         hits = [p for p in changed if any(matches(p, t) for t in item.triggers)]
@@ -197,12 +239,30 @@ def selection(args, changed):
             enabled, reason = args.gui, '--gui' if args.gui else 'requires --gui'
         elif args.all:
             enabled, reason = True, '--all'
+        elif item.layer == 'slow' and not args.slow:
+            if broad or hits:
+                enabled, reason = False, 'slow: runs on build host (use --slow)'
+            else:
+                enabled, reason = False, 'no matching changed input'
         elif broad:
             enabled, reason = True, 'global trigger: ' + ', '.join(broad)
         else:
             enabled, reason = bool(hits), 'trigger: ' + ', '.join(hits) if hits else 'no matching changed input'
         selected[item.name] = {'selected': enabled, 'reason': reason}
     return selected
+
+
+def build_selection(args, changed):
+    if args.skip_build:
+        return False, '--skip-build'
+    if args.build:
+        return True, '--build'
+    if args.all or args.only is not None:
+        return True, 'default build'
+    hits = [p for p in changed if any(matches(p, t) for t in APP_BUILD_TRIGGERS)]
+    if hits:
+        return True, 'trigger: ' + ', '.join(hits)
+    return False, 'no matching app-build input (use --build)'
 
 
 def artifact_root():
@@ -335,13 +395,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     if sys.flags.optimize:
         parser.error('run without -O or PYTHONOPTIMIZE; assertions must remain enabled')
-    parser.add_argument('--base', default='dev')
+    parser.add_argument('--base', default='dev', help='git base commit/ref for changed-file detection (default: dev)')
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('--all', action='store_true', help='all offline checks')
-    group.add_argument('--only', help='comma-separated check names; GUI checks also require --gui')
+    group.add_argument('--all', action='store_true', help='run build and all fast and slow checks (plus GUI checks with --gui)')
+    group.add_argument('--only', help='comma-separated check names to run; GUI checks also require --gui')
+    parser.add_argument('--slow', action='store_true', help='include slow checks matched by changed paths in default selection')
     parser.add_argument('--gui', action='store_true', help='include checks requiring a logged-in graphical session')
+    parser.add_argument('--fail-fast', action='store_true', help='stop after the first FAIL or TIMEOUT check and mark remaining selected checks NOT-RUN')
     parser.add_argument('--list', action='store_true', help='print selection, arguments, coverage and reasons; execute nothing')
-    parser.add_argument('--skip-build', action='store_true')
+    build_group = parser.add_mutually_exclusive_group()
+    build_group.add_argument('--build', action='store_true', help='force the app build even when no app-build inputs changed')
+    build_group.add_argument('--skip-build', action='store_true', help='skip the app build')
     args = parser.parse_args()
     if args.only is not None:
         args.only = args.only.split(',')
@@ -371,13 +435,15 @@ def main():
         print(f'FAIL: cannot inspect repository: {error}', file=sys.stderr)
         return 1
     selected = selection(args, changed)
+    build_selected, build_reason = build_selection(args, changed)
     if args.list:
         for item in CHECKS:
             entry = selected[item.name]
             print(f"{item.name} [{item.layer}]: {'selected' if entry['selected'] else 'not selected'} — {entry['reason']}")
             print(f'  args={item.arguments!r}; timeout={item.timeout}s; prerequisites={item.prerequisites!r}; output={item.output}')
             print('  triggers: ' + ', '.join(item.triggers))
-        print('build: ' + ('skipped (--skip-build)' if args.skip_build else 'selected'))
+        print(f"build: {'selected' if build_selected else 'not selected'} — {build_reason}")
+        print('  triggers: ' + ', '.join(APP_BUILD_TRIGGERS))
         return 0
     stamp = datetime.now(timezone.utc).strftime('%y%m%dT%H%M%SZ')
     suffix = hashlib.sha256(uuid.uuid4().bytes).hexdigest()[:6]
@@ -386,8 +452,8 @@ def main():
     git = shutil.which('git') or 'git'
     report = {'head': head, 'dirty': dirty, 'base': args.base, 'merge_base': base,
               'changed_files': changed, 'artifacts': str(run), 'checks': {},
-              'build': {'status': 'not selected' if args.skip_build else 'pending',
-                        'reason': '--skip-build' if args.skip_build else 'default build'}}
+              'build': {'status': 'pending' if build_selected else 'not selected',
+                        'reason': build_reason}}
     for item in CHECKS:
         entry = selected[item.name]
         report['checks'][item.name] = dict(entry, layer=item.layer, seconds=0, log=None,
@@ -397,7 +463,28 @@ def main():
         (run / 'summary.json').write_text(json.dumps(report, indent=2, ensure_ascii=True) + '\n')
 
     save()
-    if not args.skip_build:
+    # Fail before the build, not after it and every earlier check, when a selected
+    # check cannot run here (e.g. no logged-in GUI session on the build host).
+    preflight = {}
+    for item in CHECKS:
+        if selected[item.name]['selected']:
+            needs = tuple(r for r in item.prerequisites if r != 'short-socket-path')
+            missing = missing_prerequisites(needs, run, git)
+            if missing:
+                preflight[item.name] = missing
+    if preflight:
+        for name, missing in preflight.items():
+            report['checks'][name].update(status='MISSING-PREREQ', missing_prerequisites=missing)
+            print(f'{name}: missing prerequisites: ' + ', '.join(missing), file=sys.stderr)
+        for row in report['checks'].values():
+            if row['status'] == 'pending':
+                row.update(status='NOT-RUN', reason='missing prerequisites')
+        if build_selected:
+            report['build'].update(status='NOT-RUN', reason='missing prerequisites')
+        save()
+        print('Artifacts: ' + str(run))
+        return 1
+    if build_selected:
         print('Running build', flush=True)
         report['build'] = execute('build', ['xcodebuild', '-project', 'Tivano.xcodeproj',
                                  '-scheme', 'Tivano', '-configuration', 'Debug',
@@ -405,7 +492,7 @@ def main():
                                  '-skipPackagePluginValidation', '-skipMacroValidation', 'build'],
                                  3600, ('macOS', 'xcodebuild'), run, git)
         save()
-    build_failed = not args.skip_build and report['build']['status'] != 'PASS'
+    build_failed = build_selected and report['build']['status'] != 'PASS'
     if build_failed:
         for row in report['checks'].values():
             if row['selected']:
@@ -413,30 +500,39 @@ def main():
         save()
         print_build_errors(report['build']['log'])
     interrupted = False
+    failed_fast = False
     for item in CHECKS:
-        if interrupted and selected[item.name]['selected']:
+        if not selected[item.name]['selected'] or build_failed:
+            continue
+        if interrupted:
             report['checks'][item.name].update(status='NOT-RUN', reason='interrupted')
             continue
-        if selected[item.name]['selected'] and not build_failed:
-            print('Running ' + item.name, flush=True)
-            short = None
-            try:
-                if 'short-socket-path' in item.prerequisites:
-                    # Retain this separate artifact tree, including on failure.
-                    short = Path(tempfile.mkdtemp(prefix='tvlc-', dir='/tmp')).resolve() / 'lc'
-                result = execute(item.name, item.command(run, git, short),
-                                 item.timeout, item.prerequisites, run, git, short)
-            except OSError as error:
-                log_path = run / (item.name + '.log')
-                log_path.write_text(str(error) + '\n')
-                result = {'status': 'FAIL', 'error': str(error), 'log': str(log_path)}
-                if short is not None:
-                    result['artifacts'] = str(short)
-                    with log_path.open('a') as log:
-                        log.write('Check artifacts: ' + str(short) + '\n')
-            report['checks'][item.name].update(result)
-            interrupted = bool(result.get('interrupted'))
-            save()
+        if failed_fast:
+            report['checks'][item.name].update(status='NOT-RUN', reason='fail-fast')
+            continue
+        print('Running ' + item.name, flush=True)
+        short = None
+        try:
+            if 'short-socket-path' in item.prerequisites:
+                # Retain this separate artifact tree, including on failure.
+                short = Path(tempfile.mkdtemp(prefix='tvlc-', dir='/tmp')).resolve() / 'lc'
+            result = execute(item.name, item.command(run, git, short),
+                             item.timeout, item.prerequisites, run, git, short)
+        except OSError as error:
+            log_path = run / (item.name + '.log')
+            log_path.write_text(str(error) + '\n')
+            result = {'status': 'FAIL', 'error': str(error), 'log': str(log_path)}
+            if short is not None:
+                result['artifacts'] = str(short)
+                with log_path.open('a') as log:
+                    log.write('Check artifacts: ' + str(short) + '\n')
+        report['checks'][item.name].update(result)
+        interrupted = bool(result.get('interrupted'))
+        if args.fail_fast and not interrupted and result.get('status') in ('FAIL', 'TIMEOUT'):
+            failed_fast = True
+        save()
+    if interrupted or failed_fast:
+        save()
     print(f"{'Check':34} {'Status':16} Seconds")
     for name, row in [('build', report['build']), *report['checks'].items()]:
         print(f"{name:34} {row['status']:16} {row.get('seconds', 0):7.1f}  {row.get('reason', '')}")

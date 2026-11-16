@@ -154,7 +154,6 @@ enum Storage {
     static var threadsDirectory: URL { root.appendingPathComponent("threads") }
     static var attachmentsDirectory: URL { root.appendingPathComponent("attachments") }
     static func threadURL(_ id: UUID) -> URL { threadsDirectory.appendingPathComponent("\(id).json") }
-    static func prepareLibraryWrite(_ library: Library, to url: URL) throws {}
 /* STORE_METHODS */
 }
 enum HeadFilter {

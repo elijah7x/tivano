@@ -143,12 +143,6 @@ enum DshCLI {
         return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
     }
 
-    static func accountCredentialStamp(environment: [String: String]) -> String? {
-        let file = accountHome(environment: environment).appendingPathComponent(".credentials.yaml")
-        guard let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .fileResourceIdentifierKey]) else { return nil }
-        return "\(values.contentModificationDate?.timeIntervalSince1970 ?? 0):\(values.fileSize ?? 0):\(String(describing: values.fileResourceIdentifier))"
-    }
-
     /// Local evidence only, not online authentication. Reads a bounded credential document
     /// in memory; no credential values leave this function or enter logs/caches.
     static func hasAccountLogin(environment: [String: String]) -> Bool {

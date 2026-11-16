@@ -1,206 +1,78 @@
 import AppKit
 import SwiftUI
 
-/// Every theme Tivano offers: Breeze, Tivano's own avocado theme (the accent of
-/// the app icon, in a variant that follows the Mac and a light and a dark one),
-/// the system look, plus the palettes the big coding agents ship (Catppuccin,
-/// Dracula, Tokyo Night, Nord, Gruvbox, One Dark, Everforest, Kanagawa, Rosé
-/// Pine, Solarized, GitHub, Ayu, Night Owl, Monokai, Claude, Codex, Cursor,
-/// Matrix).
+/// Every accent color Tivano offers: System Accent, Avocado (Tivano's own green
+/// from the app icon), and ten named color accents across greens, blues, purple,
+/// pinks, reds and yellow.
 ///
-/// Hexes follow the canonical upstream palettes (matching what OpenCode's
-/// desktop themes, Gemini CLI's `/theme` list and the Claude Code community
-/// themes use), so a theme feels like its namesake. The app stays Liquid
-/// Glass throughout: a theme tints the glass and recolors the accent and
-/// status hues, never paints opaque surfaces.
+/// Each custom accent pairs a dark-appearance hex with a light-appearance hex,
+/// resolved dynamically for the current appearance while keeping case raw values
+/// stable for persisted settings. The app stays Liquid Glass throughout, with a
+/// dynamic glass tint and system status hues; the Creation style swaps glass for
+/// solid surfaces.
 enum AppTheme: String, Codable, CaseIterable, Identifiable, Sendable {
-    // Breeze leads, so it also leads each picker section.
-    case breeze
-    case breezeLight
-    case breezeDark
     case system
-    case light
-    case dark
-    case catppuccinMocha
-    case catppuccinLatte
-    case dracula
-    case tokyoNight
-    case nord
-    case gruvbox
-    case gruvboxLight
-    case oneDark
+    case breeze
     case everforest
-    case kanagawa
-    case rosePine
-    case solarizedDark
-    case solarizedLight
-    case githubDark
-    case githubLight
-    case ayu
+    case matrix
+    case nord
+    case github
     case nightOwl
+    case catppuccin
+    case rosePine
     case monokai
     case claude
-    case claudeLight
-    case codex
-    case cursor
-    case matrix
+    case ayu
+
+    /// The accent family Creation selects each time the style is entered.
+    static let creationDefault: AppTheme = .claude
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .breeze: "Breeze"
-        case .breezeLight: "Breeze Light"
-        case .breezeDark: "Breeze Dark"
-        case .system: "System"
-        case .light: "Light"
-        case .dark: "Dark"
-        case .catppuccinMocha: "Catppuccin Mocha"
-        case .catppuccinLatte: "Catppuccin Latte"
-        case .dracula: "Dracula"
-        case .tokyoNight: "Tokyo Night"
-        case .nord: "Nord"
-        case .gruvbox: "Gruvbox"
-        case .gruvboxLight: "Gruvbox Light"
-        case .oneDark: "One Dark"
-        case .everforest: "Everforest"
-        case .kanagawa: "Kanagawa"
-        case .rosePine: "Rosé Pine"
-        case .solarizedDark: "Solarized Dark"
-        case .solarizedLight: "Solarized Light"
-        case .githubDark: "GitHub Dark"
-        case .githubLight: "GitHub Light"
-        case .ayu: "Ayu"
-        case .nightOwl: "Night Owl"
-        case .monokai: "Monokai"
-        case .claude: "Claude"
-        case .claudeLight: "Claude Light"
-        case .codex: "Codex"
-        case .cursor: "Cursor"
-        case .matrix: "Matrix"
+        case .system: "System Accent"
+        case .breeze: "Avocado"
+        case .everforest: "Matcha Green"
+        case .matrix: "Emerald Green"
+        case .nord: "Glacier Blue"
+        case .github: "Sea Blue"
+        case .nightOwl: "Sky Blue"
+        case .catppuccin: "Lavender Purple"
+        case .rosePine: "Rose Pink"
+        case .monokai: "Raspberry Red"
+        case .claude: "Coral Red"
+        case .ayu: "Honey Yellow"
         }
     }
 
-    /// Short picker subtitle, e.g. "Dark · Mauve".
-    var detail: String {
+    /// Dark and light hexes for the family's accent, or nil to keep the system control accent.
+    private var accentHexes: (dark: String, light: String)? {
         switch self {
-        case .breeze: "Follows your Mac · Avocado"
-        case .breezeLight: "Light · Avocado"
-        case .breezeDark: "Dark · Avocado"
-        case .system: "Follows your Mac"
-        case .light: "Light · System accent"
-        case .dark: "Dark · System accent"
-        case .catppuccinMocha: "Dark · Mauve"
-        case .catppuccinLatte: "Light · Mauve"
-        case .dracula: "Dark · Purple"
-        case .tokyoNight: "Dark · Blue"
-        case .nord: "Dark · Frost"
-        case .gruvbox: "Dark · Orange"
-        case .gruvboxLight: "Light · Rust"
-        case .oneDark: "Dark · Blue"
-        case .everforest: "Dark · Green"
-        case .kanagawa: "Dark · Wave blue"
-        case .rosePine: "Dark · Rose"
-        case .solarizedDark: "Dark · Blue"
-        case .solarizedLight: "Light · Blue"
-        case .githubDark: "Dark · Blue"
-        case .githubLight: "Light · Blue"
-        case .ayu: "Dark · Amber"
-        case .nightOwl: "Dark · Blue"
-        case .monokai: "Dark · Pink"
-        case .claude: "Dark · Terracotta"
-        case .claudeLight: "Light · Terracotta"
-        case .codex: "Dark · Magenta"
-        case .cursor: "Dark · Frost"
-        case .matrix: "Dark · Green"
+        case .system: nil
+        // The app icon's own green (mean of its background, sampled from the 1024 px master),
+        // used as-is on dark and light grounds alike.
+        case .breeze: ("7BA58F", "7BA58F")
+        case .everforest: ("A7C080", "8DA101")
+        case .matrix: ("00E676", "00A152")
+        case .nord: ("88C0D0", "5E81AC")
+        case .github: ("4493F8", "0969DA")
+        case .nightOwl: ("82AAFF", "4876D6")
+        case .catppuccin: ("CBA6F7", "8839EF")
+        case .rosePine: ("EB6F92", "B4637A")
+        case .monokai: ("F92672", "D3175F")
+        case .claude: ("CE7E64", "B5654A")
+        case .ayu: ("E6B450", "C98A12")
         }
     }
 
-    /// The app icon's own green (mean of its background, sampled from the 1024 px master),
-    /// used as-is on dark and light grounds alike.
-    private static let breezeDarkAccent = "7BA58F"
-    private static let breezeLightAccent = "7BA58F"
-
-    /// scheme: nil follows the system. accent/success/warning/danger: nil
-    /// keeps the system hue; surface always tints the glass.
-    private var palette: (
-        scheme: ColorScheme?, accent: String?, surface: String,
-        success: String?, warning: String?, danger: String?
-    ) {
-        switch self {
-        // Breeze follows the Mac, so its accent is dynamic (see `spec`); the dark hex stands
-        // in for it here.
-        case .breeze: (nil, Self.breezeDarkAccent, "1E1E20", nil, nil, nil)
-        case .breezeLight: (.light, Self.breezeLightAccent, "FFFFFF", nil, nil, nil)
-        case .breezeDark: (.dark, Self.breezeDarkAccent, "1E1E20", nil, nil, nil)
-        case .system: (nil, nil, "1E1E20", nil, nil, nil)
-        case .light: (.light, nil, "FFFFFF", nil, nil, nil)
-        case .dark: (.dark, nil, "1E1E20", nil, nil, nil)
-        case .catppuccinMocha: (.dark, "CBA6F7", "1E1E2E", "A6E3A1", "F9E2AF", "F38BA8")
-        case .catppuccinLatte: (.light, "8839EF", "EFF1F5", "40A02B", "DF8E1D", "D20F39")
-        case .dracula: (.dark, "BD93F9", "282A36", "50FA7B", "FFB86C", "FF5555")
-        case .tokyoNight: (.dark, "7AA2F7", "1A1B26", "9ECE6A", "E0AF68", "F7768E")
-        case .nord: (.dark, "88C0D0", "2E3440", "A3BE8C", "EBCB8B", "BF616A")
-        case .gruvbox: (.dark, "FE8019", "282828", "B8BB26", "FABD2E", "FB4934")
-        case .gruvboxLight: (.light, "AF3A03", "FBF1C7", "79740E", "B57614", "9D0006")
-        case .oneDark: (.dark, "61AFEF", "282C34", "98C379", "E5C07B", "E06C75")
-        case .everforest: (.dark, "A7C080", "2D353B", "A7C080", "DBBC7F", "E67E80")
-        case .kanagawa: (.dark, "7E9CD8", "1F1F28", "98BB6C", "D7A657", "E82424")
-        case .rosePine: (.dark, "EB6F92", "191724", "9CCFD8", "F6C177", "EB6F92")
-        case .solarizedDark: (.dark, "268BD2", "002B36", "859900", "B58900", "DC322F")
-        case .solarizedLight: (.light, "268BD2", "FDF6E3", "859900", "B58900", "DC322F")
-        case .githubDark: (.dark, "4493F8", "0D1117", "3FB950", "D29922", "F85149")
-        case .githubLight: (.light, "0969DA", "FFFFFF", "1A7F37", "9A6700", "CF222E")
-        case .ayu: (.dark, "E6B450", "0F1419", "AAD94C", "FFB454", "F58572")
-        case .nightOwl: (.dark, "82AAFF", "011627", "C5E478", "ECC48D", "EF5350")
-        case .monokai: (.dark, "F92672", "272822", "A6E22E", "FD971F", "F92672")
-        case .claude: (.dark, "C15F3C", "1A1816", "51A556", "C9A227", "D97757")
-        case .claudeLight: (.light, "C15F3C", "FAF9F5", "2E7D32", "9A6700", "B3261E")
-        case .codex: (.dark, "D946EF", "101014", "3FB950", "D29922", "F85149")
-        case .cursor: (.dark, "88C0D0", "181818", "3FA266", "F1B467", "E34671")
-        case .matrix: (.dark, "00E676", "000000", "00E676", "FFD600", "FF5252")
-        }
-    }
-
-    /// The scheme the theme fixes; nil for the themes that follow the Mac (System, Breeze).
-    var scheme: ColorScheme? { palette.scheme }
-
-    /// The picker's badge: a circle running from the theme's surface into
-    /// its accent, so dark themes read dark and light themes light at a
-    /// glance. System splits into the Mac's light and dark halves; Breeze
-    /// does too, with an avocado core to tell the two apart.
+    /// The picker's badge: a plain circle filled with the theme's dynamic accent
+    /// (or the system control accent for System Accent), with a hairline rim.
     @ViewBuilder
     var swatch: some View {
-        let palette = palette
-        let rim = Circle().strokeBorder(Color.primary.opacity(0.22), lineWidth: 0.5)
-        if self == .system || self == .breeze {
-            Circle()
-                .fill(LinearGradient(
-                    stops: [
-                        .init(color: Color(hex: "FFFFFF"), location: 0), .init(color: Color(hex: "FFFFFF"), location: 0.5),
-                        .init(color: Color(hex: "1E1E20"), location: 0.5), .init(color: Color(hex: "1E1E20"), location: 1),
-                    ],
-                    startPoint: .leading, endPoint: .trailing
-                ))
-                .overlay {
-                    if self == .breeze {
-                        Circle().fill(Color(hex: Self.breezeDarkAccent)).padding(4)
-                    }
-                }
-                .overlay(rim)
-        } else {
-            let accent = palette.accent.map(Color.init(hex:)) ?? Color.accentColor
-            Circle()
-                .fill(LinearGradient(
-                    stops: [
-                        .init(color: Color(hex: palette.surface), location: 0),
-                        .init(color: Color(hex: palette.surface), location: 0.42),
-                        .init(color: accent, location: 1),
-                    ],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ))
-                .overlay(rim)
-        }
+        Circle()
+            .fill(spec.accent ?? Color.accentColor)
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.22), lineWidth: 0.5))
     }
 
     /// A color that reads `dark` in a dark appearance and `light` in a light one, picked
@@ -215,47 +87,186 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable, Sendable {
                 alpha: 1.0
             )
         }
-        let darkColor = srgb(dark), lightColor = srgb(light)
+        let darkColor = srgb(dark)
+        if dark == light { return Color(nsColor: darkColor) }
+        let lightColor = srgb(light)
         return Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
             appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? darkColor : lightColor
         }))
     }
 
+    private static let surfaceColor = dynamicColor(dark: "1E1E20", light: "FFFFFF")
+
+    private static let cachedSpecs: [AppTheme: ThemeSpec] = {
+        var specs: [AppTheme: ThemeSpec] = [:]
+        specs.reserveCapacity(allCases.count)
+        for theme in allCases {
+            specs[theme] = ThemeSpec(
+                accent: theme.accentHexes.map { dynamicColor(dark: $0.dark, light: $0.light) },
+                surface: surfaceColor,
+                success: .green,
+                warning: .orange,
+                danger: .red
+            )
+        }
+        return specs
+    }()
+
+    private static let cachedCreationSpecs: [AppTheme: ThemeSpec] = {
+        let surface = Color(hex: "FEFEFD")
+        let success = Color(hex: "5C8A5B")
+        let warning = Color(hex: "B5862F")
+        let danger = Color(hex: "B4473A")
+        var specs: [AppTheme: ThemeSpec] = [:]
+        specs.reserveCapacity(allCases.count)
+        for theme in allCases {
+            specs[theme] = ThemeSpec(
+                scheme: .light,
+                accent: theme.spec.accent,
+                surface: surface,
+                success: success,
+                warning: warning,
+                danger: danger,
+                solid: .creation,
+                serif: true,
+                handDrawnIcons: true
+            )
+        }
+        return specs
+    }()
+
     var spec: ThemeSpec {
-        let palette = palette
-        // System and Breeze follow the Mac: the glass tint flips between dark and white with
-        // it, and Breeze's accent between its dark and light avocado.
-        let surfaceColor = palette.scheme == nil
-            ? Self.dynamicColor(dark: "1E1E20", light: "FFFFFF")
-            : Color(hex: palette.surface)
-        let accentColor = self == .breeze
-            ? Self.dynamicColor(dark: Self.breezeDarkAccent, light: Self.breezeLightAccent)
-            : palette.accent.map(Color.init(hex:))
-        return ThemeSpec(
-            scheme: palette.scheme,
-            accent: accentColor,
-            surface: surfaceColor,
-            success: palette.success.map(Color.init(hex:)) ?? .green,
-            warning: palette.warning.map(Color.init(hex:)) ?? .orange,
-            danger: palette.danger.map(Color.init(hex:)) ?? .red
-        )
+        Self.cachedSpecs[self]!
+    }
+
+    var creationSpec: ThemeSpec {
+        Self.cachedCreationSpecs[self]!
+    }
+
+    /// Maps current and legacy theme raw values onto the merged accent families.
+    static func migrated(fromLegacy raw: String) -> AppTheme? {
+        if let current = AppTheme(rawValue: raw) { return current }
+        switch raw {
+        case "breezeLight", "breezeDark": return .breeze
+        case "light", "dark": return .system
+        case "catppuccinMocha", "catppuccinLatte", "dracula", "codex": return .catppuccin
+        case "tokyoNight", "kanagawa": return .nightOwl
+        case "cursor": return .nord
+        case "oneDark", "githubDark", "githubLight", "solarized", "solarizedDark", "solarizedLight": return .github
+        case "claudeLight", "gruvbox", "gruvboxLight": return .claude
+        case "creation": return .claude
+        default: return nil
+        }
+    }
+
+    /// Returns the fixed appearance a legacy theme value used to imply, or nil when it
+    /// followed the system or is unknown.
+    static func legacyScheme(ofRaw raw: String) -> ColorScheme? {
+        switch raw {
+        case "breezeLight", "light", "catppuccinLatte", "gruvboxLight", "solarizedLight", "githubLight", "claudeLight":
+            return .light
+        case "breeze", "system":
+            return nil
+        case "breezeDark", "dark", "catppuccinMocha", "dracula", "tokyoNight", "nord",
+             "gruvbox", "oneDark", "everforest", "kanagawa", "rosePine",
+             "solarizedDark", "githubDark", "ayu", "nightOwl", "monokai",
+             "claude", "codex", "cursor", "matrix":
+            return .dark
+        default:
+            return nil
+        }
     }
 }
 
-/// What a theme paints: an optional fixed color scheme, an optional accent
-/// (nil keeps the system control accent), the glass tint, and status hues.
-struct ThemeSpec {
-    var scheme: ColorScheme?
+/// The opaque grounds of a solid theme, from the window down to a hairline, and the inks
+/// written on them. Only Creation has them; every other theme stays glass.
+struct SolidSurfaces: Equatable, Sendable {
+    /// The conversation's page.
+    var canvas: Color
+    var sidebar: Color
+    /// The composer, popovers and floating panels: a shade brighter than the page.
+    var elevated: Color
+    /// Cards, code blocks and folded tool groups.
+    var card: Color
+    var userBubble: Color
+    /// The selected sidebar row.
+    var selection: Color
+    var hairline: Color
+    var hairlineStrong: Color
+    var ink: Color
+    var body: Color
+    var muted: Color
+    var faint: Color
+
+    /// Near-white with only a trace of warmth, cleaner than Claude's page; never parchment.
+    static let creation = SolidSurfaces(
+        canvas: Color(hex: "FEFEFD"),
+        sidebar: Color(hex: "F8F8F6"),
+        elevated: Color(hex: "FFFFFF"),
+        card: Color(hex: "F9F9F7"),
+        userBubble: Color(hex: "F5F5F2"),
+        selection: Color(hex: "EFEEEA"),
+        hairline: Color(hex: "EAE8E4"),
+        hairlineStrong: Color(hex: "D6D3CD"),
+        ink: Color(hex: "24221E"),
+        body: Color(hex: "36332E"),
+        muted: Color(hex: "6E685F"),
+        faint: Color(hex: "A49D93")
+    )
+
+    /// The soft lift of a floating solid surface, standing in for the glass's own depth.
+    static let shadow = Color(red: 0.11, green: 0.10, blue: 0.09).opacity(0.05)
+
+    private static let paperCanvas = Color(hex: "F1F0EC")
+    private static let paperSidebar = Color(hex: "EAE8E3")
+
+    /// Applies the 0…1 transparency slider around its 0.5 midpoint: down to 80% opacity on the
+    /// clear side, and mixed toward a soft paper grey on the solid side.
+    func adjusted(backdrop t: Double) -> SolidSurfaces {
+        let clamped = min(max(t, 0), 1)
+        if clamped == 0.5 { return self }
+        var adjusted = self
+        if clamped < 0.5 {
+            let opacity = 0.80 + 0.20 * (clamped / 0.5)
+            adjusted.canvas = canvas.opacity(opacity)
+            adjusted.sidebar = sidebar.opacity(opacity)
+        } else {
+            let amount = (clamped - 0.5) / 0.5
+            adjusted.canvas = canvas.mix(with: Self.paperCanvas, by: amount)
+            adjusted.sidebar = sidebar.mix(with: Self.paperSidebar, by: amount)
+        }
+        return adjusted
+    }
+}
+
+extension EnvironmentValues {
+    /// The solid theme's surfaces, or nil for the glass themes. Set at every hosted root
+    /// so a theme change re-renders the surfaces that read it.
+    @Entry var solidSurfaces: SolidSurfaces? = nil
+}
+
+/// What an accent family or solid theme paints: an optional fixed color scheme, an optional
+/// dynamic accent (nil keeps the system control accent), the glass tint, and status hues.
+struct ThemeSpec: Sendable {
+    var scheme: ColorScheme? = nil
     var accent: Color?
     var surface: Color
     var success: Color
     var warning: Color
     var danger: Color
+    /// Opaque surfaces instead of Liquid Glass; nil for the glass themes.
+    var solid: SolidSurfaces? = nil
+    /// New York for Latin and Songti SC for Chinese in interface and chat text; code stays mono.
+    var serif = false
+    /// The hand-drawn template icons in place of SF Symbols where a drawing exists.
+    var handDrawnIcons = false
+
+    var isSolid: Bool { solid != nil }
 }
 
 /// The theme every static `Chrome` color reads. Mirrored from
-/// `AppSettings.theme`, which is the source of truth; views re-render
-/// through the settings they already observe, so the static read is always
+/// `AppSettings.theme` and `AppSettings.themeStyle`, which are the source of truth; views
+/// re-render through the settings they already observe, so the static read is always
 /// fresh on the main thread.
 enum ThemeManager {
     /// Posted after the theme changes, for layer-backed views whose colours are set once
@@ -265,24 +276,34 @@ enum ThemeManager {
 
     nonisolated(unsafe) static var current: AppTheme = .breeze {
         didSet {
-            spec = current.spec
+            spec = style == .create ? current.creationSpec : current.spec
             NotificationCenter.default.post(name: didChange, object: nil)
         }
     }
 
-    /// The current theme's colors, built once per theme change. `Chrome.accent` and friends
-    /// are read in hundreds of view bodies per frame, and building a spec parses hex colors,
-    /// so the parse happens here rather than on every read.
+    nonisolated(unsafe) static var style: ThemeStyle = .liquidGlass {
+        didSet {
+            spec = style == .create ? current.creationSpec : current.spec
+            NotificationCenter.default.post(name: didChange, object: nil)
+        }
+    }
+
+    /// The current theme's colors, built once per theme or style change. `Chrome.accent` and
+    /// friends are read in hundreds of view bodies per frame, and building a spec parses hex
+    /// colors, so the parse happens here rather than on every read.
     nonisolated(unsafe) private(set) static var spec: ThemeSpec = AppTheme.breeze.spec
 }
 
 extension Color {
     /// `"CBA6F7"` or `"#CBA6F7"` in sRGB.
     init(hex: String) {
-        var text = hex.trimmed
-        if text.hasPrefix("#") { text = String(text.dropFirst()) }
-        var value: UInt64 = 0
-        Scanner(string: text).scanHexInt64(&value)
+        var digits = hex.trimmed[...]
+        if digits.hasPrefix("#") {
+            digits = digits.dropFirst()
+        } else if digits.hasPrefix("0x") || digits.hasPrefix("0X") {
+            digits = digits.dropFirst(2)
+        }
+        let value = UInt32(digits, radix: 16) ?? 0
         let red = Double((value >> 16) & 0xFF) / 255
         let green = Double((value >> 8) & 0xFF) / 255
         let blue = Double(value & 0xFF) / 255

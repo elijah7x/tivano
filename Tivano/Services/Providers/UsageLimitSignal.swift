@@ -31,6 +31,39 @@ enum UsageLimitSignal {
             || lower.contains("out of credits")
     }
 
+    private static let unixTimestampRegex = try! NSRegularExpression(pattern: #"\|\s*(\d{9,})"#)
+    private static let resetClockRegex = try! NSRegularExpression(pattern: #"(?i)resets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)"#)
+    private static let timeZoneRegex = try! NSRegularExpression(pattern: #"\(([A-Za-z_]+/[A-Za-z_]+)\)"#)
+    private static let retryAfterMillisRegexes = [
+        try! NSRegularExpression(pattern: #"(?i)retry-after-ms\s*[:=]\s*(\d+)"#),
+        try! NSRegularExpression(pattern: #"(?i)provider requested\s+(\d+)\s*ms\s+wait"#),
+    ]
+    private static let relativeWaitRegexes = [
+        try! NSRegularExpression(pattern: #"(?i)(?:try again|retry)\s+in\s+~?\s*"#),
+        try! NSRegularExpression(pattern: #"(?i)resets?\s+(?:after|in)\s+"#),
+    ]
+    private static let durationTokenRegex = try! NSRegularExpression(
+        pattern: #"([0-9]+(?:\.[0-9]+)?)\s*(milliseconds?|ms|days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])"#
+    )
+    private static let secondsPerUnit: [String: TimeInterval] = [
+        "d": 86_400, "day": 86_400, "days": 86_400,
+        "h": 3_600, "hr": 3_600, "hrs": 3_600, "hour": 3_600, "hours": 3_600,
+        "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+        "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+        "ms": 0.001, "millisecond": 0.001, "milliseconds": 0.001,
+    ]
+
+    private static func firstRange(
+        of regex: NSRegularExpression,
+        in string: String,
+        from start: String.Index,
+        options: NSRegularExpression.MatchingOptions = []
+    ) -> Range<String.Index>? {
+        let nsRange = NSRange(start..<string.endIndex, in: string)
+        guard let hit = regex.firstMatch(in: string, options: options, range: nsRange) else { return nil }
+        return Range(hit.range, in: string)
+    }
+
     /// The reset time an error message carries, when it does: a Unix timestamp after a bar
     /// ("usage limit reached|1757865600"), a clock time such as "resets 3pm" or "resets at
     /// 3:30 pm", taken as the next such time from now, or a wait (see `waitTime`) counted
@@ -38,7 +71,7 @@ enum UsageLimitSignal {
     static func resetTime(in text: String, now: Date = .now) -> Date? {
         guard now.timeIntervalSinceReferenceDate.isFinite,
               now >= .distantPast, now <= .distantFuture else { return nil }
-        if let match = text.range(of: #"\|\s*(\d{9,})"#, options: .regularExpression) {
+        if let match = firstRange(of: unixTimestampRegex, in: text, from: text.startIndex) {
             let digits = text[match].drop { !$0.isNumber }
             guard let raw = TimeInterval(digits), raw.isFinite, raw > 0 else { return nil }
             // Some providers write milliseconds.
@@ -47,7 +80,7 @@ enum UsageLimitSignal {
             let date = Date(timeIntervalSince1970: seconds)
             return supportsResetTime(date, now: now) ? date : nil
         }
-        if let match = text.range(of: #"(?i)resets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)"#, options: .regularExpression) {
+        if let match = firstRange(of: resetClockRegex, in: text, from: text.startIndex) {
             let clock = String(text[match])
             let numbers = clock.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
             guard let hourText = numbers.first, var hour = Int(hourText) else { return nil }
@@ -57,7 +90,7 @@ enum UsageLimitSignal {
             if isPM, hour < 12 { hour += 12 }
             if !isPM, hour == 12 { hour = 0 }
             var calendar = Calendar.current
-            if let zone = text.range(of: #"\(([A-Za-z_]+/[A-Za-z_]+)\)"#, options: .regularExpression),
+            if let zone = firstRange(of: timeZoneRegex, in: text, from: text.startIndex),
                let timeZone = TimeZone(identifier: text[zone].trimmingCharacters(in: CharacterSet(charactersIn: "()"))) {
                 calendar.timeZone = timeZone
             }
@@ -77,24 +110,24 @@ enum UsageLimitSignal {
     /// the longest wait is taken, rather than adding independent waits together.
     static func waitTime(in text: String) -> TimeInterval? {
         var waits: [TimeInterval] = []
-        for pattern in [#"(?i)retry-after-ms\s*[:=]\s*(\d+)"#, #"(?i)provider requested\s+(\d+)\s*ms\s+wait"#] {
-            var rest = text[...]
-            while let match = rest.range(of: pattern, options: .regularExpression) {
-                guard let milliseconds = TimeInterval(String(rest[match].filter(\.isNumber))),
+        for regex in retryAfterMillisRegexes {
+            var index = text.startIndex
+            while let match = firstRange(of: regex, in: text, from: index) {
+                guard let milliseconds = TimeInterval(String(text[match].filter(\.isNumber))),
                       milliseconds.isFinite, milliseconds > 0,
                       milliseconds <= maximumWait * 1_000 else { return nil }
                 let seconds = milliseconds / 1_000
                 guard supportsWait(seconds) else { return nil }
                 waits.append(seconds)
-                rest = rest[match.upperBound...]
+                index = match.upperBound
             }
         }
-        for pattern in [#"(?i)(?:try again|retry)\s+in\s+~?\s*"#, #"(?i)resets?\s+(?:after|in)\s+"#] {
-            var rest = text[...]
-            while let match = rest.range(of: pattern, options: .regularExpression) {
-                guard let seconds = duration(in: String(rest[match.upperBound...])) else { return nil }
+        for regex in relativeWaitRegexes {
+            var index = text.startIndex
+            while let match = firstRange(of: regex, in: text, from: index) {
+                guard let seconds = duration(in: text[match.upperBound...]) else { return nil }
                 waits.append(seconds)
-                rest = rest[match.upperBound...]
+                index = match.upperBound
             }
         }
         return waits.max().flatMap { supportsWait($0) ? $0 : nil }
@@ -103,22 +136,16 @@ enum UsageLimitSignal {
     /// "18h31m10s", "2 hours 5 min", "3 days", "158 min", "12s", "5 ms": the units of one
     /// contiguous run add up. A bare number carries no unit and so no duration, and `ms` is
     /// milliseconds, not minutes plus seconds.
-    private static func duration(in text: String) -> TimeInterval? {
-        let secondsPerUnit: [String: TimeInterval] = [
-            "d": 86_400, "day": 86_400, "days": 86_400,
-            "h": 3_600, "hr": 3_600, "hrs": 3_600, "hour": 3_600, "hours": 3_600,
-            "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
-            "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
-            "ms": 0.001, "millisecond": 0.001, "milliseconds": 0.001,
-        ]
+    private static func duration(in text: Substring) -> TimeInterval? {
         var total: TimeInterval = 0
         var found = false
-        var rest = text.lowercased()[...]
+        let lower = text.lowercased()
+        var index = lower.startIndex
         while true {
-            rest = rest.drop(while: \.isWhitespace)
-            guard let match = rest.range(of: #"([0-9]+(?:\.[0-9]+)?)\s*(milliseconds?|ms|days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])"#, options: .regularExpression),
-                match.lowerBound == rest.startIndex else { break }
-            let piece = rest[match]
+            while index < lower.endIndex, lower[index].isWhitespace { index = lower.index(after: index) }
+            guard let match = firstRange(of: durationTokenRegex, in: lower, from: index, options: [.anchored]),
+                  match.lowerBound == index else { break }
+            let piece = lower[match]
             let digits = piece.prefix { $0.isNumber || $0 == "." }
             let unit = piece.dropFirst(digits.count).trimmingCharacters(in: .whitespacesAndNewlines)
             guard let amount = TimeInterval(digits), let scale = secondsPerUnit[unit],
@@ -128,7 +155,7 @@ enum UsageLimitSignal {
                   total + seconds <= maximumWait else { return nil }
             total += seconds
             found = true
-            rest = rest[match.upperBound...]
+            index = match.upperBound
         }
         return found && supportsWait(total) ? total : nil
     }

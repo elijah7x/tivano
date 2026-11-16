@@ -94,61 +94,79 @@ final class RecentDownloads {
     }
 }
 
-/// The attach button's popover: the latest downloads with native icons and photo
-/// previews, plus a way out to Finder.
+/// The attach button's popover: Finder first, then the latest downloads with native icons
+/// and photo previews when enabled, and a switch for the recent downloads list.
 struct DownloadsPopover: View {
+    @Environment(AppModel.self) private var model
     let pick: (URL) -> Void
     let chooseOther: () -> Void
 
     @State private var downloads = RecentDownloads()
 
     var body: some View {
-        // A ScrollView in a popover collapses to a couple of rows on its own, so the
-        // rows' own height is forced on it. The popover takes its size the moment it
-        // opens and keeps it, so the height is set from the first frame: a full list's
-        // worth while the folder is read (nearly every Downloads folder fills it), the
-        // rows' own height once it is, and only an empty folder sizes itself.
-        PopoverMenu(maxHeight: 700, idealHeight: height) {
-            PopoverSectionHeader("Recent downloads")
-            if !downloads.isLoaded {
-                HStack {
-                    Spacer(minLength: 0)
-                    ProgressView().controlSize(.small)
-                    Spacer(minLength: 0)
+        @Bindable var settings = model.settings
+        let showsRecents = settings.recentDownloadsPicker
+        let idealHeight = height(showsRecents: showsRecents)
+        PopoverMenu(maxHeight: 700, idealHeight: idealHeight, scrolls: idealHeight != nil) {
+            PopoverItem("Choose files…", symbol: "paperclip") {
+                chooseOther()
+            }
+            if showsRecents {
+                PopoverDivider()
+                PopoverSectionHeader("Recent downloads")
+                if !downloads.isLoaded {
+                    HStack {
+                        Spacer(minLength: 0)
+                        ProgressView().controlSize(.small)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 14)
+                } else if downloads.items.isEmpty {
+                    PopoverNote("No downloads yet. Anything you download appears here.")
+                } else {
+                    ForEach(downloads.items) { item in
+                        DownloadRow(
+                            item: item,
+                            icon: downloads.icons[item.url.path],
+                            thumbnail: downloads.thumbnails[item.url.path],
+                            pick: { pick(item.url) }
+                        )
+                    }
                 }
-                .padding(.vertical, 14)
-            } else if downloads.items.isEmpty {
-                PopoverNote("No downloads yet. Anything you download appears here.")
-            } else {
-                ForEach(downloads.items) { item in
-                    DownloadRow(
-                        item: item,
-                        icon: downloads.icons[item.url.path],
-                        thumbnail: downloads.thumbnails[item.url.path],
-                        pick: { pick(item.url) }
-                    )
+                PopoverDivider()
+                PopoverItem("Show in Finder", symbol: "folder") {
+                    if let directory = downloads.directory {
+                        NSWorkspace.shared.open(directory)
+                    }
                 }
             }
             PopoverDivider()
-            PopoverItem("Show in Finder", symbol: "folder") {
-                if let directory = downloads.directory {
-                    NSWorkspace.shared.open(directory)
-                }
+            HStack(spacing: 8) {
+                Text("Show recent downloads")
+                    .font(.ui(.callout))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .lineLimit(1)
+                Spacer(minLength: 12)
+                SettingsSwitch(isOn: $settings.recentDownloadsPicker)
+                    .accessibilityLabel(Text("Show recent downloads"))
             }
-            PopoverItem("Choose files…", symbol: "doc.on.doc") {
-                chooseOther()
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+        }
+        // Wide enough for long file names and their sizes when listing downloads.
+        .frame(width: showsRecents ? 360 : 250, height: idealHeight)
+        .task(id: showsRecents) {
+            if showsRecents, !downloads.isLoaded {
+                await downloads.load()
             }
         }
-        // Wide enough for long file names and their sizes: without a fixed width the
-        // popover shrinks to PopoverMenu's minimum and truncates every row.
-        .frame(width: 360, height: height)
-        .task { await downloads.load() }
     }
 
     /// The rows' own height, so the popover is exactly as tall as it has downloads to
-    /// show; a full list's worth before the folder is read. Nil only for an empty
-    /// folder, whose note sizes itself.
-    private var height: CGFloat? {
+    /// show; a full list's worth before the folder is read. Nil when downloads are hidden
+    /// or for an empty folder, which sizes itself.
+    private func height(showsRecents: Bool) -> CGFloat? {
+        guard showsRecents else { return nil }
         guard downloads.isLoaded else { return Self.height(forRows: RecentDownloads.limit) }
         guard !downloads.items.isEmpty else { return nil }
         return Self.height(forRows: downloads.items.count)
@@ -156,8 +174,8 @@ struct DownloadsPopover: View {
 
     private static func height(forRows count: Int) -> CGFloat {
         let rows = CGFloat(count) * DownloadRow.height
-        // The section header, the divider and the two ways out below the rows.
-        return min(700, rows + 106)
+        // Choose files…, section header, dividers, Show in Finder and the switch row.
+        return min(700, rows + 150)
     }
 }
 

@@ -126,7 +126,7 @@ enum OmpCLI {
     /// A launch with no path is a new conversation, which omp would not start if the user's own
     /// config has `autoResume` on: it continues the folder's latest session instead, so a new
     /// chat in a project opens with another chat's conversation in it. Off here.
-    static func writeLaunchSettings(id: String, hydra: HydraLaunch?, leadModel: String?) throws -> URL {
+    static func writeLaunchSettings(id: String) throws -> URL {
         let lines = ["autoResume: false", "bash:", "  autoBackground:", "    enabled: false", "async:", "  enabled: false", "task:", "  maxRecursionDepth: 1"]
         let file = try launchDirectory("launch").appendingPathComponent("\(id).yml")
         try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: file, options: .atomic)
@@ -222,7 +222,7 @@ enum OmpCLI {
         const gate = readGate();
         if (!gate || gate.finalReport || gate.interactionMode === "plan"
             || gate.runtimeMode !== "fullAccess" || !gate.allowTask) {
-          return { block: true, reason: "Declined: OMP subagents require Full access with Hydra off." };
+          return { block: true, reason: "Declined: OMP's built-in sub-agents need Full access with Tivano sub-agents off." };
         }
       });
 
@@ -233,7 +233,7 @@ enum OmpCLI {
         const name = device ?? event.toolName;
         if (gate.finalReport) return { block: true, reason: "Declined: this is the final report, with no tools." };
         if (name === "task" && (gate.allowTask !== true || gate.runtimeMode !== "fullAccess")) {
-          return { block: true, reason: "Declined: OMP subagents require Full access with Hydra off." };
+          return { block: true, reason: "Declined: OMP's built-in sub-agents need Full access with Tivano sub-agents off." };
         }
         const deviceWrite = event.toolName === "write" && typeof event.input?.path === "string"
           && event.input.path.trim().toLowerCase().startsWith("xd://");

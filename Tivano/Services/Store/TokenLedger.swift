@@ -70,19 +70,6 @@ final class TokenLedger {
     /// recorded since carries provenance and is not in here.
     private(set) var legacyDaily: [String: Int] = [:]
 
-    /// How many tokens recorded for the current year rest on the pre-provenance
-    /// totals above. Earlier years are not counted.
-    var uncertainTokensThisYear: Int {
-        let year = String(format: "%04d-", Calendar.current.component(.year, from: Date()))
-        return legacyDaily.reduce(0) { $0 + ($1.key.hasPrefix(year) ? $1.value : 0) }
-    }
-
-    /// Where v1 kept live spend: one mixed-provider total per day, in the
-    /// preferences plist. Read once into `legacyDaily` and left on disk as it was.
-    nonisolated fileprivate static let legacyLiveDefaultsKey = "tivano.tokenActivity.liveDaily"
-    /// A capture run keeps to its own suite, like the rest of the app's settings.
-    private static let defaults: UserDefaults = CaptureRun.defaults ?? .standard
-
     /// Live spend, its Codex provenance and the legacy values, persisted whole.
     private var state = LiveSpendState()
     private var historyDaily: [String: Int] = [:]
@@ -94,7 +81,7 @@ final class TokenLedger {
     private let launchDate = Date()
 
     private init() {
-        state = LiveSpendStateStore.load(defaults: Self.defaults)
+        state = LiveSpendStateStore.load()
         legacyDaily = state.legacyDaily
         dailyTotals = mergedTotals()
     }
@@ -211,28 +198,6 @@ private struct CodexFileFingerprint: Sendable, Codable {
         self.identity = identity
     }
 
-    init?(dict: [String: Any], path: String) {
-        guard let mtime = dict["mtime"] as? Double,
-              let day = dict["day"] as? String else { return nil }
-        let size: UInt64
-        if let number = dict["size"] as? NSNumber {
-            size = number.uint64Value
-        } else if let int = dict["size"] as? Int {
-            size = UInt64(int)
-        } else {
-            return nil
-        }
-        let tokens = (dict["tokens"] as? NSNumber)?.intValue ?? (dict["tokens"] as? Int ?? 0)
-        let identity = dict["identity"] as? String ?? ""
-        self.init(
-            mtime: mtime,
-            size: size,
-            tokens: tokens,
-            day: day,
-            identity: identity.isEmpty ? Self.rolloutIdentity(path: path) : identity
-        )
-    }
-
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mtime = try container.decode(Double.self, forKey: .mtime)
@@ -262,49 +227,17 @@ private struct CodexFileFingerprint: Sendable, Codable {
 /// few megabytes of fingerprints slow down every setting the app touches. They sit in
 /// their own JSON file in Application Support instead, beside the library.
 private enum CodexFingerprintStore {
-    /// Where earlier builds kept them. Read once, then cleared.
-    private static let legacyDefaultsKey = "tivano.tokenActivity.codexFiles"
-
     private static var fileURL: URL {
-        Storage.root.appendingPathComponent("token-activity-codex-v3-\(AppInfo.isDevelopment ? "dev" : "release").json")
+        Storage.root.appendingPathComponent("token-activity-codex-v3-\(AppInfo.edition.rawValue).json")
     }
 
     static func load() -> [String: CodexFileFingerprint] {
-        // The first shape counted a resumed thread's history once per file it
-        // was resumed in; the v2 file holds each file's own growth, so the
-        // old one is not migrated.
-        let oldURL = Storage.root.appendingPathComponent("token-activity-codex.json")
         // Keep the shared legacy caches as read-only migration sources.
-        _ = oldURL
         if let data = (try? Data(contentsOf: fileURL)) ?? (try? Data(contentsOf: Storage.root.appendingPathComponent("token-activity-codex-v3.json"))),
            let stored = try? JSONDecoder().decode([String: CodexFileFingerprint].self, from: data) {
             return stored
         }
-        // v2 kept each file's own growth but not the rollout identity, which v3
-        // needs to reconcile live spend; the session id comes from the path, so
-        // the record carries over whole.
-        let v2URL = Storage.root.appendingPathComponent("token-activity-codex-v2.json")
-        if let data = try? Data(contentsOf: v2URL),
-           let stored = try? JSONDecoder().decode([String: CodexFileFingerprint].self, from: data) {
-            var rebuilt: [String: CodexFileFingerprint] = [:]
-            for (path, fingerprint) in stored {
-                var migrated = fingerprint
-                if migrated.identity.isEmpty { migrated.identity = CodexFileFingerprint.rolloutIdentity(path: path) }
-                rebuilt[path] = migrated
-            }
-            save(rebuilt)
-            return rebuilt
-        }
-        guard let legacy = UserDefaults.standard.dictionary(forKey: legacyDefaultsKey) as? [String: [String: Any]] else {
-            return [:]
-        }
-        let migrated = legacy.reduce(into: [String: CodexFileFingerprint]()) { result, entry in
-            if let fingerprint = CodexFileFingerprint(dict: entry.value, path: entry.key) { result[entry.key] = fingerprint }
-        }
-        if save(migrated) {
-            UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
-        }
-        return migrated
+        return [:]
     }
 
     @discardableResult
@@ -355,18 +288,16 @@ private enum LiveSpendStateStore {
     private static let writer = Writer()
 
     private static var fileURL: URL {
-        Storage.root.appendingPathComponent("token-activity-live-v2-\(AppInfo.isDevelopment ? "dev" : "release").json")
+        Storage.root.appendingPathComponent("token-activity-live-v2-\(AppInfo.edition.rawValue).json")
     }
 
-    static func load(defaults: UserDefaults) -> LiveSpendState {
+    static func load() -> LiveSpendState {
         var state: LiveSpendState
         if let data = (try? Data(contentsOf: fileURL)) ?? (try? Data(contentsOf: Storage.root.appendingPathComponent("token-activity-live-v2.json"))),
            let stored = try? JSONDecoder().decode(LiveSpendState.self, from: data) {
             state = stored
         } else {
             state = LiveSpendState()
-            // The v1 per-day totals, read once. They stay on disk as they were.
-            state.legacyDaily = defaults.dictionary(forKey: TokenLedger.legacyLiveDefaultsKey) as? [String: Int] ?? [:]
         }
         // The process that recorded `liveCodex` is gone: its Codex spend is
         // settled now, and the rollouts holding it are files on disk that the
