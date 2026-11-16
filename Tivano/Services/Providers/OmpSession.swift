@@ -140,7 +140,7 @@ final class OmpSession: ProviderSession {
         let extensionURL = try OmpCLI.installExtension()
         let settings: URL
         do {
-            settings = try OmpCLI.writeLaunchSettings(id: launchID, hydra: configuration.hydra, leadModel: model)
+            settings = try OmpCLI.writeLaunchSettings(id: launchID)
             settingsFile = settings
             gateURL = try OmpCLI.gateFile(id: launchID)
             try writeGate(finalReport: false)

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ChatView: View {
     @Environment(\.chatColumnIsShown) private var columnIsShown
+    @Environment(\.chatColumnInitialPaneSize) private var initialPaneSize
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
     @Bindable var runtime: ThreadRuntime
@@ -65,6 +66,8 @@ struct ChatView: View {
         guard columnIsShown else { return nil }
         return model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
     }
+    private var effectivePaneSize: CGSize { paneSize == .zero ? initialPaneSize : paneSize }
+    private var effectiveColumnHeight: CGFloat { columnHeight == 0 ? initialPaneSize.height : columnHeight }
     @State private var hydraShownSince: Date?
     @State private var hydraLingers = false
     @State private var hydraLingerTask: Task<Void, Never>?
@@ -100,7 +103,9 @@ struct ChatView: View {
         // thread lists.
         let members = PanelMembers(runtime: runtime, model: model)
         let switching = sceneThreadID != runtime.threadID || (columnIsShown && !hasSettled)
-        let scene = PanelScene(members: members, runtime: runtime, model: model, paneSize: paneSize, composerAreaHeight: composerAreaHeight, holdsHydra: hydraLingers, preferredSize: livePreferredSize)
+        let currentPaneSize = effectivePaneSize
+        let currentColumnHeight = effectiveColumnHeight
+        let scene = PanelScene(members: members, runtime: runtime, model: model, paneSize: currentPaneSize, composerAreaHeight: composerAreaHeight, holdsHydra: hydraLingers, preferredSize: livePreferredSize)
         // The team's panel as the model has it, before the linger below: what decides
         // whether the panel is held on a beat after its heads leave.
         let hydraPresent = !members.heads.isEmpty && scene.isMeasured
@@ -113,12 +118,12 @@ struct ChatView: View {
                 projectName: project?.name ?? (thread?.affiliation == .standalone ? Chrome.localized("Task") : nil),
                 workingDirectory: workingDirectory,
                 supportsRewind: thread?.provider.supportsRewind ?? false,
-                columnHeight: columnHeight,
+                columnHeight: currentColumnHeight,
                 // A panel docked on the left takes the rail's edge; the rail goes with it. So
                 // does a pane too narrow for both: the column reads at up to 820 points and the
                 // rail floats over its gutter, so under about 900 the two would overlap.
                 showsMinimap: !scene.dockedSides.contains(.leading)
-                    && (paneSize == .zero || paneSize.width - scene.reserve.leading - scene.reserve.trailing >= 900),
+                    && (currentPaneSize == .zero || currentPaneSize.width - scene.reserve.leading - scene.reserve.trailing >= 900),
                 usesTimelineTopFade: true
             )
             .equatable()
@@ -163,7 +168,7 @@ struct ChatView: View {
                     project: project,
                     directory: directory,
                     git: git,
-                    titleLeading: scene.reserve.leading + max(20, (paneSize.width - scene.reserve.leading - scene.reserve.trailing - 820) / 2)
+                    titleLeading: scene.reserve.leading + max(20, (currentPaneSize.width - scene.reserve.leading - scene.reserve.trailing - 820) / 2)
                 )
             }
             .overlay(alignment: .topLeading) {
@@ -292,7 +297,6 @@ struct ChatView: View {
             }
         }
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-        .detailSheet()
         // The column stays mounted across a thread switch; only the timeline is swapped
         // (see its `.id(runtime.threadID)`). That swap must replace in place, never
         // slide or fade. Any transition here displaces every row, the composer and
@@ -322,15 +326,15 @@ struct ChatView: View {
         .onChange(of: runtime.threadID) {
             sceneThreadID = runtime.threadID
             hydraLingerTask?.cancel()
-            hydraLingers = false
-            scrollChrome = ChromeScrollModel()
-            scrollState = TimelineScrollState()
-            subagentDrag = PanelDragState()
-            hydraDrag = PanelDragState()
-            poppedDrag = PanelDragState()
-            autoDrag = PanelDragState()
-            autoDrags = [:]
-            panelResize = PanelResizeState()
+            if hydraLingers { hydraLingers = false }
+            scrollChrome.update(travel: 0)
+            scrollState.reset()
+            subagentDrag.reset()
+            hydraDrag.reset()
+            poppedDrag.reset()
+            autoDrag.reset()
+            if !autoDrags.isEmpty { autoDrags = [:] }
+            panelResize.reset()
         }
         .onAppear { sceneThreadID = runtime.threadID }
         .onChange(of: columnIsShown, initial: true) { _, shown in
@@ -1035,7 +1039,6 @@ struct JumpToLatestButton: View {
 /// The sticky glass controls across the top of the conversation.
 private struct ChatChromeRow: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     let runtime: ThreadRuntime
     let scrollChrome: ChromeScrollModel
     let title: String
@@ -1043,10 +1046,6 @@ private struct ChatChromeRow: View {
     let directory: String?
     let git: GitStatusModel
     let titleLeading: CGFloat
-    @State private var isTopControlsHovered = false
-    @State private var isTopControlPresented = false
-    @State private var chromeRowWidth: CGFloat = 0
-    @State private var topControlsWidth: CGFloat = 0
 
     var body: some View {
         // Follows the buttons, not the sidebar's state: they leave for the sidebar only once it
@@ -1058,11 +1057,14 @@ private struct ChatChromeRow: View {
         let showsSidebarControls = !sidebarVisible && !model.sidebar.isSliding
         chromeRowContent(sidebarVisible: sidebarVisible, showsSidebarControls: showsSidebarControls)
         // With the sidebar hidden the native window buttons sit over this row, so it steps clear of them.
-        .padding(.leading, sidebarVisible ? 0 : Chrome.trafficLightsWidth + Chrome.trafficLightClearance)
+        .padding(.leading, sidebarVisible ? 0 : WindowChrome.collapsedTrafficLightClearance - Chrome.chromeHorizontalPadding)
         .padding(.horizontal, Chrome.chromeHorizontalPadding)
         .padding(.top, Chrome.chromeTopPadding)
         .animation(Chrome.panelSlide, value: sidebarVisible)
         .animation(.softAppear, value: showsSidebarControls)
+        .onChange(of: model.settings.collapseTopControls) {
+            model.isTopControlsExpanded = false
+        }
     }
 
     @ViewBuilder
@@ -1081,92 +1083,152 @@ private struct ChatChromeRow: View {
                 // mid-flight. Scroll progress still drives it per frame.
                 .animation(nil, value: title)
                 .padding(.leading, titleInset(sidebarVisible: sidebarVisible))
-            Group {
-                if performanceMode {
-                    topControls
-                } else {
-                    GlassEffectContainer(spacing: 2) {
-                        topControls
-                    }
-                }
+            // Keep one unconditional path so Creation switches preserve top-controls identity.
+            GlassEffectContainer(spacing: 2) {
+                topControls
             }
-            // Keep the reveal area and title layout stable while the controls are hidden.
-            .opacity(showsTopControls ? 1 : 0)
-            .allowsHitTesting(showsTopControls)
-            .accessibilityHidden(!showsTopControls)
-            .background(Color.clear)
-            .contentShape(.rect)
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { topControlsWidth = $0 }
-            .onPreferenceChange(ChromePresentationPreference.self) { isTopControlPresented = $0 }
-            .animation(performanceMode ? nil : .softAppear, value: showsTopControls)
-        }
-        .contentShape(.rect)
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { chromeRowWidth = $0 }
-        // The reveal region stays wide even when repository controls are absent.
-        // onContinuousHover reports positions in the row's local coordinate space:
-        // https://developer.apple.com/documentation/swiftui/view/oncontinuoushover(coordinatespace:perform:)
-        .onContinuousHover { phase in
-            let isHovered: Bool
-            switch phase {
-            case .active(let location):
-                let revealWidth = max(topControlsWidth, Chrome.capsuleHeight * 15)
-                isHovered = location.x >= max(0, chromeRowWidth - revealWidth)
-            case .ended:
-                isHovered = false
-            }
-            if isTopControlsHovered != isHovered { isTopControlsHovered = isHovered }
         }
     }
 
     private var topControls: some View {
-        HStack(spacing: 8) {
-            if let thread = model.thread(runtime.threadID), model.settings.hydraEnabled, !thread.isHelper {
-                HydraButton(thread: thread, runtime: runtime)
-                    .transition(.softAppear)
+        let collapses = model.settings.collapseTopControls
+        return HStack(spacing: 8) {
+            if !collapses || model.isTopControlsExpanded {
+                expandedTopControls
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
-            if let thread = model.thread(runtime.threadID) {
-                ChimeraButton(thread: thread, runtime: runtime)
-                    .transition(.softAppear)
-            }
-            if let directory, git.directory == directory, git.isRepository {
-                BranchMenu(runtime: runtime, directory: directory, git: git)
-            }
-            ChromeCapsule {
-                OpenInMenu(threadID: runtime.threadID, directory: directory)
-                if let project {
-                    ChromeDivider()
-                    ScriptsMenu(project: project, runtime: runtime)
-                }
-                if let directory, git.directory == directory, git.isRepository {
-                    ChromeDivider()
-                    GitActionsMenu(runtime: runtime, directory: directory, git: git)
+            if collapses {
+                ChromeCapsule {
+                    ChromeIconButton(symbol: "ellipsis", isActive: model.isTopControlsExpanded, help: "More controls") {
+                        withAnimation(.snappy(duration: 0.2)) {
+                            model.isTopControlsExpanded.toggle()
+                        }
+                    }
                 }
             }
             ChromeCapsule {
-                ChromeIconButton(symbol: "terminal", isActive: runtime.isTerminalVisible, help: Chrome.localized("Terminal") + ShortcutStore.hint(for: .toggleTerminal)) {
-                    runtime.isTerminalVisible.toggle()
+                ChromeIconButton(symbol: "gearshape", help: "Settings") {
+                    WindowManager.shared.showSettings()
                 }
-                if let directory, git.directory == directory, git.isRepository {
-                    ChromeDivider()
-                    ChromeIconButton(symbol: "plusminus", isActive: runtime.isDiffVisible, help: Chrome.localized("Changes") + ShortcutStore.hint(for: .toggleChanges)) {
-                        runtime.toggleDiff()
+                .overlay(alignment: .topTrailing) {
+                    if UpdateChecker.shared.updateAvailable {
+                        UpdateAvailableDot()
+                            .allowsHitTesting(false)
                     }
                 }
             }
         }
     }
 
-    private var showsTopControls: Bool {
-        !model.settings.autoHideTopControls || isTopControlsHovered || isTopControlPresented
+    private var expandedTopControls: some View {
+        HStack(spacing: 8) {
+            agentControls
+            if let directory, git.directory == directory, git.isRepository {
+                BranchMenu(runtime: runtime, directory: directory, git: git)
+            }
+            utilityControls
+            changesCapsule
+        }
+    }
+
+    @ViewBuilder
+    private var agentControls: some View {
+        // Sub-agent modes are chosen in the model card; the top bar only opens the heads panel.
+        if let thread = model.thread(runtime.threadID), !thread.isHelper, !model.panelHeads(of: thread.id).isEmpty {
+            HydraButton(thread: thread, runtime: runtime)
+                .transition(.softAppear)
+        }
+    }
+
+    @ViewBuilder
+    private var utilityControls: some View {
+        ChromeCapsule {
+            OpenInMenu(threadID: runtime.threadID, directory: directory)
+            if let project {
+                ChromeDivider()
+                ScriptsMenu(project: project, runtime: runtime)
+            }
+            if let directory, git.directory == directory, git.isRepository {
+                ChromeDivider()
+                GitActionsMenu(runtime: runtime, directory: directory, git: git)
+            }
+        }
+        ChromeCapsule {
+            ChromeIconButton(symbol: "terminal", isActive: runtime.isTerminalVisible, help: Chrome.localized("Terminal") + ShortcutStore.hint(for: .toggleTerminal)) {
+                runtime.isTerminalVisible.toggle()
+            }
+            if let directory, git.directory == directory, git.isRepository {
+                ChromeDivider()
+                ChromeIconButton(symbol: "plusminus", isActive: runtime.isDiffVisible, help: Chrome.localized("Changes") + ShortcutStore.hint(for: .toggleChanges)) {
+                    runtime.toggleDiff()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var changesCapsule: some View {
+        if directory != nil, git.directory != directory || git.isRepository, let stats = runtime.changeStats {
+            ThreadChangesCapsule(stats: stats, isActive: runtime.isDiffVisible) {
+                if !runtime.isDiffVisible, runtime.diffSelection != nil {
+                    runtime.diffSelection = nil
+                }
+                runtime.toggleDiff()
+            }
+            .transition(.softAppear)
+        }
     }
 
     private func titleInset(sidebarVisible: Bool) -> CGFloat {
         var leading = Chrome.chromeHorizontalPadding
         if !sidebarVisible {
-            leading += Chrome.trafficLightsWidth + Chrome.trafficLightClearance
+            leading = WindowChrome.collapsedTrafficLightClearance
             leading += 2 * (Chrome.capsuleHeight + 10)
         }
         return max(0, titleLeading - leading)
+    }
+}
+
+private struct ThreadChangesCapsule: View {
+    let stats: FileChangeSummary
+    let isActive: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        ChromeCapsule {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    Text(verbatim: "+\(stats.additions)")
+                        .foregroundStyle(Chrome.success)
+                    Text(verbatim: "\u{2212}\(stats.deletions)")
+                        .foregroundStyle(Chrome.danger)
+                }
+                .font(.ui(.callout, weight: .medium).monospacedDigit())
+                .lineLimit(1)
+                .opacity(isHovering || isActive ? 1 : 0.92)
+                .padding(.horizontal, Chrome.capsuleHorizontalPadding - Chrome.iconCapsuleInnerPadding)
+                .frame(height: Chrome.capsuleContentHeight)
+                .background {
+                    if isActive || isHovering {
+                        Capsule(style: .continuous)
+                            .fill(Chrome.overlay(isActive ? 0.12 : 0.06))
+                            .padding(1)
+                    }
+                }
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .fixedSize()
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                withAnimation(Chrome.hover) { isHovering = hovering }
+            }
+            .help(Text(verbatim: String(format: Chrome.localized("Show this thread's changes%@"), ShortcutStore.hint(for: .toggleChanges))))
+            .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("%d files changed, %d lines added, %d lines removed"), stats.files.count, stats.additions, stats.deletions)))
+        }
     }
 }
 
@@ -1337,34 +1399,7 @@ private struct BranchMenu: View {
             title: git.activity ?? git.status?.branch ?? "Detached",
             help: "Branch"
         ) {
-            PopoverSectionHeader("Switch branch")
-            ForEach(git.branches.prefix(25)) { branch in
-                PopoverItem(
-                    branch.name,
-                    isChecked: branch.isCurrent,
-                    isEnabled: !branch.isCurrent && !runtime.isRunning
-                ) {
-                    switchBranch(branch.name)
-                }
-            }
-            PopoverDivider()
-            PopoverItem("New branch…", symbol: "plus") {
-                branchName = ""
-                isNamingBranch = true
-            }
-            if let thread = runtime.thread, thread.worktreePath != nil, let branch = thread.branch {
-                PopoverItem("Rename branch…", symbol: "pencil", isEnabled: !runtime.isHydraMerging) {
-                    branchName = branch
-                    isRenamingBranch = true
-                }
-            }
-            if model.project(runtime.thread?.projectID) != nil, runtime.thread?.worktreePath == nil, runtime.turns.isEmpty {
-                PopoverItem("Use a new worktree for this thread", symbol: "square.stack.3d.up") {
-                    branchName = AppModel.suggestedBranchName(title: runtime.thread?.title ?? ChatThread.untitled,
-                                                            threadID: runtime.threadID)
-                    isNamingWorktree = true
-                }
-            }
+            menuContent
         }
         .alert("New branch", isPresented: $isNamingBranch) {
             TextField("Branch name", text: $branchName)
@@ -1398,6 +1433,38 @@ private struct BranchMenu: View {
         }
         .transformPreference(ChromePresentationPreference.self) {
             $0 = $0 || isNamingBranch || isNamingWorktree || isRenamingBranch || pushedRename != nil
+        }
+    }
+
+    @ViewBuilder
+    private var menuContent: some View {
+        PopoverSectionHeader("Switch branch")
+        ForEach(git.branches.prefix(25)) { branch in
+            PopoverItem(
+                branch.name,
+                isChecked: branch.isCurrent,
+                isEnabled: !branch.isCurrent && !runtime.isRunning
+            ) {
+                switchBranch(branch.name)
+            }
+        }
+        PopoverDivider()
+        PopoverItem("New branch…", symbol: "plus") {
+            branchName = ""
+            isNamingBranch = true
+        }
+        if let thread = runtime.thread, thread.worktreePath != nil, let branch = thread.branch {
+            PopoverItem("Rename branch…", symbol: "pencil", isEnabled: !runtime.isHydraMerging) {
+                branchName = branch
+                isRenamingBranch = true
+            }
+        }
+        if model.project(runtime.thread?.projectID) != nil, runtime.thread?.worktreePath == nil, runtime.turns.isEmpty {
+            PopoverItem("Use a new worktree for this thread", symbol: "square.stack.3d.up") {
+                branchName = AppModel.suggestedBranchName(title: runtime.thread?.title ?? ChatThread.untitled,
+                                                        threadID: runtime.threadID)
+                isNamingWorktree = true
+            }
         }
     }
 
@@ -1660,7 +1727,7 @@ private struct CommitSheet: View {
                 }
                 .buttonStyle(.glass)
                 .disabled(isGenerating || !canGenerate)
-                .help(Text(verbatim: canGenerate ? Chrome.localized("Write a commit message from these changes") : Chrome.localized("Turn on text generation in Settings › Source control")))
+                .help(Text(verbatim: canGenerate ? Chrome.localized("Write a commit message from these changes") : Chrome.localized("Turn on text generation in Settings › Models")))
                 Toggle("Push after committing", isOn: $pushesAfterCommit)
                     .toggleStyle(.checkbox)
                     .disabled(git.status?.branch == nil)
@@ -1694,7 +1761,7 @@ private struct CommitSheet: View {
         if let text = await TextGeneration.commitMessage(
             summary: resolved.summary,
             patch: resolved.patch,
-            instructions: model.settings.commitInstructions,
+            instructions: "",
             engine: engine,
             directory: URL(fileURLWithPath: directory)
         ) {

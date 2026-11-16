@@ -14,14 +14,6 @@ enum APIKeychain {
         return fallback
     }
 
-    /// Stores the key, or removes it for an empty one. Returns whether the Keychain
-    /// took it.
-    @discardableResult
-    static func setKey(_ key: String, for provider: ProviderKind) -> Bool {
-        guard let account = account(for: provider) else { return false }
-        return set(key, account: account)
-    }
-
     /// Returns the system error description, or nil when the key was stored.
     static func store(_ key: String, for provider: ProviderKind) -> String? {
         let status: OSStatus

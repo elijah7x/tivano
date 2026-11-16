@@ -2,95 +2,174 @@ import AppKit
 import SwiftUI
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general
     case appearance
+    case conversation
     case providers
     case models
     case hydra
-    case chimera
-    case mcp
-    case sourceControl
+    case connections
     case shortcuts
     case archive
     case alpha
-    case keepsakes
     case about
+    case credits
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .general: "General"
         case .appearance: "Appearance"
-        case .providers: "Providers"
-        case .mcp: "MCP"
+        case .conversation: "Conversation"
+        case .providers: "Provider management"
         case .models: "Models"
-        case .alpha: "Alpha"
-        case .hydra: "Hydra"
-        case .chimera: "Chimera"
-        case .sourceControl: "Source control"
+        case .hydra: "Sub-agent control"
+        case .connections: "Connections"
         case .shortcuts: "Shortcuts"
         case .archive: "Storage"
-        case .keepsakes: "Keepsakes"
-        case .about: "About"
+        case .alpha: "Labs"
+        case .about: "Version"
+        case .credits: "Credits"
         }
     }
 
     var symbol: String {
         switch self {
-        case .general: "gear"
         case .appearance: "paintpalette"
+        case .conversation: "bubble.left.and.bubble.right"
         case .providers: "cpu"
-        case .mcp: "puzzlepiece.extension"
         case .models: "slider.horizontal.3"
-        // Never drawn: the sidebar gives the Alpha row its flask mark instead.
-        case .alpha: "flask"
-        // Never drawn: the sidebar gives the Hydra row the dragon mark instead. Kept so
-        // the switch stays exhaustive and anything else that asks gets a sane symbol.
         case .hydra: "point.3.connected.trianglepath.dotted"
-        // Never drawn: the sidebar gives the Chimera row its own mark instead.
-        case .chimera: "person.3.sequence"
-        case .sourceControl: "arrow.triangle.branch"
+        case .connections: "puzzlepiece.extension"
         case .shortcuts: "command"
         case .archive: "internaldrive"
-        case .keepsakes: "tag"
+        case .alpha: "flask"
         case .about: "info.circle"
+        case .credits: "tag"
         }
     }
 
     var tint: Color {
         switch self {
-        case .general: Chrome.gray
-        case .alpha: Color(red: 0.95, green: 0.55, blue: 0.20)
         case .appearance: Color(red: 0.85, green: 0.44, blue: 0.36)
+        case .conversation: Chrome.gray
         case .providers: Chrome.blue
-        case .mcp: Color(red: 0.95, green: 0.55, blue: 0.20)
         case .models: Color(red: 0.686, green: 0.322, blue: 0.871)
         case .hydra: Color(red: 0.188, green: 0.690, blue: 0.780)
-        case .chimera: Color(red: 0.78, green: 0.40, blue: 0.60)
-        case .sourceControl: Color(red: 0.345, green: 0.337, blue: 0.839)
+        case .connections: Color(red: 0.95, green: 0.55, blue: 0.20)
         case .shortcuts: Color(red: 0.32, green: 0.48, blue: 0.93)
         case .archive: Chrome.orange
-        case .keepsakes: Color(red: 0.204, green: 0.780, blue: 0.349)
+        case .alpha: Color(red: 0.95, green: 0.55, blue: 0.20)
         case .about: Color(red: 0.204, green: 0.780, blue: 0.349)
+        case .credits: Color(red: 0.204, green: 0.780, blue: 0.349)
         }
     }
 
     var keywords: [String] {
         switch self {
-        case .general: ["permissions", "worktree", "reasoning", "thinking", "notifications", "usage", "limits", "finish", "finished", "sound", "chime", "compact", "concise", "anti-slop", "slop", "verbose", "comments", "replies", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style", "语音", "麦克风", "通话", "local control", "control", "cli", "本地控制"]
-        case .appearance: ["appearance", "theme", "transparency", "transparent", "opacity", "glass", "clear", "clearer", "liquid glass", "blur", "dark", "light", "accent", "tint", "catppuccin", "dracula", "tokyo", "nord", "gruvbox", "solarized", "github", "claude", "codex", "cursor", "matrix", "text", "size", "font", "zoom", "wallpaper", "sidebar", "performance", "gpu"]
-        case .models: ["model", "effort", "reasoning", "fast", "slider", "picker"]
-        case .chimera: ["chimera", "casting", "presets", "roles", "选角", "预设", "角色"]
-        case .hydra: ["hydra", "heads", "subagents", "sub-agents", "agents", "team", "orchestrator", "worker", "pair", "pairs", "parallel", "delegate", "queue"]
-        case .providers: ["kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "zcode", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance"]
-        case .mcp: ["mcp", "model context protocol", "servers", "tools", "connect", "integrations", "github", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting", "remote mcp", "remote", "远程"]
-        case .sourceControl: ["git", "commit", "pull request", "titles", "text generation", "github", "repository", "repositories", "repo", "sign in", "token", "connect", "account"]
-        case .alpha: ["alpha", "labs", "experimental", "beta", "preview", "实验室", "实验"]
-        case .shortcuts: ["keyboard", "keys"]
-        case .archive: ["storage", "space", "disk", "worktree", "worktrees", "build", "cache", "clean", "archive", "archived", "restore", "存储", "空间", "归档", "清理", "缓存"]
-        case .keepsakes: ["keepsake", "early supporter", "信物"]
-        case .about: ["version", "license"]
+        case .appearance: [
+            "appearance", "language", "languages", "theme", "style", "liquid glass", "texture", "create", "creation", "serif", "solid", "transparency", "transparent", "opacity", "glass", "dark", "light", "system", "accent", "accent color", "tint", "avocado", "matcha", "emerald", "glacier", "sea blue", "sky blue", "lavender", "rose", "raspberry", "coral", "honey", "text", "size", "font", "zoom", "wallpaper", "softness", "weather", "weather window",
+            "外观", "语言", "主题", "液态玻璃", "质感", "创作", "衬线", "透明度", "强调色", "牛油果", "抹茶", "翡翠", "冰川", "海蓝", "天蓝", "薰衣草", "玫瑰", "树莓", "珊瑚", "蜂蜜", "壁纸", "柔化", "天气窗", "字号",
+            "外觀", "語言", "主題", "液態玻璃", "質感", "創作", "襯線", "透明度", "強調色", "酪梨綠", "抹茶", "翡翠", "冰川藍", "海藍", "天藍", "薰衣草紫", "玫瑰", "覆盆子", "珊瑚紅", "蜂蜜金", "桌布", "柔化", "天氣窗", "字級",
+            "外観", "言語", "テーマ", "Liquid Glass", "質感", "クリエイション", "セリフ", "透明度", "アクセントカラー", "アボカド", "抹茶", "エメラルド", "グレイシャー", "シーブルー", "スカイブルー", "ラベンダー", "ローズ", "ラズベリー", "コーラル", "ハニー", "壁紙", "やわらかさ", "天気ウィンドウ", "文字サイズ",
+            "화면 스타일", "외관", "언어", "테마", "질감", "크리에이션", "세리프", "투명도", "강조 색상", "아보카도", "말차", "에메랄드", "글레이셔", "바다 파랑", "하늘 파랑", "라벤더", "로즈", "라즈베리", "코랄", "허니", "배경화면", "부드러움", "날씨 창", "글자 크기",
+            "apparence", "langue", "langues", "thème", "style", "verre liquide", "texture", "création", "empattements", "transparence", "opacité", "sombre", "clair", "couleur d'accentuation", "vert avocat", "matcha", "émeraude", "glacier", "bleu mer", "bleu ciel", "lavande", "rose", "framboise", "corail", "miel", "fond d'écran", "douceur", "fenêtre météo", "taille du texte", "police",
+        ]
+        case .conversation: [
+            "general", "conversation", "new thread", "location", "default model", "permissions", "workspace", "worktree", "downloads", "recent downloads", "reasoning", "thinking", "working line", "finish", "finished", "sound", "chime", "predictions", "composer", "auto-hide", "top controls", "sleep", "power", "awake", "titles", "thread titles", "delete", "confirm", "shelve", "auto-shelve", "voice", "speech", "talk", "call", "microphone", "mic", "realtime", "orb", "codex", "style",
+            "对话", "通用", "位置", "权限", "工作区", "最近下载", "思考", "提示音", "预测", "休眠", "标题", "删除", "搁置", "语音", "麦克风", "通话",
+            "對話", "一般", "位置", "權限", "工作區", "最近下載", "思考", "提示音", "預測", "睡眠", "標題", "刪除", "封存", "暫存", "語音", "麥克風", "通話",
+            "一般", "会話", "場所", "権限", "ワークスペース", "最近のダウンロード", "思考", "チャイム", "予測", "スリープ", "タイトル", "削除", "一時退避", "音声", "マイク", "通話",
+            "대화", "일반", "위치", "권한", "작업 공간", "최근 다운로드", "추론", "알림음", "예측", "잠자기", "제목", "삭제", "보관", "보류", "음성", "마이크", "통화",
+            "général", "conversation", "emplacement", "autorisations", "permissions", "espace de travail", "téléchargements récents", "raisonnement", "son", "prédictions", "veille", "titres", "supprimer", "mettre de côté", "voix", "micro", "microphone", "appel",
+        ]
+        case .providers: [
+            "providers", "provider", "setup", "management", "kimi", "pi", "codex", "claude", "cursor", "opencode", "opencode zen", "opencode go", "zen", "grok", "deepseek", "deepseek harness", "dsh", "meta", "muse", "spark", "zai", "z.ai", "zcode", "glm", "coding plan", "devin", "cognition", "antigravity", "agy", "google", "gemini", "copilot", "github", "command code", "commandcode", "cmd", "minimax", "mcode", "binary", "path", "sign in", "login", "api key", "usage", "limits", "limit", "plan", "quota", "credits", "balance",
+            "服务商", "管理",
+            "供應商", "提供者", "管理", "登入", "金鑰", "用量", "額度", "配額", "餘額", "路徑",
+            "プロバイダー", "管理", "サインイン", "ログイン", "api キー", "使用量", "上限", "クォータ", "残高", "パス",
+            "제공자", "공급자", "관리", "로그인", "api 키", "사용량", "한도", "할당량", "잔액", "경로",
+            "fournisseur", "fournisseurs", "gestion", "connexion", "clé api", "utilisation", "limites", "quota", "crédits", "solde", "chemin",
+        ]
+        case .models: [
+            "model", "models", "effort", "reasoning", "fast", "slider", "picker", "group", "outdated", "text generation", "background model", "commit", "commit message", "instructions",
+            "模型", "后台模型", "文本生成", "提交",
+            "模型", "背景模型", "文字生成", "提交", "群組", "推理強度",
+            "モデル", "バックグラウンドモデル", "テキスト生成", "コミット", "グループ", "推論レベル",
+            "모델", "백그라운드 모델", "텍스트 생성", "커밋", "그룹", "추론 강도",
+            "modèle", "modèles", "modèle en arrière-plan", "génération de texte", "commit", "groupe", "effort", "raisonnement", "rapide",
+        ]
+        case .hydra: [
+            "hydra", "chimera", "heads", "subagents", "sub-agents", "subagent", "agents", "team", "orchestrator", "worker", "casting", "presets", "roles", "parallel", "delegate", "delegation", "review", "queue", "combo", "combos", "pair", "pairs", "same-model", "preset", "adaptive", "strengths", "suggested",
+            "组合", "同模型", "预设子代理", "自适应", "启发式", "模型特长", "推荐组合", "主代理", "子代理", "子智能体", "选角", "预设", "角色", "委派", "审查",
+            "組合", "同模型", "預設子代理", "自適應", "模型專長", "推薦組合", "主代理", "子代理", "指派", "預設", "角色", "委派", "審查", "佇列",
+            "コンボ", "同一モデル", "プリセット", "アダプティブ", "得意分野", "おすすめコンボ", "リード", "サブエージェント", "チーム", "割り当て", "役割", "委譲", "レビュー", "キュー",
+            "콤보", "동일 모델", "프리셋", "적응형", "모델 강점", "추천 콤보", "리드", "하위 에이전트", "서브에이전트", "팀", "배정", "역할", "위임", "검토", "대기열",
+            "combinaisons", "combos", "même modèle", "préréglage", "adaptatif", "points forts", "équipe", "agent principal", "sous-agent", "sous-agents", "déléguer", "rôles", "revue", "file",
+        ]
+        case .connections: [
+            "connections", "mcp", "model context protocol", "servers", "tools", "connect", "integrations", "local control", "control", "cli", "remote mcp", "remote", "code hosts", "git", "pull request", "github", "gitlab", "gitea", "cursor origin", "origin", "repository", "repositories", "repo", "account", "playwright", "notion", "linear", "slack", "figma", "supabase", "stripe", "resend", "email", "context7", "sentry", "postgres", "browser", "netlify", "deploy", "hosting", "token", "tokens", "usage", "cost", "token taken", "tokentaken", "statistics",
+            "连接", "本地控制", "远程", "代码托管", "用量", "统计",
+            "連線", "本機控制", "遠端", "程式碼託管", "伺服器", "用量", "統計", "儲存庫", "拉取請求",
+            "接続", "ローカル制御", "リモート", "コードホスト", "サーバー", "使用量", "統計", "リポジトリ",
+            "연결", "로컬 제어", "원격", "코드 호스트", "서버", "사용량", "통계", "저장소",
+            "connexions", "contrôle local", "distant", "hébergeurs de code", "serveur", "serveurs", "utilisation", "statistiques", "dépôt", "jeton",
+        ]
+        case .shortcuts: [
+            "shortcuts", "keyboard", "keys", "hotkey",
+            "快捷键",
+            "快速鍵", "鍵盤", "按鍵",
+            "ショートカット", "キーボード", "キー",
+            "단축키", "키보드", "키",
+            "raccourcis", "clavier", "touches",
+        ]
+        case .archive: [
+            "storage", "space", "disk", "worktree", "worktrees", "reveal", "finder", "build", "cache", "clean", "archive", "archived", "restore",
+            "存储", "空间", "工作树", "归档", "清理", "缓存",
+            "儲存空間", "空間", "磁碟", "工作樹", "封存", "清理", "快取", "還原",
+            "ストレージ", "容量", "ディスク", "キャッシュ", "削除", "アーカイブ", "復元",
+            "저장 공간", "디스크", "캐시", "정리", "보관", "복원",
+            "stockage", "espace", "disque", "cache", "nettoyer", "archiver", "archive", "restaurer",
+        ]
+        case .alpha: [
+            "alpha", "labs", "experimental", "beta", "preview",
+            "实验室", "实验",
+            "實驗室", "實驗", "搶先體驗",
+            "ラボ", "実験", "実験的", "プレビュー",
+            "실험실", "실험", "미리보기",
+            "labo", "laboratoire", "expérimental", "aperçu",
+        ]
+        case .about: [
+            "about", "version", "update", "updates", "software update", "auto-update", "release", "changelog",
+            "版本", "关于", "更新",
+            "版本", "關於", "更新",
+            "バージョン", "情報", "アップデート", "更新",
+            "버전", "정보", "업데이트",
+            "version", "à propos", "mise à jour", "mises à jour",
+        ]
+        case .credits: [
+            "credits", "acknowledgements", "thanks", "license", "licenses", "droppy", "zeron", "swiftterm", "orbs", "trademark", "keepsake", "keepsakes", "early supporter",
+            "致谢", "许可证", "开源", "信物",
+            "致謝", "授權條款", "許可證", "開源", "信物", "紀念物", "早期支持者",
+            "クレジット", "謝辞", "ライセンス", "オープンソース", "記念品", "初期サポーター",
+            "크레딧", "감사의 글", "라이선스", "오픈 소스", "기념품", "초기 후원자",
+            "crédits", "remerciements", "licence", "licences", "souvenir", "souvenirs", "premiers soutiens",
+        ]
+        }
+    }
+
+    private static var visibleCases: [SettingsPage] {
+        allCases.filter { $0 != .alpha }
+    }
+
+    static func filtered(matching rawQuery: String) -> [SettingsPage] {
+        let query = rawQuery.trimmed
+        guard !query.isEmpty else { return visibleCases }
+        return visibleCases.filter { page in
+            ([page.title] + page.keywords).contains { key in
+                [key, Chrome.localized(key)].contains {
+                    $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                }
+            }
         }
     }
 }
@@ -100,11 +179,16 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 final class SettingsNavigation {
     static let shared = SettingsNavigation()
     private(set) var isPresented = false
-    var page: SettingsPage = .general
-    var requestedPage: SettingsPage?
+    var page: SettingsPage = .appearance
+
+    private static var transitionAnimation: Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            ? nil
+            : .easeOut(duration: 0.14)
+    }
 
     func present(page: SettingsPage? = nil) {
-        withAnimation(Chrome.panelSlide) {
+        withAnimation(Self.transitionAnimation) {
             if let page { self.page = page }
             isPresented = true
         }
@@ -112,201 +196,19 @@ final class SettingsNavigation {
 
     func dismiss() {
         guard isPresented else { return }
-        withAnimation(Chrome.panelSlide) { isPresented = false }
-    }
-}
-
-struct SettingsView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var keepsakeOverlayShown = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var keepsakeDismissRequest = 0
-    @State private var page: SettingsPage = .general
-    @State private var search = ""
-    @State private var scrollTracker = SettingsScrollTracker()
-
-    private var visiblePages: [SettingsPage] {
-        let query = search.trimmed
-        let pages = SettingsPage.allCases.filter { $0 != .chimera || model.settings.isChimeraEnabled }
-        guard !query.isEmpty else { return pages }
-        return pages.filter { page in
-            ([page.title] + page.keywords).contains { key in
-                [key, Chrome.localized(key)].contains {
-                    $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-                }
-            }
-        }
-    }
-
-    var body: some View {
-        let visiblePages = self.visiblePages
-        HStack(spacing: 0) {
-            sidebar(visiblePages: visiblePages).frame(width: 212)
-                .opacity(keepsakeOverlayShown ? 0.25 : 1)
-                .allowsHitTesting(!keepsakeOverlayShown)
-                .disabled(keepsakeOverlayShown)
-                .overlay {
-                    // Inserted only while shown, so the blur view costs nothing on other pages.
-                    if keepsakeOverlayShown {
-                        ZStack {
-                            KeepsakeBackdrop()
-                            KeepsakeOverlayStyle.veil(dark: colorScheme == .dark)
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture { keepsakeDismissRequest += 1 }
-                        .transition(.opacity)
-                    }
-                }
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: keepsakeOverlayShown)
-            SettingsDetail(page: page, fullWindow: false)
-                .padding(.trailing, Chrome.sheetInset)
-                .padding(.vertical, Chrome.sheetInset)
-        }
-        .environment(\.keepsakeDismissRequest, keepsakeDismissRequest)
-        .onPreferenceChange(KeepsakeOverlayPreference.self) { keepsakeOverlayShown = $0 }
-        .onDisappear { scrollTracker.end() }
-        .background { WindowBackdrop(opacity: model.settings.backdropOpacity) }
-        .background { WindowChromeConfigurator(performanceMode: model.settings.performanceMode) }
-        .ignoresSafeArea()
-        .frame(width: 780, height: 580)
-        .onChange(of: SettingsNavigation.shared.requestedPage, initial: true) { _, requested in
-            guard let requested else { return }
-            page = requested == .chimera && !model.settings.isChimeraEnabled ? .alpha : requested
-            SettingsNavigation.shared.requestedPage = nil
-        }
-        .onChange(of: model.settings.isChimeraEnabled, initial: true) { _, enabled in
-            if !enabled {
-                if page == .chimera { page = .alpha }
-                if SettingsNavigation.shared.page == .chimera { SettingsNavigation.shared.page = .alpha }
-            }
-        }
-        .onChange(of: visiblePages) { _, pages in
-            guard !pages.isEmpty, !pages.contains(page), let first = pages.first else { return }
-            // Chimera switched off from its own page lands on Alpha, where its switch is.
-            page = page == .chimera && !model.settings.isChimeraEnabled ? .alpha : first
-        }
-    }
-
-    private func sidebar(visiblePages: [SettingsPage]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Color.clear
-                .frame(height: Chrome.trafficLightDiameter)
-                .padding(.top, Chrome.trafficLightTop)
-            SidebarSearchField(text: $search, prompt: "Search settings pages or providers") {
-                if let first = visiblePages.first { page = first }
-            }
-            .padding(.horizontal, Chrome.listInset)
-            .padding(.top, 14)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(visiblePages) { item in
-                        SettingsSidebarRow(page: item, isSelected: page == item, hasUnseenKeepsakes: model.hasUnseenKeepsakes) { page = item }
-                            .equatable()
-                    }
-                    if visiblePages.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("No results")
-                                .font(.ui(.body, weight: .semibold))
-                                .foregroundStyle(Chrome.primaryText.opacity(0.92))
-                            Text("Try a setting or a provider name.")
-                                .font(.ui(.subheadline))
-                                .foregroundStyle(Chrome.secondaryText)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.top, 14)
-                    }
-                }
-                .padding(.horizontal, Chrome.listInset)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
-                .allowsHitTesting(!scrollTracker.isFrozen)
-            }
-            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, _ in
-                scrollTracker.note()
-            }
-            .onScrollPhaseChange { _, phase in
-                if phase == .interacting { scrollTracker.note() } else { scrollTracker.coast() }
-            }
-            .scrollIndicators(.never)
-        }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background { WindowDragArea() }
-    }
-
-}
-
-private struct SettingsSidebarRow: View, Equatable {
-    let page: SettingsPage
-    let isSelected: Bool
-    let hasUnseenKeepsakes: Bool
-    let action: () -> Void
-
-    // Each action only selects this row's fixed page in its owning sidebar.
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.page == rhs.page && lhs.isSelected == rhs.isSelected && lhs.hasUnseenKeepsakes == rhs.hasUnseenKeepsakes
-    }
-
-    var body: some View {
-        SidebarRow(title: page.title, isSelected: isSelected, accessoryWidth: page == .keepsakes && hasUnseenKeepsakes ? 14 : 0, action: action) {
-            SettingsSidebarIcon(page: page)
-        } accessory: { _ in
-            if page == .keepsakes && hasUnseenKeepsakes {
-                Circle()
-                    .fill(Chrome.accent)
-                    .frame(width: 6, height: 6)
-                    .accessibilityHidden(true)
-            }
-        }
-    }
-}
-
-private struct SettingsSidebarIcon: View {
-    let page: SettingsPage
-
-    var body: some View {
-        SidebarIconBadge {
-            if page == .hydra {
-                // The Hydra page wears the dragon mark, the same one as the composer button.
-                HydraMarkImage()
-                    .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
-            } else if page == .chimera {
-                ChimeraMarkImage()
-                    .frame(width: Chrome.symbolSize * 1.15, height: Chrome.symbolSize * 1.15)
-            } else if page == .alpha {
-                AlphaMarkImage()
-                    .frame(width: Chrome.symbolSize, height: Chrome.symbolSize)
-            } else {
-                SidebarSymbol(page.symbol, scale: page == .general ? 1.15 : 1)
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if page == .about, UpdateChecker.shared.updateAvailable {
-                UpdateAvailableDot()
-            }
-        }
+        withAnimation(Self.transitionAnimation) { isPresented = false }
     }
 }
 
 struct SettingsSidebar: View {
     @Environment(AppModel.self) private var model
     @Bindable private var navigation = SettingsNavigation.shared
-    @State private var search = ""
     @State private var scrollTracker = SettingsScrollTracker()
 
     private var page: SettingsPage { navigation.page }
 
     private var visiblePages: [SettingsPage] {
-        let query = search.trimmed
-        let pages = SettingsPage.allCases.filter { $0 != .chimera || model.settings.isChimeraEnabled }
-        guard !query.isEmpty else { return pages }
-        return pages.filter { page in
-            ([page.title] + page.keywords).contains { key in
-                [key, Chrome.localized(key)].contains {
-                    $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-                }
-            }
-        }
+        SettingsPage.filtered(matching: "")
     }
 
     var body: some View {
@@ -315,41 +217,20 @@ struct SettingsSidebar: View {
             Color.clear
                 .frame(height: Chrome.trafficLightDiameter)
                 .padding(.top, Chrome.trafficLightTop)
-            SidebarRow(title: "Back", action: { WindowManager.shared.hideSettings() }) {
-                SidebarIconBadge { SidebarSymbol("arrow.left") }
+            SettingsBackRow {
+                WindowManager.shared.hideSettings()
             }
-            .help(Text(verbatim: Chrome.localized("Back to your threads")))
             .padding(.horizontal, Chrome.listInset)
             .padding(.top, 10)
-            SidebarSearchField(text: $search, prompt: "Search settings pages or providers") {
-                if let first = visiblePages.first { navigation.page = first }
-            }
-            .padding(.horizontal, Chrome.listInset)
-            .padding(.top, 14)
             ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(visiblePages) { item in
-                        SettingsSidebarRow(page: item, isSelected: page == item, hasUnseenKeepsakes: model.hasUnseenKeepsakes) { navigation.page = item }
-                            .equatable()
-                    }
-                    if visiblePages.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("No results")
-                                .font(.ui(.body, weight: .semibold))
-                                .foregroundStyle(Chrome.primaryText.opacity(0.92))
-                            Text("Try a setting or a provider name.")
-                                .font(.ui(.subheadline))
-                                .foregroundStyle(Chrome.secondaryText)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.top, 14)
-                    }
-                }
-                .padding(.horizontal, Chrome.listInset)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
-                .allowsHitTesting(!scrollTracker.isFrozen)
+                SettingsPageList(
+                    pages: visiblePages,
+                    selected: page,
+                    hasUnseenKeepsakes: model.hasUnseenKeepsakes,
+                    isFrozen: scrollTracker.isFrozen
+                ) { navigation.page = $0 }
             }
+            .padding(.top, 14)
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, _ in
                 scrollTracker.note()
             }
@@ -361,26 +242,255 @@ struct SettingsSidebar: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background { WindowDragArea() }
         .onDisappear { scrollTracker.end() }
-        .onChange(of: model.settings.isChimeraEnabled, initial: true) { _, enabled in
-            if !enabled, page == .chimera { navigation.page = .alpha }
-        }
         .onChange(of: visiblePages) { _, pages in
             guard !pages.isEmpty, !pages.contains(page), let first = pages.first else { return }
-            // Chimera switched off from its own page lands on Alpha, where its switch is.
-            navigation.page = page == .chimera && !model.settings.isChimeraEnabled ? .alpha : first
+            navigation.page = first
+        }
+    }
+}
+
+private struct SettingsBackRow: View {
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Home")
+                    .font(.ui(size: 16, weight: .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+            }
+            .foregroundStyle(Chrome.primaryText.opacity(isHovering ? 1 : 0.85))
+            .padding(.horizontal, Chrome.rowHorizontalPadding)
+            .frame(height: Chrome.rowHeight + 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .background {
+            shape
+                .fill(isHovering ? Chrome.overlay(0.06) : .clear)
+                .animation(Chrome.hover, value: isHovering)
+        }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .help(Text(verbatim: Chrome.localized("Back to your threads")))
+        .accessibilityLabel(Text("Back to your threads"))
+    }
+}
+
+private enum SettingsSidebarMetrics {
+    static let rowSpacing: CGFloat = 1
+    static let textLeading: CGFloat = 20
+    static let tickHeight: CGFloat = 2
+    static let minorTickHeight: CGFloat = 1.5
+    static var pitch: CGFloat { Chrome.rowHeight + rowSpacing }
+}
+
+/// Icon-less settings page list with a leading tick scale and neighbour magnification on hover,
+/// following `TimelineMinimapRail`'s pitch-mapped continuous hover geometry.
+private struct SettingsPageList: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(WindowLiveResize.self) private var liveResize
+
+    let pages: [SettingsPage]
+    let selected: SettingsPage
+    let hasUnseenKeepsakes: Bool
+    let isFrozen: Bool
+    let select: (SettingsPage) -> Void
+
+    @State private var hoveredIndex: Int?
+
+    private var hoverAnimation: Animation? {
+        if liveResize.isActive || reduceMotion { return nil }
+        return .smooth(duration: 0.22)
+    }
+
+    var body: some View {
+        Group {
+            if pages.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No results")
+                        .font(.ui(.body, weight: .semibold))
+                        .foregroundStyle(Chrome.primaryText.opacity(0.92))
+                    Text("Try a setting or a provider name.")
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ZStack(alignment: .topLeading) {
+                    VStack(alignment: .leading, spacing: SettingsSidebarMetrics.rowSpacing) {
+                        ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
+                            SettingsPlainSidebarRow(
+                                page: item,
+                                isSelected: selected == item,
+                                hoverDistance: hoveredIndex.map { abs($0 - index) },
+                                showsUpdateDot: item == .about && UpdateChecker.shared.updateAvailable,
+                                showsKeepsakeDot: item == .credits && hasUnseenKeepsakes
+                            ) {
+                                select(item)
+                            }
+                        }
+                    }
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location):
+                            let pitch = SettingsSidebarMetrics.pitch
+                            let totalHeight = CGFloat(pages.count) * pitch - SettingsSidebarMetrics.rowSpacing
+                            guard location.y >= 0, location.y <= totalHeight else {
+                                if hoveredIndex != nil { hoveredIndex = nil }
+                                return
+                            }
+                            let index = min(max(0, Int(floor(location.y / pitch))), pages.count - 1)
+                            if hoveredIndex != index { hoveredIndex = index }
+                        case .ended:
+                            if hoveredIndex != nil { hoveredIndex = nil }
+                        }
+                    }
+
+                    tickScale
+                        .opacity(hoveredIndex == nil ? 0 : 1)
+                        .allowsHitTesting(false)
+                }
+                .animation(hoverAnimation, value: hoveredIndex)
+                .animation(hoverAnimation, value: selected)
+            }
+        }
+        .padding(.horizontal, Chrome.listInset)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .allowsHitTesting(!isFrozen)
+    }
+
+    private var tickScale: some View {
+        let rowHeight = Chrome.rowHeight
+        let pitch = SettingsSidebarMetrics.pitch
+        return ZStack(alignment: .topLeading) {
+            ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
+                let isSelected = selected == item
+                let distance = hoveredIndex.map { abs($0 - index) }
+                let isHovered = distance == 0
+                let width: CGFloat = if isHovered {
+                    14
+                } else if isSelected {
+                    11
+                } else if distance == 1 {
+                    9
+                } else {
+                    5.5
+                }
+                let style: AnyShapeStyle = if isSelected && !isHovered {
+                    AnyShapeStyle(Chrome.accent)
+                } else if isHovered {
+                    AnyShapeStyle(.primary.opacity(0.95))
+                } else if distance == 1 {
+                    AnyShapeStyle(.primary.opacity(0.52))
+                } else {
+                    AnyShapeStyle(.primary.opacity(0.28))
+                }
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(style)
+                    .frame(width: width, height: SettingsSidebarMetrics.tickHeight)
+                    .offset(y: CGFloat(index) * pitch + (rowHeight - SettingsSidebarMetrics.tickHeight) / 2)
+
+                if index < pages.count - 1 {
+                    RoundedRectangle(cornerRadius: 0.75, style: .continuous)
+                        .fill(.primary.opacity(0.16))
+                        .frame(width: 3, height: SettingsSidebarMetrics.minorTickHeight)
+                        .offset(y: CGFloat(index) * pitch + rowHeight + (SettingsSidebarMetrics.rowSpacing - SettingsSidebarMetrics.minorTickHeight) / 2)
+                }
+            }
+        }
+        .padding(.leading, 2)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct SettingsPlainSidebarRow: View {
+    let page: SettingsPage
+    let isSelected: Bool
+    let hoverDistance: Int?
+    let showsUpdateDot: Bool
+    let showsKeepsakeDot: Bool
+    let action: () -> Void
+
+    private var isHovered: Bool { hoverDistance == 0 }
+
+    private var textScale: CGFloat {
+        guard let hoverDistance else { return 1 }
+        switch hoverDistance {
+        case 0: return 1.09
+        case 1: return 1.035
+        default: return 1
         }
     }
 
+    private var textOffset: CGFloat {
+        guard let hoverDistance else { return 0 }
+        switch hoverDistance {
+        case 0: return 4
+        case 1: return 1.5
+        default: return 0
+        }
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(verbatim: Chrome.localized(page.title))
+                    .font(.ui(.body, weight: isSelected || isHovered ? .medium : .regular))
+                    .foregroundStyle(Chrome.primaryText.opacity(isSelected || isHovered ? 1 : 0.88))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .scaleEffect(textScale, anchor: .leading)
+                    .offset(x: textOffset)
+                Spacer(minLength: 4)
+                if showsUpdateDot {
+                    UpdateAvailableDot(inline: true)
+                } else if showsKeepsakeDot {
+                    Circle()
+                        .fill(Chrome.accent)
+                        .frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.leading, SettingsSidebarMetrics.textLeading)
+            .padding(.trailing, Chrome.rowHorizontalPadding)
+            .frame(height: Chrome.rowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .background {
+            shape.fill(isSelected ? Chrome.overlay(0.12) : (isHovered ? Chrome.overlay(0.05) : .clear))
+        }
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+    }
 }
 
 struct SettingsDetail: View {
     let page: SettingsPage
-    var fullWindow = true
+    @State private var contentReady = false
 
     var body: some View {
-        SettingsPageScroll(page: page, fullWindow: fullWindow)
+        SettingsPageScroll(page: page, contentReady: contentReady)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .detailSheet()
+            .onAppear {
+                guard !contentReady else { return }
+                DispatchQueue.main.async {
+                    contentReady = true
+                }
+            }
     }
 }
 
@@ -388,10 +498,7 @@ private struct SettingsPageScroll: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var keepsakeOverlayShown = false
     let page: SettingsPage
-    let fullWindow: Bool
-    @State private var modelSearch = ""
-    @State private var providerSearch = ""
-    @State private var mcpSearch = ""
+    let contentReady: Bool
     @State private var archiveFilter = ArchiveFilter()
     @State private var scrollChrome = ChromeScrollModel()
     @State private var stickyContext = SettingsScrollOffset()
@@ -404,39 +511,27 @@ private struct SettingsPageScroll: View {
         .onChange(of: page, initial: true) {
             scrollChrome.update(travel: 0)
             stickyContext.travel = 0
-            modelSearch = ""
-            providerSearch = ""
-            mcpSearch = ""
             archiveFilter = ArchiveFilter()
         }
     }
 
     private var contentTopInset: CGFloat {
-        fullWindow || pageHasChromeControls ? Chrome.chromeTopPadding + Chrome.capsuleHeight + 16 : 22
+        Chrome.chromeTopPadding + Chrome.capsuleHeight + 16
     }
 
     private var pageScroll: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Chrome.pageTitleSpacing) {
-                if fullWindow {
-                    Text(verbatim: Chrome.localized(page.title))
-                        .font(.ui(.title2, weight: .medium))
-                        .foregroundStyle(Chrome.primaryText)
-                        .accessibilityAddTraits(.isHeader)
-                        .opacity(keepsakeOverlayShown ? 0 : 1)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: keepsakeOverlayShown)
-                }
-                VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
+            VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
+                if contentReady {
                     pageContent
                 }
             }
             .environment(\.chromeSectionHeaderSpacing, Chrome.pageSectionHeaderSpacing)
-            .frame(maxWidth: fullWindow ? 680 : .infinity, alignment: .leading)
-            .padding(.horizontal, fullWindow ? Chrome.contentHorizontalPadding * 2 : Chrome.contentHorizontalPadding + 8)
+            .frame(maxWidth: 680, alignment: .leading)
+            .padding(.horizontal, Chrome.contentHorizontalPadding * 2)
             .frame(maxWidth: .infinity)
-            // Full-window pages clear the titlebar; the old window keeps its existing inset.
             .padding(.top, contentTopInset)
-            .padding(.bottom, fullWindow ? Chrome.contentHorizontalPadding * 2 : 24)
+            .padding(.bottom, Chrome.contentHorizontalPadding * 2)
             .coordinateSpace(.named(SettingsStickyCoordinates.space))
             .environment(\.settingsStickyContext, stickyContext)
             .onChange(of: contentTopInset, initial: true) { _, inset in
@@ -465,47 +560,36 @@ private struct SettingsPageScroll: View {
             stickyContext.travel = travel
         }
         .onScrollPhaseChange { _, phase in
-            // Fingers on the content freeze the rows (no click can land then anyway); the
-            // moment the scroll coasts or settles they come back, so a click that stops a
-            // flick always reaches its target. Wheel scrolling reports no phases and is
-            // caught by the movement above instead.
             if phase == .interacting { scrollTracker.note() } else { scrollTracker.coast() }
         }
         .chromeEdgeFade(scrollChrome)
         .overlay(alignment: .top) {
-            SettingsPageChrome(
-                page: page,
-                scrollChrome: scrollChrome,
-                modelSearch: $modelSearch,
-                providerSearch: $providerSearch,
-                mcpSearch: $mcpSearch
-            )
-            .opacity(keepsakeOverlayShown ? 0 : 1)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: keepsakeOverlayShown)
+            if pageHasChromeControls {
+                SettingsPageChrome(page: page)
+                    .opacity(keepsakeOverlayShown ? 0 : 1)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: keepsakeOverlayShown)
+            }
         }
     }
 
     private var pageHasChromeControls: Bool {
-        page == .providers || page == .models || page == .mcp || page == .about
+        page == .providers || page == .models || page == .hydra || page == .connections || page == .about
     }
 
     @ViewBuilder
     private var pageContent: some View {
         switch page {
-        case .general: GeneralSettingsPage()
         case .appearance: AppearanceSettingsPage()
-        case .providers: ProvidersSettingsPage(query: providerSearch)
-        case .mcp: MCPSettingsPage(query: mcpSearch)
-        case .models:
-            ModelsSettingsPage(query: modelSearch)
-        case .hydra: HydraSettingsPage()
-        case .chimera: ChimeraSettingsPage()
-        case .alpha: AlphaSettingsPage()
-        case .sourceControl: SourceControlSettingsPage()
+        case .conversation: ConversationSettingsPage()
+        case .providers: ProvidersSettingsPage(query: "")
+        case .models: ModelsSettingsPage(query: "")
+        case .hydra: HydraSettingsPage(query: "")
+        case .connections: ConnectionsSettingsPage(query: "")
         case .shortcuts: ShortcutsSettingsPage()
         case .archive: StorageSettingsPage(filter: $archiveFilter)
-        case .keepsakes: KeepsakesSettingsPage()
-        case .about: AboutSettingsPage()
+        case .alpha: AlphaSettingsPage()
+        case .about: VersionSettingsPage()
+        case .credits: CreditsSettingsPage()
         }
     }
 
@@ -516,22 +600,11 @@ private struct SettingsPageScroll: View {
 
 private struct SettingsPageChrome: View {
     let page: SettingsPage
-    let scrollChrome: ChromeScrollModel
-    @Binding var modelSearch: String
-    @Binding var providerSearch: String
-    @Binding var mcpSearch: String
 
     var body: some View {
         HStack(spacing: 10) {
-            ChromeCompactTitle(title: page.title, model: scrollChrome)
-            if page == .models {
-                ChromeSearchField(query: $modelSearch, prompt: "Search models")
-            }
-            if page == .mcp {
-                ChromeSearchField(query: $mcpSearch, prompt: "Search servers")
-            }
+            Spacer(minLength: 0)
             if page == .providers {
-                ChromeSearchField(query: $providerSearch, prompt: "Search providers")
                 ProvidersRefreshButton()
             }
             if page == .about {
@@ -555,207 +628,8 @@ struct SettingsSwitch: View {
     }
 }
 
-private struct GeneralSettingsPage: View {
-    @Environment(AppModel.self) private var model
-
-    private static let runtimeOptions = RuntimeMode.allCases.map { ($0, $0.title) }
-    private static let workspaceOptions = WorkspaceMode.allCases.map { ($0, $0.title) }
-    private static let hapticOptions = TimelineHapticStyle.allCases.map { ($0, $0.title) }
-    private static let languageOptions = AppLanguage.allCases.map { ($0, $0.title) }
-    private static let locationOptions: [(NewThreadLocation, String)] = [
-        (.recent, "Follow the latest chat"),
-        (.standalone, "Tasks (no project)"),
-    ]
-    private static let autoShelveOptions: [(Int, String)] = [
-        (0, "Never"),
-        (3, "3 days"),
-        (7, "7 days"),
-        (14, "14 days"),
-    ]
-
-    var body: some View {
-        @Bindable var settings = model.settings
-        ChromeSection(title: "New threads") {
-            ChromeCard {
-                newThreadModelRow
-                ChromeRowDivider()
-                ChromeRow(title: "Default location", detail: "By default, follow the latest chat's location, including Tasks. Applies only to ordinary new chats; creating a chat from a project still places it in that project.") {
-                    GlassPickerButton(options: Self.locationOptions, selection: $settings.newThreadLocation, maxWidth: 190)
-                        .accessibilityLabel(Text("Default location"))
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Permissions", detail: settings.defaultRuntimeMode.summary) {
-                    GlassPickerButton(options: Self.runtimeOptions, selection: $settings.defaultRuntimeMode, symbol: { $0.symbol })
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Workspace", detail: "Where a new thread makes its changes") {
-                    ChromeVisualPicker(options: Self.workspaceOptions, selection: $settings.defaultWorkspaceMode) { mode in
-                        Image(systemName: mode == .local ? "folder" : "arrow.triangle.branch")
-                    }
-                }
-            }
-        }
-            ChromeSection(title: "Conversation") {
-                ChromeCard {
-                    ChromeRow(title: "Show thinking", detail: "The working line opens to the agent's thinking") {
-                        SettingsSwitch(isOn: $settings.showReasoning)
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(title: "Concise AI replies", detail: "Built-in guidance for shorter replies, useful code comments, and focused work, including Hydra heads. Changes apply on the next message.") {
-                        SettingsSwitch(isOn: $settings.antiSlopEnabled)
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(title: "Working line", detail: "A card with the turn's progress bar, or a plain line") {
-                        ChromeVisualPicker(options: [(true, "Card"), (false, "Line")], selection: $settings.showsWorkingCard) { isCard in
-                            Image(systemName: isCard ? "rectangle.fill" : "minus")
-                        }
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(title: "Timeline haptics", detail: "Play haptic feedback when hovering over timeline ticks and progress bars") {
-                        GlassPickerButton(options: Self.hapticOptions, selection: $settings.timelineHapticStyle)
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(title: "Recent downloads", detail: "The attach button offers recent downloads first") {
-                        SettingsSwitch(isOn: $settings.recentDownloadsPicker)
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(title: "Notify when a turn finishes") {
-                    SettingsSwitch(isOn: $settings.notifyWhenFinished)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Chime when a turn finishes", detail: "A soft chime, whether or not the thread is in view") {
-                    SettingsSwitch(isOn: $settings.chimeWhenFinished)
-                }
-                // Switching it on plays the chime once, so you hear what you are getting.
-                .onChange(of: settings.chimeWhenFinished) { _, isOn in
-                    if isOn { FinishChime.play() }
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Confirm before deleting threads") {
-                    SettingsSwitch(isOn: $settings.confirmBeforeDeleting)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Auto-shelve projects", detail: "Shelve a project after its latest thread has been idle this long. Projects with running, unread or open threads stay put.") {
-                    GlassPickerButton(options: Self.autoShelveOptions, selection: $settings.autoShelveDays, maxWidth: 190)
-                }
-                .onChange(of: settings.autoShelveDays) { model.autoShelveIdleProjects() }
-            }
-        }
-        ChromeSection(title: "Realtime voice") {
-            ChromeCard {
-                ChromeRow(title: "Codex realtime voice", detail: "Talk with Codex out loud. Start a call from Start voice in the sidebar, or from the waveform button in any Codex chat to continue that chat by voice. Codex listens, answers and does the work in the chat. Needs Codex 0.159 or later, signed in with ChatGPT. Turning this off ends the current call.") {
-                    SettingsSwitch(isOn: $settings.voiceEnabled)
-                        .accessibilityLabel(Text("Codex realtime voice"))
-                }
-                if settings.voiceEnabled {
-                    ChromeRowDivider()
-                    VoiceStyleRow()
-                }
-            }
-        }
-        .onChange(of: settings.isVoiceEnabled) { _, enabled in
-            if !enabled { model.voice.end() }
-        }
-        ChromeSection(title: "Text generation") {
-            ChromeCard {
-                TextGenerationModelRows()
-                if settings.textGeneration != .off {
-                    ChromeRowDivider()
-                    ChromeRow(
-                        title: "Thread titles",
-                        detail: "Name once titles a chat from its first message. Keep updated renames it every few turns when the work moves on. Titles you set yourself never change."
-                    ) {
-                        GlassPickerButton(options: ThreadTitleMode.allCases.map { ($0, $0.title) }, selection: $settings.threadTitleMode)
-                    }
-                    ChromeRowDivider()
-                    ChromeRow(
-                        title: "Composer predictions",
-                        detail: "After a reply, suggests your likely next message in the empty composer; press Tab or → to use it. Recent messages from the chat go to the model above."
-                    ) {
-                        SettingsSwitch(isOn: $settings.promptPredictionsEnabled)
-                            .accessibilityLabel(Text("Composer predictions"))
-                    }
-                }
-            }
-        }
-        ChromeSection(title: "Local control") {
-            ChromeCard { LocalControlSettingsRows() }
-            CLIInstallationSettings()
-        }
-        ChromeSection(title: "Power") {
-            ChromeCard {
-                ChromeRow(
-                    title: "Prevent sleep while tasks are running",
-                    detail: "While tasks run, your Mac won't doze off. Keep Mac awake lets the screen turn off on its own; Keep Mac and screen awake leaves it lit too, which helps when an agent needs to see a front end. Manual sleep and closing the lid still work."
-                ) {
-                    GlassPickerButton(options: TaskSleepMode.allCases.map { ($0, $0.title) }, selection: $settings.taskSleepMode)
-                }
-            }
-        }
-        ChromeSection(title: "Languages") {
-            ChromeCard {
-                ChromeRow(title: "App language", detail: "Changes apply after the app restarts.") {
-                    GlassPickerButton(options: Self.languageOptions, selection: $settings.appLanguage)
-                }
-            }
-        }
-    }
-
-    private var newThreadModelRow: some View {
-        NewThreadModelSettingsRow()
-    }
-}
-
-private struct NewThreadModelSettingsRow: View {
-    @Environment(AppModel.self) private var model
-    @State private var isPresented = false
-
-    var body: some View {
-        let registry = model.providers
-        let providers = registry.availableProviders
-        let selection = model.settings.newThreadModelSelection
-        let option = selection.flatMap { registry.model($0.modelID, for: $0.provider) }
-        let isAvailable = selection.map { providers.contains($0.provider) && option != nil } ?? true
-        let name = selection.map { ModelPin(provider: $0.provider, modelID: $0.modelID).displayName }
-        let effortTitle = option.flatMap { option -> String? in
-            guard !option.efforts.isEmpty else { return nil }
-            let effort = selection?.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
-            return Chrome.localized(ModelOption.effortTitle(effort ?? option.defaultEffort ?? ""))
-        }
-        let title = selection.map { [$0.provider.displayName, option?.shortName ?? name ?? $0.modelID, effortTitle].compactMap { $0 }.joined(separator: " · ") }
-            ?? Chrome.localized("Last selection")
-        let fullTitle = selection.map { [$0.provider.displayName, option?.name ?? name ?? $0.modelID, effortTitle].compactMap { $0 }.joined(separator: " · ") }
-            ?? Chrome.localized("Last selection")
-        let displayedTitle = isAvailable ? title : String(format: Chrome.localized("%@ (unavailable)"), title)
-        let helpTitle = isAvailable ? fullTitle : String(format: Chrome.localized("%@ (unavailable)"), fullTitle)
-        var details = [Chrome.localized("Project Hydra presets take priority. Otherwise, Last selection uses the current or most recent model; a selected model stays fixed.")]
-        if !isAvailable {
-            details.append(Chrome.localized("The selected model is unavailable. New chats will use Last selection."))
-        }
-        if providers.isEmpty {
-            details.append(Chrome.localized("No providers available. You can still use Last selection."))
-        }
-        return ChromeRow(title: "Default model", detail: details.joined(separator: "\n")) {
-            ModelChoiceButton(
-                title: displayedTitle,
-                help: helpTitle,
-                iconName: selection?.provider.iconName,
-                accessibilityLabel: "Default model",
-                isPresented: $isPresented
-            ) {
-                NewThreadModelPicker(
-                    selection: selection,
-                    selectedModelID: option?.id ?? selection?.modelID,
-                    initialProvider: selection?.provider
-                        ?? (providers.contains(model.settings.defaultProvider) ? model.settings.defaultProvider : providers.first)
-                ) { selection in
-                    model.settings.newThreadModelSelection = selection
-                    if selection == nil { isPresented = false }
-                }
-            }
-        }
-    }
-}
+typealias DefaultModelPickerButton = ModelChoiceButton
+typealias DefaultModelPopover = NewThreadModelPicker
 
 struct ModelChoiceButton<Popover: View>: View {
     let title: String
@@ -1035,164 +909,6 @@ struct NewThreadModelPicker: View {
     }
 }
 
-/// The main interface, font sizes and other appearance settings.
-private struct AppearanceSettingsPage: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var settings = model.settings
-        let performanceMode = settings.performanceMode
-        let clearerUnavailable = performanceMode || WallpaperStore.shared.hasWallpaper
-        ChromeSection(title: "Main interface") {
-            ChromeCard {
-                ChromeRow(title: "Theme", detail: settings.theme.detail, localizesDetail: false) {
-                    ThemePickerButton(selection: $settings.theme)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Transparency", detail: "How much shows through the window") {
-                    BackdropOpacitySlider(value: $settings.backdropOpacity)
-                }
-                .disabled(performanceMode)
-                .opacity(performanceMode ? 0.5 : 1)
-                ChromeRowDivider()
-                ChromeRow(
-                    title: "Clearer glass",
-                    detail: performanceMode
-                        ? "Unavailable in Performance mode"
-                        : clearerUnavailable
-                            ? "Unavailable while a wallpaper is set"
-                            : "Shows more of the desktop through the window with Liquid Glass. Uses more GPU while the window's content changes; off uses a lighter system blur."
-                ) {
-                    SettingsSwitch(isOn: $settings.clearerBackdrop)
-                }
-                .disabled(clearerUnavailable)
-                .opacity(clearerUnavailable ? 0.5 : 1)
-                ChromeRowDivider()
-                ChromeRow(title: "Performance mode", detail: "Disable window transparency, blurs, glows and background effects for lowest GPU usage") {
-                    SettingsSwitch(isOn: $settings.performanceMode)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Skylight", detail: performanceMode ? "Unavailable in Performance mode" : "A teru teru bozu at the top of the sidebar keeps you company while agents work, and its weather shows how your threads are doing: it sways in the wind while they run, turns overcast when one needs you, brightens when a reply lands and rains when one fails. It animates only while visible.") {
-                    SettingsSwitch(isOn: $settings.showsSkylight)
-                }
-                .disabled(performanceMode)
-                .opacity(performanceMode ? 0.5 : 1)
-            }
-            WallpaperCard()
-        }
-        FontSizeSection()
-        ChromeSection(title: "Other") {
-            ChromeCard {
-                ChromeRow(title: "Auto-hide top controls", detail: "Show the upper-right controls only while the pointer is over their area") {
-                    SettingsSwitch(isOn: $settings.autoHideTopControls)
-                }
-            }
-        }
-    }
-}
-
-/// Font sizes use the same section and card spacing as the other settings.
-private struct FontSizeSection: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var settings = model.settings
-        ChromeSection(
-            title: "Font sizes",
-            trailing: AnyView(
-                Button("Reset font sizes") { settings.resetFontSizes() }
-                    .font(.ui(.body))
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                    .disabled(settings.isDefault)
-            )
-        ) {
-            ChromeCard {
-                ChromeRow(title: "Interface font size", detail: "Adjust Tivano's base font size") {
-                    FontSizeButtons(value: $settings.uiFontSize, range: TypeScale.uiRange)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Content font size", detail: "Adjust the base font size of conversations") {
-                    FontSizeButtons(value: $settings.contentFontSize, range: TypeScale.contentRange)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Code font size", detail: "Adjust the base font size of code in chat and diff views") {
-                    FontSizeButtons(value: $settings.codeFontSize, range: TypeScale.codeRange)
-                }
-            }
-        }
-    }
-}
-
-private struct FontSizeButtons: View {
-    @Binding var value: Int
-    let range: ClosedRange<Int>
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ChromeIconButton(symbol: "minus", isEnabled: value > range.lowerBound, help: "Decrease Font Size") {
-                value = TypeScale.clamp(value - 1, to: range)
-            }
-
-            Text(verbatim: "\(value) pt")
-                .font(Font.ui(size: 12).monospacedDigit())
-                .frame(width: 56)
-                .help(Text(verbatim: "\(range.lowerBound)–\(range.upperBound)"))
-
-            ChromeIconButton(symbol: "plus", isEnabled: value < range.upperBound, help: "Increase Font Size") {
-                value = TypeScale.clamp(value + 1, to: range)
-            }
-        }
-    }
-}
-
-/// Clear glass on the left, a solid base on the right, the stock look in the middle,
-/// with a reset that shows only once the slider has left the stock look.
-private struct BackdropOpacitySlider: View {
-    @Binding var value: Double
-
-    private var isOffStock: Bool { abs(value - AppSettings.defaultBackdropOpacity) >= 0.005 }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "circle.dotted")
-                .font(.ui(.subheadline))
-                .foregroundStyle(Chrome.secondaryText)
-                .help(Text(verbatim: Chrome.localized("Transparent")))
-            Slider(value: $value, in: 0...1)
-                .controlSize(.small)
-                .frame(width: 140)
-            Image(systemName: "circle.fill")
-                .font(.ui(.subheadline))
-                .foregroundStyle(Chrome.secondaryText)
-                .help(Text(verbatim: Chrome.localized("Solid")))
-        }
-        // The reset takes no room in the row, so the slider ends flush with the card's
-        // other controls whether or not it shows; it fades in to the slider's left once
-        // the value has left the stock look.
-        .overlay(alignment: .leading) {
-            if isOffStock {
-                Button {
-                    withAnimation(.snappy(duration: 0.2)) { value = AppSettings.defaultBackdropOpacity }
-                } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                        .font(.ui(.subheadline, weight: .medium))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .frame(width: 22, height: 22)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help(Text(verbatim: Chrome.localized("Back to the stock look")))
-                .offset(x: -28)
-                .transition(.opacity.combined(with: .offset(x: 6)))
-            }
-        }
-        .animation(.snappy(duration: 0.2), value: isOffStock)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(Text("Window transparency"))
-    }
-}
-
 private struct ProvidersRefreshButton: View {
     @Environment(AppModel.self) private var model
 
@@ -1240,7 +956,7 @@ private struct ProvidersSettingsPage: View {
                             .id(selected)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else if !visible.isEmpty {
-                        VStack(alignment: .leading, spacing: Chrome.unitSpacing) {
+                        LazyVStack(alignment: .leading, spacing: Chrome.unitSpacing) {
                             ForEach(visible) { provider in
                                 ProviderSettingsSection(provider: provider, alignsCardTop: provider == visible.first)
                             }
@@ -1251,6 +967,8 @@ private struct ProvidersSettingsPage: View {
             }
         }
         .task {
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
             await model.providers.checkCLIUpdates(freshness: ProviderRegistry.cliCheckFreshnessOnOpen)
         }
         .onChange(of: settings.checksCLIUpdates) { _, _ in
@@ -1291,27 +1009,12 @@ private extension VerticalAlignment {
 }
 
 private struct ProviderListColumn: View {
-    static let railButtonSize: CGFloat = Chrome.rowHeight
-    static let railWidth: CGFloat = Chrome.listInset * 2 + railButtonSize
-    static let railStatusDotSize: CGFloat = 5
-    private static let expandedWidth: CGFloat = 200
-    private static let collapseDelay: Duration = .milliseconds(120)
+    static let railWidth: CGFloat = SettingsIconRail.railWidth
 
     @Environment(AppModel.self) private var model
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     let providers: [ProviderKind]
     let selected: ProviderKind?
     let select: (ProviderKind?) -> Void
-
-    @State private var isHoveringRail = false
-    @State private var isHoveringOverlay = false
-    @State private var isExpanded = false
-    @State private var collapseTask: Task<Void, Never>?
-    @State private var railHeight: CGFloat = 0
-    @State private var scrollIsolator = ProviderSelectorScrollIsolator()
-
-    private var isHovering: Bool { isHoveringRail || isHoveringOverlay }
 
     private var groupedProviders: [(group: ProviderGroup, providers: [ProviderKind])] {
         ProviderGroup.allCases.compactMap { group in
@@ -1321,162 +1024,48 @@ private struct ProviderListColumn: View {
     }
 
     var body: some View {
-        railCard
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { railHeight = $0 }
-            .alignmentGuide(.providerCardTop) { $0[.top] }
-            .background {
-                ProviderSelectorProbe { view in
-                    scrollIsolator.railView = view
-                }
-            }
-            .onHover { hovering in
-                isHoveringRail = hovering
-                handleHoverChange()
-            }
-            .overlay(alignment: .topLeading) {
-                if isExpanded {
-                    expandedCard
-                        .geometryGroup()
-                        .onHover { hovering in
-                            isHoveringOverlay = hovering
-                            handleHoverChange()
-                        }
-                        .transition(overlayTransition)
-                }
-            }
-            .animation(nil, value: providers)
-            .onChange(of: isHovering) { _, hovering in
-                scrollIsolator.setMonitoring(hovering)
-            }
-            .onDisappear {
-                scrollIsolator.setMonitoring(false)
-                collapseTask?.cancel()
-                collapseTask = nil
-                isHoveringRail = false
-                isHoveringOverlay = false
-                isExpanded = false
-            }
-    }
-
-    private var railCard: some View {
-        ChromeCard {
-            VStack(spacing: 0) {
-                ProviderRailButton(
-                    title: Chrome.localized("All providers"),
-                    status: nil,
-                    isSelected: selected == nil,
-                    action: { select(nil) }
-                ) {
-                    SidebarSymbol("square.grid.2x2")
-                        .foregroundStyle(Chrome.primaryText.opacity(selected == nil ? 1 : 0.92))
-                }
-                ForEach(groupedProviders, id: \.group.id) { entry in
-                    Divider()
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 4)
-                        .accessibilityHidden(true)
-                    ForEach(entry.providers) { provider in
-                        ProviderRailButton(
-                            title: provider.displayName,
-                            status: visibleStatus(provider),
-                            isSelected: selected == provider,
-                            action: { select(provider) }
-                        ) {
-                            ProviderIcon(provider: provider, size: Chrome.symbolSize)
-                        }
-                    }
-                }
-            }
-            .padding(Chrome.listInset)
-            .opacity(isExpanded ? 0 : 1)
-            .accessibilityHidden(isExpanded)
+        let allRow = SettingsIconRailRow(
+            id: "all",
+            title: "All providers",
+            titleIsVerbatim: false,
+            isSelected: selected == nil,
+            action: { select(nil) }
+        ) {
+            SidebarSymbol("square.grid.2x2")
+                .foregroundStyle(Chrome.primaryText.opacity(selected == nil ? 1 : 0.92))
         }
-    }
-
-    private var expandedCard: some View {
-        let shape = RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
-        return ChromeCard {
-            ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 0) {
-                SidebarRow(title: "All providers", isSelected: selected == nil,
-                           action: { select(nil) }) {
-                    SidebarSymbol("square.grid.2x2")
-                } accessory: { _ in
-                    EmptyView()
-                }
-                if providers.isEmpty {
-                    Text("No matching providers")
-                        .font(.ui(.subheadline))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .padding(.horizontal, Chrome.rowHorizontalPadding)
-                        .padding(.top, 12)
-                        .padding(.bottom, 4)
-                } else {
-                    ForEach(groupedProviders, id: \.group.id) { entry in
-                        Text(verbatim: Chrome.localized(entry.group.title))
-                            .font(.ui(.subheadline, weight: .semibold))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .padding(.horizontal, Chrome.rowHorizontalPadding)
-                            .padding(.top, 12)
-                            .padding(.bottom, 4)
-                            .accessibilityAddTraits(.isHeader)
-                        ForEach(entry.providers) { provider in
-                            row(provider)
-                        }
-                    }
-                }
+        let sections = [SettingsIconRailSection(id: "all", rows: [allRow])]
+            + groupedProviders.map { entry in
+                SettingsIconRailSection(
+                    id: entry.group.id,
+                    title: Chrome.localized(entry.group.title),
+                    rows: entry.providers.map(row)
+                )
             }
-            .padding(Chrome.listInset)
-            .background {
-                ProviderSelectorProbe { view in
-                    scrollIsolator.scrollProbeView = view
-                }
-            }
-            }
-            .scrollBounceBehavior(.basedOnSize)
-        }
-        // Group titles make the menu taller than the rail; keep it within the rail's height
-        // (which the sticky column positions) and scroll the rest.
-        .frame(width: Self.expandedWidth, height: railHeight)
-        .floatingGlass(shape)
-        .shadow(
-            color: .black.opacity(performanceMode ? 0 : 0.28),
-            radius: performanceMode ? 0 : 10,
-            y: performanceMode ? 0 : 4
+        SettingsIconRail(
+            sections: sections,
+            emptyTitle: providers.isEmpty ? Chrome.localized("No matching providers") : nil
         )
+        .alignmentGuide(.providerCardTop) { $0[.top] }
     }
 
-    private var overlayTransition: AnyTransition {
-        if reduceMotion { return .opacity }
-        return .opacity
-            .combined(with: .scale(scale: 0.97, anchor: .topLeading))
-            .combined(with: .offset(x: -4))
-    }
-
-    private func handleHoverChange() {
-        if isHovering {
-            collapseTask?.cancel()
-            collapseTask = nil
-            if !isExpanded {
-                withAnimation(Chrome.hover) { isExpanded = true }
-            }
-        } else if isExpanded {
-            collapseTask?.cancel()
-            collapseTask = Task { @MainActor in
-                try? await Task.sleep(for: Self.collapseDelay)
-                guard !Task.isCancelled, !isHovering else { return }
-                withAnimation(Chrome.hover) { isExpanded = false }
-            }
+    private func row(_ provider: ProviderKind) -> SettingsIconRailRow {
+        let status = visibleStatus(provider)
+        let dot = status.map {
+            SettingsIconRailRow.StatusDot(color: $0.color, accessibilityLabel: Chrome.localized($0.title))
         }
-    }
-
-    private func row(_ provider: ProviderKind) -> some View {
-        SidebarRow(title: provider.displayName, titleIsVerbatim: true,
-                   isSelected: selected == provider, accessoryWidth: 14,
-                   action: { select(provider) }) {
+        return SettingsIconRailRow(
+            id: provider.id,
+            title: provider.displayName,
+            titleIsVerbatim: true,
+            statusDot: dot,
+            accessoryWidth: 14,
+            isSelected: selected == provider,
+            action: { select(provider) }
+        ) {
             ProviderIcon(provider: provider, size: Chrome.symbolSize)
-        } accessory: { _ in
-            if let status = visibleStatus(provider) {
+        } accessory: {
+            if let status {
                 Circle()
                     .fill(status.color)
                     .frame(width: 6, height: 6)
@@ -1498,188 +1087,6 @@ private struct ProviderListColumn: View {
         case .available, .failed: return .attention
         default: return .ready
         }
-    }
-}
-
-private struct ProviderSelectorProbe: NSViewRepresentable {
-    let onResolve: @MainActor (NSView?) -> Void
-
-    func makeNSView(context: Context) -> ProbeView {
-        ProbeView(onResolve: onResolve)
-    }
-
-    func updateNSView(_ nsView: ProbeView, context: Context) {
-        nsView.onResolve = onResolve
-        nsView.report()
-    }
-
-    final class ProbeView: NSView {
-        var onResolve: @MainActor (NSView?) -> Void
-
-        init(onResolve: @escaping @MainActor (NSView?) -> Void) {
-            self.onResolve = onResolve
-            super.init(frame: .zero)
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { nil }
-
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            report()
-        }
-
-        func report() {
-            onResolve(window == nil ? nil : self)
-        }
-    }
-}
-
-@MainActor
-private final class ProviderSelectorScrollIsolator {
-    weak var railView: NSView?
-    weak var scrollProbeView: NSView?
-    private nonisolated(unsafe) var monitor: Any?
-    private var hasActiveGesture = false
-
-    deinit {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-    }
-
-    func setMonitoring(_ active: Bool) {
-        if active {
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self else { return event }
-                // Local monitors run on the main thread; the event never leaves it.
-                nonisolated(unsafe) let wheel = event
-                let consumed = MainActor.assumeIsolated { self.handleScrollWheel(wheel) == nil }
-                return consumed ? nil : event
-            }
-        } else {
-            hasActiveGesture = false
-            guard let monitor else { return }
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
-        }
-    }
-
-    private func handleScrollWheel(_ event: NSEvent) -> NSEvent? {
-        let overlayScroll = activeScrollView(in: event.window)
-        let activeWindow = railView?.window ?? overlayScroll?.window
-        guard let activeWindow, event.window === activeWindow else { return event }
-        guard isPointInSelector(event.locationInWindow, window: activeWindow, overlayScroll: overlayScroll) else {
-            return event
-        }
-        guard let overlayScroll else {
-            hasActiveGesture = false
-            return nil
-        }
-        if shouldForwardWheel(event, to: overlayScroll) {
-            overlayScroll.scrollWheel(with: event)
-        }
-        return nil
-    }
-
-    private func activeScrollView(in window: NSWindow?) -> NSScrollView? {
-        guard let scroll = scrollProbeView?.enclosingScrollView,
-              !scroll.isHiddenOrHasHiddenAncestor,
-              let scrollWindow = scroll.window,
-              window == nil || scrollWindow === window else { return nil }
-        return scroll
-    }
-
-    private func isPointInSelector(_ point: NSPoint, window: NSWindow, overlayScroll: NSScrollView?) -> Bool {
-        containsWindowPoint(point, in: railView, window: window)
-            || containsWindowPoint(point, in: overlayScroll, window: window)
-    }
-
-    private func containsWindowPoint(_ point: NSPoint, in view: NSView?, window: NSWindow) -> Bool {
-        guard let view, view.window === window, !view.isHiddenOrHasHiddenAncestor, !view.bounds.isEmpty else {
-            return false
-        }
-        return view.bounds.contains(view.convert(point, from: nil))
-    }
-
-    /// Prevent `NSScrollView.scrollWheel(with:)` from forwarding excess scroll up the responder
-    /// chain into the Settings page's outer scroll view when at an edge or unscrollable.
-    private func shouldForwardWheel(_ event: NSEvent, to scrollView: NSScrollView) -> Bool {
-        guard let document = scrollView.documentView else { return false }
-        let clip = scrollView.contentView.bounds
-        let doc = document.bounds
-        guard doc.height > clip.height + 0.5 else {
-            hasActiveGesture = false
-            return false
-        }
-        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
-            let wasActive = hasActiveGesture
-            hasActiveGesture = false
-            return wasActive
-        }
-        let deltaY = event.scrollingDeltaY
-        guard deltaY != 0 else { return false }
-        let flipped = document.isFlipped
-        let atTop = flipped ? (clip.minY <= doc.minY + 0.5) : (clip.maxY >= doc.maxY - 0.5)
-        let atBottom = flipped ? (clip.maxY >= doc.maxY - 0.5) : (clip.minY <= doc.minY + 0.5)
-        if (deltaY > 0 && atTop) || (deltaY < 0 && atBottom) {
-            return false
-        }
-        if !event.phase.isEmpty {
-            hasActiveGesture = true
-        }
-        return true
-    }
-}
-
-private struct ProviderRailButton<Icon: View>: View {
-    let title: String
-    let status: ProviderListStatus?
-    let isSelected: Bool
-    let action: () -> Void
-    @ViewBuilder let icon: () -> Icon
-
-    @State private var isHovering = false
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
-        Button(action: action) {
-            icon()
-                .frame(width: Chrome.iconSize, height: Chrome.iconSize)
-                .frame(width: ProviderListColumn.railButtonSize, height: ProviderListColumn.railButtonSize)
-                .contentShape(shape)
-        }
-        .buttonStyle(.plain)
-        .help(Text(verbatim: title))
-        .accessibilityLabel(Text(verbatim: title))
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-        .background {
-            shape
-                .fill(fill)
-                .animation(Chrome.hover, value: isSelected)
-                .animation(Chrome.hover, value: isHovering)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if let status {
-                Circle()
-                    .fill(status.color)
-                    .frame(width: ProviderListColumn.railStatusDotSize, height: ProviderListColumn.railStatusDotSize)
-                    .padding((ProviderListColumn.railButtonSize - Chrome.iconSize) / 2)
-                    .allowsHitTesting(false)
-                    .accessibilityLabel(Text(verbatim: Chrome.localized(status.title)))
-            }
-        }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-    }
-
-    private var fill: Color {
-        if isSelected { return Chrome.overlay(0.12) }
-        if isHovering { return Chrome.overlay(0.06) }
-        return .clear
     }
 }
 
@@ -1711,10 +1118,7 @@ private struct ProviderSettingsSection: View {
     private var apiKeyDetail: String {
         let settings = model.settings
         if let error = settings.apiKeyStoreErrors[provider] {
-            let template = settings.apiKeyMigrationFailures.contains(provider)
-                ? "This key from an earlier version is still stored unencrypted because the Keychain refused it (%@). Enter it again to retry."
-                : "Couldn't save to your Keychain (%@). The key works until you quit Tivano; enter it again to retry."
-            return String(format: Chrome.localized(template), error)
+            return String(format: Chrome.localized("Couldn't save to your Keychain (%@). The key works until you quit Tivano; enter it again to retry."), error)
         }
         if apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            case .environment(let name) = settings.apiKeySource(for: provider) {
@@ -2032,90 +1436,6 @@ private struct ProviderSettingsSection: View {
     }
 }
 
-private struct SourceControlSettingsPage: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var settings = model.settings
-        GitHubSettingsSection()
-        ChromeSection(title: "Cursor Origin") {
-            ChromeCard { CursorOriginStatusRow() }
-        }
-        ChromeSection(title: "Commit message instructions") {
-            ChromeCard {
-                ZStack(alignment: .topLeading) {
-                    TextEditor(text: $settings.commitInstructions)
-                        .font(.ui(.body))
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 90)
-                    if settings.commitInstructions.isEmpty {
-                        Text("For example: use conventional commit prefixes")
-                            .font(.ui(.body))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .padding(.horizontal, 5)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .padding(12)
-            }
-        }
-        ChromeSection(title: "Worktrees and pull requests") {
-            ChromeCard {
-                ChromeRow(title: "Worktrees", detail: Storage.worktreesDirectory.path) {
-                    Button("Reveal") { Workspace.revealInFinder(Storage.worktreesDirectory.path) }
-                        .buttonStyle(.glass)
-                }
-                ChromeRowDivider()
-                ChromeRow(title: "Pull requests", detail: "Opened with the GitHub CLI (gh), GitLab CLI (glab), Cursor Origin CLI (origin) or Gitea CLI (tea) from your PATH.") {
-                    EmptyView()
-                }
-            }
-        }
-    }
-}
-
-/// Whether the `origin` CLI that opens and merges Cursor Origin pull requests is installed
-/// and signed in, read from `origin auth status`.
-private struct CursorOriginStatusRow: View {
-    private enum Status: Equatable {
-        case checking, missing, signedOut, signedIn(String?)
-    }
-
-    @State private var status = Status.checking
-
-    var body: some View {
-        ChromeRow(title: "Origin CLI", detail: detail) {
-            if status == .signedOut {
-                Button("Copy command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("origin auth login", forType: .string)
-                }
-                .buttonStyle(.glass)
-            }
-        }
-        .task { status = await Self.check() }
-    }
-
-    private var detail: String {
-        switch status {
-        case .checking: Chrome.localized("Checking…")
-        case .missing: Chrome.localized("The origin CLI is not on your PATH.")
-        case .signedOut: Chrome.localized("Not signed in. Run `origin auth login` in Terminal.")
-        case .signedIn(let account?): String(format: Chrome.localized("Signed in as %@"), account)
-        case .signedIn(nil): Chrome.localized("Signed in")
-        }
-    }
-
-    private static func check() async -> Status {
-        guard LoginEnvironment.which("origin") != nil else { return .missing }
-        guard let result = try? await Shell.run(tool: "origin", ["auth", "status"], timeout: 20) else { return .signedOut }
-        let text = TextCleanup.stripANSI(result.output + "\n" + result.errorOutput)
-        guard result.succeeded, text.range(of: "Token:\\s+valid", options: .regularExpression) != nil else { return .signedOut }
-        let account = text.firstMatch(of: /Account:[ \t]*(\S+)/).map { String($0.output.1) }
-        return .signedIn(account)
-    }
-}
-
 /// Which archived chats the storage page shows, kept by the settings scroll so it resets
 /// when the page changes; its search field and Delete all act on the same rows.
 struct ArchiveFilter: Equatable {
@@ -2126,7 +1446,7 @@ struct ArchiveFilter: Equatable {
             switch self {
             case .all: "All chats"
             case .chats: "Chats"
-            case .heads: "Hydra heads"
+            case .heads: "Sub-agents"
             }
         }
     }
@@ -2162,319 +1482,6 @@ struct ArchiveFilter: Equatable {
                 $0.range(of: search, options: [.caseInsensitive, .diacriticInsensitive]) != nil
             }
             return matchesType && matchesProject && matchesSearch
-        }
-    }
-}
-
-private struct AboutSettingsPage: View {
-    @Environment(AppModel.self) private var model
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Brings its own gap below, and only while it shows a card, so an empty one
-            // leaves no hole under the page title; a new release pushes the rest down.
-            AboutSoftwareUpdateSection()
-            VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
-                ChromeSection(title: "Version information") {
-                    appCard
-                }
-                credits
-            }
-        }
-    }
-
-    private var credits: some View {
-        ChromeSection(title: "Credits") {
-            ChromeCard {
-                UpstreamAttributionRow()
-                ChromeRowDivider()
-                CreditDetailRow(
-                    symbol: "waveform", title: "Zeron", meta: "Wing · MIT",
-                    detail: "Working indicators, the voice system and its sounds, and the voice orb integration. The streaming text fade (from mugen-markdown) and the Codex voice protocol (from OpenAI Codex, Apache-2.0) also came through Zeron."
-                )
-                ChromeRowDivider()
-                CreditDetailRow(
-                    symbol: "apple.terminal", title: "SwiftTerm", meta: "Miguel de Icaza · MIT",
-                    detail: "The built-in terminal."
-                )
-                ChromeRowDivider()
-                CreditDetailRow(
-                    symbol: "circle.hexagongrid", title: "Thinking orbs", meta: "Animation engine · MIT",
-                    detail: "The voice orb animations: Bezel → gpui-thinking-orbs → Jakub Antalik's thinking-orbs."
-                )
-                VStack(alignment: .leading, spacing: 12) {
-                    CreditGroup(
-                        title: "Code",
-                        items: "T3 Code (Droppy Code's origin) · mugen-markdown · OpenAI Codex · anti-slop (writing policy)"
-                    )
-                    CreditGroup(
-                        title: "Assets",
-                        items: "GitHub Octicons (Copilot mark) · oh-my-pi (omp mark) · Simple Icons and the Git Logo by Jason Long (service marks)"
-                    )
-                    CreditGroup(title: "References", items: "MonoCode (usage reset flow)")
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, Chrome.contentHorizontalPadding)
-                .padding(.vertical, 11)
-                ChromeRowDivider()
-                LicensesRow()
-            }
-        }
-    }
-
-    private var appCard: some View {
-        @Bindable var settings = model.settings
-        return ChromeCard {
-            HStack(spacing: 14) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .frame(width: 56, height: 56)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Tivano")
-                        .font(.ui(.title3, weight: .semibold))
-                    Text(verbatim: String(format: Chrome.localized("Version %@ (%@)"), AppInfo.version, AppInfo.build))
-                        .font(.ui(.callout))
-                        .foregroundStyle(Chrome.secondaryText)
-                }
-                Spacer()
-            }
-            .padding(16)
-            ChromeRowDivider()
-            AboutUpdateCheckRow()
-            if !AppInfo.isDevelopment {
-                ChromeRowDivider()
-                ChromeRow(title: "Automatically update", detail: "Downloads new versions in the background and installs them while you're away.") {
-                    SettingsSwitch(isOn: $settings.autoUpdateEnabled)
-                }
-            }
-        }
-    }
-}
-
-/// The license, the third-party notices and the trademark policy, as shipped in the bundle,
-/// read in a popover: every copy of the app carries the notices for what it builds on.
-private struct LicensesRow: View {
-    @State private var isPresented = false
-
-    private static let files: [(title: String, resource: String)] = [
-        ("Tivano", "LICENSE"),
-        ("Third-party notices", "THIRD_PARTY_NOTICES"),
-        ("Trademarks", "TRADEMARK"),
-    ]
-
-    var body: some View {
-        ChromeRow(title: "Licenses", detail: "AGPL-3.0 with attribution terms, and the notices for what the app builds on.") {
-            Button("Show") { isPresented = true }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            ForEach(Self.files, id: \.resource) { file in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(verbatim: Chrome.localized(file.title))
-                                        .font(.ui(.body, weight: .semibold))
-                                    MarkdownView(text: Self.text(of: file.resource)).equatable()
-                                        .environment(\.markdownPointSize, TypeScale.shared.content(12))
-                                        .foregroundStyle(Chrome.secondaryText)
-                                        .textSelection(.enabled)
-                                }
-                            }
-                        }
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(width: 480, height: 440)
-                    .presentedChrome()
-                }
-        }
-    }
-
-    /// Read from the bundle once: the popover's body runs on every hover and scroll, and
-    /// the markdown it now renders is parsed from this text each time as it is.
-    private static let texts: [String: String] = Dictionary(uniqueKeysWithValues: files.map { file in
-        let url = Bundle.main.url(forResource: file.resource, withExtension: file.resource == "LICENSE" ? nil : "md")
-        let text = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? String(format: Chrome.localized("The %@ file is missing from this copy of the app."), file.resource)
-        return (file.resource, unwrapped(text))
-    })
-
-    /// The files are hard-wrapped at 70–120 columns and the markdown view breaks at every
-    /// newline, so each source line became its own paragraph. Lines of one paragraph are
-    /// joined; blank lines, headings, list items, rules and indented lines keep their breaks.
-    private static func unwrapped(_ text: String) -> String {
-        func standsAlone(_ line: Substring) -> Bool {
-            let trimmed = line.drop(while: { $0 == " " })
-            if trimmed.isEmpty || line.hasPrefix("  ") || line.hasPrefix("\t") { return true }
-            if trimmed.hasPrefix("#") || trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("|") || trimmed.hasPrefix("```") || trimmed.hasPrefix("Copyright") { return true }
-            if trimmed.allSatisfy({ $0 == "-" || $0 == "=" || $0 == "_" }) { return true }
-            if let dot = trimmed.firstIndex(of: "."), dot > trimmed.startIndex, trimmed[..<dot].allSatisfy(\.isNumber) { return true }
-            return false
-        }
-        func closes(_ line: Substring) -> Bool {
-            let trimmed = line.drop(while: { $0 == " " })
-            return trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("|") || trimmed.hasPrefix("```")
-                || trimmed.allSatisfy({ $0 == "-" || $0 == "=" || $0 == "_" })
-        }
-        var out: [String] = []
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            // An indented or list line opens a paragraph; the lines wrapped under it still join it.
-            if let last = out.last, !standsAlone(line), !closes(Substring(last)) {
-                out[out.count - 1] = last + " " + line
-            } else {
-                out.append(String(line))
-            }
-        }
-        return out.joined(separator: "\n")
-    }
-
-    private static func text(of resource: String) -> String {
-        texts[resource] ?? String(format: Chrome.localized("The %@ file is missing from this copy of the app."), resource)
-    }
-}
-
-/// The upstream project, named with its address: the license keeps the credit for Droppy Code
-/// with its author, so the fork's About page carries it.
-private struct UpstreamAttributionRow: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Where Tivano began")
-                .font(.ui(.caption))
-                .foregroundStyle(Chrome.secondaryText)
-            Text(verbatim: "Droppy Code")
-                .font(.ui(.title2, weight: .semibold))
-                .foregroundStyle(Chrome.primaryText)
-            Text(verbatim: "Droppy Code by Jordy Spruit (Droppy), https://getdroppycode.app")
-                .font(.ui(.subheadline))
-                .foregroundStyle(Chrome.secondaryText)
-            Text("Tivano is a fork of Droppy Code, under AGPL-3.0 with attribution terms.")
-                .font(.ui(.subheadline))
-                .foregroundStyle(Chrome.secondaryText)
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Chrome.contentHorizontalPadding)
-        .padding(.vertical, 14)
-    }
-}
-
-/// A captioned run of smaller credits under the major rows.
-private struct CreditGroup: View {
-    let title: String
-    let items: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(verbatim: Chrome.localized(title))
-                .font(.ui(.caption))
-            Text(verbatim: Chrome.localized(items))
-                .font(.ui(.subheadline))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundStyle(Chrome.secondaryText)
-    }
-}
-
-private struct CreditDetailRow: View {
-    let symbol: String
-    let title: String
-    let meta: String
-    let detail: String
-
-    var body: some View {
-        // The glyph sits on the title's baseline: top alignment rode it above the text.
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Image(systemName: symbol)
-                .font(.ui(.body))
-                .foregroundStyle(Chrome.secondaryText)
-                .frame(width: 24)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                (Text(verbatim: Chrome.localized(title))
-                    .font(.ui(.body, weight: .semibold))
-                    .foregroundColor(Chrome.primaryText)
-                 + Text(verbatim: "  " + Chrome.localized(meta))
-                    .font(.ui(.subheadline))
-                    .foregroundColor(Chrome.secondaryText))
-                Text(verbatim: Chrome.localized(detail))
-                    .font(.ui(.subheadline))
-                    .foregroundStyle(Chrome.secondaryText)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, Chrome.contentHorizontalPadding)
-        .padding(.vertical, 11)
-    }
-}
-
-/// The theme menu: Breeze (Tivano's own) and System on top, then the dark and the
-/// light themes in their own sections, each with a swatch of its surface and accent.
-/// Breeze Dark and Breeze Light lead their sections.
-private struct ThemePickerButton: View {
-    @Binding var selection: AppTheme
-
-    @State private var isPresented = false
-    @State private var isHovering = false
-
-    private static let dark = AppTheme.allCases.filter { $0.scheme == .dark }
-    private static let light = AppTheme.allCases.filter { $0.scheme == .light }
-
-    var body: some View {
-        Button {
-            isPresented.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                selection.swatch
-                    .frame(width: 14, height: 14)
-                Text(verbatim: selection.displayName)
-                    .font(.ui(size: 12.5, weight: .medium))
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Chrome.secondaryText)
-            }
-            .foregroundStyle(Chrome.primaryText.opacity(isHovering || isPresented ? 1 : 0.92))
-            .padding(.horizontal, Chrome.capsuleHorizontalPadding)
-            .frame(height: Chrome.capsuleContentHeight)
-            .contentShape(Capsule(style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-        .chromeGlassCapsule()
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            PopoverMenu {
-                item(.breeze)
-                item(.system)
-                PopoverSectionHeader("Dark")
-                ForEach(Self.dark) { item($0) }
-                PopoverSectionHeader("Light")
-                ForEach(Self.light) { item($0) }
-            }
-        }
-    }
-
-    private func item(_ theme: AppTheme) -> some View {
-        PopoverItem(theme.displayName, leading: AnyView(theme.swatch), isChecked: theme == selection, localizesTitle: false) {
-            selection = theme
-        }
-    }
-}
-
-private struct VoiceStyleRow: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var settings = model.settings
-        var options = model.voice.voices
-        if let saved = settings.codexVoice, !options.contains(saved) { options.append(saved) }
-        return ChromeRow(title: "Codex voice style", detail: "Applies to your next voice session") {
-            GlassPickerButton(
-                options: [(String?.none, "Codex default")] + options.map { (String?.some($0), VoiceCatalog.label($0)) },
-                selection: $settings.codexVoice
-            )
-            .accessibilityLabel(Text("Codex voice style"))
         }
     }
 }

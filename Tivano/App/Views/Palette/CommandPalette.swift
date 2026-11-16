@@ -203,7 +203,7 @@ struct CommandPalette: View {
                 }
             }, at: 1)
         }
-        if !(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented),
+        if !SettingsNavigation.shared.isPresented,
            let threadID = model.selectedThreadID {
             let runtime = model.runtime(for: threadID)
             actions.append(Item(id: "terminal", title: Chrome.localized("Toggle terminal"), symbol: "terminal", shortcut: ShortcutStore.label(for: .toggleTerminal)) {
@@ -260,15 +260,24 @@ struct CommandPalette: View {
 }
 
 private struct PaletteSurface: ViewModifier {
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
-        if !performanceMode {
-            content.glassEffect(.regular, in: .rect(cornerRadius: 24, style: .continuous))
-        } else {
-            content
-                .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color(nsColor: .windowBackgroundColor)))
-                .clipShape(.rect(cornerRadius: 24, style: .continuous))
-        }
+        let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+        content
+            .background {
+                if let solid {
+                    shape
+                        .fill(solid.elevated)
+                        .shadow(color: .black.opacity(0.1), radius: 18, y: 6)
+                }
+            }
+            .clipShape(SwitchableClip(shape: shape, isOn: solid != nil))
+            .glassEffect(solid == nil ? .regular : .identity, in: shape)
+            .overlay {
+                if let solid {
+                    shape.strokeBorder(solid.hairline, lineWidth: 1)
+                }
+            }
     }
 }

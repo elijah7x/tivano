@@ -81,7 +81,7 @@ swift += r'''
         snapshot.capture(in: areaA, owner: ownerA)
         check(snapshot.text == fragment, "second paragraph uses UTF-16 selection")
         let runtime = ThreadRuntime()
-        let actions = MenuHarness.messageActions(text: full, code: nil, runtime: runtime, selection: snapshot)
+        let actions = MenuHarness.messageActions(text: full, runtime: runtime, selection: snapshot)
         let add = actions.first { $0.title == "Add to reply" }!
         native.string = "message replaced while menu is open"
         native.setSelectedRange(NSRange(location: 0, length: 0))
@@ -95,7 +95,7 @@ swift += r'''
         native.setSelectedRange((full as NSString).range(of: other))
         let second = SelectionCopy()
         second.capture(in: areaA, owner: ownerA)
-        MenuHarness.messageActions(text: full, code: nil, runtime: runtime, selection: second).last!.action()
+        MenuHarness.messageActions(text: full, runtime: runtime, selection: second).last!.action()
         check(runtime.draft.quotes.map(\.text) == [fragment, other], "different fragment of same message is retained")
         runtime.draft.text = "请解释"
         check(runtime.draft.outgoingText == "> \(fragment)\n\n> \(other)\n\n请解释", "outgoing payload contains only quoted selections")
@@ -103,7 +103,7 @@ swift += r'''
         let empty = SelectionCopy()
         empty.capture(in: areaA, owner: ownerA)
         let fallback = ThreadRuntime()
-        MenuHarness.messageActions(text: full, code: nil, runtime: fallback, selection: empty).last!.action()
+        MenuHarness.messageActions(text: full, runtime: fallback, selection: empty).last!.action()
         check(fallback.draft.quotes.map(\.text) == [full], "no selection quotes full message")
         native.setSelectedRange((full as NSString).range(of: fragment))
         let wrongOwner = SelectionCopy()
@@ -124,7 +124,7 @@ swift += r'''
         do {
             let transient = ThreadRuntime()
             weakRuntime = transient
-            retainedAction = MenuHarness.messageActions(text: full, code: nil, runtime: transient, selection: all).last
+            retainedAction = MenuHarness.messageActions(text: full, runtime: transient, selection: all).last
         }
         check(weakRuntime == nil, "menu callback does not retain runtime")
         retainedAction?.action()
@@ -155,7 +155,7 @@ swift += r'''
         swiftUI.capture(in: areaB, owner: ownerB)
         check(swiftUI.text == fragment, "real SwiftUI partial selection is captured")
         let swiftRuntime = ThreadRuntime()
-        let swiftAction = MenuHarness.messageActions(text: "第一段\n\n" + selectedText, code: nil,
+        let swiftAction = MenuHarness.messageActions(text: "第一段\n\n" + selectedText,
                                                     runtime: swiftRuntime, selection: swiftUI).last!
         textB.setAccessibilitySelectedTextRange(NSRange(location: 0, length: 0))
         swiftAction.action()

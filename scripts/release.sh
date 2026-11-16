@@ -96,8 +96,9 @@ if [ "$PREFLIGHT_ONLY" = 1 ]; then
 fi
 
 step "Generating the Xcode project"
-xcodegen generate --quiet
-# XcodeGen orders the two top-level "Tivano" groups (the app's synced folder and the CLI's
+python3 scripts/xcodegen_generate.py
+# xcodegen_generate.py restores options.knownRegions from project.yml; XcodeGen still
+# orders the two top-level "Tivano" groups (the app's synced folder and the CLI's
 # shared sources) at random. When that order is the only difference, keep the committed
 # project so the release builds dev's exact tree and leaves the worktree clean for ship.sh.
 PROJECT_FILE=Tivano.xcodeproj/project.pbxproj

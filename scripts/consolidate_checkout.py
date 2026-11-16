@@ -136,7 +136,8 @@ def refs(root):
 
 def data_roots(home):
     support = home / "Library/Application Support"
-    return [support / "Tivano", support / "Tivano Dev", home / ".tivano", home / ".tivano-dev"]
+    return [support / "Tivano", support / "Tivano Dev", support / "Tivano Preview",
+            home / ".tivano", home / ".tivano-dev", home / ".tivano-preview"]
 
 
 def topology(source, destination, state, home):
@@ -251,8 +252,8 @@ def processes(roots):
             continue
         pid, executable = int(fields[0]), fields[1]
         name = Path(executable).name
-        if name in ("Tivano", "Tivano Dev", "Droppy Code", "Droppy Code Dev", "Cody") or any(
-                f"/{app}.app/" in executable for app in ("Tivano", "Tivano Dev", "Droppy Code", "Droppy Code Dev", "Cody")):
+        if name in ("Tivano", "Tivano Dev", "Tivano Preview", "Droppy Code", "Droppy Code Dev", "Cody") or any(
+                f"/{app}.app/" in executable for app in ("Tivano", "Tivano Dev", "Tivano Preview", "Droppy Code", "Droppy Code Dev", "Cody")):
             active.add((pid, "application"))
     result = subprocess.run(["/usr/sbin/lsof", "-nP", "-F", "pftn"], cwd="/", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     require(result.returncode == 0 and not result.stderr.strip(), "Cannot prove process quiescence with lsof")
@@ -275,7 +276,8 @@ def processes(roots):
 def lock_paths(plan):
     support = Path(plan["home"]) / "Library/Application Support"
     paths = [support / name for name in (".tivano-library.lock", ".tivano-migration.lock",
-                                         ".tivano-release-library.lock", ".tivano-dev-library.lock")]
+                                         ".tivano-release-library.lock", ".tivano-dev-library.lock",
+                                         ".tivano-preview-library.lock")]
     for common in (plan["git_common_dir"], str(Path(plan["destination"]) / ".git")):
         digest = hashlib.sha256(common.encode()).hexdigest()
         paths.append(support / ".tivano-resource-locks" / (digest + ".lock"))
@@ -415,7 +417,7 @@ def restore_worktree_metadata(root, expected, *, create_directories=False, resto
 
 def library_paths(plan):
     support = Path(plan["home"]) / "Library/Application Support"
-    return [support / edition / "library.json" for edition in ("Tivano", "Tivano Dev")]
+    return [support / edition / "library.json" for edition in ("Tivano", "Tivano Dev", "Tivano Preview")]
 
 
 def mapped(value, plan):

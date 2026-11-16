@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 EDITION=${1:-release}
-case "$EDITION" in dev|release) ;; *) echo 'Usage: version.sh [dev|release] [display|full]' >&2; exit 1 ;; esac
+case "$EDITION" in dev|release|preview) ;; *) echo 'Usage: version.sh [dev|release|preview] [display|full]' >&2; exit 1 ;; esac
 VERSION=$(awk -F= '/^MARKETING_VERSION[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2}' "$ROOT/config/$EDITION.xcconfig")
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid numeric version' >&2; exit 1; }
 FULL=$(awk -F= '/^TIVANO_RELEASE_VERSION[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2}' "$ROOT/config/$EDITION.xcconfig")
@@ -14,4 +14,12 @@ else
   FULL="$VERSION"
 fi
 if [ "${2:-}" = full ]; then printf '%s\n' "$FULL"; exit 0; fi
-if [ "${2:-}" = display ] && [ "$EDITION" = dev ]; then printf 'dev-%s\n' "$VERSION"; else printf '%s\n' "$VERSION"; fi
+if [ "${2:-}" = display ]; then
+  case "$EDITION" in
+    dev) printf 'dev-%s\n' "$VERSION" ;;
+    preview) printf '%s\n' "$FULL" ;;
+    release) printf '%s\n' "$VERSION" ;;
+  esac
+else
+  printf '%s\n' "$VERSION"
+fi

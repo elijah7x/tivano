@@ -11,13 +11,6 @@ extension HydraPrompts {
         var isComplete = false
     }
 
-    /// The delegation block of a reply as far as it has streamed: nil until its opening
-    /// fence is there. See `streamedDelegations(inBody:)`.
-    static func streamedDelegations(in text: String) -> StreamedDelegations? {
-        guard let opener = text.firstMatch(of: #/```[ \t]*hydra(?:-sent)?[ \t]*\r?\n/#.ignoresCase())?.range else { return nil }
-        return streamedDelegations(inBody: text[opener.upperBound...])
-    }
-
     /// The entries closed so far in a block body (what follows the opening fence), read
     /// without waiting for the JSON to be whole. The walk is over bytes: JSON's structure
     /// is ASCII, and a multi-byte character never holds an ASCII byte, so strings (with
@@ -125,110 +118,5 @@ extension HydraPrompts {
 
     fileprivate static func isJSONWhitespace(_ byte: UInt8) -> Bool {
         byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r") || byte == UInt8(ascii: "\t")
-    }
-}
-
-/// Reads only newly appended UTF-8 bytes. Completed/replaced messages get a fresh
-/// parser; the runtime's sent watermark prevents already dispatched entries repeating.
-final class HydraDelegationStreamParser {
-    let turnID: UUID
-    let entryID: String
-    private(set) var delegations: [HydraDelegation] = []
-    private(set) var isComplete = false
-    private var opener = 0
-    private var inBody = false
-    private var shapeKnown = false
-    private var isArray = false
-    private var depth = 0
-    private var inString = false
-    private var escaped = false
-    private var atLineStart = true
-    private var entry: [UInt8] = []
-
-    init(turnID: UUID, entryID: String) {
-        self.turnID = turnID
-        self.entryID = entryID
-    }
-
-    func ingest(_ text: String) {
-        guard !isComplete else { return }
-        for byte in text.utf8 {
-            if inBody { readBody(byte) } else { readOpener(byte) }
-            if isComplete { break }
-        }
-    }
-
-    private func readOpener(_ byte: UInt8) {
-        let lower = byte >= 65 && byte <= 90 ? byte + 32 : byte
-        switch opener {
-        case 0...2:
-            opener = byte == 96 ? opener + 1 : 0
-        case 3:
-            if byte == 32 || byte == 9 || byte == 96 { return }
-            if lower == 104 { opener = 4; return }
-            if lower == 99, HydraPrompts.acceptsChimeraFence { opener = 20; return }
-            opener = 0
-        case 20...25:
-            let expected: [UInt8] = [104, 105, 109, 101, 114, 97]
-            opener = lower == expected[opener - 20] ? (opener == 25 ? 8 : opener + 1) : (byte == 96 ? 1 : 0)
-        case 4...7:
-            let expected: UInt8 = switch opener { case 4: 121; case 5: 100; case 6: 114; default: 97 }
-            opener = lower == expected ? opener + 1 : (byte == 96 ? 1 : 0)
-        case 8:
-            if byte == 45 { opener = 9 } else { readOpenerEnd(byte) }
-        case 9...12:
-            let expected: UInt8 = switch opener { case 9: 115; case 10: 101; case 11: 110; default: 116 }
-            opener = lower == expected ? opener + 1 : (byte == 96 ? 1 : 0)
-        case 13, 14:
-            readOpenerEnd(byte)
-        case 15:
-            if byte == 10 { inBody = true } else { opener = byte == 96 ? 1 : 0 }
-        default: break
-        }
-    }
-
-    private func readOpenerEnd(_ byte: UInt8) {
-        switch byte {
-        case 32, 9: opener = 14
-        case 13: opener = 15
-        case 10: inBody = true
-        default: opener = byte == 96 ? 1 : 0
-        }
-    }
-
-    private func readBody(_ byte: UInt8) {
-        if !shapeKnown {
-            if byte == 32 || byte == 9 || byte == 13 || byte == 10 { return }
-            shapeKnown = true
-            isArray = byte == 91
-            if isArray { return }
-        }
-        if depth > 0 { entry.append(byte) }
-        if inString {
-            if escaped { escaped = false }
-            else if byte == 92 { escaped = true }
-            else if byte == 34 { inString = false }
-        } else {
-            switch byte {
-            case 34: inString = true
-            case 123:
-                if depth == 0 { entry = [byte] }
-                depth += 1
-            case 125:
-                depth -= 1
-                if depth == 0 {
-                    if let json = JSONValue.parse(String(decoding: entry, as: UTF8.self)),
-                       let delegation = HydraPrompts.delegation(fromEntry: json) {
-                        delegations.append(delegation)
-                    }
-                    entry.removeAll(keepingCapacity: true)
-                    if !isArray { isComplete = true }
-                } else if depth < 0 { isComplete = true }
-            case 93 where depth == 0: isComplete = true
-            case 96 where depth == 0 && atLineStart: isComplete = true
-            default: break
-            }
-        }
-        atLineStart = byte == 10
     }
 }

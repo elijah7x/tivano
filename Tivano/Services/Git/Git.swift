@@ -45,7 +45,7 @@ enum GitLane: Hashable, Sendable {
 
 private actor GitAdmission {
     static let shared = GitAdmission()
-    private var available: [GitLane: Int] = [.read: 6, .checkpoint: 2, .long: 2]
+    private var available: [GitLane: Int] = [.read: 12, .checkpoint: 3, .long: 2]
     private struct Waiter {
         let id: UUID
         let continuation: CheckedContinuation<Void, Error>
@@ -745,28 +745,6 @@ struct Git: Sendable {
         return false
     }
 
-    /// Moves the current branch to `commit`; index and working tree stay as they are.
-    func resetSoft(to commit: String) async throws {
-        try Self.check(await run(["reset", "--soft", "--quiet", commit]))
-    }
-
-    /// The index takes HEAD's version of `paths`; the working tree stays as it is.
-    func resetIndex(paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        try Self.check(await run(["--literal-pathspecs", "reset", "--quiet", "--pathspec-from-file=-", "--pathspec-file-nul"], input: Self.nulSeparated(paths)))
-    }
-
-    /// Index and working tree take `ref`'s version of `paths`.
-    func checkoutPaths(from ref: String, _ paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        try Self.check(await run(["--literal-pathspecs", "checkout", "--quiet", ref, "--"] + paths))
-    }
-
-    func removePaths(_ paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        try Self.check(await run(["--literal-pathspecs", "rm", "--quiet", "--"] + paths))
-    }
-
     func pullFastForward() async throws {
         try Self.check(await run(["pull", "--ff-only", "--quiet"], timeout: 300))
     }
@@ -854,8 +832,9 @@ struct Git: Sendable {
     /// branch. A tree already checkpointed since anything changed reuses its commit, so a
     /// turn starting on an untouched tree costs the `update-ref` alone.
     func captureCheckpoint(_ ref: String) async throws {
-        let tree = try await currentTree()
-        let watch = await watch()
+        let indexPath = await indexPath()
+        let watch = indexPath.flatMap { watch(indexPath: $0) }
+        let tree = try await currentTree(indexPath: indexPath, watch: watch)
         let commit: String
         if let known = watch?.commit(of: tree) {
             commit = known
@@ -871,10 +850,16 @@ struct Git: Sendable {
     /// The working tree as a tree object, from the directory's watch when it can vouch
     /// that nothing changed since the last capture, else captured now.
     func currentTree() async throws -> String {
-        guard let indexPath = await indexPath(), let watch = await watch() else { return try await captureTree() }
+        let indexPath = await indexPath()
+        let watch = indexPath.flatMap { watch(indexPath: $0) }
+        return try await currentTree(indexPath: indexPath, watch: watch)
+    }
+
+    private func currentTree(indexPath: String?, watch: WorkingTreeWatch?) async throws -> String {
+        guard let indexPath, let watch else { return try await captureTree() }
         return try await watch.currentTree(indexPath: indexPath) { scratch, paths in
             guard let scratch else { return try await captureTree() }
-            return try await captureTree(scratch: scratch, paths: paths)
+            return try await captureTree(scratch: scratch, paths: paths, indexPath: indexPath)
         }
     }
 
@@ -882,7 +867,7 @@ struct Git: Sendable {
     /// directories the watch saw change since the last capture, only they are walked and
     /// the rest of the index stands. A walk that fails, as when a path vanished with
     /// nothing of it in the index, is redone whole.
-    private func captureTree(scratch: URL, paths: [String]?) async throws -> String {
+    private func captureTree(scratch: URL, paths: [String]?, indexPath: String) async throws -> String {
         let environment = ["GIT_INDEX_FILE": scratch.path]
         if let paths, !paths.isEmpty, FileManager.default.fileExists(atPath: scratch.path),
            (try? await run(["--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(paths), timeout: 300, lane: .checkpoint))?.succeeded == true {
@@ -891,7 +876,7 @@ struct Git: Sendable {
             return tree.trimmedOutput
         }
         try? FileManager.default.removeItem(at: scratch)
-        if let indexPath = await indexPath(), FileManager.default.fileExists(atPath: indexPath) {
+        if FileManager.default.fileExists(atPath: indexPath) {
             try? FileManager.default.copyItem(atPath: indexPath, toPath: scratch.path)
         } else if await hasCommits() {
             try Self.check(await run(["read-tree", "HEAD"], environment: environment, lane: .checkpoint))
@@ -902,9 +887,8 @@ struct Git: Sendable {
         return tree.trimmedOutput
     }
 
-    private func watch() async -> WorkingTreeWatch? {
-        guard let indexPath = await indexPath() else { return nil }
-        return WorkingTreeWatch.shared(for: directory.path, gitDirectory: (indexPath as NSString).deletingLastPathComponent)
+    private func watch(indexPath: String) -> WorkingTreeWatch? {
+        WorkingTreeWatch.shared(for: directory.path, gitDirectory: (indexPath as NSString).deletingLastPathComponent)
     }
 
     /// The working tree as a tree object: a cheap before/after marker for a

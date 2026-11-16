@@ -62,6 +62,8 @@ enum MCPWire {
 
     // MARK: - Streamable HTTP
 
+    nonisolated private static let httpSession = URLSession(configuration: .ephemeral)
+
     nonisolated static func post(
         to url: URL,
         headers: [String: String],
@@ -79,25 +81,17 @@ enum MCPWire {
         request.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
         if let sessionID { request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
 
-        // A dedicated session gives cancellation ownership even before headers arrive.
         let postRequest = request
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.invalidateAndCancel() }
-        return try await withTaskCancellationHandler {
-            try await withThrowingTaskGroup(of: MCPHTTPReply.self) { group in
-                group.addTask { try await readPost(postRequest, session: session, id: id) }
-                group.addTask {
-                    try await Task.sleep(for: .seconds(timeout))
-                    session.invalidateAndCancel()
-                    throw MCPWireError.timedOut
-                }
-                defer { group.cancelAll() }
-                guard let reply = try await group.next() else { throw CancellationError() }
-                try Task.checkCancellation()
-                return reply
+        return try await withThrowingTaskGroup(of: MCPHTTPReply.self) { group in
+            group.addTask { try await readPost(postRequest, session: httpSession, id: id) }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                throw MCPWireError.timedOut
             }
-        } onCancel: {
-            session.invalidateAndCancel()
+            defer { group.cancelAll() }
+            guard let reply = try await group.next() else { throw CancellationError() }
+            try Task.checkCancellation()
+            return reply
         }
     }
 

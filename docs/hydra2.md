@@ -1,6 +1,6 @@
 # Hydra 2.0 设计
 
-状态：2.2.0 起正式提供，是唯一的 Hydra 流程。v1 已在 2.2.0 移除，代码保留在 Git 历史中。本文描述当前设计；依据包括 `docs/research/hydra2-code-map-2026-10-26.md`、`docs/research/hydra2-audit/docs-data.md` 和 Hydra 1 基线（`scripts/hydra_eval.py baseline`，输出在仓库外 `private-artifacts/hydra-eval/2026-10-26-hydra1-baseline/`）。
+状态：2.2.0 起正式提供，是唯一的 Hydra 流程。v1 已在 2.2.0 移除，代码保留在 Git 历史中。本文描述当前设计；依据包括 `docs/research/hydra2-code-map-2026-10-26.md`、`docs/research/hydra2-audit/docs-data.md` 和 Hydra 1 基线（`scripts/hydra_eval.py baseline`，输出在仓库外 `private-artifacts/hydra-eval/2026-10-26-hydra1-baseline/`；`scripts/hydra_eval.py` 等评测脚本已于 2026-11-15 归档到仓库外 `private-artifacts/retired-probes-20261115/`）。
 
 ## 目标与边界
 

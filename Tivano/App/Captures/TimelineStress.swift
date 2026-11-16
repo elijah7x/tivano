@@ -121,6 +121,60 @@ enum TimelineStress {
         exit(missingStills.isEmpty ? 0 : 1)
     }
 
+    static func runHistoryFlick(model: AppModel) async {
+        guard CaptureRun.isEnabled, let output = CaptureRun.outputDirectory else { return }
+        phases.removeAll()
+        missingStills.removeAll()
+        await model.bootstrap()
+        guard model.isLibraryLoaded, !model.threads.isEmpty else {
+            WebsiteCaptures.log("stress library failed to load")
+            exit(1)
+        }
+        deadline = Date.now.addingTimeInterval(budgetSeconds)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(budgetSeconds))
+            WebsiteCaptures.log("stress out of time, quitting")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        model.settings.hasSeenHydraIntro = true
+        model.settings.hydraEnabled = false
+        WebsiteCaptures.log("history-flick start \(output.path)")
+
+        let stage = Stage(model: model)
+        stage.show(size: NSSize(width: 1320, height: 860))
+        await stage.ensureActive()
+        guard let window = appWindow(), NSApp.isActive, window.isKeyWindow else {
+            note("blocked", "foreground desktop unavailable; unlock the host before running")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        guard let content = try? await SCShareableContent.currentProcess, !content.displays.isEmpty else {
+            note("blocked", "no capturable display for this process")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        if model.sidebar.isVisible { model.sidebar.toggle() }
+        // Keep the target thread unmounted while seeding so opening it starts on the
+        // initial tail window (12 blocks, 48 hidden) rather than the live-append path.
+        model.selectedThreadID = nil
+        try? await Task.sleep(for: .milliseconds(300))
+        let recorder = Recorder(output: output, stage: stage)
+
+        let outcome = await historyFlick(model, recorder, stage)
+        switch outcome {
+        case .blockedOrOutOfTime:
+            note("done", "quitting (blocked/out-of-time)")
+            saveReport(listFiles: true)
+            exit(2)
+        case .passed, .failed:
+            let passed = outcome == .passed && missingStills.isEmpty
+            note("done", "quitting (\(passed ? "PASS" : "FAIL"))")
+            saveReport(listFiles: true)
+            exit(passed ? 0 : 1)
+        }
+    }
+
     static func runHeldDrag(model: AppModel) async {
         guard CaptureRun.isEnabled, let output = CaptureRun.outputDirectory else { return }
         phases.removeAll()
@@ -373,6 +427,546 @@ enum TimelineStress {
             "wheelMode": wheelMode,
         ])
         saveReport(listFiles: false)
+    }
+
+    private enum HistoryFlickOutcome: Equatable {
+        case passed
+        case failed
+        case blockedOrOutOfTime
+    }
+
+    private struct HistoryFlickRect: Codable {
+        let x: Double
+        let y: Double
+        let width: Double
+        let height: Double
+    }
+
+    private struct HistoryFlickReady: Codable {
+        let pid: Int32
+        let windowNumber: Int
+        let point: HeldDragPoint
+        let windowFrame: HistoryFlickRect
+        let upSign: Int32
+        let viewport: Double
+        let flicks: Int
+        let readyAt: Double
+        let readyAtWallClock: Double
+    }
+
+    private struct HistoryFlickObservedEvent: Encodable {
+        let time: Double
+        let phase: UInt
+        let momentumPhase: UInt
+        let scrollingDeltaY: Double
+        let windowNumber: Int
+    }
+
+    private struct HistoryFlickFrameJump: Encodable {
+        let time: Double
+        let size: Double
+        let deltaP: Double
+        let observedDelta: Double
+    }
+
+    private struct HistoryFlickSample: Encodable {
+        let index: Int
+        let injected: Double
+        let observed: Double
+        let discrepancy: Double
+        let clamped: Bool
+        let docHeightStart: Double
+        let docHeightEnd: Double
+        let historyPageLoaded: Bool
+        let frameJumps: [HistoryFlickFrameJump]
+    }
+
+    private struct HistoryFlickSamplesReport: Encodable {
+        let verdict: String
+        let delivery: String
+        let upSign: Int32
+        let viewport: Double
+        let observedEventsCount: Int
+        let flicksCount: Int
+        let unclampedFlicksCount: Int
+        let pageLoads: Int
+        let maxAbsDiscrepancy: Double
+        let flicksOver24pt: Int
+        let frameJumpsCount: Int
+        let flicks: [HistoryFlickSample]
+        let observedEvents: [HistoryFlickObservedEvent]
+    }
+
+    private struct FlickScrollSnapshot {
+        let p: Double
+        let docHeight: Double
+        let clipMinY: Double
+        let topInset: Double
+
+        var isClampedAtTop: Bool {
+            clipMinY <= -topInset + 1.0
+        }
+    }
+
+    private struct TimedFlickSnapshot {
+        let monoTime: CFTimeInterval
+        let snapshot: FlickScrollSnapshot
+    }
+
+    @MainActor
+    private final class HistoryFlickObservedBuffer {
+        struct RawEvent {
+            let monoTime: CFTimeInterval
+            let phase: NSEvent.Phase
+            let momentumPhase: NSEvent.Phase
+            let scrollingDeltaY: Double
+            let windowNumber: Int
+            let preBeganSnapshot: FlickScrollSnapshot?
+        }
+
+        var initialSnapshot: FlickScrollSnapshot?
+        var initialSnapshotMonoTime: CFTimeInterval?
+        var events: [RawEvent] = []
+    }
+
+    private static let historyFlickCount = 60
+
+    private static func historyFlick(_ model: AppModel, _ recorder: Recorder, _ stage: Stage) async -> HistoryFlickOutcome {
+        guard let output = CaptureRun.outputDirectory else { return .failed }
+        let seeded = await seedHistory(
+            model,
+            threadID: shortThreadID,
+            count: 60,
+            noteName: "flick-seed",
+            minSecondsLeft: 50
+        )
+        guard seeded > 0, secondsLeft() > 40 else {
+            note("flick-open", "skipped after seeding \(seeded) turns, \(Int(secondsLeft()))s left")
+            return .blockedOrOutOfTime
+        }
+
+        guard let opened = await openAndSettleHistory(
+            model,
+            threadID: shortThreadID,
+            recorder: recorder,
+            stage: stage,
+            shotName: "flick-bottom",
+            noteName: "flick-open",
+            turnsSeeded: seeded,
+            minSecondsLeft: 38
+        ) else {
+            return secondsLeft() <= 38 ? .blockedOrOutOfTime : .failed
+        }
+        let window = opened.window
+        let scroll = opened.scroll
+
+        // External HID uses the AppKit convention (same as held-drag): positive scrollingDeltaY moves toward the top.
+        let upSign: Int32 = 1
+        var resetSteps = 0
+        while let gap = bottomGap(scroll), gap > 4, resetSteps < 8, secondsLeft() > 35 {
+            await burst(-upSign * 160, times: 3, window: window, scroll: scroll, direct: true)
+            resetSteps += 1
+        }
+        if resetSteps > 0 {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let startGap = bottomGap(scroll), startGap <= 8 else {
+            note("flick-pinned", "not at bottom before ready (gap=\(bottomGap(scroll).map(String.init) ?? "nil"))")
+            return .failed
+        }
+        note("flick-pinned", "pinned at end gap=\(startGap) delivery=hid upSign=\(upSign)")
+
+        let baselineViewport = Double(max(240, unobstructedViewportRect(in: scroll).height))
+
+        let flickStop = RecordingStop()
+        let flickMaxSeconds = max(15.0, secondsLeft() - 16)
+        let flickRecording = Task { await recordWindow("history-flick", seconds: flickMaxSeconds, stop: flickStop) }
+        let startWait = Date.now.addingTimeInterval(1.5)
+        while !flickStop.started, Date.now < startWait {
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+
+        await shoot(recorder, stage, "flick-start")
+
+        let buffer = HistoryFlickObservedBuffer()
+        var monitor: Any? = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            guard event.window === window else { return event }
+            let now = CACurrentMediaTime()
+            let liveScroll = timelineScroll(in: window) ?? scroll
+            if buffer.initialSnapshot == nil, let snap = readScrollSnapshot(liveScroll) {
+                buffer.initialSnapshot = snap
+                buffer.initialSnapshotMonoTime = now - 0.000_001
+            }
+            let preBegan = event.phase.contains(.began) ? readScrollSnapshot(liveScroll) : nil
+            let lineScroll = liveScroll.verticalLineScroll
+            let preciseDelta = Double(
+                event.hasPreciseScrollingDeltas
+                    ? event.scrollingDeltaY
+                    : event.scrollingDeltaY * lineScroll
+            )
+            buffer.events.append(HistoryFlickObservedBuffer.RawEvent(
+                monoTime: now,
+                phase: event.phase,
+                momentumPhase: event.momentumPhase,
+                scrollingDeltaY: preciseDelta,
+                windowNumber: event.window?.windowNumber ?? event.windowNumber,
+                preBeganSnapshot: preBegan
+            ))
+            return event
+        }
+        defer {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        var latestPreEventSnap = readScrollSnapshot(scroll)
+        var latestPreEventMono = CACurrentMediaTime()
+
+        let point = timelineCGPoint(window: window, scroll: scroll)
+        let winFrame = windowCGRect(window)
+        let ready = HistoryFlickReady(
+            pid: getpid(),
+            windowNumber: window.windowNumber,
+            point: HeldDragPoint(x: Double(point.x), y: Double(point.y)),
+            windowFrame: winFrame,
+            upSign: upSign,
+            viewport: baselineViewport,
+            flicks: historyFlickCount,
+            readyAt: CACurrentMediaTime(),
+            readyAtWallClock: Date().timeIntervalSince1970
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let readyData = try? encoder.encode(ready) else {
+            flickStop.stopped = true
+            await flickRecording.value
+            note("history-flick-ready", "failed to encode history-flick-ready.json")
+            return .failed
+        }
+        do {
+            try readyData.write(to: output.appendingPathComponent("history-flick-ready.json"), options: .atomic)
+        } catch {
+            flickStop.stopped = true
+            await flickRecording.value
+            note("history-flick-ready", "failed to write history-flick-ready.json: \(error.localizedDescription)")
+            return .failed
+        }
+        note(
+            "history-flick-ready",
+            String(
+                format: "pid=%d window=%d point=(%.1f,%.1f) windowFrame=(%.1f,%.1f,%.1f,%.1f) upSign=%d viewport=%.1f flicks=%d",
+                getpid(), window.windowNumber, point.x, point.y,
+                winFrame.x, winFrame.y, winFrame.width, winFrame.height,
+                upSign, baselineViewport, historyFlickCount
+            )
+        )
+
+        let waitStart = Date.now
+        let waitDeadline = waitStart.addingTimeInterval(30.0)
+        while Date.now < waitDeadline, secondsLeft() > 8 {
+            if !buffer.events.isEmpty { break }
+            if let liveWindow = appWindow(), let liveScroll = timelineScroll(in: liveWindow),
+               let snap = readScrollSnapshot(liveScroll) {
+                latestPreEventSnap = snap
+                latestPreEventMono = CACurrentMediaTime()
+            }
+            try? await Task.sleep(for: .milliseconds(8))
+        }
+
+        guard let firstEvent = buffer.events.first else {
+            if let activeMonitor = monitor {
+                NSEvent.removeMonitor(activeMonitor)
+                monitor = nil
+            }
+            flickStop.stopped = true
+            await flickRecording.value
+            await shoot(recorder, stage, "flick-end")
+            note(
+                "history-flick-hid-wait",
+                "failed: no scrollWheel event matched window=\(window.windowNumber) within 30s"
+            )
+            _ = evaluateHistoryFlick(
+                samples: [],
+                rawEvents: [],
+                upSign: upSign,
+                viewport: baselineViewport,
+                output: output
+            )
+            return .failed
+        }
+
+        note(
+            "history-flick-hid-started",
+            String(
+                format: "first event phase=%lu momentum=%lu after %.2fs",
+                firstEvent.phase.rawValue,
+                firstEvent.momentumPhase.rawValue,
+                Date.now.timeIntervalSince(waitStart)
+            )
+        )
+
+        var samples: [TimedFlickSnapshot] = []
+        if let seedSnap = buffer.initialSnapshot ?? latestPreEventSnap {
+            let seedTime = buffer.initialSnapshotMonoTime ?? min(latestPreEventMono, firstEvent.monoTime - 0.000_001)
+            samples.append(TimedFlickSnapshot(monoTime: seedTime, snapshot: seedSnap))
+        }
+
+        while secondsLeft() > 6 {
+            if let liveWindow = appWindow(), let liveScroll = timelineScroll(in: liveWindow),
+               let snap = readScrollSnapshot(liveScroll) {
+                samples.append(TimedFlickSnapshot(monoTime: CACurrentMediaTime(), snapshot: snap))
+            }
+            if let lastMono = buffer.events.last?.monoTime,
+               CACurrentMediaTime() - lastMono >= 1.5 {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(8))
+        }
+
+        if let activeMonitor = monitor {
+            NSEvent.removeMonitor(activeMonitor)
+            monitor = nil
+        }
+
+        try? await Task.sleep(for: .milliseconds(100))
+        flickStop.stopped = true
+        await flickRecording.value
+        await shoot(recorder, stage, "flick-end")
+
+        let passed = evaluateHistoryFlick(
+            samples: samples,
+            rawEvents: buffer.events,
+            upSign: upSign,
+            viewport: baselineViewport,
+            output: output
+        )
+        return passed ? .passed : .failed
+    }
+
+    private static func evaluateHistoryFlick(
+        samples: [TimedFlickSnapshot],
+        rawEvents: [HistoryFlickObservedBuffer.RawEvent],
+        upSign: Int32,
+        viewport: Double,
+        output: URL
+    ) -> Bool {
+        let sortedSamples = samples.sorted { $0.monoTime < $1.monoTime }
+        let sortedEvents = rawEvents.sorted { $0.monoTime < $1.monoTime }
+        let originMono = sortedEvents.first?.monoTime ?? sortedSamples.first?.monoTime ?? CACurrentMediaTime()
+
+        let observedEvents = sortedEvents.map { event in
+            HistoryFlickObservedEvent(
+                time: event.monoTime - originMono,
+                phase: event.phase.rawValue,
+                momentumPhase: event.momentumPhase.rawValue,
+                scrollingDeltaY: event.scrollingDeltaY,
+                windowNumber: event.windowNumber
+            )
+        }
+
+        var allJumps: [(monoTime: CFTimeInterval, jump: HistoryFlickFrameJump)] = []
+        if sortedSamples.count >= 2 {
+            var eventCursor = 0
+            while eventCursor < sortedEvents.count, sortedEvents[eventCursor].monoTime <= sortedSamples[0].monoTime {
+                eventCursor += 1
+            }
+            for idx in 1..<sortedSamples.count {
+                let prev = sortedSamples[idx - 1]
+                let curr = sortedSamples[idx]
+                var intervalObserved = 0.0
+                while eventCursor < sortedEvents.count, sortedEvents[eventCursor].monoTime <= curr.monoTime {
+                    if sortedEvents[eventCursor].monoTime > prev.monoTime {
+                        intervalObserved += sortedEvents[eventCursor].scrollingDeltaY
+                    }
+                    eventCursor += 1
+                }
+                let deltaP = curr.snapshot.p - prev.snapshot.p
+                let diff = deltaP - intervalObserved
+                let topClampedNoGrowth = (prev.snapshot.isClampedAtTop || curr.snapshot.isClampedAtTop)
+                    && abs(curr.snapshot.docHeight - prev.snapshot.docHeight) <= 1.0
+                if !topClampedNoGrowth, abs(diff) > 40.0 {
+                    allJumps.append((
+                        monoTime: curr.monoTime,
+                        jump: HistoryFlickFrameJump(
+                            time: curr.monoTime - originMono,
+                            size: diff,
+                            deltaP: deltaP,
+                            observedDelta: intervalObserved
+                        )
+                    ))
+                }
+            }
+        }
+
+        let beganIndices = sortedEvents.indices.filter { sortedEvents[$0].phase.contains(.began) }
+        var flickSamples: [HistoryFlickSample] = []
+        flickSamples.reserveCapacity(beganIndices.count)
+
+        for (pos, beganIdx) in beganIndices.enumerated() {
+            let flickIndex = pos + 1
+            let nextBeganIdx = pos + 1 < beganIndices.count ? beganIndices[pos + 1] : sortedEvents.count
+            let slice = beganIdx..<nextBeganIdx
+            let momEndIdx = slice.last {
+                sortedEvents[$0].momentumPhase.contains(.ended) || sortedEvents[$0].momentumPhase.contains(.cancelled)
+            }
+            let lastMomIdx = slice.last { !sortedEvents[$0].momentumPhase.isEmpty }
+            let fingerEndIdx = slice.last {
+                sortedEvents[$0].phase.contains(.ended) || sortedEvents[$0].phase.contains(.cancelled)
+            }
+            let endIdx = momEndIdx ?? lastMomIdx ?? fingerEndIdx ?? (nextBeganIdx - 1)
+
+            let beganEvent = sortedEvents[beganIdx]
+            let endEvent = sortedEvents[endIdx]
+            // Positive precise-adjusted scrollingDeltaY moves toward the top, which increases P.
+            let injected = sortedEvents[beganIdx...endIdx].reduce(0.0) { $0 + $1.scrollingDeltaY }
+
+            guard let startSnap = beganEvent.preBeganSnapshot ?? snapshotJustBefore(beganEvent.monoTime, in: sortedSamples) else {
+                continue
+            }
+
+            let wantEndTime = endEvent.monoTime + 0.150
+            let endSnap: FlickScrollSnapshot
+            let measureEndTime: CFTimeInterval
+            if nextBeganIdx < sortedEvents.count, sortedEvents[nextBeganIdx].monoTime <= wantEndTime {
+                let nextBegan = sortedEvents[nextBeganIdx]
+                endSnap = nextBegan.preBeganSnapshot ?? snapshotJustBefore(nextBegan.monoTime, in: sortedSamples) ?? startSnap
+                measureEndTime = nextBegan.monoTime
+            } else {
+                endSnap = snapshotAtOrAfter(wantEndTime, in: sortedSamples) ?? startSnap
+                measureEndTime = wantEndTime
+            }
+
+            let observed = endSnap.p - startSnap.p
+            let discrepancy = observed - injected
+            let clampedInWindow = sortedSamples.contains {
+                $0.monoTime >= beganEvent.monoTime && $0.monoTime <= measureEndTime && $0.snapshot.isClampedAtTop
+            }
+            let clamped = startSnap.isClampedAtTop || endSnap.isClampedAtTop || clampedInWindow
+            let pageLoaded = endSnap.docHeight - startSnap.docHeight > 1.0
+
+            let jumpLower = pos == 0 ? -Double.infinity : beganEvent.monoTime
+            let jumpUpper = nextBeganIdx < sortedEvents.count ? sortedEvents[nextBeganIdx].monoTime : Double.infinity
+            let flickJumps = allJumps
+                .filter { $0.monoTime >= jumpLower && $0.monoTime < jumpUpper }
+                .map(\.jump)
+
+            let record = HistoryFlickSample(
+                index: flickIndex,
+                injected: injected,
+                observed: observed,
+                discrepancy: discrepancy,
+                clamped: clamped,
+                docHeightStart: startSnap.docHeight,
+                docHeightEnd: endSnap.docHeight,
+                historyPageLoaded: pageLoaded,
+                frameJumps: flickJumps
+            )
+            flickSamples.append(record)
+            WebsiteCaptures.log(
+                "stress flick-\(String(format: "%02d", flickIndex)): injected=\(String(format: "%.1f", injected))pt observed=\(String(format: "%.1f", observed))pt discrepancy=\(String(format: "%.1f", discrepancy))pt clamped=\(clamped) pageLoaded=\(pageLoaded) jumps=\(flickJumps.count) docHeight=\(Int(startSnap.docHeight.rounded()))->\(Int(endSnap.docHeight.rounded()))"
+            )
+        }
+
+        let unclamped = flickSamples.filter { !$0.clamped }
+        let pageLoads = flickSamples.filter(\.historyPageLoaded).count
+        let maxAbsDiscrepancy = unclamped.map { abs($0.discrepancy) }.max() ?? 0.0
+        let flicksOver24 = unclamped.filter { abs($0.discrepancy) > 24.0 }.count
+        let frameJumpsCount = allJumps.count
+        // A short or stalled sequence proves nothing: every flick must arrive and history
+        // must actually page in under the reader, which is the case being measured.
+        let sequenceComplete = flickSamples.count == historyFlickCount
+        // The failure being guarded: a history page landing uncompensated, which moves the
+        // reader by a large part of a page between two samples. Per-flick discrepancy and the
+        // small frame jumps are reported but not judged: flicks overlap their neighbours'
+        // momentum, so their segmentation alone swings by tens of points either way.
+        let pageJumps = allJumps.filter { abs($0.jump.size) > viewport / 2 }.count
+        let passed = sequenceComplete && pageLoads >= 2 && !unclamped.isEmpty && pageJumps == 0
+        let verdict = passed ? "PASS" : "FAIL"
+
+        let samplesFile = "history-flick-samples.json"
+        let samplesReport = HistoryFlickSamplesReport(
+            verdict: verdict,
+            delivery: "hid",
+            upSign: upSign,
+            viewport: viewport,
+            observedEventsCount: observedEvents.count,
+            flicksCount: flickSamples.count,
+            unclampedFlicksCount: unclamped.count,
+            pageLoads: pageLoads,
+            maxAbsDiscrepancy: maxAbsDiscrepancy,
+            flicksOver24pt: flicksOver24,
+            frameJumpsCount: frameJumpsCount,
+            flicks: flickSamples,
+            observedEvents: observedEvents
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let encoded = try? encoder.encode(samplesReport) {
+            try? encoded.write(to: output.appendingPathComponent(samplesFile), options: .atomic)
+        }
+
+        let summaryDetail = "verdict=\(verdict) sequenceComplete=\(sequenceComplete) delivery=hid observedEvents=\(observedEvents.count) flicks=\(flickSamples.count) unclampedFlicks=\(unclamped.count) pageLoads=\(pageLoads) maxAbsDiscrepancy=\(String(format: "%.1f", maxAbsDiscrepancy))pt flicksOver24pt=\(flicksOver24) frameJumps=\(frameJumpsCount) pageJumps=\(pageJumps) viewport=\(Int(viewport.rounded()))pt"
+        WebsiteCaptures.log("stress history-flick-summary: \(summaryDetail)")
+        phases.append([
+            "name": "history-flick-summary",
+            "verdict": verdict,
+            "detail": summaryDetail,
+            "delivery": "hid",
+            "observedEvents": String(observedEvents.count),
+            "flicks": String(flickSamples.count),
+            "unclampedFlicks": String(unclamped.count),
+            "pageLoads": String(pageLoads),
+            "maxAbsDiscrepancyPt": String(format: "%.1f", maxAbsDiscrepancy),
+            "flicksOver24pt": String(flicksOver24),
+            "frameJumps": String(frameJumpsCount),
+            "viewportPt": String(Int(viewport.rounded())),
+            "samplesFile": samplesFile,
+        ])
+        saveReport(listFiles: false)
+        return passed
+    }
+
+    private static func readScrollSnapshot(_ scroll: NSScrollView) -> FlickScrollSnapshot? {
+        guard let document = scroll.documentView else { return nil }
+        let docHeight = Double(document.bounds.height)
+        let clipMinY = Double(scroll.contentView.bounds.minY)
+        let topInset = Double(scroll.contentInsets.top)
+        return FlickScrollSnapshot(
+            p: docHeight - clipMinY,
+            docHeight: docHeight,
+            clipMinY: clipMinY,
+            topInset: topInset
+        )
+    }
+
+    private static func snapshotJustBefore(
+        _ time: CFTimeInterval,
+        in samples: [TimedFlickSnapshot]
+    ) -> FlickScrollSnapshot? {
+        if let idx = samples.lastIndex(where: { $0.monoTime <= time }) {
+            return samples[idx].snapshot
+        }
+        return samples.first?.snapshot
+    }
+
+    private static func snapshotAtOrAfter(
+        _ time: CFTimeInterval,
+        in samples: [TimedFlickSnapshot]
+    ) -> FlickScrollSnapshot? {
+        if let idx = samples.firstIndex(where: { $0.monoTime >= time }) {
+            return samples[idx].snapshot
+        }
+        return samples.last?.snapshot
+    }
+
+    private static func windowCGRect(_ window: NSWindow) -> HistoryFlickRect {
+        let frame = window.frame
+        let displayHeight = CGDisplayBounds(CGMainDisplayID()).height
+        return HistoryFlickRect(
+            x: Double(frame.minX),
+            y: Double(displayHeight - frame.maxY),
+            width: Double(frame.width),
+            height: Double(frame.height)
+        )
     }
 
     private enum HeldDragRouting: String {
@@ -1821,12 +2415,21 @@ enum TimelineStress {
         window: NSWindow,
         scroll: NSScrollView,
         deltaY: Int32,
-        phase: UInt32
+        phase: UInt32,
+        momentumPhase: UInt32 = 0
     ) -> (cg: CGEvent, ns: NSEvent)? {
         guard let cg = buildWheelCGEvent(window: window, scroll: scroll, deltaY: deltaY) else { return nil }
         cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase))
-        cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+        cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(momentumPhase))
         cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        if let ns = NSEvent(cgEvent: cg),
+           ns.type == .scrollWheel,
+           ns.hasPreciseScrollingDeltas,
+           abs(ns.scrollingDeltaY - CGFloat(deltaY)) <= 0.01 {
+            return (cg, ns)
+        }
+        cg.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(deltaY))
+        cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Double(deltaY))
         guard let ns = NSEvent(cgEvent: cg), ns.type == .scrollWheel else { return nil }
         return (cg, ns)
     }

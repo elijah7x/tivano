@@ -174,7 +174,7 @@ final class UpdateChecker {
     /// The launch check, the six-hourly one after it, and a catch-up when the app comes to
     /// the front after a long sleep.
     func startBackgroundChecks() {
-        guard backgroundTask == nil, !CaptureRun.isEnabled, !AppInfo.isDevelopment else { return }
+        guard backgroundTask == nil, !CaptureRun.isEnabled, AppInfo.allowsAppUpdates else { return }
         backgroundTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.launchDelay))
             while !Task.isCancelled {
@@ -199,7 +199,7 @@ final class UpdateChecker {
     /// afterwards. A background check also posts the one notification a new version gets.
     @discardableResult
     func check(background: Bool = false) async -> Bool {
-        guard !AppInfo.isDevelopment else { return false }
+        guard AppInfo.allowsAppUpdates else { return false }
         guard !isChecking else { return updateAvailable }
         isChecking = true
         defer { isChecking = false }
@@ -406,7 +406,7 @@ final class UpdateChecker {
         defaults.set(update.version, forKey: Keys.notifiedVersion)
         let content = UNMutableNotificationContent()
         content.title = String(format: Chrome.localized("Tivano %@ is available"), update.version)
-        content.body = Chrome.localized("Open Settings › About to update and restart.")
+        content.body = Chrome.localized("Open Settings › Version to update and restart.")
         content.userInfo = ["update": update.version]
         let request = UNNotificationRequest(identifier: "update-\(update.version)", content: content, trigger: nil)
         Task {

@@ -325,12 +325,11 @@ private struct FollowUpRow: View {
     /// Held while the grip's drag runs; SwiftUI resets it when the gesture ends or is
     /// cancelled, and a cancelled gesture calls no `onEnded` of its own.
     @GestureState private var isGrabbing = false
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     /// How far the prose is lifted to centre its x-height on the row's line: half the
     /// gap between cap height and x-height of its 12 pt font, on the half point.
     private static var proseLift: CGFloat {
-        let font = NSFont.systemFont(ofSize: TypeScale.shared.content(12))
+        let font = ThemeTypeface.nsFont(size: TypeScale.shared.content(12))
         return ((font.capHeight - font.xHeight) / 2 * 2).rounded() / 2
     }
 
@@ -472,7 +471,7 @@ private struct FollowUpRow: View {
             if isDragged {
                 Capsule(style: .continuous)
                     .fill(Chrome.overlay(0.12))
-                    .shadow(color: .black.opacity(performanceMode ? 0 : 0.28), radius: performanceMode ? 0 : 10, y: performanceMode ? 0 : 4)
+                    .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
             }
         }
         // A scale above the scroll view's edge would be cut off there, so the lift reads
@@ -530,31 +529,8 @@ private struct QueueIconButton: View {
 }
 
 private struct FollowUpQueueSurface: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "upstream"
-
     func body(content: Content) -> some View {
         let shape = UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12, style: .continuous)
-        let isDark = colorScheme == .dark
-        if floatingGlassStyle == "upstream" {
-            content.floatingGlass(shape, hiddenRimBottom: ThreadChangesTab.overlap)
-        } else if !performanceMode {
-            content
-                .glassEffect(.regular, in: shape)
-                .background {
-                    shape
-                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
-                        .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
-                }
-                .clipShape(shape)
-        } else {
-            content
-                .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
-                .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(Chrome.overlay(isDark ? 0.14 : 0.08), lineWidth: 1)
-                }
-        }
+        content.floatingGlass(shape, hiddenRimBottom: ThreadChangesTab.overlap)
     }
 }

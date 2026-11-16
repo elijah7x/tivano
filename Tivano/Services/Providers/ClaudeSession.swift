@@ -186,38 +186,6 @@ final class ClaudeSession: ProviderSession {
         }
     }
 
-    /// What the CLI reports in its handshake: its models, and the slash commands it finds
-    /// for `directory`. A bare process, not a session: it gets the initialize and nothing else.
-    static func handshake(executable: URL, directory: URL, environment: [String: String]) async throws -> (models: [ModelOption], commands: [SlashCommand]) {
-        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
-        let process = StdioProcess(
-            executable: executable,
-            arguments: ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--setting-sources", "user,project,local"],
-            directory: directory,
-            environment: environment
-        )
-        try process.start()
-        let watchdog = Task {
-            try? await Task.sleep(for: .seconds(20))
-            if !Task.isCancelled { process.terminate() }
-        }
-        defer { watchdog.cancel(); process.terminate() }
-        process.send(["type": "control_request", "request_id": "handshake", "request": ["subtype": "initialize", "hooks": .null]])
-        return try await withTaskCancellationHandler {
-            for await message in process.messages {
-                guard message["type"]?.string == "control_response",
-                      message["response"]?["request_id"]?.string == "handshake" else { continue }
-                guard let response = message["response"]?["response"], let commands = response["commands"]?.array else {
-                    throw ProviderError.failed(AppText.localized("Claude could not load its commands."))
-                }
-                return (models(in: response), SlashCommand.claudeCommands(commands))
-            }
-            throw ProviderError.failed(AppText.localized("Claude's command discovery did not finish. Try again."))
-        } onCancel: {
-            process.terminate()
-        }
-    }
-
     private func validateAccountIdentity() async throws {
         guard configuration.environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1" else { return }
         guard let expected = configuration.claudeIdentity else { throw ClaudeAccountValidationError.identityUnavailable }

@@ -26,9 +26,7 @@ struct StorageSettingsPage: View {
                 generation += 1
             }
             RuntimeStorageSection(diagnostics: diagnostics, updates: updates)
-            if let usage, !usage.worktrees.isEmpty {
-                StorageWorktreesSection(worktrees: usage.worktrees) { libraryGeneration += 1 }
-            }
+            StorageWorktreesSection(worktrees: usage?.worktrees ?? []) { libraryGeneration += 1 }
             ArchivedChatsSection(filter: $filter, usage: usage)
         }
         // Deleting a chat can take its worktree with it, so the measure follows the library.
@@ -143,8 +141,16 @@ private struct StorageOverviewSection: View {
     }
 
     private var parts: [Part] {
-        let archivedIDs = Set(model.threads.filter(\.isArchived).map(\.id))
-        let archived = usage?.chatSizes.reduce(Int64(0)) { $0 + (archivedIDs.contains($1.key) ? $1.value : 0) } ?? 0
+        let archived: Int64
+        if let chatSizes = usage?.chatSizes {
+            var total: Int64 = 0
+            for thread in model.threads where thread.isArchived {
+                total += chatSizes[thread.id] ?? 0
+            }
+            archived = total
+        } else {
+            archived = 0
+        }
         var parts = [
             Part(title: "Chats", bytes: (usage.map { $0.chats + $0.attachments } ?? 0) - archived, color: Chrome.blue),
             Part(title: "Archived chats", bytes: archived, color: Chrome.orange),
@@ -353,19 +359,89 @@ private struct StorageWorktreesSection: View {
     let changed: () -> Void
     @State private var busy: Set<String> = []
     @State private var pendingRemoval: WorktreeUsage?
+    @State private var rowsCache = WorktreeRowsCache()
+
+    private struct WorktreeRow: Identifiable {
+        let worktree: WorktreeUsage
+        let detail: String
+        let canRemove: Bool
+        let reason: String?
+        var id: String { worktree.path }
+    }
+
+    @MainActor
+    private final class WorktreeRowsCache {
+        private var lastWorktrees: [WorktreeUsage]?
+        private var lastThreads: [ChatThread]?
+        private var lastProjects: [Project]?
+        private var cached: [WorktreeRow] = []
+
+        func rows(worktrees: [WorktreeUsage], threads: [ChatThread], projects: [Project]) -> [WorktreeRow] {
+            if lastWorktrees == worktrees, lastThreads == threads, lastProjects == projects {
+                return cached
+            }
+            let result: [WorktreeRow]
+            if worktrees.isEmpty {
+                result = []
+            } else {
+                var resolvedCache: [String: String] = [:]
+                func resolve(_ path: String) -> String {
+                    if let cached = resolvedCache[path] { return cached }
+                    let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+                    resolvedCache[path] = resolved
+                    return resolved
+                }
+                let threadPaths: [(thread: ChatThread, paths: [String])] = threads.compactMap { thread in
+                    var paths: [String] = []
+                    if let wt = thread.worktreePath, !wt.isEmpty { paths.append(resolve(wt)) }
+                    if let target = thread.hydra?.targetCheckout, !target.isEmpty { paths.append(resolve(target)) }
+                    return paths.isEmpty ? nil : (thread, paths)
+                }
+                let projectPaths = projects.map { resolve($0.path) }
+                result = worktrees.map { worktree in
+                    let path = resolve(worktree.path)
+                    let prefix = path + "/"
+                    let users = threadPaths.compactMap { entry in
+                        entry.paths.contains { $0 == path || $0.hasPrefix(prefix) } ? entry.thread : nil
+                    }
+                    let usedByProject = projectPaths.contains { $0 == path || $0.hasPrefix(prefix) }
+                    let canRemove = users.isEmpty && !usedByProject
+                        && (worktree.isRegistered ? worktree.changedFiles == 0 : true)
+                    return WorktreeRow(
+                        worktree: worktree,
+                        detail: StorageWorktreesSection.detail(for: worktree, users: users),
+                        canRemove: canRemove,
+                        reason: StorageWorktreesSection.reason(for: worktree, users: users, canRemove: canRemove)
+                    )
+                }
+            }
+            lastWorktrees = worktrees
+            lastThreads = threads
+            lastProjects = projects
+            cached = result
+            return result
+        }
+    }
 
     var body: some View {
+        let rows = rowsCache.rows(worktrees: worktrees, threads: model.threads, projects: model.projects)
         ChromeSection(title: "Worktrees") {
             StorageSectionNote(text: "Each worktree is a separate copy of a project, made so a chat can work without touching your checkout. Most of its space is usually dependencies and build output.")
             ChromeCard {
-                ForEach(worktrees) { worktree in
-                    if worktree.id != worktrees.first?.id { ChromeRowDivider() }
-                    ChromeRow(title: worktree.name, detail: detail(for: worktree), localizesDetail: false) {
+                ChromeRow(title: "Worktrees", detail: Storage.worktreesDirectory.path, localizesDetail: false) {
+                    Button("Reveal") { Workspace.revealInFinder(Storage.worktreesDirectory.path) }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                }
+                ForEach(rows) { row in
+                    let worktree = row.worktree
+                    ChromeRowDivider()
+                    ChromeRow(title: worktree.name, detail: row.detail, localizesDetail: false) {
                         if busy.contains(worktree.path) {
                             ProgressView().controlSize(.small)
-                        } else if worktree.buildFilesSize > 0 || model.canRemove(worktree) {
-                            FreeSpaceButton(worktree: worktree, canRemove: model.canRemove(worktree),
-                                            reason: reason(for: worktree)) { action in
+                        } else if worktree.buildFilesSize > 0 || row.canRemove {
+                            FreeSpaceButton(worktree: worktree, canRemove: row.canRemove,
+                                            reason: row.reason) { action in
                                 switch action {
                                 case .buildFiles: run(worktree) { await model.removeBuildFiles(of: worktree) }
                                 case .worktree: pendingRemoval = worktree
@@ -392,8 +468,7 @@ private struct StorageWorktreesSection: View {
         }
     }
 
-    private func detail(for worktree: WorktreeUsage) -> String {
-        let users = model.threadsUsing(worktree)
+    private static func detail(for worktree: WorktreeUsage, users: [ChatThread]) -> String {
         var parts: [String]
         if let thread = users.first(where: { !$0.isHelper }) ?? users.first {
             parts = [String(format: Chrome.localized(thread.isArchived ? "Used by archived chat “%@”" : "Used by chat “%@”"), thread.title)]
@@ -412,9 +487,9 @@ private struct StorageWorktreesSection: View {
     }
 
     /// Why the whole worktree cannot go from here, shown under the greyed-out choice.
-    private func reason(for worktree: WorktreeUsage) -> String? {
-        guard !model.canRemove(worktree) else { return nil }
-        if !model.threadsUsing(worktree).isEmpty {
+    private static func reason(for worktree: WorktreeUsage, users: [ChatThread], canRemove: Bool) -> String? {
+        guard !canRemove else { return nil }
+        if !users.isEmpty {
             return "A chat still uses it. Delete that chat to delete its worktree."
         }
         if (worktree.changedFiles ?? 0) > 0 {
@@ -476,10 +551,13 @@ private struct ArchivedChatsSection: View {
     @Binding var filter: ArchiveFilter
     let usage: StorageUsage?
     @State private var pendingDeletion: ArchiveRow?
+    @State private var archiveCache = ArchiveCache()
 
     private struct ArchiveRow: Identifiable {
         let thread: ChatThread
         let title: String
+        let detail: String
+        let hasOwnWorktree: Bool
         var id: UUID { thread.id }
     }
 
@@ -489,40 +567,99 @@ private struct ArchivedChatsSection: View {
         let rows: [ArchiveRow]
     }
 
-    var body: some View {
-        let archived = model.archivedThreads
-        let projects = ArchiveFilter.projects(in: archived, from: model.projects)
-        let known = Set(projects.map(\.id))
-        let options: [(value: ArchiveFilter.ProjectScope, title: String)] = [(.all, "All projects")]
-            + projects.map { (.project($0.id), $0.name) } + [(.none, "No project")]
-        let shown = filter.apply(to: archived, known: known)
-        let rows = shown.map { thread in
-            let title: String
-            if let info = thread.hydra, !info.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                title = "\(info.persona.name) · \(info.task)"
-            } else {
-                title = thread.title
+    private struct ArchiveData {
+        let isEmpty: Bool
+        let options: [(value: ArchiveFilter.ProjectScope, title: String)]
+        let groups: [ArchiveGroup]
+        let allIDs: Set<UUID>
+    }
+
+    @MainActor
+    private final class ArchiveCache {
+        private var lastThreads: [ChatThread]?
+        private var lastProjects: [Project]?
+        private var lastUsage: StorageUsage?
+        private var cached: ArchiveData?
+
+        func data(model: AppModel, usage: StorageUsage?) -> ArchiveData {
+            let threads = model.threads
+            let projectsList = model.projects
+            if let cached, lastThreads == threads, lastProjects == projectsList, lastUsage == usage {
+                return cached
             }
-            return ArchiveRow(thread: thread, title: title)
+            let archived = model.archivedThreads
+            let result: ArchiveData
+            if archived.isEmpty {
+                result = ArchiveData(
+                    isEmpty: true,
+                    options: [(.all, "All projects"), (.none, "No project")],
+                    groups: [],
+                    allIDs: []
+                )
+            } else {
+                let projects = ArchiveFilter.projects(in: archived, from: projectsList)
+                let known = Set(projects.map(\.id))
+                let options: [(value: ArchiveFilter.ProjectScope, title: String)] = [(.all, "All projects")]
+                    + projects.map { (.project($0.id), $0.name) } + [(.none, "No project")]
+                let worktreesByPath = Dictionary(
+                    (usage?.worktrees ?? []).map { ($0.path, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                let rows = archived.map { thread in
+                    let title: String
+                    if let info = thread.hydra, !info.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        title = "\(info.persona.name) · \(info.task)"
+                    } else {
+                        title = thread.title
+                    }
+                    let ownPath = model.ownWorktree(of: thread)
+                    var parts = [thread.updatedAt.formatted(date: .abbreviated, time: .shortened)]
+                    if let ownPath, let worktree = worktreesByPath[ownPath] {
+                        parts.append(String(format: Chrome.localized("Worktree %@"), formattedSize(worktree.size)))
+                    }
+                    return ArchiveRow(
+                        thread: thread,
+                        title: title,
+                        detail: parts.joined(separator: " · "),
+                        hasOwnWorktree: ownPath != nil
+                    )
+                }
+                let grouped = Dictionary(grouping: rows) { ArchiveFilter.scope(of: $0.thread, known: known) }
+                let groups = options.filter { $0.value != .all }.compactMap { option -> ArchiveGroup? in
+                    guard let rows = grouped[option.value], !rows.isEmpty else { return nil }
+                    return ArchiveGroup(id: option.value, title: option.title, rows: rows)
+                }
+                result = ArchiveData(
+                    isEmpty: false,
+                    options: options,
+                    groups: groups,
+                    allIDs: Set(archived.map(\.id))
+                )
+            }
+            lastThreads = threads
+            lastProjects = projectsList
+            lastUsage = usage
+            cached = result
+            return result
         }
-        let grouped = Dictionary(grouping: rows) { ArchiveFilter.scope(of: $0.thread, known: known) }
-        let groups = options.filter { $0.value != .all }.compactMap { option -> ArchiveGroup? in
-            guard let rows = grouped[option.value], !rows.isEmpty else { return nil }
-            return ArchiveGroup(id: option.value, title: option.title, rows: rows)
-        }
+    }
+
+    var body: some View {
+        let data = archiveCache.data(model: model, usage: usage)
+        let (groups, shownIDs) = filtered(data)
         ChromeSection(
             title: "Archived chats",
-            trailing: archived.isEmpty ? nil : AnyView(ArchiveDeleteAllButton(threadIDs: Set(shown.map(\.id)), isFiltered: filter.isActive))
+            trailing: data.isEmpty ? nil : AnyView(ArchiveDeleteAllButton(threadIDs: shownIDs, isFiltered: filter.isActive))
         ) {
-            StorageSectionNote(text: archived.isEmpty
+            StorageSectionNote(text: data.isEmpty
                 ? "Chats you archive leave the sidebar and wait here. Nothing is archived yet."
                 : "Restore a chat to the sidebar, or delete it for good. A chat's worktree can go with it.")
-            if !archived.isEmpty {
+            if !data.isEmpty {
                 HStack(spacing: 8) {
                     ChromeSearchField(query: $filter.query, prompt: "Search archived chats")
                     GlassPickerButton(options: ArchiveFilter.ChatType.allCases.map { ($0, $0.title) }, selection: $filter.chatType)
                         .accessibilityLabel(Text("Chat type"))
-                    GlassPickerButton(options: options, selection: $filter.project, symbol: { _ in "folder" })
+                    GlassPickerButton(options: data.options, selection: $filter.project, symbol: { _ in "folder" })
                         .accessibilityLabel(Text("Project"))
                 }
                 if groups.isEmpty {
@@ -548,14 +685,14 @@ private struct ArchivedChatsSection: View {
                         ChromeCard(lazy: true) {
                             ForEach(group.rows) { row in
                                 if row.id != group.rows.first?.id { ChromeRowDivider() }
-                                ChromeRow(title: row.title, detail: detail(for: row.thread), localizesDetail: false) {
+                                ChromeRow(title: row.title, detail: row.detail, localizesDetail: false) {
                                     HStack(spacing: 8) {
                                         Button("Restore") { model.unarchive(row.id) }
                                             .buttonStyle(.glass)
                                         Button("Delete", role: .destructive) {
                                             // A chat holding a worktree always asks, since the
                                             // answer decides whether its space is freed.
-                                            if model.settings.confirmBeforeDeleting || model.ownWorktree(of: row.thread) != nil {
+                                            if model.settings.confirmBeforeDeleting || row.hasOwnWorktree {
                                                 pendingDeletion = row
                                             } else {
                                                 model.delete(row.id)
@@ -580,7 +717,7 @@ private struct ArchivedChatsSection: View {
             ),
             presenting: pendingDeletion
         ) { row in
-            if model.ownWorktree(of: row.thread) != nil {
+            if row.hasOwnWorktree {
                 Button("Delete thread and worktree", role: .destructive) {
                     model.delete(row.id, removeWorktree: true)
                     pendingDeletion = nil
@@ -596,7 +733,7 @@ private struct ArchivedChatsSection: View {
                 }
             }
         } message: { row in
-            if model.ownWorktree(of: row.thread) != nil {
+            if row.hasOwnWorktree {
                 Text("Its history will be removed. Removing its worktree frees its space; its branch and commits stay, and a worktree with uncommitted changes is kept.")
             } else {
                 Text("Its history will be removed. Files in your project stay as they are.")
@@ -604,14 +741,36 @@ private struct ArchivedChatsSection: View {
         }
     }
 
-    /// When it was last active, and the space its worktree holds.
-    private func detail(for thread: ChatThread) -> String {
-        var parts = [thread.updatedAt.formatted(date: .abbreviated, time: .shortened)]
-        if let path = model.ownWorktree(of: thread),
-           let worktree = usage?.worktrees.first(where: { $0.path == path }) {
-            parts.append(String(format: Chrome.localized("Worktree %@"), formattedSize(worktree.size)))
+    private func filtered(_ data: ArchiveData) -> (groups: [ArchiveGroup], shownIDs: Set<UUID>) {
+        guard filter.isActive else { return (data.groups, data.allIDs) }
+        let search = filter.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var shownIDs = Set<UUID>()
+        let groups = data.groups.compactMap { group -> ArchiveGroup? in
+            if filter.project != .all, group.id != filter.project { return nil }
+            let matching = group.rows.filter { row in
+                let thread = row.thread
+                let matchesType = filter.chatType == .all
+                    || (filter.chatType == .heads ? thread.isHydraHead : !thread.isHydraHead)
+                guard matchesType else { return false }
+                guard !search.isEmpty else { return true }
+                if thread.title.range(of: search, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+                    return true
+                }
+                if let info = thread.hydra {
+                    if info.persona.name.range(of: search, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+                        return true
+                    }
+                    if info.task.range(of: search, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+                        return true
+                    }
+                }
+                return false
+            }
+            guard !matching.isEmpty else { return nil }
+            for row in matching { shownIDs.insert(row.id) }
+            return ArchiveGroup(id: group.id, title: group.title, rows: matching)
         }
-        return parts.joined(separator: " · ")
+        return (groups, shownIDs)
     }
 }
 

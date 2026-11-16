@@ -152,15 +152,6 @@ final class TerminalStore {
     private(set) var sessions: [UUID: [TerminalSession]] = [:]
     var selection: [UUID: UUID] = [:]
 
-    /// Whether a foreground job currently owns a terminal.
-    var hasForegroundJob: Bool {
-        sessions.values.contains { list in
-            list.contains { session in
-                session.isRunning && TerminalSession.foregroundJobIsRunning(session.view.process.shellPid, shellName: session.shellName)
-            }
-        }
-    }
-
     /// Background jobs also need to finish before an update can quit their shell.
     var hasRunningJob: Bool {
         sessions.values.contains { list in

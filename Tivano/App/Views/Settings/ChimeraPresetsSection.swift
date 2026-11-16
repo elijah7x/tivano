@@ -12,7 +12,7 @@ struct ChimeraPresetsSection: View {
         let firstProvider = ProviderKind.alphabetical.first {
             settings.isEnabled($0) && model.providers.status($0).isInstalled
         }
-        ChromeSection(title: "Model presets") {
+        ChromeSection(title: "Model strengths") {
             ChromeCard {
                 if !settings.chimeraPresets.isEmpty {
                     // A plain stack preserves row identity and zIndex while rows change slots.
@@ -47,7 +47,7 @@ struct ChimeraPresetsSection: View {
                     ChromeRowDivider()
                 }
                 ChromeRow(
-                    title: settings.chimeraPresets.isEmpty ? "No presets yet" : "Add preset",
+                    title: settings.chimeraPresets.isEmpty ? "No model strengths yet" : "Add model strength",
                     detail: settings.chimeraPresets.isEmpty ? "Add a model and describe what it is good at." : nil
                 ) {
                     Button {
@@ -58,13 +58,13 @@ struct ChimeraPresetsSection: View {
                             ))
                         }
                     } label: {
-                        Label("Add preset", systemImage: "plus")
+                        Label("Add model strength", systemImage: "plus")
                     }
                     .buttonStyle(.glass)
                     .disabled(firstProvider == nil)
                 }
             }
-            Text("Describe what each model is good at. In a real conversation Chimera reads these to match helpers with models and pre-fills the casting card, so you rarely pick by hand. Nothing runs until you confirm.")
+            Text("Describe what each model is good at. Adaptive sub-agents use this to match roles with models and fill in the assignment card for you.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
                 .padding(.horizontal, 4)
@@ -129,8 +129,6 @@ private struct ChimeraPresetRow: View {
     let onDragEnded: () -> Void
     let onRemove: () -> Void
 
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-
     var body: some View {
         HStack(spacing: 10) {
             ChimeraPresetGrip()
@@ -157,8 +155,8 @@ private struct ChimeraPresetRow: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .help(Text(verbatim: Chrome.localized("Remove this preset")))
-            .accessibilityLabel(Text("Remove this preset"))
+            .help(Text(verbatim: Chrome.localized("Remove this model strength")))
+            .accessibilityLabel(Text("Remove this model strength"))
         }
         .padding(.leading, 10)
         .padding(.trailing, Chrome.rowControlTrailingPadding)
@@ -167,7 +165,7 @@ private struct ChimeraPresetRow: View {
             if isDragged {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Chrome.overlay(0.12))
-                    .shadow(color: .black.opacity(performanceMode ? 0 : 0.28), radius: performanceMode ? 0 : 10, y: performanceMode ? 0 : 4)
+                    .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
             }
         }
         .scaleEffect(isDragged ? 1.02 : 1)

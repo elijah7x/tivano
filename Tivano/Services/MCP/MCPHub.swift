@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import Synchronization
 
 enum MCPHubError: LocalizedError, Sendable {
@@ -16,6 +17,7 @@ enum MCPHubError: LocalizedError, Sendable {
 }
 
 actor MCPHub {
+    private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "mcp-hub")
     static let shared = MCPHub()
 
     /// Every server process started this run, so the app can end them as it quits: a
@@ -89,7 +91,7 @@ actor MCPHub {
             } catch {
                 try Task.checkCancellation()
                 guard !shuttingDown, generation == self.generation else { throw CancellationError() }
-                print("MCPHub: \(id): \(error.localizedDescription)")
+                Self.log.error("MCPHub: \(id): \(error.localizedDescription)")
                 failed.insert(id)
             }
         }
@@ -400,14 +402,7 @@ private actor MCPClient {
                 connection.stop()
                 stdio = nil
             }
-            let environmentBase: [String: String]
-            if DshIntegrationConfiguration.isOfflineNative {
-                environmentBase = DshIntegrationConfiguration.environment
-                guard DshIntegrationConfiguration.paths != nil, !environmentBase.isEmpty,
-                      command.hasPrefix("/") else { throw MCPHubError.server("Invalid offline native fixture") }
-            } else {
-                environmentBase = LoginEnvironment.current
-            }
+            let environmentBase = LoginEnvironment.current
             guard let executable = LoginEnvironment.which(command, in: environmentBase) else {
                 throw MCPHubError.server(String(format: String(localized: "%@ isn't installed."), command))
             }
@@ -415,9 +410,7 @@ private actor MCPClient {
             for (key, value) in env { environment[key] = value }
             let connection: MCPStdioConnection
             do {
-                let directory = DshIntegrationConfiguration.isOfflineNative
-                    ? environmentBase["HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) } : nil
-                connection = try MCPStdioConnection.launch(executable: executable, arguments: args, environment: environment, directory: directory)
+                connection = try MCPStdioConnection.launch(executable: executable, arguments: args, environment: environment)
             } catch {
                 throw MCPHubError.server(error.localizedDescription)
             }

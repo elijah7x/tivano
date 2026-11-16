@@ -56,8 +56,8 @@ def main():
         "SETTINGS_PRODUCTION": "\n".join(declaration(settings, marker) for marker in [
             "    var alphaEnabled:", "    var externalControlEnabled:", "    var isExternalControlEnabled:",
             "    var alphaChimeraEnabled:", "    var isChimeraEnabled:", "    var hydraEnabled:", "    func hydraPair(for",
-            "    var cliInstallationTarget:", "    var performanceMode:", "    var clearerBackdrop:",
-            "    var showsSkylight:", "    var showsSkylightNow:", "    var antiSlopEnabled:", "    var textGeneration:"]),
+            "    var cliInstallationTarget:", "    var themeStyle:", "    var weatherWindowEnabled:",
+            "    var showsWeatherNow:", "    var textGeneration:"]),
         "APPMODEL_PRODUCTION": "\n".join(declaration(model, marker) for marker in [
             "    func controlWorkspace(", "    func requireExternalPersistence(", "    func commitExternalLibrary(",
             "    func createExternalThread(", "    static func requireControlDirectory(", "    func prepareExternalWorktree(",
@@ -127,7 +127,7 @@ def main():
     (output / "structural-results.json").write_text(json.dumps({"scope": "source-structure assertions only; behavioral cases are in domain-results.json", "checked": ["external delivery reuses startTurn", "no external session-start fallback", "no UI ensureModel await for external submission", "beginThreadTurn and thread persistence precede session.send", "reservation and submission recheck share runtime admission guards", "runtime failures delegate to production ControlFailureClassifier", "shutdown suspension precedes flush and restores on failure", "updater uses flush before installer and restores on failure"]}, indent=2) + "\n")
     swift = subprocess.check_output(["xcrun", "--find", "swiftc"], text=True).strip()
     sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
-    paths = ["Tivano/Core/Models/LocalControl.swift", "Tivano/Core/Support/Coding.swift", "Tivano/Core/Models/ProviderAccount.swift", "Tivano/Core/Models/Chimera.swift", "Tivano/Core/Models/Hydra2.swift", "Tivano/Core/Models/Library.swift", "Tivano/Core/Support/StoragePaths.swift", "Tivano/Services/Control/ControlLedger.swift", "Tivano/App/Runtime/ControlFailureClassifier.swift"]
+    paths = ["Tivano/Core/Models/LocalControl.swift", "Tivano/UI/Theme/ThemeStyle.swift", "Tivano/Core/Support/Coding.swift", "Tivano/Core/Models/ProviderAccount.swift", "Tivano/Core/Models/Chimera.swift", "Tivano/Core/Models/Hydra2.swift", "Tivano/Core/Models/Library.swift", "Tivano/Core/Support/StoragePaths.swift", "Tivano/Services/Control/ControlLedger.swift", "Tivano/App/Runtime/ControlFailureClassifier.swift"]
     command = [swift, "-parse-as-library", "-swift-version", "6", "-target", "arm64-apple-macosx26.0", "-sdk", sdk,
                "-j", "4", "-module-cache-path", str(output / "ModuleCache"),
                *[str(ROOT / path) for path in paths], str(generated), "-o", str(output / "domain-checks")]
