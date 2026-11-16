@@ -185,8 +185,6 @@ struct TimelineMinimapRail: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(WindowLiveResize.self) private var liveResize
     @Environment(AppModel.self) private var model
-    @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     /// Tick under the pointer, nil once the pointer leaves the rail.
     @State private var hoveredID: String?
@@ -197,7 +195,7 @@ struct TimelineMinimapRail: View, Equatable {
     private var baseOpacity: Double { isExpanded ? 0.4 : 0.25 }
     private var hoverAnimation: Animation? {
         // Held mid-resize: a hover curve restarted every frame lagged the whole rail.
-        if liveResize.isActive || reduceMotion || performanceMode { return nil }
+        if liveResize.isActive || reduceMotion { return nil }
         return .smooth(duration: 0.22)
     }
 
@@ -224,11 +222,7 @@ struct TimelineMinimapRail: View, Equatable {
                             if hoveredID != id {
                                 hoveredID = id
                                 if id != nil {
-                                    switch model.settings.timelineHapticStyle {
-                                    case .soft: Haptics.perform(.generic)
-                                    case .strong: Haptics.perform(.alignment)
-                                    case .none: break
-                                    }
+                                    Haptics.perform(.alignment)
                                 }
                             }
                         case .ended:
@@ -250,7 +244,7 @@ struct TimelineMinimapRail: View, Equatable {
         }
         .animation(hoverAnimation, value: hoveredID)
         .animation(hoverAnimation, value: isPressing)
-        .animation(hoverAnimation, value: selectedID)
+        .animation(ScrollActivity.shared.isScrolling ? nil : hoverAnimation, value: selectedID)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Conversation outline")
     }
@@ -339,7 +333,7 @@ struct TimelineMinimapRail: View, Equatable {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(width: Self.cardWidth, alignment: .leading)
-            .modifier(MinimapCardSurface(isDark: colorScheme == .dark))
+            .modifier(MinimapCardSurface())
             Spacer(minLength: 0)
         }
         .padding(.leading, 34)
@@ -500,29 +494,30 @@ private struct RailHitArea: Shape {
     }
 }
 
-/// The rail's hover card surface: glass on, a flat panel fill in performance mode.
+/// The rail's hover card surface.
 private struct MinimapCardSurface: ViewModifier {
-    let isDark: Bool
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
-        if !performanceMode {
-            content
-                .glassEffect(.regular, in: shape)
-                .background {
+        // Keep content on one unconditional path so Creation switches preserve card identity.
+        content
+            .chromeGlassEffect(solid == nil ? .regular : .identity, in: shape)
+            .background {
+                if let solid {
+                    shape.fill(solid.elevated)
+                        .shadow(color: SolidSurfaces.shadow, radius: 12, y: 3)
+                } else {
                     shape
                         .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
                         .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
                 }
-                .clipShape(shape)
-        } else {
-            content
-                .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
-                .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(Chrome.overlay(isDark ? 0.14 : 0.08), lineWidth: 1)
+            }
+            .clipShape(shape)
+            .overlay {
+                if let solid {
+                    shape.strokeBorder(solid.hairline, lineWidth: 1)
                 }
-        }
+            }
     }
 }

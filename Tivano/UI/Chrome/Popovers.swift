@@ -9,6 +9,7 @@ extension View {
         self
             .buttonBorderShape(.capsule)
             .tint(ThemeManager.spec.accent)
+            .environment(\.solidSurfaces, ThemeManager.spec.solid)
     }
 }
 
@@ -323,7 +324,7 @@ struct PopoverItem: View {
                         .frame(width: 16)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 } else if let symbol {
-                    Image(systemName: symbol)
+                    Image.themed(symbol)
                         .font(.ui(.callout))
                         .frame(width: 16)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
@@ -397,7 +398,7 @@ struct RowActionMenuButtons: View {
                 item.action()
             } label: {
                 if let symbol = item.symbol {
-                    Label { Text(verbatim: Chrome.localized(item.title)) } icon: { Image(systemName: symbol) }
+                    Label { Text(verbatim: Chrome.localized(item.title)) } icon: { Image.themed(symbol) }
                 } else {
                     Text(verbatim: Chrome.localized(item.title))
                 }

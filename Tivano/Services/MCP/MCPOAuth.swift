@@ -201,10 +201,6 @@ enum MCPOAuth {
         MCPKeychain.delete(server: serverID, field: "oauth-client")
     }
 
-    static func refreshIfNeeded(serverID: String) async {
-        _ = try? await accessToken(serverID: serverID)
-    }
-
     // MARK: - Discovery
 
     private static func discover(url: String) async throws -> AuthServerMetadata {

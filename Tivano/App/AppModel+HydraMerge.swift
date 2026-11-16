@@ -245,7 +245,7 @@ extension AppModel {
                 groups.append((other, other.path, work, true))
             }
         } catch {
-            note(leadID, AppText.localized("Hydra could not inspect the team's work."), error.localizedDescription, status: .failed)
+            note(leadID, AppText.localized("Could not inspect the sub-agents' work."), error.localizedDescription, status: .failed)
             recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
             return
         }
@@ -295,7 +295,7 @@ extension AppModel {
                 return
             }
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
-            note(leadID, Chrome.localized("Hydra did not merge: the team's files are outside every project."), strayBody(stray), status: .failed)
+            note(leadID, Chrome.localized("Auto-merge skipped: the sub-agents' files are outside every project."), strayBody(stray), status: .failed)
             recordHydraJobMerge(.failed, of: leadID, jobID: jobID)
             return
         }
@@ -328,8 +328,8 @@ extension AppModel {
         if !stray.isEmpty {
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .stray, project: nil, label: nil, url: nil, files: stray.count, detail: strayBody(stray)))
             note(leadID, stray.count == 1
-                ? Chrome.localized("Hydra left a file outside every project.")
-                : String(format: Chrome.localized("Hydra left %d files outside every project."), stray.count), strayBody(stray))
+                ? Chrome.localized("Auto-merge left a file outside every project.")
+                : String(format: Chrome.localized("Auto-merge left %d files outside every project."), stray.count), strayBody(stray))
         } else if !hasNonGitGroup, outcomes.allSatisfy({ $0 == .alreadyOnMain }) {
             recordHydraSettlement(leadID: leadID, runtime: runtime)
         }
@@ -406,7 +406,7 @@ extension AppModel {
         }
         defer { withExtendedLifetime(repoLease) {} }
         guard let remote = await git.remoteURL() else {
-            return fail(Chrome.localized("Hydra did not merge: no remote."), Chrome.localized("The team's work is in the checkout; there is no origin to push it to."))
+            return fail(Chrome.localized("Auto-merge skipped: no remote."), Chrome.localized("The team's work is in the checkout; there is no origin to push it to."))
         }
         let target = await git.defaultBranch()
         if let head = try? await git.commitHash() {
@@ -429,11 +429,11 @@ extension AppModel {
         guard conflicted.isEmpty else {
             let files = conflicted.map { "`\($0)`" }.joined(separator: ", ")
             let headline = conflicted.count == 1
-                ? Chrome.localized("Hydra did not merge: conflict markers in a file.")
-                : String(format: Chrome.localized("Hydra did not merge: conflict markers in %d files."), conflicted.count)
+                ? Chrome.localized("Auto-merge paused: conflict markers in a file.")
+                : String(format: Chrome.localized("Auto-merge paused: conflict markers in %d files."), conflicted.count)
             let body = conflicted.count == 1
-                ? String(format: Chrome.localized("%@ still holds conflict markers from a head's landing. Resolve them and the merge goes out by itself."), files)
-                : String(format: Chrome.localized("%@ still hold conflict markers from a head's landing. Resolve them and the merge goes out by itself."), files)
+                ? String(format: Chrome.localized("%@ still holds conflict markers from a sub-agent's landing. Resolve them and the merge goes out by itself."), files)
+                : String(format: Chrome.localized("%@ still hold conflict markers from a sub-agent's landing. Resolve them and the merge goes out by itself."), files)
             return fail(headline, body)
         }
 
@@ -470,7 +470,7 @@ extension AppModel {
                    let remote = try? await git.commitHash(of: "origin/\(target)"), remote != head,
                    (spent ? true : await git.isAncestor(head, of: remote)) {
                     guard let rebased = try await git.captureTree(paths: sorted, onto: remote, from: head) else {
-                        let headline = String(format: Chrome.localized("Hydra did not merge: `%@` changed the same lines."), target)
+                        let headline = String(format: Chrome.localized("Auto-merge skipped: `%@` changed the same lines."), target)
                         let body = sorted.count == 1
                             ? String(format: Chrome.localized("The remote changed a file the team changed too, in the same places. The work is in the checkout: bring `%@` in (`git pull`), settle the overlap, and the merge goes out by itself."), target)
                             : String(format: Chrome.localized("The remote changed files the team changed too, in the same places. The work is in the checkout: bring `%@` in (`git pull`), settle the overlap, and the merge goes out by itself."), target)
@@ -532,7 +532,7 @@ extension AppModel {
                 break
             }
             guard let prepared else {
-                return fail(Chrome.localized("Hydra did not merge: the checkout kept moving."), String(format: Chrome.localized("Commits kept landing on `%@` while the team's work was prepared. The work is in the checkout and goes out on the next try."), current ?? target), retryable: true)
+                return fail(Chrome.localized("Auto-merge skipped: the checkout kept moving."), String(format: Chrome.localized("Commits kept landing on `%@` while the team's work was prepared. The work is in the checkout and goes out on the next try."), current ?? target), retryable: true)
             }
             let head = prepared.head
             let files = prepared.files
@@ -558,7 +558,7 @@ extension AppModel {
             let body = mergeRequestBody(for: lead, files: files, through: Set(work.turnIDs), runtime: runtime)
             advance(.opening)
             // The same refusal whichever call failed: the branch is out, the request is not.
-            let requestFailed = String(format: Chrome.localized("Hydra pushed %@ but could not open a merge request."), branch)
+            let requestFailed = String(format: Chrome.localized("Auto-merge pushed %@ but could not open a merge request."), branch)
             let requestStays = String(format: Chrome.localized("The work is in the checkout and on `%@`; the next try opens the request."), branch)
             let requestURL: URL?
             do {
@@ -578,7 +578,7 @@ extension AppModel {
                 return fail(requestFailed, Chrome.localized("The forge did not say where the request is. The next try opens it again."), retryable: true)
             }
             advance(.merging)
-            let mergeFailed = String(format: Chrome.localized("Hydra opened %@ but could not merge it."), link.label)
+            let mergeFailed = String(format: Chrome.localized("Auto-merge opened %@ but could not merge it."), link.label)
             do {
                 try await git.mergePullRequest(link)
             } catch GitError.cursorOriginSetup {
@@ -627,7 +627,7 @@ extension AppModel {
                 } catch {
                     // The forge succeeded. Do not describe this as an unpushed job or
                     // automatically retry a patch that may already be partly applied.
-                    _ = fail(AppText.localized("Hydra merged the work, but could not synchronize the checkout."),
+                    _ = fail(AppText.localized("Merged sub-agent changes, but could not synchronize the checkout."),
                              "\(url.absoluteString)\n\n\(error.localizedDescription)", label: link.label, url: url)
                     return .syncFailed
                 }
@@ -643,18 +643,18 @@ extension AppModel {
                         lines.append("The project checkout is up to date.")
                     }
                 } catch {
-                    _ = fail(AppText.localized("Hydra merged the work, but could not synchronize the checkout."),
+                    _ = fail(AppText.localized("Merged sub-agent changes, but could not synchronize the checkout."),
                              "\(url.absoluteString)\n\n\(error.localizedDescription)", label: link.label, url: url)
                     return .syncFailed
                 }
             }
             runtime.recordHydraMerge(HydraMergeRecord(at: .now, outcome: .merged, project: project.name, label: link.label, url: url, files: files.count, detail: nil))
-            note(leadID, title(String(format: Chrome.localized("Hydra merged %@"), link.label)), lines.joined(separator: "\n"), merged: true)
+            note(leadID, title(String(format: Chrome.localized("Merged sub-agent changes in %@"), link.label)), lines.joined(separator: "\n"), merged: true)
             existingRuntime(for: leadID)?.noteDiffChanged()
             return .merged
         } catch {
             let next = Chrome.localized("The work is in the checkout; the next try sends it again.")
-            return fail(Chrome.localized("Hydra could not merge the team's work."), "\(error.localizedDescription)\n\n\(next)", retryable: true)
+            return fail(Chrome.localized("Could not merge the sub-agents' work."), "\(error.localizedDescription)\n\n\(next)", retryable: true)
         }
     }
 
@@ -947,7 +947,7 @@ extension AppModel {
             } else {
                 let headID = head.id
                 guard let document = await Task.detached(priority: .utility, operation: { Storage.decodeDocument(headID) }).value else {
-                    throw ShellError(String(format: AppText.localized("A head's history could not be read; its work was not settled: %@."), headID.uuidString))
+                    throw ShellError(String(format: AppText.localized("A sub-agent's history could not be read; its work was not settled: %@."), headID.uuidString))
                 }
                 items = document.items
             }
@@ -1196,14 +1196,14 @@ extension AppModel {
             if let text = await TextGeneration.commitMessage(
                 summary: summary,
                 patch: patch,
-                instructions: settings.commitInstructions,
+                instructions: "",
                 engine: engine,
                 directory: URL(fileURLWithPath: directory)
             ), !text.isEmpty {
                 return text
             }
         }
-        var lines = [lead.title == ChatThread.untitled ? "Hydra: the team's work" : lead.title, ""]
+        var lines = [lead.title == ChatThread.untitled ? "Tivano: sub-agent changes" : lead.title, ""]
         for head in hydraTeam(of: lead.id) {
             guard let info = head.hydra, !info.task.isEmpty else { continue }
             lines.append("- \(info.persona.name): \(TextCleanup.singleLine(info.task, limit: 100))")
@@ -1213,10 +1213,10 @@ extension AppModel {
 
     /// The request's description: what the team did and how the lead summed it up.
     private func mergeRequestBody(for lead: ChatThread, files: [DiffFile], through: Set<UUID>, runtime: ThreadRuntime) -> String {
-        var lines = ["Opened by Tivano once its Hydra team finished.", ""]
+        var lines = ["Opened by Tivano after its sub-agents finished.", ""]
         let heads = hydraTeam(of: lead.id).compactMap(\.hydra).filter { !$0.task.isEmpty }
         if !heads.isEmpty {
-            lines.append("## Heads")
+            lines.append("## Sub-agents")
             for info in heads {
                 var line = "- **\(info.persona.name)**: \(TextCleanup.singleLine(info.task, limit: 120))"
                 if let landing = info.landing, !landing.files.isEmpty {
@@ -1322,7 +1322,7 @@ extension AppModel {
             $0.unreadRevision = UUID()
         }
         updateDockBadge()
-        if settings.notifyWhenFinished, let lead = thread(leadID) {
+        if let lead = thread(leadID) {
             notify(threadID: leadID, title: lead.title, body: title)
         }
     }

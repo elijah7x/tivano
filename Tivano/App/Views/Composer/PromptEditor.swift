@@ -48,7 +48,7 @@ struct PromptEditor<Extra: View, Actions: View>: View {
         let bounds = (text.isEmpty ? " " : text as NSString).boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: NSFont.systemFont(ofSize: TypeScale.shared.content(14))]
+            attributes: [.font: ThemeTypeface.nsFont(size: TypeScale.shared.content(14))]
         )
         return ceil(max(TypeScale.shared.content(18), bounds.height) + 2 * 2)
     }
@@ -81,7 +81,7 @@ struct PromptEditor<Extra: View, Actions: View>: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .help("Add files")
                 .accessibilityLabel(Text("Add files"))
                 .disabled(attachments.count >= Storage.attachmentLimit)

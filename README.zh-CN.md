@@ -52,7 +52,7 @@ open Tivano.xcodeproj
 
 唯一的依赖 SwiftTerm 由 Swift Package Manager 拉取。
 
-本地 Debug 构建请先运行一次 `scripts/setup_local_signing.sh`；详见 [docs/local-development.md](docs/local-development.md) 与 [docs/packaging.md](docs/packaging.md)。`scripts/release.sh` 可完成发布构建的归档、签名与公证。
+本地 Debug 构建详见 [docs/local-development.md](docs/local-development.md) 与 [docs/packaging.md](docs/packaging.md)。`scripts/release.sh` 可完成发布构建的归档、签名与公证。
 
 ## 代码结构
 

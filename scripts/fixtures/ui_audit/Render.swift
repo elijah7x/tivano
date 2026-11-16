@@ -44,7 +44,7 @@
         var rows: [[String: String]] = []
         for dark in [false, true] {
             let theme = dark ? "dark" : "light"
-            ThemeManager.current = dark ? .breezeDark : .breezeLight
+            ThemeManager.current = .breeze
             let (previewWindow, previewHost) = host(ToolImagePreview(path: corrupt.path).padding(12),
                                                      size: CGSize(width: 504, height: 340), dark: dark)
             let previewName = "preview-failure-\(theme)"

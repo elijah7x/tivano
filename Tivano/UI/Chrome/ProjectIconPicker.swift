@@ -26,30 +26,6 @@ struct ProjectIconMark: View {
     }
 }
 
-/// A project's mark as a button: clicking it opens the picker over it.
-struct ProjectIconButton: View {
-    @Binding var icon: ProjectIcon?
-    var size: CGFloat = 13
-
-    @State private var isPresented = false
-
-    var body: some View {
-        Button {
-            isPresented.toggle()
-        } label: {
-            ProjectIconMark(icon: icon, size: size)
-                .frame(width: size + 9, height: size + 9)
-                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .help(Text(verbatim: Chrome.localized("Choose this project's icon")))
-        .accessibilityLabel(Text("Project icon"))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            ProjectIconPicker(icon: $icon)
-        }
-    }
-}
-
 /// Chooses a project's mark: categorized emoji, a search over emoji and SF Symbols,
 /// and a Folder tile that clears the mark back to its default.
 struct ProjectIconPicker: View {

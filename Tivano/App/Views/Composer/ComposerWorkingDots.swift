@@ -11,16 +11,12 @@ import SwiftUI
 /// and no drawing on the main thread, however long a turn runs.
 struct ComposerWorkingDots: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.chatColumnIsShown) private var chatColumnIsShown
 
     var body: some View {
-        if performanceMode {
-            EmptyView()
-        } else {
-            DotFieldLayerView.Representable(color: Chrome.accentNSColor, animated: !reduceMotion)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-        }
+        DotFieldLayerView.Representable(color: Chrome.accentNSColor, animated: !reduceMotion && chatColumnIsShown)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
     }
 }
 
@@ -29,11 +25,12 @@ struct ComposerWorkingDots: View {
 /// reduced motion nothing is drawn.
 struct DotFieldSweep: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.chatColumnIsShown) private var chatColumnIsShown
     let tint: NSColor
 
     var body: some View {
         if !reduceMotion {
-            DotFieldLayerView.Representable(color: tint, animated: true, sweeps: true)
+            DotFieldLayerView.Representable(color: tint, animated: chatColumnIsShown, sweeps: true)
                 .accessibilityHidden(true)
                 .allowsHitTesting(false)
         }
@@ -66,6 +63,7 @@ final class DotFieldLayerView: NSView {
     private var color: NSColor = .controlAccentColor
     private var animated = true
     private var laidOutSize: CGSize = .zero
+    private weak var observedWindow: NSWindow?
     /// Set once, before the view is configured: a sweep fills every row of its surface
     /// with one wave that starts when the view appears and ends faded out.
     fileprivate var sweeps = false
@@ -97,8 +95,15 @@ final class DotFieldLayerView: NSView {
         rows.addSublayer(columns)
         layer?.addSublayer(rows)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive), name: NSApplication.didBecomeActiveNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidResignActive), name: NSApplication.didResignActiveNotification, object: nil)
+        let center = NotificationCenter.default
+        for name in [
+            NSApplication.didBecomeActiveNotification,
+            NSApplication.didResignActiveNotification,
+            NSApplication.didHideNotification,
+            NSApplication.didUnhideNotification,
+        ] {
+            center.addObserver(self, selector: #selector(visibilityChanged), name: name, object: nil)
+        }
     }
 
     @available(*, unavailable)
@@ -118,24 +123,58 @@ final class DotFieldLayerView: NSView {
         self.color = color
         self.animated = animated
         if colorChanged { dot.backgroundColor = color.cgColor }
-        if motionChanged { installAnimation() }
+        if motionChanged { syncAnimation(force: true) }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil {
-            installAnimation()
-        } else {
-            waveMask.removeAnimation(forKey: Self.animationKey)
+        if observedWindow !== window {
+            let center = NotificationCenter.default
+            let names = [
+                NSWindow.didChangeOcclusionStateNotification,
+                NSWindow.didMiniaturizeNotification,
+                NSWindow.didDeminiaturizeNotification,
+                NSWindow.willCloseNotification,
+            ]
+            if let observedWindow {
+                for name in names {
+                    center.removeObserver(self, name: name, object: observedWindow)
+                }
+            }
+            observedWindow = window
+            if let window {
+                for name in names {
+                    let selector = name == NSWindow.willCloseNotification
+                        ? #selector(windowWillClose)
+                        : #selector(visibilityChanged)
+                    center.addObserver(self, selector: selector, name: name, object: window)
+                }
+            }
         }
+        syncAnimation()
     }
 
-    @objc private func applicationDidBecomeActive() {
-        if window != nil { installAnimation() }
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        syncAnimation()
     }
 
-    @objc private func applicationDidResignActive() {
-        waveMask.removeAnimation(forKey: Self.animationKey)
+    override func viewDidHide() {
+        super.viewDidHide()
+        pauseAnimation()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        syncAnimation()
+    }
+
+    @objc private func visibilityChanged() {
+        syncAnimation()
+    }
+
+    @objc private func windowWillClose() {
+        pauseAnimation()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -169,16 +208,39 @@ final class DotFieldLayerView: NSView {
         rows.instanceDelay = 0
         rows.instanceAlphaOffset = sweeps ? 0 : -Float(1) / Float(rowCount)
         CATransaction.commit()
-        if animated && window != nil {
+        syncAnimation(force: true)
+    }
+
+    private var canAnimate: Bool {
+        guard animated, superview != nil, bounds.width > 0, let window else { return false }
+        return NSApp.isActive
+            && !NSApp.isHidden
+            && window.isVisible
+            && window.occlusionState.contains(.visible)
+            && !window.isMiniaturized
+            && !isHiddenOrHasHiddenAncestor
+    }
+
+    private func pauseAnimation() {
+        waveMask.removeAnimation(forKey: Self.animationKey)
+        dot.opacity = sweeps ? 0 : 0.28
+        rows.mask = nil
+    }
+
+    private func syncAnimation(force: Bool = false) {
+        guard canAnimate else {
+            pauseAnimation()
+            return
+        }
+        if force || waveMask.animation(forKey: Self.animationKey) == nil {
             installAnimation()
         }
     }
 
     private func installAnimation() {
         waveMask.removeAnimation(forKey: Self.animationKey)
-        guard animated, window != nil, bounds.width > 0 else {
-            dot.opacity = sweeps ? 0 : 0.28
-            rows.mask = nil
+        guard canAnimate else {
+            pauseAnimation()
             return
         }
         let baseAlpha: CGFloat = sweeps ? 0 : 0.12

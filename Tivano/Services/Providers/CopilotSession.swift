@@ -298,7 +298,7 @@ final class CopilotSession: ProviderSession {
             "mode": "conversation",
         ])
         guard result["outcome"]?.string == "success" else {
-            throw ProviderError.failed(result["error"]?.string ?? "Copilot could not rewind the conversation.")
+            throw ProviderError.failed(result["error"]?.string ?? AppText.localized("Copilot could not rewind the conversation."))
         }
     }
 

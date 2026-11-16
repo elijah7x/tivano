@@ -70,7 +70,7 @@ def fixture(name, dirty=False, unknown=False, occupied=False):
     libraries = []
     support = home / 'Library/Application Support'
     support.mkdir(parents=True)
-    for edition in ('Tivano', 'Tivano Dev'):
+    for edition in ('Tivano', 'Tivano Dev', 'Tivano Preview'):
         root = support / edition;root.mkdir()
         data = {'projects': [{'id':'dev-project', 'path':str(source), 'name':'keep name'},
                              {'id':'main-project', 'path':str(dest), 'name':'keep old name'}],
@@ -83,7 +83,7 @@ def fixture(name, dirty=False, unknown=False, occupied=False):
         path = root / 'library.json'
         path.write_text(json.dumps(data))
         libraries.append((path, path.read_bytes()))
-    for name in ('.tivano-library.lock','.tivano-migration.lock','.tivano-release-library.lock','.tivano-dev-library.lock'):
+    for name in ('.tivano-library.lock','.tivano-migration.lock','.tivano-release-library.lock','.tivano-dev-library.lock','.tivano-preview-library.lock'):
         (support / name).touch()
     before = {k:v for k,v in worker.inventory(source).items() if k != '.git' and not k.startswith('.git/')}
     worker.prepare(argparse.Namespace(source=str(source), destination=str(dest), state_dir=str(state), home=str(home)))

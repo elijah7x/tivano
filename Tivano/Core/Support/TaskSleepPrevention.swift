@@ -22,8 +22,6 @@ final class TaskSleepPrevention {
     private var activity: NSObjectProtocol?
     private var activeMode = TaskSleepMode.off
 
-    var isPreventingSleep: Bool { activity != nil }
-
     func update(mode: TaskSleepMode, hasRunningTasks: Bool) {
         let wanted = hasRunningTasks ? mode : .off
         guard wanted != activeMode else { return }

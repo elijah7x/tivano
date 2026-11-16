@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// A provider's subscription limits: each rolling window, how much of it is used and when it resets.
 struct PlanLimits: Sendable, Equatable {
@@ -74,7 +75,7 @@ enum PlanLimitsReader {
         do {
             let limits: PlanLimits? = switch provider {
             case .codex: try await CodexSession.readPlanLimits(executable: executable, environment: environment)
-            case .claude: await readClaude(environment: environment)
+            case .claude: await readClaude(executable: executable, environment: environment)
             case .antigravity: try await AntigravitySession.readPlanLimits(executable: executable, environment: environment)
             case .copilot: try await CopilotSession.readPlanLimits(executable: executable, environment: environment)
             case .commandcode: await CommandCodeAPI.planLimits(environment: environment)
@@ -158,8 +159,11 @@ enum PlanLimitsReader {
 
     // MARK: - Claude
 
+    private nonisolated static let tierMultiplierRegex = try! NSRegularExpression(pattern: #"\d+x"#)
+    private nonisolated static let fractionalSecondsRegex = try! NSRegularExpression(pattern: #"\.\d+"#)
+
     /// Reads existing credentials and usage only. Normal Claude sessions own token refresh.
-    static func readClaude(environment: [String: String]) async -> PlanLimits? {
+    static func readClaude(executable: URL, environment: [String: String]) async -> PlanLimits? {
         guard !CaptureRun.isEnabled else { return nil }
         let managed = environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1"
         let account = ProviderAccountStore.load().accounts.first {
@@ -172,7 +176,7 @@ enum PlanLimitsReader {
         do { accountID = try ProviderAccounts.beginClaudeCredentialRead(environment: environment) }
         catch { return failure(ProviderAccounts.safeClaudeError(error), kind: .unavailable) }
         defer { if let accountID { ProviderAccounts.endRead(accountID) } }
-        return await readClaudeUsageEndpoint(environment: environment)
+        return await readClaudeUsageEndpoint(executable: executable, environment: environment)
     }
 
     private struct ClaudeLogin {
@@ -184,8 +188,10 @@ enum PlanLimitsReader {
         /// "Max (20x)" from `max` and `default_claude_max_20x`.
         var planName: String? {
             guard var name = PlanLimitsReader.planName(subscriptionType) else { return nil }
-            if let tier = rateLimitTier?.range(of: #"\d+x"#, options: .regularExpression) {
-                name += " (\(rateLimitTier![tier]))"
+            if let rateLimitTier,
+               let match = PlanLimitsReader.tierMultiplierRegex.firstMatch(in: rateLimitTier, range: NSRange(rateLimitTier.startIndex..., in: rateLimitTier)),
+               let tier = Range(match.range, in: rateLimitTier) {
+                name += " (\(rateLimitTier[tier]))"
             }
             return name
         }
@@ -194,7 +200,7 @@ enum PlanLimitsReader {
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     private static let claudeUsageUnavailable = "Claude usage is temporarily unavailable. Use Claude normally to let the official CLI refresh its login, then check usage again."
 
-    private static func readClaudeUsageEndpoint(environment: [String: String]) async -> PlanLimits? {
+    private static func readClaudeUsageEndpoint(executable: URL, environment: [String: String]) async -> PlanLimits? {
         do {
             guard let login = try await claudeLogin(environment: environment) else {
                 return failure("Claude credentials could not be read. Check this account's sign-in and macOS credential access.", kind: .unavailable)
@@ -202,7 +208,7 @@ enum PlanLimitsReader {
             if let expiresAt = login.expiresAt, expiresAt <= .now {
                 return failure(claudeUsageUnavailable, kind: .unavailable)
             }
-            let response = try await fetchClaudeUsage(token: login.accessToken)
+            let response = try await fetchClaudeUsage(token: login.accessToken, version: await claudeVersion(executable))
             if response.status == 401 {
                 return failure(claudeUsageUnavailable, kind: .unavailable)
             }
@@ -241,8 +247,29 @@ enum PlanLimitsReader {
         )
     }
 
-    private static func fetchClaudeUsage(token: String) async throws -> (status: Int, data: Data) {
+    private static let claudeVersions = Mutex<[String: String]>([:])
+
+    /// The installed Claude Code version: the native installer's `versions/<version>` file name,
+    /// otherwise `--version`, cached per resolved path.
+    private static func claudeVersion(_ executable: URL) async -> String? {
+        let resolved = executable.resolvingSymlinksInPath()
+        if let cached = claudeVersions.withLock({ $0[resolved.path] }) { return cached }
+        var version: String?
+        if resolved.deletingLastPathComponent().lastPathComponent == "versions",
+           resolved.lastPathComponent.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil {
+            version = resolved.lastPathComponent
+        } else if let result = try? await Shell.run(executable, ["--version"], timeout: 10), result.succeeded,
+                  let range = result.output.range(of: #"\b\d+\.\d+\.\d+\b"#, options: .regularExpression) {
+            version = String(result.output[range])
+        }
+        if let version { claudeVersions.withLock { $0[resolved.path] = version } }
+        return version
+    }
+
+    /// Claude Code sends this User-Agent to the usage endpoint, which throttles generic clients harder.
+    private static func fetchClaudeUsage(token: String, version: String?) async throws -> (status: Int, data: Data) {
         var request = URLRequest(url: usageURL, timeoutInterval: 15)
+        if let version { request.setValue("claude-cli/\(version) (external, cli)", forHTTPHeaderField: "User-Agent") }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -286,7 +313,11 @@ enum PlanLimitsReader {
 
     /// Claude writes microsecond timestamps, which the ISO 8601 parser does not take, so the fraction is dropped.
     nonisolated static func parseDate(_ text: String) -> Date? {
-        let trimmed = text.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
+        let trimmed = fractionalSecondsRegex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..., in: text),
+            withTemplate: ""
+        )
         return ISO8601.date(from: trimmed)
     }
 }

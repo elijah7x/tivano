@@ -8,7 +8,7 @@ import SwiftUI
 /// opens the floating panel, tapping again dismisses it.
 struct HydraButton: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatColumnIsShown) private var chatColumnIsShown
     let thread: ChatThread
     let runtime: ThreadRuntime
 
@@ -45,7 +45,7 @@ struct HydraButton: View {
         } label: {
             ZStack {
                 if isOn {
-                    HydraCharge(isWorking: running > 0)
+                    HydraCharge(isWorking: running > 0 && chatColumnIsShown)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
                 HydraMarkView(isOn: isOn, isHovering: isHovering)
@@ -106,7 +106,7 @@ struct HydraButton: View {
         }
         #endif
         .help(Text(verbatim: help(isOn: isOn, running: running, hasHeads: !heads.isEmpty)))
-        .accessibilityLabel(Text(verbatim: model.chimeraIsOn(thread) ? Chrome.localized("Turn Hydra on for this chat") : panelHelp(running: running, hasHeads: !heads.isEmpty)))
+        .accessibilityLabel(Text(verbatim: model.chimeraIsOn(thread) ? Chrome.localized("Turn sub-agents on for this chat") : panelHelp(running: running, hasHeads: !heads.isEmpty)))
         .accessibilityValue(Text(verbatim: isOn ? Chrome.localized("On") : Chrome.localized("Off")))
     }
 
@@ -198,22 +198,28 @@ struct HydraButton: View {
     }
 
     private func panelHelp(running: Int, hasHeads: Bool) -> String {
-        guard hasHeads else { return Chrome.localized("Hydra is on, no heads out yet") }
-        if running == 0 { return Chrome.localized("Hydra is on, show the panel") }
-        return running == 1 ? Chrome.localized("Hydra is on, 1 head working, show or hide the panel") : String(format: Chrome.localized("Hydra is on, %d heads working, show or hide the panel"), running)
+        guard hasHeads else { return Chrome.localized("Sub-agents are on, no sub-agents out yet") }
+        if running == 0 { return Chrome.localized("Sub-agents are on, show the panel") }
+        return running == 1 ? Chrome.localized("Sub-agents are on, 1 sub-agent working, show or hide the panel") : String(format: Chrome.localized("Sub-agents are on, %d sub-agents working, show or hide the panel"), running)
     }
 
     private func help(isOn: Bool, running: Int, hasHeads: Bool) -> String {
-        guard isOn else { return Chrome.localized(model.chimeraIsOn(thread) ? "Turn Hydra on for this chat" : "Hydra is on in Settings") }
-        var parts = [Chrome.localized("Hydra is on")]
+        guard isOn else {
+            return Chrome.localized(
+                model.chimeraIsOn(thread)
+                    ? "Turn sub-agents on for this chat"
+                    : (model.settings.hydraEnabled ? "Sub-agents are off for this chat" : "Sub-agents are off in Settings")
+            )
+        }
+        var parts = [Chrome.localized("Sub-agents are on")]
         if let pair = model.hydraPair(for: thread) {
             parts.append(HydraPairSummary.workers(pair, registry: model.providers))
         } else {
-            parts.append(Chrome.localized("Heads run on this chat's model"))
+            parts.append(Chrome.localized("Sub-agents run on this chat's model"))
         }
-        if running > 0 { parts.append(running == 1 ? Chrome.localized("1 head working") : String(format: Chrome.localized("%d heads working"), running)) }
+        if running > 0 { parts.append(running == 1 ? Chrome.localized("1 sub-agent working") : String(format: Chrome.localized("%d sub-agents working"), running)) }
         guard hasHeads else {
-            parts.append(Chrome.localized("No heads out yet"))
+            parts.append(Chrome.localized("No sub-agents out yet"))
             return parts.joined(separator: " · ")
         }
         parts.append(runtime.isHydraPanelHidden ? Chrome.localized("Show the panel") : Chrome.localized("Hide the panel"))
@@ -232,19 +238,19 @@ private struct HydraSwitchPopover: View {
     var body: some View {
         PopoverMenu {
             if !model.settings.hydraEnabled {
-                PopoverSectionHeader("Hydra is off in Settings")
-                PopoverItem("Turn Hydra on") {
+                PopoverSectionHeader("Sub-agents are off in Settings")
+                PopoverItem("Turn sub-agents on") {
                     model.settings.hydraEnabled = true
                     model.setHydra(true, for: thread.id)
                     isHydraSwitchShown = false
                 }
             } else {
-                PopoverSectionHeader(isOn ? "Hydra is on for this chat" : "Hydra is off for this chat")
-                PopoverItem("Turn Hydra on for this chat", isChecked: isOn) {
+                PopoverSectionHeader(isOn ? "Sub-agents are on for this chat" : "Sub-agents are off for this chat")
+                PopoverItem("Turn sub-agents on for this chat", isChecked: isOn) {
                     model.setHydra(true, for: thread.id)
                     isHydraSwitchShown = false
                 }
-                PopoverItem("Turn Hydra off for this chat", isChecked: !isOn) {
+                PopoverItem("Turn sub-agents off for this chat", isChecked: !isOn) {
                     model.setHydra(false, for: thread.id)
                     isHydraSwitchShown = false
                 }
@@ -327,19 +333,19 @@ private struct HydraIdlePopover: View {
 
     var body: some View {
         PopoverMenu {
-            PopoverSectionHeader("Hydra is on")
+            PopoverSectionHeader("Sub-agents are on")
             if let pair = model.hydraPair(for: thread) {
                 PopoverNote(HydraPairSummary.title(pair, registry: model.providers))
                 PopoverNote(HydraPairSummary.workers(pair, registry: model.providers))
             } else {
-                PopoverNote("Heads run on this chat's model and effort.")
+                PopoverNote("Sub-agents run on this chat's model and effort.")
             }
             PopoverDivider()
             PopoverNote(isPreparing
-                ? "Preparing a delegation. No heads go out until the whole block is ready."
-                : "No heads are out yet. Send a request and the lead will decide what to do itself and what to delegate. Each head gets a panel of its own.")
+                ? "Preparing a delegation. No sub-agents go out until the whole block is ready."
+                : "No sub-agents are out yet. Send a request and the lead will decide what to do itself and what to delegate. Each sub-agent gets a panel of its own.")
             PopoverDivider()
-            PopoverNote("Right-click the mark to switch Hydra off for this chat.")
+            PopoverNote("Right-click the sub-agent button to switch sub-agents off for this chat.")
         }
         .frame(width: 290)
     }
@@ -367,6 +373,8 @@ private struct HydraMarkView: View {
 struct HydraCharge: View {
     /// Whether any head is at work: the ring turns and the glow breathes only then.
     var isWorking = true
+    @Environment(\.chatColumnIsShown) private var chatColumnIsShown
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     fileprivate static let colors: [Color] = HydraRoster.personas.prefix(6).map(\.color)
     /// The same colours for the moving ring, which is drawn by a layer.
@@ -374,7 +382,7 @@ struct HydraCharge: View {
 
     var body: some View {
         ZStack {
-            if isWorking, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            if isWorking, chatColumnIsShown, !reduceMotion {
                 HydraChargeMotion()
             } else {
                 Self.glow(breathing: false)
@@ -451,6 +459,7 @@ final class HydraChargeLayerView: NSView {
     private let ringMask = CAShapeLayer()
     private var colors: [NSColor] = []
     private var accent: NSColor = .controlAccentColor
+    private weak var observedWindow: NSWindow?
 
     private static let turnKey = "turn"
     private static let breathKey = "breathe"
@@ -499,8 +508,14 @@ final class HydraChargeLayerView: NSView {
         layer?.addSublayer(ring)
 
         let center = NotificationCenter.default
-        center.addObserver(self, selector: #selector(appDidBecomeActive), name: NSApplication.didBecomeActiveNotification, object: nil)
-        center.addObserver(self, selector: #selector(windowDidChangeOcclusionState(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        for name in [
+            NSApplication.didBecomeActiveNotification,
+            NSApplication.didResignActiveNotification,
+            NSApplication.didHideNotification,
+            NSApplication.didUnhideNotification,
+        ] {
+            center.addObserver(self, selector: #selector(visibilityChanged), name: name, object: nil)
+        }
         // The accent is set on the glow once, not resolved on every draw, so a theme
         // change has to reach it here.
         center.addObserver(self, selector: #selector(themeDidChange), name: ThemeManager.didChange, object: nil)
@@ -524,16 +539,53 @@ final class HydraChargeLayerView: NSView {
         if recolor { applyColors() }
         // The animations go on once; the lifecycle below puts them back wherever they can
         // be lost. A re-render of the button (every hover) is not one of those.
-        if ring.animation(forKey: Self.turnKey) == nil { installAnimations() }
+        syncAnimations()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if observedWindow !== window {
+            let center = NotificationCenter.default
+            let names = [
+                NSWindow.didChangeOcclusionStateNotification,
+                NSWindow.didMiniaturizeNotification,
+                NSWindow.didDeminiaturizeNotification,
+                NSWindow.willCloseNotification,
+            ]
+            if let observedWindow {
+                for name in names {
+                    center.removeObserver(self, name: name, object: observedWindow)
+                }
+            }
+            observedWindow = window
+            if let window {
+                for name in names {
+                    let selector = name == NSWindow.willCloseNotification
+                        ? #selector(windowWillClose)
+                        : #selector(visibilityChanged)
+                    center.addObserver(self, selector: selector, name: name, object: window)
+                }
+            }
+        }
         // Joining a window late (a button built off screen), the layers need their colours
         // resolved for its appearance and their animations running from the shared clock.
-        guard window != nil else { return }
-        applyColors()
-        installAnimations()
+        if window != nil { applyColors() }
+        syncAnimations()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        syncAnimations()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        removeAnimations()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        syncAnimations()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -542,16 +594,39 @@ final class HydraChargeLayerView: NSView {
         applyColors()
     }
 
-    @objc private func appDidBecomeActive() {
-        guard window != nil else { return }
-        installAnimations()
+    @objc private func visibilityChanged() {
+        syncAnimations()
     }
 
-    @objc private func windowDidChangeOcclusionState(_ note: Notification) {
-        // Every window ordered in posts this, popovers and tooltips included: only this
-        // view's own window coming back into view concerns it.
-        guard let window, (note.object as? NSWindow) === window, window.occlusionState.contains(.visible) else { return }
-        installAnimations()
+    @objc private func windowWillClose() {
+        removeAnimations()
+    }
+
+    private var canAnimate: Bool {
+        guard superview != nil, let window else { return false }
+        return NSApp.isActive
+            && !NSApp.isHidden
+            && window.isVisible
+            && window.occlusionState.contains(.visible)
+            && !window.isMiniaturized
+            && !isHiddenOrHasHiddenAncestor
+    }
+
+    private func syncAnimations() {
+        guard canAnimate else {
+            removeAnimations()
+            return
+        }
+        if ring.animation(forKey: Self.turnKey) == nil {
+            installAnimations()
+        }
+    }
+
+    private func removeAnimations() {
+        ring.removeAllAnimations()
+        glow.removeAllAnimations()
+        ring.opacity = Self.ringRestOpacity
+        glow.opacity = Self.glowRestOpacity
     }
 
     @objc private func themeDidChange() {
@@ -668,7 +743,7 @@ struct HydraSendWorkingBadge: View {
         .background(isSending ? Chrome.glassTint : Chrome.accent, in: Capsule())
         .contentShape(Capsule())
         .animation(Chrome.panelSlide, value: isSending)
-        .help(Text(verbatim: isSending && running == 0 ? Chrome.localized(isChimera ? "Preparing the delegation · Show or hide the Chimera panel" : "Preparing the delegation · Show or hide the Hydra panel") : running == 1 ? Chrome.localized(isChimera ? "1 head working · Show or hide the Chimera panel" : "1 head working · Show or hide the Hydra panel") : String(format: Chrome.localized(isChimera ? "%d heads working · Show or hide the Chimera panel" : "%d heads working · Show or hide the Hydra panel"), running)))
+        .help(Text(verbatim: isSending && running == 0 ? Chrome.localized("Preparing the delegation · Show or hide the sub-agents panel") : running == 1 ? Chrome.localized("1 sub-agent working · Show or hide the sub-agents panel") : String(format: Chrome.localized("%d sub-agents working · Show or hide the sub-agents panel"), running)))
         .accessibilityHidden(true)
     }
 }
@@ -691,12 +766,12 @@ enum HydraPairSummary {
         var parts: [String] = []
         if let model = workerModel(pair, registry: registry) {
             parts.append(pair.sendsHeadsElsewhere
-                ? String(format: Chrome.localized("Heads on %@ (%@)"), model, pair.headsProvider.displayName)
-                : String(format: Chrome.localized("Heads on %@"), model))
+                ? String(format: Chrome.localized("Sub-agents on %@ (%@)"), model, pair.headsProvider.displayName)
+                : String(format: Chrome.localized("Sub-agents on %@"), model))
         } else if pair.sendsHeadsElsewhere {
-            parts.append(String(format: Chrome.localized("Heads on %@"), pair.headsProvider.displayName))
+            parts.append(String(format: Chrome.localized("Sub-agents on %@"), pair.headsProvider.displayName))
         } else {
-            parts.append(Chrome.localized("Heads on the chat's model"))
+            parts.append(Chrome.localized("Sub-agents on the chat's model"))
         }
         if let effort = pair.workerEffort { parts.append(String(format: Chrome.localized("%@ effort"), Chrome.localized(ModelOption.effortTitle(effort)))) }
         return parts.joined(separator: " · ")
@@ -704,7 +779,7 @@ enum HydraPairSummary {
 
     /// "Claude lead, Antigravity heads" across providers, or just "Claude".
     static func providers(_ pair: HydraPair) -> String {
-        pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@ lead, %@ heads"), pair.provider.displayName, pair.headsProvider.displayName) : pair.provider.displayName
+        pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@ lead, %@ sub-agents"), pair.provider.displayName, pair.headsProvider.displayName) : pair.provider.displayName
     }
 
     /// The efforts in one phrase: "High effort" when lead and heads share one, "Lead high,
@@ -715,9 +790,9 @@ enum HydraPairSummary {
         let heads = pair.workerEffort.map { Chrome.localizedLowercased(ModelOption.effortTitle($0)) }
         switch (lead, heads) {
         case let (lead?, heads?) where lead == heads: return String(format: Chrome.localized("%@ effort"), lead.capitalized)
-        case let (lead?, heads?): return String(format: Chrome.localized("Lead %@, heads %@ effort"), lead, heads)
+        case let (lead?, heads?): return String(format: Chrome.localized("Lead %@, sub-agents %@ effort"), lead, heads)
         case let (lead?, nil): return String(format: Chrome.localized("Lead %@ effort"), lead)
-        case let (nil, heads?): return String(format: Chrome.localized("Heads %@ effort"), heads)
+        case let (nil, heads?): return String(format: Chrome.localized("Sub-agents %@ effort"), heads)
         case (nil, nil): return nil
         }
     }

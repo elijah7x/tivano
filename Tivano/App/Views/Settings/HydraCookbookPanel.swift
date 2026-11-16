@@ -16,10 +16,10 @@ struct HydraCookbookPanel: View {
         }
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Pair presets")
+                Text("Suggested combos")
                     .font(.ui(.title3, weight: .semibold))
                     .foregroundStyle(Chrome.primaryText)
-                Text("Add a preset to your model picker.")
+                Text("Add a suggested combo to your model picker.")
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -31,22 +31,27 @@ struct HydraCookbookPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if ready.isEmpty {
-                        Text("Set up a provider in Settings › Providers, and its models bring their pairs here.")
+                        Text("Set up a provider in Settings › Provider management, and its models bring their combos here.")
                             .font(.ui(.callout))
                             .foregroundStyle(Chrome.secondaryText)
                             .padding(16)
                     }
-                    ForEach(ready, id: \.recipe.id) { entry in
-                        HydraCookbookRow(recipe: entry.recipe, pair: entry.pair, missing: nil)
-                        Divider().opacity(0.35).padding(.leading, 16)
+                    let readyCategories = HydraPairRecipe.Category.allCases.filter { category in
+                        ready.contains { $0.recipe.category == category }
+                    }
+                    ForEach(readyCategories, id: \.self) { category in
+                        PopoverSectionHeader(category.title)
+                            .padding(.horizontal, 8)
+                            .padding(.top, category == readyCategories.first ? 6 : 10)
+                        ForEach(ready.filter { $0.recipe.category == category }, id: \.recipe.id) { entry in
+                            HydraCookbookRow(recipe: entry.recipe, pair: entry.pair, missing: nil)
+                            Divider().opacity(0.35).padding(.leading, 16)
+                        }
                     }
                     if !waiting.isEmpty {
-                        Text("Needs a provider")
-                            .font(.ui(.subheadline, weight: .semibold))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 14)
-                            .padding(.bottom, 4)
+                        PopoverSectionHeader("Needs a provider")
+                            .padding(.horizontal, 8)
+                            .padding(.top, 10)
                         ForEach(waiting, id: \.recipe.id) { entry in
                             HydraCookbookRow(recipe: entry.recipe, pair: nil, missing: entry.provider)
                                 .opacity(0.55)
@@ -95,7 +100,7 @@ private struct HydraCookbookRow: View {
                 if let pair {
                     // A same-provider pair with no efforts set has nothing to say here; an empty
                     // Text would still take a line and leave the row with blank space below it.
-                    let providersLine: String? = pair.headsProvider == pair.provider ? nil : String(format: Chrome.localized("%@ lead, %@ heads"), pair.provider.displayName, pair.headsProvider.displayName)
+                    let providersLine: String? = pair.headsProvider == pair.provider ? nil : String(format: Chrome.localized("%@ lead, %@ sub-agents"), pair.provider.displayName, pair.headsProvider.displayName)
                     let detail = [providersLine, HydraPairSummary.efforts(pair)].compactMap { $0 }.joined(separator: " · ")
                     if !detail.isEmpty {
                         Text(verbatim: detail)
@@ -104,7 +109,7 @@ private struct HydraCookbookRow: View {
                             .lineLimit(2)
                     }
                 } else if let missing {
-                    Text(verbatim: String(format: Chrome.localized("Set up %@ to add this pair."), missing.displayName))
+                    Text(verbatim: String(format: Chrome.localized("Set up %@ to add this combo."), missing.displayName))
                         .font(.ui(.subheadline))
                         .foregroundStyle(Chrome.secondaryText.opacity(0.8))
                 }
@@ -136,7 +141,7 @@ private struct HydraCookbookAddButton: View {
             } label: {
                 Label("Add", systemImage: "plus")
             }
-            .buttonStyle(.glassProminent)
+            .chromeGlassButtonStyle(prominent: true)
             .controlSize(.small)
         }
     }

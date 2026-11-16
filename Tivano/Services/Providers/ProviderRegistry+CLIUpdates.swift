@@ -62,10 +62,9 @@ extension ProviderRegistry {
             }
             return
         }
-        cliCheckTasks[provider]?.task.cancel()
         guard cliUpdates[provider]?.phase == .waiting, let executable = executable(for: provider) else { return }
         let lock = cliInstallLock(for: executable)
-        guard cliUpdateRequesters[lock] == provider, !cliRecoveryLocks.contains(lock),
+        guard cliUpdateRequesters[lock] == provider,
               providersSharingCLIInstall(lock).allSatisfy({ cliUpdates[$0]?.phase != .updating }) else { return }
         cliUpdateTasks[lock]?.task.cancel()
     }
@@ -124,10 +123,10 @@ extension ProviderRegistry {
 
     /// Asks for an install. Callers that share an install await the one already running.
     /// A custom binary path, an unknown channel, and a provider that is off or unmonitored do not install.
-    func updateCLI(_ provider: ProviderKind, recovery: Bool = false) async -> Bool {
+    func updateCLI(_ provider: ProviderKind) async -> Bool {
         // MiniMax Code needs its official installer/npm flags for native optional dependencies.
         // Until that update transaction is integrated, offer read-only version checks only.
-        guard !recovery, !CaptureRun.isEnabled, !provider.isAPIKeyBased, provider != .minimaxCode, provider != .zcode else { return false }
+        guard !CaptureRun.isEnabled, !provider.isAPIKeyBased, provider != .minimaxCode, provider != .zcode else { return false }
         guard let executable = executable(for: provider) else { return false }
         guard settings.isEnabled(provider), monitorsCLIUpdates(provider), settings.binaryPath(for: provider).isEmpty else { return false }
         let lock = cliInstallLock(for: executable)
@@ -148,7 +147,6 @@ extension ProviderRegistry {
                 if self.cliUpdateTasks[lock]?.id == id {
                     self.cliUpdateTasks[lock] = nil
                     self.cliUpdateRequesters[lock] = nil
-                    self.cliRecoveryLocks.remove(lock)
                 }
             }
             return await self.performCLIUpdate(provider, lock: lock, sharers: sharers, snapshot: snapshot)
@@ -545,7 +543,7 @@ extension ProviderRegistry {
     /// The executable still on this install, or nil when the wait should stop.
     /// A custom path, a disabled provider, and monitoring switched off are nil as well.
     private func preparedCLIExecutable(_ provider: ProviderKind, lock: String) -> URL? {
-        guard !Task.isCancelled, settings.isEnabled(provider), (cliRecoveryLocks.contains(lock) || monitorsCLIUpdates(provider)),
+        guard !Task.isCancelled, settings.isEnabled(provider), monitorsCLIUpdates(provider),
               settings.binaryPath(for: provider).isEmpty,
               let executable = executable(for: provider), cliInstallLock(for: executable) == lock else { return nil }
         return executable
@@ -570,7 +568,7 @@ extension ProviderRegistry {
         sharers: [ProviderKind],
         snapshot: [ProviderKind: CLIUpdateStatus]
     ) -> Bool {
-        if Task.isCancelled || !settings.isEnabled(requester) || (!cliRecoveryLocks.contains(lock) && !monitorsCLIUpdates(requester))
+        if Task.isCancelled || !settings.isEnabled(requester) || !monitorsCLIUpdates(requester)
             || !settings.binaryPath(for: requester).isEmpty {
             restoreCLIWait(sharers, snapshot: snapshot)
             return true
@@ -777,7 +775,6 @@ extension ProviderRegistry {
             if end <= parts.count { return "package:" + NSString.path(withComponents: Array(parts[..<end])) }
         }
         if let brew = homebrewInstallLock(path) { return brew }
-        if let pnpm = pnpmInstallLock(path) { return pnpm }
         return "path:" + path
     }
 

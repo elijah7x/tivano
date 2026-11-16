@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The question and editable affiliation before a thread's first message.
@@ -26,7 +27,7 @@ struct NewThreadPrompt: View {
                     Text("What should we build?")
                 }
             }
-            .font(.system(size: 28, weight: .regular))
+            .font(TypeScale.shared.serif ? Font(ThemeTypeface.nsFont(size: 28, weight: .regular) as CTFont) : .system(size: 28, weight: .regular))
             .foregroundStyle(Chrome.primaryText)
             .lineLimit(1)
             .minimumScaleFactor(0.6)

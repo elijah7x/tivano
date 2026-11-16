@@ -199,11 +199,11 @@ enum ProviderError: LocalizedError {
         switch self {
         case .notInstalled(let provider):
             if provider == .minimaxCode {
-                AppText.localized("MiniMax Code is not installed. Install the official mcode CLI, then refresh Providers. Authentication is configured separately in MiniMax Code.")
+                AppText.localized("MiniMax Code is not installed. Install the official mcode CLI, then refresh in Settings › Provider management. Authentication is configured separately in MiniMax Code.")
             } else if provider == .zcode {
-                AppText.localized("ZCode is not installed. Install the ZCode app, then refresh Providers.")
+                AppText.localized("ZCode is not installed. Install the ZCode app, then refresh in Settings › Provider management.")
             } else if provider.isAPIKeyBased {
-                String(format: AppText.localized("%@ needs an API key. Add one in Settings › Providers › %@."), provider.displayName, provider.displayName)
+                String(format: AppText.localized("%@ needs an API key. Add one in Settings › Provider management › %@."), provider.displayName, provider.displayName)
             } else {
                 String(format: AppText.localized("%@ is not installed. Install it and sign in with `%@`."), provider.displayName, provider.loginCommand)
             }

@@ -459,7 +459,7 @@ struct HydraReportsPopover: View {
             default: break
             }
         }
-        var line = n == 1 ? Chrome.localized("1 head") : String(format: Chrome.localized("%d heads"), n)
+        var line = n == 1 ? Chrome.localized("1 sub-agent") : String(format: Chrome.localized("%d sub-agents"), n)
         guard !files.isEmpty else { return line }
         let f = files.count
         let a = files.reduce(0) { $0 + $1.additions }

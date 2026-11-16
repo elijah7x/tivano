@@ -80,7 +80,7 @@ def main():
         failures.append('could not extract HydraPanel.panelMenu(); update the extraction marker')
     else:
         require_markers(body, {
-            'Continue head item': 'Chrome.localized("Continue head")',
+            'Continue sub-agent item': 'Chrome.localized("Continue sub-agent")',
             'manual continuation action': 'model.continueFailedHydraHead(head.id)',
         }, 'HydraPanel.panelMenu()', failures)
 

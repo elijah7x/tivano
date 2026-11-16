@@ -502,8 +502,10 @@ final class LinkTextVeil {
     /// The widest character range temporary colours were laid over, cleared before each
     /// repaint and once the veil settles.
     private var painted = NSRange(location: 0, length: 0)
+    private var isActive = false
     private var source: String?
     private var utf16Offsets: [Int] = []
+    private var utf8Offsets: [Int] = []
 
     private weak var tickTarget: NSTextView?
     /// The render scope of the column this paragraph sits in, subscribed for its
@@ -515,18 +517,24 @@ final class LinkTextVeil {
     /// the chunks in flight finish and the veil forgets the text.
     func update(_ view: NSTextView, active: Bool, scope: VeilRenderScope?) {
         subscribe(to: scope)
+        isActive = active
         let now = Date.now
-        if source != view.string {
-            source = view.string
-            var offset = 0
-            utf16Offsets = [0]
-            for character in view.string {
-                offset += String(character).utf16.count
-                utf16Offsets.append(offset)
+        let text = view.string
+        if active {
+            if source != text {
+                extendOffsets(to: text)
+                source = text
+                veil.advance(text, at: now)
             }
-            if active { veil.advance(view.string, at: now) }
+        } else if veil.isFading(at: now), source != text {
+            if let previous = source, text.utf8.starts(with: previous.utf8) {
+                extendOffsets(to: text)
+                source = text
+            } else {
+                veil.reset()
+            }
         }
-        if veil.isFading(at: now) {
+        if veil.isFading(at: now), NSApp.isActive {
             tickTarget = view
             // A hidden column records its arrivals but paints nothing and arms no
             // link: the scope repaints at the real time the moment it shows again.
@@ -535,6 +543,30 @@ final class LinkTextVeil {
             if displayLink == nil { arm() }
         } else {
             settle(view, keepText: active)
+        }
+    }
+
+    private func extendOffsets(to text: String) {
+        var utf16 = 0
+        var utf8 = 0
+        if let previous = source, utf16Offsets.count > 1, utf16Offsets.count == utf8Offsets.count,
+           text.utf8.starts(with: previous.utf8) {
+            // Re-segment from the previous final grapheme in case the append extends it.
+            utf16Offsets.removeLast()
+            utf8Offsets.removeLast()
+            utf16 = utf16Offsets.last ?? 0
+            utf8 = utf8Offsets.last ?? 0
+        } else {
+            utf16Offsets = [0]
+            utf8Offsets = [0]
+        }
+        let tail = String(decoding: text.utf8.dropFirst(utf8), as: UTF8.self)
+        for character in tail {
+            let piece = String(character)
+            utf16 += piece.utf16.count
+            utf8 += piece.utf8.count
+            utf16Offsets.append(utf16)
+            utf8Offsets.append(utf8)
         }
     }
 
@@ -584,17 +616,23 @@ final class LinkTextVeil {
         // The clock holds its last frame through a scroll, so the layout-manager repaint
         // does not run for frames the reader never sees; the ramp resumes when the scroll
         // ends.
-        guard !ScrollActivity.shared.isScrolling, NSApp.isActive else { return }
         guard let view = tickTarget else {
             displayLink?.invalidate()
             displayLink = nil
             return
         }
+        // In the background nothing is watched closely: show the arrived text at full
+        // opacity and stop the link instead of spinning it until the app is active again.
+        guard NSApp.isActive else {
+            settle(view, keepText: isActive)
+            return
+        }
+        guard !ScrollActivity.shared.isScrolling else { return }
         let now = Date.now
         if veil.isFading(at: now) {
             paint(view, at: now)
         } else {
-            settle(view, keepText: true)
+            settle(view, keepText: isActive)
         }
     }
 
@@ -602,7 +640,12 @@ final class LinkTextVeil {
         displayLink?.invalidate()
         displayLink = nil
         clear(view)
-        if !keepText { veil.reset(); source = nil; utf16Offsets = [] }
+        if !keepText {
+            veil.reset()
+            source = nil
+            utf16Offsets = []
+            utf8Offsets = []
+        }
     }
 
     private func clear(_ view: NSTextView) {
@@ -617,18 +660,33 @@ final class LinkTextVeil {
         guard let layout = view.layoutManager, let storage = view.textStorage else { return }
         clear(view)
         let accent = Chrome.accentNSColor
+        let appearance = view.effectiveAppearance
         for span in veil.spans(at: now) where span.alpha < 1 {
             let range = span.range.clamped(to: 0..<max(0, utf16Offsets.count - 1))
             guard !range.isEmpty else { continue }
             let lower = utf16Offsets[range.lowerBound]
             let nsRange = NSRange(location: lower, length: utf16Offsets[range.upperBound] - lower)
-            // Each run keeps its own colour, only thinner: prose its label colour, a link
-            // the accent it is drawn in.
+            // Each run keeps its own colour, only thinner: prose its label colour (or dimmed
+            // 0.7 label colour), a link the accent it is drawn in.
             storage.enumerateAttributes(in: nsRange) { attributes, runRange, _ in
-                let color: NSColor = attributes[.link] != nil
-                    ? accent
-                    : (attributes[.foregroundColor] as? NSColor ?? .labelColor)
-                layout.addTemporaryAttribute(.foregroundColor, value: color.withAlphaComponent(span.alpha), forCharacterRange: runRange)
+                let faded: NSColor
+                if attributes[.link] != nil {
+                    faded = accent.withAlphaComponent(span.alpha)
+                } else if (attributes[.foregroundColor] as AnyObject?) === LinkParagraphView.dimmedLabel {
+                    var resolved = NSColor.labelColor
+                    appearance.performAsCurrentDrawingAppearance {
+                        resolved = NSColor.labelColor.usingColorSpace(.sRGB)?.withAlphaComponent(0.7 * span.alpha) ?? .secondaryLabelColor.withAlphaComponent(span.alpha)
+                    }
+                    faded = resolved
+                } else {
+                    let raw = attributes[.foregroundColor] as? NSColor ?? .labelColor
+                    var resolved = raw
+                    appearance.performAsCurrentDrawingAppearance {
+                        resolved = (raw.usingColorSpace(.sRGB) ?? raw).withAlphaComponent(span.alpha)
+                    }
+                    faded = resolved
+                }
+                layout.addTemporaryAttribute(.foregroundColor, value: faded, forCharacterRange: runRange)
             }
             painted = painted.length == 0 ? nsRange : NSUnionRange(painted, nsRange)
         }

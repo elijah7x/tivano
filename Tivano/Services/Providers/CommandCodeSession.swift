@@ -450,7 +450,7 @@ final class CommandCodeSession: ProviderSession {
         case 0:
             onEvent?(.turnCompleted(status: .completed, error: nil))
         case 3:
-            onEvent?(.turnCompleted(status: .failed, error: AppText.localized("Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings › Providers › Command Code.")))
+            onEvent?(.turnCompleted(status: .failed, error: AppText.localized("Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings › Provider management › Command Code.")))
         case 4:
             onEvent?(.turnCompleted(status: .failed, error: tail ?? AppText.localized("Command Code was denied permission.")))
         case 5:
@@ -488,7 +488,7 @@ final class CommandCodeSession: ProviderSession {
     private static func friendlyError(_ text: String) -> String {
         let lowered = text.lowercased()
         if lowered.contains("not authenticated") || lowered.contains("unauthorized") || lowered.contains("session expired") {
-            return AppText.localized("Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings › Providers › Command Code.")
+            return AppText.localized("Command Code is not signed in. Run `cmd login` in Terminal, or add a Studio API key in Settings › Provider management › Command Code.")
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }

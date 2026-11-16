@@ -11,9 +11,23 @@ struct LinkHoverModifier: ViewModifier {
     let personas: [HydraPersona]
     let targets: [String: HydraMentionTarget]
 
+    @MainActor private static var personaCache = RecentCache<[HydraPersona], [String: HydraPersona]>(limit: 32)
+
+    @MainActor
+    private static func persona(named name: String, in personas: [HydraPersona]) -> HydraPersona? {
+        guard !personas.isEmpty else { return nil }
+        if let hit = personaCache.value(for: personas) { return hit[name] }
+        var map: [String: HydraPersona] = [:]
+        map.reserveCapacity(personas.count)
+        for persona in personas where map[persona.name] == nil {
+            map[persona.name] = persona
+        }
+        personaCache.insert(map, for: personas)
+        return map[name]
+    }
+
     func body(content: Content) -> some View {
-        let personasByName = Dictionary(personas.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
-        return content
+        content
             .onContinuousHover(coordinateSpace: .local) { phase in
                 guard let view = linkView.value as? LinkTextView else { return }
                 switch phase {
@@ -23,9 +37,10 @@ struct LinkHoverModifier: ViewModifier {
                         showsHand = overLink
                         if overLink { NSCursor.pointingHand.push() } else { NSCursor.pop() }
                     }
-                    if let (name, url, rect) = view.headMentionRect(at: point),
+                    if !targets.isEmpty,
+                       let (name, url, rect) = view.headMentionRect(at: point),
                        let target = targets[name], target.url == url,
-                       let persona = personasByName[name] {
+                       let persona = Self.persona(named: name, in: personas) {
                         if hoveredHeadID != target.threadID {
                             hoveredHeadID = target.threadID
                             HydraHeadHoverPopover.shared.show(persona: persona, target: target, relativeTo: rect, of: view)

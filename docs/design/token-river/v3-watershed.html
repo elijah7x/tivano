@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Tivano · Watershed studies</title>
+<style>
+  :root {
+    color-scheme: light;
+    --desktop: #d6dad6; --primary: #252727; --secondary: rgba(37,39,39,.7);
+    --accent: #7ba58f; --glass-tint: #ffffff; --card: rgba(37,39,39,.03);
+    --rule: rgba(37,39,39,.12); --rim: rgba(255,255,255,.68); --ink: #2c363b;
+    --paper: rgba(246,248,244,.8); --tag: rgba(238,243,236,.97);
+    --ribbon-paper: #dfe5e0; --ribbon-focus: #cdd4cf; --label-paper: #edf1ec;
+    --window: linear-gradient(140deg,#e4ebe6,#f5f6f3 65%,#e8ede8); --shadow: rgba(36,54,43,.10);
+    --claude: rgba(125,151,121,.23); --codex: rgba(97,138,147,.24);
+    --gemini: rgba(119,133,163,.21); --opencode: rgba(149,128,151,.20);
+    --cursor: rgba(174,139,112,.22); --kimi: rgba(154,154,110,.22);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --desktop: #1a201d; --primary: #f0f0ee; --secondary: rgba(240,240,238,.7);
+    --glass-tint: #1e1e20; --card: rgba(240,240,238,.03); --rule: rgba(240,240,238,.12);
+    --rim: rgba(255,255,255,.12); --ink: #b8c4c6; --paper: rgba(40,49,44,.82);
+    --ribbon-paper: #323c37; --ribbon-focus: #3d4743; --label-paper: #2b342f;
+    --tag: rgba(38,47,42,.98); --window: linear-gradient(140deg,#29332e,#1e1e20 65%,#242b27);
+    --shadow: rgba(12,19,15,.22);
+    --claude: rgba(158,187,151,.32); --codex: rgba(134,180,190,.34);
+    --gemini: rgba(155,171,205,.30); --opencode: rgba(190,162,192,.29);
+    --cursor: rgba(207,174,145,.31); --kimi: rgba(188,188,139,.30);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 24px 56px; background: var(--desktop); color: var(--primary);
+    font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; border: 0; }
+  button:focus-visible, input:focus-visible, canvas:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 4px;
+  }
+  button:active { transform: translateY(1px); }
+  button:disabled { cursor: default; opacity: .65; }
+  h1, h2, h3, p { margin: 0; }
+  main { max-width: 900px; margin: auto; }
+  .masthead { margin-bottom: 30px; }
+  .topline, .direction-heading, .page-heading, .metadata, .range-heading, .chart-foot {
+    display: flex; justify-content: space-between; align-items: center; gap: 14px;
+  }
+  h1 { font-size: 17px; font-weight: 600; letter-spacing: -.2px; }
+  .masthead p { margin-top: 8px; max-width: 680px; color: var(--secondary); font-size: 12px; }
+  .controls, .filters { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .controls label, .flow { display: flex; align-items: center; gap: 6px; font-size: 11px; white-space: nowrap; }
+  input[type="checkbox"] { accent-color: var(--accent); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 12px;
+    border: 1px solid var(--rule); border-radius: 999px; background: var(--card);
+    box-shadow: inset 0 1px var(--rim); font-size: 12px; }
+  .pill:hover { background: rgba(123,165,143,.12); }
+  #theme { background: rgba(123,165,143,.13); }
+  .segmented { padding: 3px; gap: 2px; }
+  .segmented button { background: transparent; border-radius: 999px; padding: 3px 10px; font-size: 11px; color: var(--secondary); }
+  .segmented button[aria-pressed="true"] { color: var(--primary); background: rgba(123,165,143,.16); box-shadow: inset 0 1px var(--rim); }
+  .icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
+  .direction { margin-bottom: 42px; }
+  .direction-heading { margin: 0 3px 10px; }
+  h2 { font-size: 14px; font-weight: 600; }
+  h2 span { color: var(--secondary); font-weight: 400; margin-left: 9px; font-size: 12px; }
+  .replay, .refresh { display: flex; align-items: center; gap: 5px; background: transparent; color: var(--secondary); padding: 4px 0; font-size: 11px; }
+  .replay:hover, .refresh:hover { color: var(--primary); }
+  .window { border-radius: 16px; overflow: hidden; background: var(--window); border: 1px solid var(--rim); box-shadow: 0 16px 40px var(--shadow); }
+  .titlebar { height: 32px; display: flex; align-items: center; padding: 0 18px; position: relative; }
+  .traffic { display: flex; gap: 9px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; background: #ff6058; }
+  .traffic i:nth-child(2) { background: #ffbd2e; }
+  .traffic i:nth-child(3) { background: #28c840; }
+  .window-name { position: absolute; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--secondary); }
+  .window-detail { padding: 8px 26px 20px; }
+  h3 { font-size: 22px; font-weight: 600; letter-spacing: -.4px; }
+  .metadata { margin-top: 4px; color: var(--secondary); font-size: 11px; }
+  .summary { display: grid; grid-template-columns: 1.1fr 1fr 1fr 1.25fr; margin: 12px 0 8px; padding: 10px 0; background: var(--card); border-radius: 16px; }
+  .metric { padding: 0 17px; min-width: 0; }
+  .metric + .metric { border-left: 1px solid var(--rule); }
+  .metric dt { color: var(--secondary); font-size: 11px; line-height: 14px; margin-bottom: 3px; }
+  .metric dd { font-size: 18px; line-height: 1.35; font-weight: 500; margin: 0; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+  .metric dd.name { font-size: 14px; padding-top: 4px; letter-spacing: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .selection, .coverage { color: var(--secondary); font-size: 10px; }
+  .selection { display: flex; gap: 9px; align-items: center; min-height: 22px; }
+  .text-button { background: none; color: var(--secondary); text-decoration: underline; text-underline-offset: 3px; padding: 0; font-size: 10px; }
+  .coverage { margin: 0 0 10px; }
+  .chart-scroll { overflow-x: auto; }
+  .hero { position: relative; background: var(--card); border-radius: 16px; min-width: 720px; }
+  canvas { display: block; width: 100%; }
+  .chart { aspect-ratio: 900 / 340; border-radius: 16px; touch-action: pan-y; }
+  .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 15px; margin: 9px 2px 12px; font-size: 10px; color: var(--secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 16px; height: 7px; border-top: .7px solid var(--ink); border-bottom: .7px solid var(--ink); }
+  .legend .core { width: 12px; height: 3px; background: var(--ink); opacity: .5; border: 0; }
+  .legend .fold { margin-left: auto; }
+  .range-heading { margin-top: 4px; }
+  .dates { font-size: 10px; color: var(--secondary); font-variant-numeric: tabular-nums; }
+  .timeline { position: relative; margin-top: 6px; touch-action: none; user-select: none; }
+  .time { aspect-ratio: 900 / 64; }
+  .handle { position: absolute; top: 4%; height: 65%; width: 7px; transform: translateX(-50%);
+    padding: 0; border: 1px solid var(--ink); border-radius: 2px; background: var(--tag); cursor: ew-resize; }
+  .handle:active { transform: translateX(-50%); }
+  .handle::after { content: ''; position: absolute; top: 35%; bottom: 35%; left: 2px; border-left: 1px solid var(--rule); }
+  .chart-foot { align-items: flex-start; margin: 8px 2px 0; color: var(--secondary); font-size: 10px; }
+  .tag { position: absolute; width: 266px; z-index: 2; pointer-events: none; padding: 28px 17px 15px;
+    font-size: 10px; color: var(--primary); filter: drop-shadow(0 5px 9px var(--shadow)); }
+  [hidden] { display: none !important; }
+  .tag-plate { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; overflow: visible; }
+  .tag-plate path, .tag-plate circle { stroke: var(--ink); stroke-width: .65; stroke-opacity: .55; vector-effect: non-scaling-stroke; }
+  .tag-plate .plate { fill: var(--tag); }
+  .tag-plate .etch { fill: none; }
+  .tag-caption { text-transform: uppercase; font-size: 9px; letter-spacing: .6px; color: var(--secondary); }
+  .tag-value { font-size: 17px; font-weight: 500; margin: 2px 0 6px; font-variant-numeric: tabular-nums; }
+  .tag-row { display: flex; justify-content: space-between; gap: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
+  .tag-footer { margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--rule); color: var(--secondary); }
+  .notes { margin: 14px 3px 0; color: var(--secondary); font-size: 12px; line-height: 1.8; }
+  .notes strong { color: var(--primary); font-weight: 500; }
+  .notes table { width: 100%; margin: 8px 0 12px; border-collapse: collapse; }
+  .notes th, .notes td { text-align: left; padding: 7px 10px; vertical-align: top; border-bottom: 1px solid var(--rule); }
+  .notes th { color: var(--primary); font-weight: 500; }
+  .notes th:first-child { width: 24%; }
+  .notes th:nth-child(2) { width: 32%; }
+  .notes ul { margin: 5px 0 12px; padding-left: 20px; }
+  .notes p { margin-top: 7px; }
+  .fixture { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--secondary); font-size: 11px; }
+  .error { padding: 28px; border: 1px solid var(--rule); border-radius: 16px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (max-width: 700px) {
+    body { padding: 20px 12px 32px; }
+    .topline { flex-direction: column; align-items: flex-start; gap: 12px; }
+    .window-detail { padding: 12px 16px 20px; }
+    .summary { grid-template-columns: 1fr 1fr; gap: 17px 0; }
+    .metric:nth-child(3) { border-left: 0; }
+    .direction-heading h2 span { display: none; }
+    .page-heading, .range-heading, .chart-foot { flex-wrap: wrap; gap: 8px; }
+    .notes { overflow-x: auto; }
+    .notes table { min-width: 540px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header class="masthead">
+    <div class="topline"><h1>Tokens · watershed studies</h1><div class="controls">
+      <label><input id="reduce" type="checkbox"> Reduce motion</label>
+      <button class="pill" id="theme" type="button" aria-pressed="false">Dark appearance</button>
+    </div></div>
+    <p>One familiar chart, two treatments. Follow each tool through shared models to four token types. Synthetic data; illustrative costs, not billing data.</p>
+  </header>
+  <div id="directions"><p role="status">Loading sample watershed…</p></div>
+  <noscript><p class="error">Enable JavaScript to explore the sample watershed.</p></noscript>
+  <footer class="fixture">Shared synthetic fixture · 365 days ending 8 Nov 2026 · 6 tools. Reasoning is included in Output. Refresh replays this sample; no network requests or saved preferences.</footer>
+</main>
+<script src="fixture.js"></script>
+<script>
+(() => {
+'use strict';
+const root = document.getElementById('directions'), fixture = window.TokenFixture;
+if (!fixture?.days?.length) {
+  root.innerHTML = '<p class="error" role="alert">Sample data is unavailable. Keep fixture.js beside this HTML file, then reopen it.</p>';
+  return;
+}
+const days = fixture.days.slice(-365), tools = fixture.tools;
+const names = Object.fromEntries(tools.map(t => [t.id, t.name]));
+const fields = ['input', 'cachedInput', 'cacheWrite', 'output'];
+const fieldNames = ['Fresh input', 'Cache reads', 'Cache writes', 'Output'];
+// The fixture exports row costs only. Its illustrative rates recover exact type costs.
+const rates = {
+  'Sonnet 4.5': [3,.3,3.75,15], 'Opus 4.1': [15,1.5,18.75,75], 'Opus 4.5': [5,.5,6.25,25],
+  'Haiku 4.5': [1,.1,1.25,5], 'GPT-5': [1.25,.125,0,10], 'GPT-5-Codex': [1.25,.125,0,10],
+  'GPT-5.5': [1.5,.15,0,12], 'Gemini 2.5 Pro': [1.25,.31,0,10], 'Gemini 3 Pro': [2,.5,0,12],
+  'Gemini 2.5 Flash': [.3,.075,0,2.5], 'Kimi K2': [.6,.15,.6,2.5],
+  'Kimi K2.5': [.6,.15,.6,3], 'GLM-4.6': [.6,.11,.6,2.2]
+};
+const full = new Intl.NumberFormat('en-US');
+const compact = n => new Intl.NumberFormat('en-US', {notation:'compact', maximumFractionDigits:1}).format(n);
+const money = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+const exactMoney = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:6});
+const percent = n => (100 * n).toFixed(1) + '%';
+const clamp = (n,a,b) => Math.max(a,Math.min(b,n));
+const sum = (items,fn) => items.reduce((total,item) => total + fn(item),0);
+const key = (...parts) => JSON.stringify(parts);
+const escapeHTML = s => String(s).replace(/[&<>"']/g,c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const refreshIcon = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 6a5.3 5.3 0 1 0 .1 4M13 2v4H9"/></svg>';
+const tagPlate = '<svg class="tag-plate" viewBox="0 0 228 250" preserveAspectRatio="none" aria-hidden="true"><path class="etch" d="M114 0V18"/><path class="plate" d="M102 12H126L218 29Q225 30 225 38V238Q225 247 216 247H12Q3 247 3 238V38Q3 30 10 29Z"/><circle class="etch" cx="114" cy="21" r="2.5"/><path class="etch" d="M215 45l5-2m-5 8 5-2m-5 8 5-2m-5 8 5-2M9 224v13h12m186 0h12v-13"/></svg>';
+const reduced = document.getElementById('reduce'), motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+reduced.checked = motionQuery.matches;
+let states = [], raf = 0, lastPaint = 0, appActive = document.hasFocus();
+const palette = () => Object.fromEntries(['ink','paper','ribbon-paper','ribbon-focus','label-paper','primary','secondary','accent','tag',...tools.map(t=>t.id)]
+  .map(k => [k,getComputedStyle(document.documentElement).getPropertyValue('--'+k).trim()]));
+let colors = palette();
+const daily = days.map(day => {
+  const values = Object.fromEntries(tools.map(t=>[t.id,0]));
+  day.rows.forEach(r=>values[r.tool]+=r.total);
+  return {date:day.date,values,total:sum(Object.values(values),v=>v)};
+});
+const dailyMax = Math.max(1,...daily.map(d=>d.total));
+
+function aggregateRange(lo,hi) {
+  const pairs = new Map();
+  for (let day=lo; day<=hi; day++) for (const row of days[day].rows) {
+    const id=key(row.tool,row.model);
+    if (!pairs.has(id)) pairs.set(id,{tool:row.tool,model:row.model,tokens:[0,0,0,0],cost:[0,0,0,0],priced:[0,0,0,0],reasoning:0,reasonCost:0});
+    const p=pairs.get(id), priced=row.costUSD!==null;
+    const amounts=priced ? fields.map((f,i)=>row[f]*rates[row.model][i]) : [0,0,0,0];
+    const subtotal=sum(amounts,v=>v);
+    fields.forEach((f,i)=>{
+      p.tokens[i]+=row[f];
+      if (priced) { p.priced[i]+=row[f]; p.cost[i]+=subtotal ? row.costUSD*amounts[i]/subtotal : 0; }
+    });
+    p.reasoning+=row.reasoning;
+    p.reasonCost+=priced&&subtotal&&row.output ? row.costUSD*amounts[3]/subtotal*row.reasoning/row.output : 0;
+  }
+  return [...pairs.values()].flatMap(p=>fields.map((_,type)=>({
+    id:key(p.tool,p.model,type), tool:p.tool, model:p.model, type,
+    tokens:p.tokens[type], cost:p.cost[type], priced:p.priced[type],
+    reasoning:type===3?p.reasoning:0, reasonCost:type===3?p.reasonCost:0
+  }))).filter(a=>a.tokens>0);
+}
+function matches(a,selection) {
+  return !selection || ((!selection.tool || selection.tool===a.tool) &&
+    (!selection.models || selection.models.includes(a.model)) &&
+    (selection.type===undefined || selection.type===a.type));
+}
+function stats(atoms,selection=null) {
+  const a={tokens:0,cost:0,priced:0,reasoning:0,reasonCost:0,tools:new Map(),models:new Map(),parts:[0,0,0,0]};
+  atoms.forEach(v=>{
+    if (!matches(v,selection)) return;
+    ['tokens','cost','priced','reasoning','reasonCost'].forEach(k=>a[k]+=v[k]);
+    a.parts[v.type]+=v.tokens;
+    a.tools.set(v.tool,(a.tools.get(v.tool)||0)+v.tokens);
+    a.models.set(v.model,(a.models.get(v.model)||0)+v.tokens);
+  });
+  return a;
+}
+function notes(tint) {
+  return `<table><thead><tr><th>数据</th><th>图形</th><th>想表达什么</th></tr></thead><tbody>
+    <tr><td>工具 → 同名模型 → 四种 token</td><td>三列 3 pt 竖线，至少 6 pt 间隔；每个模型 → 类型只画一条外轮廓</td><td>保留熟悉的桑基图读法。共享模型只出现一次，入口与出口严格守恒。</td></tr>
+    <tr><td>每条工具 × 模型 × 类型记录</td><td>${tint?'工具色作为合并河带内的堆叠色带，不加内部描边；悬停工具显露其精确分量':'默认不拆分工具分量；纸色河带以细墨线勾边，悬停工具才显露带内归属'}</td><td>${tint?'颜色只回答“来自哪个工具”；保留精确归属，同时减少独立交叉细线。':'先读模型与类型总量，需要追踪来源时再看精确分量；排线只辨认类型。'}</td></tr>
+    <tr><td>reasoning ⊂ output</td><td>输出河带与竖线里的深色内芯</td><td>推理已经包含在 Output 内，不作为第五个出口再次相加。</td></tr>
+    <tr><td>costUSD 与未定价模型</td><td>600 ms 插值切换带宽与节点位置；未定价节点单独用虚线空心标注</td><td>看清 token 与费用占比的区别；Composer 未定价，不代表免费。类型费用使用 fixture 的原始分类单价拆分。</td></tr>
+    <tr><td>365 天逐日用量与选定区间</td><td>64 pt 日条、月刻尺与可拖动选框；7 / 30 / 90 / 365 天预设</td><td>先看全年背景，再查看区间内去向。上下两图均为线性比例；上图随区间重新归一化。</td></tr>
+  </tbody></table>
+  <strong>精致化手法</strong><ul>
+    <li>每个模型 → 类型合并成一条河带，只描一次外轮廓；${tint?'工具色在带内堆叠，不再各自勾边。':'默认不画带内工具分界。'} 悬停或固定工具时，才突出它在各条河带中的精确份额。</li>
+    <li>模型占满可用高度，每个可见模型至少留 24 pt 槽位；单行标签放在纸色底片上，拥挤时先省数值再省名称。展开模型较多时增高图表，不压缩文字。</li>
+    <li>保留玻璃窗口、角括号、无编号刻尺与雕刻吊牌；${tint?'六种低饱和工具色在浅色中保持 20–24% 透明度，深色单独校准。':'河带纸色比底板深约 5%，使用 0.6 pt 墨线；悬停加深至约 14%，描边增至 1 pt。'}</li>
+    <li>工具按总量排序、类型固定顺序；模型用三轮重心扫掠选序。离开模型的河带按类型顺序排，进入类型的河带按模型顺序排，减少折返交叉。低于区间 token 总量 3% 的模型折叠，点击展开。</li>
+    <li>整个标签都能悬停，追踪完整路径时其余降到 22%；点击固定后摘要同步。工具分量直接取自原始行，不按工具总量估摊。</li>
+    <li>首屏与 Replay refresh 用 1.2 秒横向显露，不改变宽度；日期与度量切换只插值布局。流动虚线恒速，不承载数据含义。</li>
+  </ul>
+  <p><strong>计算成本</strong>：选区聚合为单次行扫描，全年约 5k 行；布局约 30 个节点。工具、模型与类型统计共用聚合结果，交互只筛选已聚合的分量。路径仅在布局变化时重建，静止时只更新虚线相位；帧率限制为 30 fps。</p>
+  <p><strong>原生实现提示</strong>：SwiftUI Canvas，预计算 ribbon paths；通过插值布局实现 animatable widths 与节点位移。TimelineView 仅在 Flow 开启时维持常驻时钟，显露与 600 ms 布局动画单独按需驱动；Reduce Motion 直接落到终态，离屏、后台与窗口失焦全部停表。</p>`;
+}
+function makeCard(tint) {
+  const id=tint?'tint':'ink', section=document.createElement('section');
+  section.className='direction'; section.setAttribute('aria-labelledby',id+'-title');
+  section.innerHTML=`<div class="direction-heading"><h2 id="${id}-title">${tint?'B · Tint':'A · Ink'}<span>${tint?'Keep the source in view':'Paper, outline, estuary'}</span></h2><button class="replay" type="button">${refreshIcon}Replay refresh</button></div>
+    <div class="window"><div class="titlebar"><div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div><span class="window-name">Tivano</span></div>
+    <div class="window-detail"><div class="page-heading"><h3>Tokens</h3><div class="filters">
+      <label class="flow"><input type="checkbox" role="switch" checked> Flow</label>
+      <div class="pill segmented" role="group" aria-label="Ribbon width"><button type="button" data-mode="tokens" aria-pressed="true">Tokens</button><button type="button" data-mode="cost" aria-pressed="false">Cost</button></div>
+    </div></div>
+    <div class="metadata"><span class="updated" role="status">Updated 3 min ago · TokenTracker</span><button class="refresh" type="button">${refreshIcon}Refresh</button></div>
+    <dl class="summary"><div class="metric"><dt>Total tokens</dt><dd class="total"></dd></div><div class="metric"><dt>Cost estimate</dt><dd class="cost"></dd></div><div class="metric"><dt>Top tool</dt><dd class="name top-tool"></dd></div><div class="metric"><dt>Top model</dt><dd class="name top-model"></dd></div></dl>
+    <div class="selection"><span>All tokens in range</span><button class="text-button clear" type="button" hidden>Clear</button></div><p class="coverage"></p>
+    <div class="chart-scroll"><div class="hero"><canvas class="chart" width="1800" height="680" tabindex="0" role="img" aria-describedby="${id}-help">Interactive watershed: tools, shared models, token types.</canvas>
+      <div class="tag" role="tooltip" hidden>${tagPlate}<div class="tag-content"></div></div>
+    </div></div>
+    <div class="legend">${tint?tools.map(t=>`<span><i style="background:var(--${t.id})" aria-hidden="true"></i>${t.name}</span>`).join(''):'<span>Paper-filled ribbons · type hatching at the estuary</span>'}<span><i class="core" aria-hidden="true"></i>Reasoning within Output</span><button class="text-button fold" type="button" hidden>Collapse small models</button></div>
+    <div class="range-heading"><span class="dates"></span><div class="pill segmented" role="group" aria-label="Date range">${[7,30,90,365].map(n=>`<button type="button" data-days="${n}" aria-pressed="${n===30}">${n} days</button>`).join('')}</div></div>
+    <div class="timeline"><canvas class="time" width="1800" height="128" role="img" aria-label="Daily tokens for the last 365 days, stacked by tool"></canvas>
+      <button class="handle start" type="button" role="slider" aria-label="Range start" aria-orientation="horizontal"></button><button class="handle end" type="button" role="slider" aria-label="Range end" aria-orientation="horizontal"></button>
+    </div><div class="chart-foot"><span id="${id}-help">Hover to trace · Click / Enter to pin · Arrows to explore · Escape to clear</span><span>Drag the range or either edge</span></div>
+    <p class="sr-only status" aria-live="polite" aria-atomic="true"></p></div></div><div class="notes" lang="zh-Hans">${notes(tint)}</div>`;
+  root.append(section);
+  const s={id,tint,el:section,lo:days.length-30,hi:days.length-1,mode:'tokens',expanded:false,
+    pin:null,hover:null,visible:false,heroVisible:false,timeVisible:false,dirty:true,timeDirty:true,flow:true,age:0,clock:0,last:null,focusId:null};
+  s.hero=section.querySelector('.hero'); s.canvas=section.querySelector('.chart'); s.ctx=s.canvas.getContext('2d');
+  s.tag=section.querySelector('.tag'); s.time=section.querySelector('.time'); s.timeline=section.querySelector('.timeline');
+  section.querySelectorAll('.replay,.refresh').forEach(b=>b.addEventListener('click',()=>replay(s)));
+  section.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{
+    if (s.mode===b.dataset.mode) return;
+    s.mode=b.dataset.mode; section.querySelectorAll('[data-mode]').forEach(v=>v.setAttribute('aria-pressed',String(v===b)));
+    setLayout(s); updateSummary(s); hideTag(s);
+  }));
+  section.querySelectorAll('[data-days]').forEach(b=>b.addEventListener('click',()=>setRange(s,days.length-Math.min(+b.dataset.days,days.length),days.length-1)));
+  section.querySelector('.flow input').addEventListener('change',e=>{s.flow=e.target.checked;s.last=null;s.dirty=true;schedule();});
+  section.querySelector('.clear').addEventListener('click',()=>clearSelection(s));
+  section.querySelector('.fold').addEventListener('click',()=>{s.expanded=false;setLayout(s);hideTag(s);});
+  s.canvas.addEventListener('pointermove',e=>pointer(s,e));
+  s.canvas.addEventListener('pointerleave',()=>{s.hover=null;hideTag(s);});
+  s.canvas.addEventListener('click',e=>{const p=point(s.canvas,e,s.scene.height);activate(s,hit(s,p.x,p.y));});
+  s.canvas.addEventListener('focus',()=>focusNode(s,s.target.columns[0][0]));
+  s.canvas.addEventListener('blur',()=>{s.hover=null;hideTag(s);});
+  s.canvas.addEventListener('keydown',e=>keyboard(s,e));
+  setupBrush(s); s.atoms=aggregateRange(s.lo,s.hi); s.all=stats(s.atoms); setLayout(s); updateSummary(s); updateRangeUI(s);
+  return s;
+}
+
+function layout(s) {
+  const weight=a=>a[s.mode==='cost'?'cost':'tokens'], total=sum(s.atoms,weight);
+  const modelStats=new Map();
+  s.atoms.forEach(a=>{
+    if (!modelStats.has(a.model)) modelStats.set(a.model,{tokens:0,priced:0});
+    const m=modelStats.get(a.model); m.tokens+=a.tokens; m.priced+=a.priced;
+  });
+  s.folded=[...modelStats].filter(([,v])=>v.tokens/s.all.tokens<.03 && (s.mode!=='cost'||v.priced>0)).map(([name])=>name);
+  const folded=new Set(s.expanded?[]:s.folded), group=a=>folded.has(a.model)?'Other models':a.model;
+  const nodes=new Map(), edges=new Map(), outlines=new Map(), segments=new Map();
+  function addNode(id,name,column,members,selection) {
+    nodes.set(id,{id,name,column,members,selection,value:sum(members,weight),tokens:sum(members,a=>a.tokens),
+      unpriced:s.mode==='cost'&&members.length>0&&sum(members,a=>a.priced)===0,alpha:1,x:[155,420,741][column]});
+  }
+  tools.forEach(t=>addNode('t:'+t.id,t.name,0,s.atoms.filter(a=>a.tool===t.id),{tool:t.id,label:t.name}));
+  [...new Set(s.atoms.map(group))].forEach(name=>{
+    const members=s.atoms.filter(a=>group(a)===name), models=[...new Set(members.map(a=>a.model))];
+    addNode('m:'+name,name,1,members,{models,label:name});
+  });
+  fields.forEach((f,type)=>addNode('y:'+f,fieldNames[type],2,s.atoms.filter(a=>a.type===type),{type,label:fieldNames[type]}));
+  const toolNodes=[...nodes.values()].filter(n=>n.column===0).sort((a,b)=>b.value-a.value||a.name.localeCompare(b.name));
+  let modelNodes=[...nodes.values()].filter(n=>n.column===1&&!n.unpriced).sort((a,b)=>b.value-a.value||a.name.localeCompare(b.name));
+  const typeNodes=fields.map(f=>nodes.get('y:'+f));
+  const unpriced=[...nodes.values()].filter(n=>n.column===1&&n.unpriced);
+  const height=Math.max(340,(modelNodes.length+unpriced.length)*24+52),top=36,bottom=height-22,gap=6;
+  const modelBottom=bottom-unpriced.length*24,available=modelBottom-top;
+  // Reserve label slots without inflating the quantitative node or ribbon heights.
+  let low=0,high=Math.max(0,available-(Math.max(toolNodes.length,modelNodes.length,4)-1)*gap)/(total||1);
+  for(let i=0;i<28;i++){
+    const candidate=(low+high)/2,occupied=sum(modelNodes,n=>Math.max(24,n.value*candidate+gap))-gap;
+    if(occupied<=available)low=candidate;else high=candidate;
+  }
+  const scale=low;
+  function position(list) {
+    const modelColumn=list[0]?.column===1;
+    const slots=list.map(n=>modelColumn?Math.max(24,n.value*scale+gap):n.value*scale+gap);
+    let y=(top+modelBottom-sum(slots,v=>v)+gap)/2;
+    list.forEach((n,i)=>{n.h=n.value*scale;n.y=y+(slots[i]-gap-n.h)/2;n.labelY=n.y+n.h/2;y+=slots[i];});
+  }
+  position(toolNodes); position(typeNodes);
+  const toolRank=new Map(toolNodes.map((n,i)=>[n.selection.tool,i]));
+  function barycenter(n,column) {
+    const value=sum(n.members,weight);
+    return sum(n.members,a=>{
+      const neighbor=nodes.get(column===0?'t:'+a.tool:'y:'+fields[a.type]);
+      return (neighbor.y+neighbor.h/2)*weight(a);
+    })/(value||1);
+  }
+  function crossings(list) {
+    const rank=new Map(list.map((n,i)=>[n.name,i])), connections=[new Map(),new Map()];
+    s.atoms.forEach(a=>{
+      if (!weight(a)) return;
+      [[toolRank.get(a.tool),rank.get(group(a))],[rank.get(group(a)),a.type]].forEach(([u,v],i)=>{
+        const id=key(u,v), old=connections[i].get(id);
+        if (old) old.w+=weight(a)/(total||1); else connections[i].set(id,{u,v,w:weight(a)/(total||1)});
+      });
+    });
+    return sum(connections,collection=>{
+      const items=[...collection.values()]; let score=0;
+      for (let i=0;i<items.length;i++) for (let j=i+1;j<items.length;j++) {
+        const a=items[i],b=items[j]; if ((a.u-b.u)*(a.v-b.v)<0) score+=a.w*b.w;
+      }
+      return score;
+    });
+  }
+  // Tool totals and the four type positions are constrained; sweep the shared model column.
+  let best=modelNodes.slice(), bestScore=crossings(best);
+  for (let pass=0;pass<3;pass++) {
+    const score=n=>pass===0?barycenter(n,0):pass===1?barycenter(n,2):(barycenter(n,0)+barycenter(n,2))/2;
+    modelNodes.sort((a,b)=>score(a)-score(b)||a.name.localeCompare(b.name));
+    position(modelNodes); const cost=crossings(modelNodes);
+    if (cost<=bestScore) {best=modelNodes.slice();bestScore=cost;}
+  }
+  modelNodes=best; position(modelNodes);
+  const modelRank=new Map(modelNodes.map((n,i)=>[n.name,i]));
+  const columns=[toolNodes,modelNodes,typeNodes];
+  columns.forEach(list=>{
+    if(list[0]?.column===1)return;
+    const labelTop=top+5,labelBottom=modelBottom-5,distance=Math.min(24,(labelBottom-labelTop)/Math.max(1,list.length-1));
+    list.forEach((n,i)=>n.labelY=Math.max(n.y+n.h/2,i?list[i-1].labelY+distance:labelTop));
+    const excess=Math.max(0,(list.at(-1)?.labelY||0)-labelBottom);
+    list.forEach(n=>n.labelY-=excess);
+    list.forEach((n,i)=>n.labelY=Math.max(n.labelY,i?list[i-1].labelY+distance:labelTop));
+  });
+  unpriced.forEach((n,i)=>{n.y=modelBottom+6+i*24;n.h=0;n.labelY=n.y+6;});
+  columns[1]=[...modelNodes,...unpriced];
+  const sourceY=new Map(), incomingY=new Map(), outgoingY=new Map(), sinkY=new Map();
+  function slots(list,destination,sort) {
+    list.forEach(n=>{
+      let y=n.y;
+      n.members.slice().sort(sort).forEach(a=>{destination.set(a.id,y);y+=weight(a)*scale;});
+    });
+  }
+  const modelOrder=(a,b)=>(modelRank.get(group(a))??99)-(modelRank.get(group(b))??99);
+  const byModel=(a,b)=>modelOrder(a,b)||a.type-b.type||a.model.localeCompare(b.model);
+  const byTool=(a,b)=>toolRank.get(a.tool)-toolRank.get(b.tool)||a.type-b.type||a.model.localeCompare(b.model);
+  slots(toolNodes,sourceY,byModel);slots(modelNodes,incomingY,byTool);
+  slots(modelNodes,outgoingY,(a,b)=>a.type-b.type||byTool(a,b));
+  slots(typeNodes,sinkY,(a,b)=>modelOrder(a,b)||byTool(a,b));
+  function mergeRibbon(id,part,selection) {
+    const existing=outlines.get(id);
+    if(existing){
+      existing.y0=Math.min(existing.y0,part.y0);existing.y1=Math.min(existing.y1,part.y1);
+      existing.h+=part.h;existing.core+=part.core;existing.members.push(...part.members);
+    }else outlines.set(id,{...part,id,selection,members:part.members.slice()});
+  }
+  s.atoms.forEach(a=>{
+    const h=weight(a)*scale;
+    if (!h) return;
+    const model='m:'+group(a), tid='t:'+a.tool, yid='y:'+fields[a.type];
+    const x0=158,x1=420,x2=423,x3=741,y0=sourceY.get(a.id),yIn=incomingY.get(a.id),yOut=outgoingY.get(a.id),y2=sinkY.get(a.id);
+    const core=(s.mode==='cost'?a.reasonCost:a.reasoning)*scale;
+    const leftId=key('left',a.tool,model),rightId=key('right',model,a.type);
+    const leftSelection={tool:a.tool,models:nodes.get(model).selection.models,label:names[a.tool]+' → '+group(a)};
+    const rightSelection={models:nodes.get(model).selection.models,type:a.type,label:group(a)+' → '+fieldNames[a.type]};
+    const left={id:'l:'+a.id,parent:leftId,side:0,x0,x1,y0,y1:yIn,h,core:0,alpha:1,members:[a],tool:a.tool,selection:leftSelection};
+    const right={id:'r:'+a.id,parent:rightId,side:1,x0:x2,x1:x3,y0:yOut,y1:y2,h,core,alpha:1,members:[a],tool:a.tool,selection:rightSelection};
+    edges.set(left.id,left);edges.set(right.id,right);
+    mergeRibbon(leftId,left,leftSelection);mergeRibbon(rightId,right,rightSelection);
+    [[tid,155,y0],[model,420,yOut],[yid,741,y2]].forEach(([node,x,y])=>{
+      const id=key(node,a.id);segments.set(id,{id,node,x,y,h,core:0,alpha:1,members:[a],tool:a.tool,type:a.type});
+    });
+  });
+  return {nodes,edges,outlines,segments,columns:columns.map(c=>c.map(n=>n.id)),scale,total,height};
+}
+function collapsed(item,kind) {
+  if (kind==='nodes') return {...item,y:item.y+item.h/2,h:0,alpha:0};
+  if (kind==='segments') return {...item,y:item.y+item.h/2,h:0,core:0,alpha:0};
+  return {...item,y0:item.y0+item.h/2,y1:item.y1+item.h/2,h:0,core:0,alpha:0};
+}
+function interpolate(from,to,t) {
+  const result={...to,ready:false,height:from.height+(to.height-from.height)*t}, properties=['x','x0','x1','y','y0','y1','h','core','labelY','alpha'];
+  for (const kind of ['nodes','edges','outlines','segments']) {
+    result[kind]=new Map();
+    for (const id of new Set([...from[kind].keys(),...to[kind].keys()])) {
+      const old=from[kind].get(id), next=to[kind].get(id), a=old||collapsed(next,kind),b=next||collapsed(old,kind),v={...(next||old)};
+      properties.forEach(k=>{if (typeof a[k]==='number'&&typeof b[k]==='number') v[k]=a[k]+(b[k]-a[k])*t;});
+      result[kind].set(id,v);
+    }
+  }
+  return result;
+}
+function setLayout(s) {
+  const target=layout(s); s.target=target;
+  if (!s.scene||reduced.checked||!appActive) {s.scene=target;s.transition=null;} else s.transition={from:s.scene,to:target,age:0};
+  s.el.querySelector('.fold').hidden=!s.expanded||!s.folded.length;
+  s.dirty=true; schedule();
+}
+function setRange(s,lo,hi) {
+  lo=clamp(Math.round(lo),0,days.length-1); hi=clamp(Math.round(hi),lo,days.length-1);
+  if (s.lo===lo&&s.hi===hi) return;
+  s.lo=lo;s.hi=hi;s.atoms=aggregateRange(lo,hi);s.all=stats(s.atoms);
+  s.hover=null;hideTag(s);setLayout(s);updateSummary(s);updateRangeUI(s);s.timeDirty=true;s.dirty=true;schedule();
+}
+function updateSummary(s) {
+  const a=stats(s.atoms,s.pin), top=map=>[...map].sort((a,b)=>b[1]-a[1])[0]?.[0];
+  s.el.querySelector('.total').textContent=compact(a.tokens);
+  s.el.querySelector('.total').title=full.format(a.tokens)+' tokens';
+  s.el.querySelector('.cost').textContent=a.tokens&&!a.priced?'Unpriced':money(a.cost);
+  s.el.querySelector('.cost').title=exactMoney(a.cost)+' · priced models only';
+  s.el.querySelector('.top-tool').textContent=names[top(a.tools)]||'—';
+  s.el.querySelector('.top-model').textContent=top(a.models)||'—';
+  s.el.querySelector('.selection span').textContent=s.pin?'Selected: '+s.pin.label:'All tokens in range';
+  s.el.querySelector('.clear').hidden=!s.pin;
+  s.el.querySelector('.coverage').textContent=`Priced coverage ${percent(a.tokens?a.priced/a.tokens:0)} of ${s.pin?'selected':'range'} tokens · ${full.format(a.tokens-a.priced)} unpriced${s.mode==='cost'?' tokens excluded from widths':' tokens'} · Illustrative USD`;
+  s.canvas.setAttribute('aria-label',`${s.tint?'Tint':'Ink'} watershed, ${s.hi-s.lo+1} days, ${full.format(s.all.tokens)} tokens. Width represents ${s.mode==='cost'?'priced USD':'tokens'}.`);
+}
+function updateRangeUI(s) {
+  s.el.querySelector('.dates').textContent=`${days[s.lo].date} – ${days[s.hi].date} · ${s.hi-s.lo+1} days`;
+  s.el.querySelectorAll('[data-days]').forEach(b=>b.setAttribute('aria-pressed',String(s.hi===days.length-1&&s.hi-s.lo+1===+b.dataset.days)));
+  [['start',s.lo,0,s.hi],['end',s.hi,s.lo,days.length-1]].forEach(([name,value,min,max])=>{
+    const handle=s.el.querySelector('.'+name);
+    handle.style.left=(24+(value+(name==='end'?1:0))*852/days.length)/9+'%';
+    handle.setAttribute('aria-valuemin',min);handle.setAttribute('aria-valuemax',max);handle.setAttribute('aria-valuenow',value);
+    handle.setAttribute('aria-valuetext',days[value].date);
+  });
+}
+
+function ribbon(v,core=false) {
+  const h=core?v.core:v.h, inset=(v.h-h)/2, a=v.y0+inset,b=v.y1+inset,dx=(v.x1-v.x0)*.48;
+  const p=new Path2D();p.moveTo(v.x0,a);p.bezierCurveTo(v.x0+dx,a,v.x1-dx,b,v.x1,b);
+  p.lineTo(v.x1,b+h);p.bezierCurveTo(v.x1-dx,b+h,v.x0+dx,a+h,v.x0,a+h);p.closePath();return p;
+}
+function hydrate(scene) {
+  if (scene.ready) return;
+  const children=new Map();
+  scene.edges.forEach(v=>{if(!children.has(v.parent))children.set(v.parent,[]);children.get(v.parent).push(v);});
+  scene.outlines.forEach(group=>{
+    const bands=new Map();
+    (children.get(group.id)||[]).forEach(v=>{
+      const band=bands.get(v.tool);
+      if(band){band.y0=Math.min(band.y0,v.y0);band.y1=Math.min(band.y1,v.y1);band.h+=v.h;band.core+=v.core;band.members.push(...v.members);}
+      else bands.set(v.tool,{...v,alpha:group.alpha,members:v.members.slice()});
+    });
+    group.bands=[...bands.values()];
+  });
+  const bands=[...scene.outlines.values()].flatMap(v=>v.bands);
+  [...scene.edges.values(),...scene.outlines.values(),...bands].forEach(v=>{
+    v.path=ribbon(v);if(v.core)v.corePath=ribbon(v,true);
+    const dx=(v.x1-v.x0)*.48;v.center=new Path2D();v.center.moveTo(v.x0,v.y0+v.h/2);
+    v.center.bezierCurveTo(v.x0+dx,v.y0+v.h/2,v.x1-dx,v.y1+v.h/2,v.x1,v.y1+v.h/2);
+  });
+  scene.ready=true;
+}
+function line(ctx,x0,y0,x1,y1) {ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();}
+function textAt(ctx,text,x,y,size=9,align='left',numeric=false) {
+  ctx.font=`${size}px ${numeric?'ui-monospace,SFMono-Regular,Menlo,monospace':'-apple-system,BlinkMacSystemFont,sans-serif'}`;
+  ctx.textAlign=align;ctx.fillText(text,x,y);
+}
+function prepare(canvas,height) {
+  const width=canvas.clientWidth,dpr=Math.min(devicePixelRatio||1,2);
+  const w=Math.round(width*dpr),h=Math.round(width*height/900*dpr);
+  if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
+  const ctx=canvas.getContext('2d');ctx.setTransform(w/900,0,0,h/height,0,0);ctx.clearRect(0,0,900,height);return ctx;
+}
+function active(s) {return s.pin||s.hover;}
+function opacity(s,item) {return item.alpha*(active(s)&&!item.members.some(a=>matches(a,active(s)))?.22:1);}
+function hatch(ctx,type,height) {
+  ctx.save();ctx.beginPath();ctx.rect(706,32,39,height-46);ctx.clip();ctx.strokeStyle=colors.ink;ctx.lineWidth=.5;ctx.globalAlpha*=.24;
+  const spacing=[7,4,9,6][type], slope=[-.8,.8,0,-1.6][type];
+  for(let y=-25;y<height+30;y+=spacing)line(ctx,704,y,746,y+42*slope);
+  ctx.restore();
+}
+function frame(ctx,s) {
+  const height=s.scene.height;
+  ctx.save();ctx.strokeStyle=colors.ink;ctx.fillStyle=colors.ink;ctx.lineWidth=.6;ctx.globalAlpha=.4;
+  [[17,17,12,12],[883,17,-12,12],[17,height-17,12,-12],[883,height-17,-12,-12]].forEach(([x,y,dx,dy])=>{
+    ctx.beginPath();ctx.moveTo(x+dx,y);ctx.lineTo(x,y);ctx.lineTo(x,y+dy);ctx.stroke();
+  });
+  ctx.globalAlpha=.68;textAt(ctx,'TOOLS',145,28,8.5,'right');textAt(ctx,'SHARED MODELS',429,28,8.5);textAt(ctx,'TOKEN TYPES',751,28,8.5);
+  ctx.globalAlpha=.56;textAt(ctx,s.mode==='cost'?'Width = priced USD':'Width = tokens',28,height-7,8.5);
+  textAt(ctx,s.mode==='cost'?'Unpriced models sit outside the scale':'Reasoning is part of Output',872,height-7,8.5,'right');ctx.restore();
+}
+function prepareModelLabels(ctx,s) {
+  const occupied=[],models=[...s.scene.nodes.values()].filter(n=>n.column===1);
+  models.sort((a,b)=>opacity(s,b)-opacity(s,a)||b.value-a.value);
+  models.forEach(n=>{
+    n.labelBox=null;if(n.alpha<.1)return;
+    n.labelName=n.unpriced?n.name+' · Unpriced':n.name==='Other models'?n.name+' +':n.name;
+    const value=n.unpriced?compact(n.tokens):s.mode==='cost'?money(n.value):compact(n.tokens);
+    const share=Math.round(100*(n.unpriced?n.tokens/(s.all.tokens||1):n.value/(s.target.total||1)))+'%';
+    const detail='  '+value+' · '+share+(n.unpriced?' tokens':'');
+    ctx.font='9px -apple-system,BlinkMacSystemFont,sans-serif';n.nameWidth=ctx.measureText(n.labelName).width;
+    for(const candidate of [detail,'']){
+      ctx.font='8.5px ui-monospace,SFMono-Regular,Menlo,monospace';
+      const box={x:n.x+6,y:n.labelY-9,w:n.nameWidth+ctx.measureText(candidate).width+12,h:18};
+      const collides=occupied.some(b=>box.x<b.x+b.w+2&&box.x+box.w+2>b.x&&box.y<b.y+b.h+2&&box.y+box.h+2>b.y);
+      if(box.x+box.w>728||collides)continue;
+      n.labelBox=box;n.labelDetail=candidate;occupied.push(box);break;
+    }
+  });
+}
+function drawNode(ctx,s,n) {
+  if(n.alpha<.01)return;
+  const relevant=n.members.some(a=>matches(a,active(s))), dim=active(s)&&!relevant?.22:1;
+  ctx.save();ctx.globalAlpha=n.alpha*dim;ctx.strokeStyle=colors.ink;ctx.fillStyle=colors.ink;
+  if(n.unpriced){ctx.setLineDash([2,2]);ctx.lineWidth=.65;ctx.strokeRect(n.x,n.y,3,12);ctx.setLineDash([]);}
+  else if(n.h>0){ctx.globalAlpha*=.56;ctx.lineWidth=.55;ctx.strokeRect(n.x,n.y,3,n.h);ctx.globalAlpha=n.alpha*dim;}
+  if(n.column===1){
+    const box=n.labelBox;if(!box){ctx.restore();return;}
+    ctx.globalAlpha=n.alpha;ctx.fillStyle=colors['label-paper'];ctx.beginPath();ctx.roundRect(box.x,box.y,box.w,box.h,8);ctx.fill();
+    ctx.globalAlpha=n.alpha*dim;ctx.fillStyle=colors.ink;ctx.textAlign='left';
+    textAt(ctx,n.labelName,box.x+6,n.labelY+3,9);
+    ctx.globalAlpha*=.63;textAt(ctx,n.labelDetail,box.x+6+n.nameWidth,n.labelY+3,8.5,'left',true);
+    if(s.focusId===n.id&&document.activeElement===s.canvas){ctx.globalAlpha=.9;ctx.strokeStyle=colors.accent;ctx.lineWidth=1;ctx.setLineDash([2,2]);ctx.strokeRect(box.x-2,box.y-2,box.w+4,box.h+4);}
+    ctx.restore();return;
+  }
+  const x=n.column===0?n.x-10:n.x+9, align=n.column===0?'right':'left';
+  const center=n.unpriced?n.y+6:n.y+n.h/2;
+  if(Math.abs(n.labelY-center)>4){
+    ctx.globalAlpha*=.3;ctx.lineWidth=.5;const near=n.column===0?n.x-1:n.x+4,far=n.column===0?x+3:x-3;
+    ctx.beginPath();ctx.moveTo(near,center);ctx.lineTo(far,n.labelY);ctx.stroke();ctx.globalAlpha=n.alpha*dim;
+  }
+  const label=n.unpriced?n.name+' · Unpriced':n.name==='Other models'?n.name+' +':n.name;
+  ctx.textAlign=align;ctx.font='9px -apple-system,BlinkMacSystemFont,sans-serif';
+  const nameWidth=ctx.measureText(label).width;
+  ctx.strokeStyle=colors.tag;ctx.lineJoin='round';ctx.lineWidth=3.5;ctx.strokeText(label,x,n.labelY-2);ctx.fillText(label,x,n.labelY-2);
+  const value=n.unpriced?compact(n.tokens):s.mode==='cost'?money(n.value):compact(n.tokens);
+  const share=n.unpriced?percent(n.tokens/(s.all.tokens||1))+' tokens':percent(n.value/(s.target.total||1));
+  ctx.font='8px ui-monospace,SFMono-Regular,Menlo,monospace';
+  const detail=value+'  '+share;ctx.strokeText(detail,x,n.labelY+9);
+  const labelWidth=Math.max(nameWidth,ctx.measureText(detail).width);
+  n.labelBox={x:(align==='right'?x-labelWidth:x)-5,y:n.labelY-13,w:labelWidth+10,h:26};
+  const left=align==='right'?x-ctx.measureText(detail).width:x;
+  ctx.textAlign='left';ctx.globalAlpha*=.86;ctx.fillText(value,left,n.labelY+9);
+  ctx.globalAlpha*=.6;ctx.fillText('  '+share,left+ctx.measureText(value).width,n.labelY+9);
+  if(s.focusId===n.id&&document.activeElement===s.canvas){
+    ctx.strokeStyle=colors.accent;ctx.globalAlpha=.9;ctx.lineWidth=1;ctx.setLineDash([2,2]);
+    const width=Math.max(ctx.measureText(detail).width,95);ctx.strokeRect(align==='right'?x-width-3:x-3,n.labelY-13,width+6,26);
+  }
+  ctx.restore();
+}
+function draw(s) {
+  const height=s.scene.height;s.canvas.style.aspectRatio='900 / '+height;
+  const ctx=prepare(s.canvas,height);if(!s.canvas.width)return;
+  hydrate(s.scene);ctx.lineCap='round';ctx.lineJoin='round';frame(ctx,s);
+  const p=reduced.checked?1:clamp(s.age/1200,0,1), reveal=p*p*(3-2*p);
+  ctx.save();ctx.beginPath();ctx.rect(154,32,592*reveal,height-46);ctx.clip();
+  const paths=[...s.scene.outlines.values()],selection=active(s),toolSelection=Boolean(selection?.tool);
+  // Paint dimmed paths first; an active path remains legible at crossings.
+  paths.sort((a,b)=>opacity(s,a)-opacity(s,b));
+  paths.forEach(v=>{
+    if(v.h<.001||v.alpha<.001)return;
+    const selected=selection&&v.members.some(a=>matches(a,selection)),split=toolSelection&&v.side===1;
+    const baseAlpha=split?v.alpha*.22:opacity(s,v);
+    ctx.save();ctx.globalAlpha=baseAlpha;
+    ctx.fillStyle=s.tint?colors['label-paper']:colors[selected&&!split?'ribbon-focus':'ribbon-paper'];ctx.fill(v.path);
+    ctx.save();ctx.clip(v.path);
+    if(s.tint){
+      v.bands.forEach(b=>{ctx.globalAlpha=opacity(s,b);ctx.fillStyle=colors[b.tool];ctx.fill(b.path);});
+    }else if(split){
+      v.bands.filter(b=>b.members.some(a=>matches(a,selection))).forEach(b=>{
+        ctx.globalAlpha=b.alpha;ctx.fillStyle=colors['ribbon-focus'];ctx.fill(b.path);
+        ctx.globalAlpha=b.alpha*.8;ctx.strokeStyle=colors.ink;ctx.lineWidth=1;ctx.stroke(b.path);
+      });
+    }
+    if(v.side===1&&!s.tint){ctx.globalAlpha=baseAlpha;hatch(ctx,v.members[0].type,height);}
+    if(v.corePath){ctx.globalAlpha=baseAlpha*.36;ctx.fillStyle=colors.ink;ctx.fill(v.corePath);}
+    if(split)v.bands.filter(b=>b.corePath&&b.members.some(a=>matches(a,selection))).forEach(b=>{
+      ctx.globalAlpha=b.alpha*.36;ctx.fillStyle=colors.ink;ctx.fill(b.corePath);
+    });
+    ctx.restore();
+    ctx.globalAlpha=baseAlpha*(selected&&!split?.88:.64);ctx.strokeStyle=colors.ink;ctx.lineWidth=selected&&!split?1:.6;ctx.stroke(v.path);
+    ctx.restore();
+  });
+  if(s.flow&&!reduced.checked){
+    paths.forEach(v=>{
+      if(v.h<1.5)return;
+      ctx.save();ctx.clip(v.path);ctx.globalAlpha=opacity(s,v)*.19;ctx.strokeStyle=colors.ink;ctx.lineWidth=.6;
+      ctx.setLineDash([2,29]);ctx.lineDashOffset=-s.clock*.018;ctx.stroke(v.center);ctx.restore();
+    });
+  }
+  ctx.restore();
+  s.scene.segments.forEach(v=>{
+    ctx.save();ctx.globalAlpha=opacity(s,v);ctx.fillStyle=s.tint?colors[v.tool]:colors.ink;
+    if(!s.tint)ctx.globalAlpha*=.46;ctx.fillRect(v.x,v.y,3,v.h);
+    ctx.restore();
+  });
+  paths.filter(v=>v.side===1&&v.core).forEach(v=>{
+    const cores=toolSelection?[v,...v.bands.filter(b=>b.core&&b.members.some(a=>matches(a,selection)))]:[v];
+    cores.forEach((part,i)=>{
+      ctx.save();ctx.fillStyle=colors.ink;ctx.globalAlpha=(toolSelection&&i===0?v.alpha*.22:opacity(s,part))*.7;
+      ctx.fillRect(part.x0-3,part.y0+(part.h-part.core)/2,3,part.core);ctx.fillRect(part.x1,part.y1+(part.h-part.core)/2,3,part.core);ctx.restore();
+    });
+  });
+  prepareModelLabels(ctx,s);
+  s.scene.nodes.forEach(n=>drawNode(ctx,s,n));
+  if(!s.all.tokens){ctx.fillStyle=colors.secondary;textAt(ctx,'No token usage in this range',450,height/2,12,'center');}
+  s.dirty=false;
+}
+function drawTime(s) {
+  const ctx=prepare(s.time,64);if(!s.time.width)return;
+  const step=852/days.length;
+  daily.forEach((day,i)=>{
+    let y=42;
+    tools.forEach((tool,j)=>{
+      const h=day.values[tool.id]/dailyMax*36;y-=h;
+      ctx.fillStyle=s.tint?colors[tool.id]:colors.ink;
+      ctx.globalAlpha=(i>=s.lo&&i<=s.hi?1:.27)*(s.tint?1:.2+j*.065);
+      ctx.fillRect(24+i*step,y,Math.max(.7,step-.7),h);
+    });
+  });
+  ctx.globalAlpha=.3;ctx.strokeStyle=colors.ink;ctx.lineWidth=.55;line(ctx,24,45,876,45);
+  daily.forEach((day,i)=>{
+    const x=24+i*step,monthStart=day.date.slice(8)==='01';
+    if(i%7===0||monthStart)line(ctx,x,45,x,monthStart?50:47);
+    if(monthStart&&x<858){ctx.globalAlpha=.65;ctx.fillStyle=colors.ink;textAt(ctx,new Date(day.date+'T00:00:00Z').toLocaleDateString('en-US',{month:'short',timeZone:'UTC'}),x+2,60,8);ctx.globalAlpha=.3;}
+  });
+  ctx.globalAlpha=.64;ctx.strokeStyle=colors.ink;ctx.lineWidth=.6;ctx.strokeRect(24+s.lo*step,3,(s.hi-s.lo+1)*step,40);
+  ctx.globalAlpha=1;s.timeDirty=false;
+}
+
+function point(canvas,e,height) {
+  const rect=canvas.getBoundingClientRect();return {x:(e.clientX-rect.left)*900/rect.width,y:(e.clientY-rect.top)*height/rect.height};
+}
+function hit(s,x,y) {
+  if(!s.scene)return null;
+  const nodes=[...s.scene.nodes.values()].filter(n=>n.alpha>.65&&s.target.nodes.has(n.id));
+  for(const n of nodes){
+    const b=n.labelBox;
+    if(b&&x>=b.x-3&&x<=b.x+b.w+3&&y>=b.y-3&&y<=b.y+b.h+3)return {selection:n.selection,node:n,x:n.x,y:n.labelY};
+  }
+  for(const n of nodes){
+    const nearBar=x>=n.x-5&&x<=n.x+8&&y>=n.y-2&&y<=n.y+(n.unpriced?12:n.h)+2;
+    if(nearBar)return {selection:n.selection,node:n,x:n.x,y:n.labelY};
+  }
+  const ctx=s.ctx;ctx.save();ctx.setTransform(1,0,0,1,0,0);
+  const candidates=[...s.scene.outlines.values()].reverse();let result=null;
+  for(const v of candidates){
+    if(v.alpha>.65&&v.path&&ctx.isPointInPath(v.path,x,y)){result={selection:v.selection,x,y};break;}
+  }
+  ctx.restore();return result;
+}
+function pointer(s,e) {
+  const p=point(s.canvas,e,s.scene.height), found=hit(s,p.x,p.y);
+  s.canvas.style.cursor=found?'pointer':'default';s.hover=found?.selection||null;
+  if(found)showTag(s,found.selection,p.x,p.y);else hideTag(s);
+  s.dirty=true;schedule();
+}
+function showTag(s,selection,x,y) {
+  const a=stats(s.atoms,selection), share=a.tokens/(s.all.tokens||1);
+  s.tag.querySelector('.tag-content').innerHTML=`<div class="tag-caption">${escapeHTML(selection.label)}</div><div class="tag-value">${full.format(a.tokens)} tokens</div>
+    <div class="tag-row"><span>Share of range tokens</span><span>${percent(share)}</span></div>
+    <div class="tag-row"><span>Priced cost</span><span>${a.priced?exactMoney(a.cost):'Unpriced'}</span></div>
+    <div class="tag-row"><span>Share of priced cost</span><span>${a.priced?percent(a.cost/(s.all.cost||1)):'—'}</span></div>
+    ${a.parts[3]?`<div class="tag-row"><span>Reasoning (in Output)</span><span>${full.format(a.reasoning)}</span></div>`:''}
+    <div class="tag-footer">${full.format(a.tokens-a.priced)} unpriced tokens${s.mode==='cost'?' excluded from width':''} · ${s.pin?'Selection pinned · Escape clears':'Click to pin'}${selection.models?.length>1?' · '+selection.models.length+' models':''}</div>`;
+  s.tag.hidden=false;
+  const w=s.hero.clientWidth,h=s.hero.clientHeight,tw=s.tag.offsetWidth,th=s.tag.offsetHeight,anchor=x*w/900;
+  s.tag.style.left=clamp(anchor>w*.53?anchor-tw-15:anchor+15,6,w-tw-6)+'px';
+  s.tag.style.top=clamp(y*h/s.scene.height-th/2,4,Math.max(4,h-th-4))+'px';
+}
+function hideTag(s) {s.tag.hidden=true;s.dirty=true;schedule();}
+function clearSelection(s) {s.pin=null;s.hover=null;hideTag(s);updateSummary(s);s.dirty=true;schedule();}
+function activate(s,found) {
+  if(!found){clearSelection(s);return;}
+  s.pin=found.selection;s.hover=null;
+  if(found.node?.name==='Other models'){s.expanded=true;setLayout(s);}
+  updateSummary(s);showTag(s,s.pin,found.x,found.y);s.dirty=true;
+  s.el.querySelector('.status').textContent='Selected: '+s.pin.label+'. '+full.format(stats(s.atoms,s.pin).tokens)+' tokens.';schedule();
+}
+function focusNode(s,id) {
+  const n=s.target.nodes.get(id);if(!n)return;
+  s.focusId=id;s.hover=n.selection;showTag(s,n.selection,n.x,n.labelY);s.dirty=true;
+  const a=stats(s.atoms,n.selection);
+  s.el.querySelector('.status').textContent=n.name+', '+full.format(a.tokens)+' tokens, '+percent(a.tokens/(s.all.tokens||1))+' of range. '+(a.priced?exactMoney(a.cost)+' priced cost.':'Unpriced.');schedule();
+}
+function keyboard(s,e) {
+  if(e.key==='Escape'){e.preventDefault();clearSelection(s);return;}
+  const current=s.target.nodes.get(s.focusId)||s.target.nodes.get(s.target.columns[0][0]);if(!current)return;
+  if(e.key==='Enter'||e.key===' '){e.preventDefault();activate(s,{node:current,selection:current.selection,x:current.x,y:current.labelY});return;}
+  if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key))return;e.preventDefault();
+  let column=current.column,index=s.target.columns[column].indexOf(current.id),list=s.target.columns[column];
+  if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+    column=clamp(column+(e.key==='ArrowLeft'?-1:1),0,2);list=s.target.columns[column];
+    const nearest=list.slice().sort((a,b)=>Math.abs(s.target.nodes.get(a).labelY-current.labelY)-Math.abs(s.target.nodes.get(b).labelY-current.labelY));
+    focusNode(s,nearest[0]);return;
+  }
+  index=e.key==='Home'?0:e.key==='End'?list.length-1:(index+list.length+(e.key==='ArrowUp'?-1:1))%list.length;
+  focusNode(s,list[index]);
+}
+function setupBrush(s) {
+  const index=x=>clamp(Math.floor((x-24)/852*days.length),0,days.length-1);
+  s.timeline.addEventListener('pointerdown',e=>{
+    if(e.button!==0)return;e.preventDefault();
+    const {x}=point(s.time,e,64),step=852/days.length,left=24+s.lo*step,right=24+(s.hi+1)*step;
+    const mode=e.target.classList.contains('start')||Math.abs(x-left)<7?'start':e.target.classList.contains('end')||Math.abs(x-right)<7?'end':x>left&&x<right?'move':'new';
+    s.drag={mode,anchor:index(x),lo:s.lo,hi:s.hi,pointer:e.pointerId};s.timeline.setPointerCapture(e.pointerId);
+    if(e.target.classList.contains('handle'))e.target.focus();
+    if(mode==='new')s.pendingRange=[index(x),index(x)];s.dirty=true;schedule();
+  });
+  s.timeline.addEventListener('pointermove',e=>{
+    const {x}=point(s.time,e,64);
+    if(!s.drag){s.timeline.style.cursor='crosshair';return;}
+    const d=s.drag,at=index(x),delta=at-d.anchor;
+    if(d.mode==='start')s.pendingRange=[Math.min(at,d.hi),d.hi];
+    else if(d.mode==='end')s.pendingRange=[d.lo,Math.max(at,d.lo)];
+    else if(d.mode==='new')s.pendingRange=[Math.min(d.anchor,at),Math.max(d.anchor,at)];
+    else{const lo=clamp(d.lo+delta,0,days.length-1-(d.hi-d.lo));s.pendingRange=[lo,lo+d.hi-d.lo];}
+    s.dirty=true;schedule();
+  });
+  const finish=e=>{
+    if(!s.drag)return;
+    if(s.pendingRange){const range=s.pendingRange;s.pendingRange=null;setRange(s,...range);}
+    s.drag=null;if(s.timeline.hasPointerCapture(e.pointerId))s.timeline.releasePointerCapture(e.pointerId);
+  };
+  s.timeline.addEventListener('pointerup',finish);s.timeline.addEventListener('pointercancel',finish);
+  ['start','end'].forEach(name=>s.el.querySelector('.'+name).addEventListener('keydown',e=>{
+    if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key))return;e.preventDefault();
+    const start=name==='start',value=start?s.lo:s.hi,min=start?0:s.lo,max=start?s.hi:days.length-1;
+    const next=e.key==='Home'?min:e.key==='End'?max:clamp(value+(['ArrowLeft','ArrowDown'].includes(e.key)?-1:1)*(e.shiftKey?7:1),min,max);
+    setRange(s,start?next:s.lo,start?s.hi:next);
+  }));
+}
+
+function finishRefresh(s) {
+  s.el.querySelector('.updated').textContent='Updated 3 min ago · TokenTracker';
+  s.el.querySelectorAll('.refresh,.replay').forEach(b=>b.disabled=false);s.canvas.setAttribute('aria-busy','false');
+}
+function replay(s) {
+  s.age=reduced.checked?1200:0;s.last=null;s.dirty=true;s.hover=null;hideTag(s);
+  s.canvas.setAttribute('aria-busy',String(!reduced.checked));
+  s.el.querySelectorAll('.refresh,.replay').forEach(b=>b.disabled=!reduced.checked);
+  s.el.querySelector('.updated').textContent=reduced.checked?'Updated 3 min ago · TokenTracker':'Refreshing sample… · TokenTracker';schedule();
+}
+function animates(s) {return appActive&&s.heroVisible&&!reduced.checked&&(s.flow||s.age<1200||s.transition);}
+function schedule() {
+  if(!raf&&!document.hidden&&states.some(s=>s.visible&&(s.dirty||s.timeDirty||s.pendingRange||animates(s))))raf=requestAnimationFrame(tick);
+}
+function tick(now) {
+  raf=0;
+  if(now-lastPaint>=1000/30){
+    lastPaint=now;
+    states.forEach(s=>{
+      if(!s.visible||document.hidden){s.last=null;return;}
+      const dt=s.last===null?0:Math.min(now-s.last,100);s.last=now;
+      if(s.pendingRange){const range=s.pendingRange;s.pendingRange=null;setRange(s,...range);}
+      if(!appActive){
+        if(s.age<1200){s.age=1200;finishRefresh(s);s.dirty=true;}
+        if(s.transition){s.scene=s.target;s.transition=null;s.dirty=true;}
+      }
+      if(animates(s)){
+        const before=s.age;s.age=Math.min(1200,s.age+dt);if(s.flow)s.clock+=dt;
+        if(before<1200&&s.age===1200)finishRefresh(s);
+        if(s.transition){
+          const transition=s.transition;transition.age+=dt;const p=clamp(transition.age/600,0,1),ease=p*p*(3-2*p);
+          s.scene=p===1?transition.to:interpolate(transition.from,transition.to,ease);
+          if(p===1)s.transition=null;
+        }
+        s.dirty=true;
+      }
+      if(s.dirty)draw(s);if(s.timeDirty)drawTime(s);
+    });
+  }
+  schedule();
+}
+function pause() {if(raf){cancelAnimationFrame(raf);raf=0;}states.forEach(s=>s.last=null);}
+root.replaceChildren();states=[makeCard(false),makeCard(true)];
+const observer=new IntersectionObserver(entries=>{
+  entries.forEach(entry=>{
+    const s=states.find(v=>v.hero===entry.target||v.timeline===entry.target);
+    if(entry.target===s.hero)s.heroVisible=entry.isIntersecting;else s.timeVisible=entry.isIntersecting;
+    s.visible=s.heroVisible||s.timeVisible;s.last=null;
+    if(s.visible){s.dirty=true;s.timeDirty=true;}else{s.hover=null;s.tag.hidden=true;}
+  });schedule();
+},{threshold:.04});
+states.forEach(s=>{observer.observe(s.hero);observer.observe(s.timeline);});
+const resizeObserver=new ResizeObserver(()=>{states.forEach(s=>{s.dirty=true;s.timeDirty=true;s.tag.hidden=true;});schedule();});
+states.forEach(s=>resizeObserver.observe(s.hero));
+document.addEventListener('visibilitychange',()=>{pause();if(!document.hidden)schedule();});
+addEventListener('blur',()=>{appActive=false;states.forEach(s=>s.dirty=true);pause();schedule();});
+addEventListener('focus',()=>{appActive=true;pause();schedule();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')states.forEach(clearSelection);});
+function motionChanged() {
+  states.forEach(s=>{
+    const control=s.el.querySelector('.flow input');control.disabled=reduced.checked;control.checked=!reduced.checked&&s.flow;
+    s.last=null;s.dirty=true;
+    if(reduced.checked){s.scene=s.target;s.transition=null;s.age=1200;finishRefresh(s);}
+  });schedule();
+}
+reduced.addEventListener('change',motionChanged);
+motionQuery.addEventListener('change',e=>{reduced.checked=e.matches;motionChanged();});
+document.getElementById('theme').addEventListener('click',e=>{
+  const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';
+  e.currentTarget.setAttribute('aria-pressed',String(dark));e.currentTarget.textContent=dark?'Light appearance':'Dark appearance';
+  colors=palette();states.forEach(s=>{s.dirty=true;s.timeDirty=true;});schedule();
+});
+motionChanged();
+})();
+</script>
+</body>
+</html>

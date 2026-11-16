@@ -46,7 +46,7 @@ struct MCPSettingsPage: View {
                             detail: "Your files and credentials are unchanged. Repair the configuration file, then retry."
                         ) {
                             Button("Retry") { model.mcp.retryConfigurationLoad() }
-                                .buttonStyle(.glass)
+                                .chromeGlassButtonStyle()
                                 .controlSize(.small)
                         }
                         ChromeRowDivider()
@@ -90,9 +90,6 @@ struct MCPSettingsPage: View {
             Text("Connected servers reach every provider except Antigravity when a thread starts: the CLIs at launch, the API models through Tivano itself. Antigravity's CLI only reads its own global MCP settings.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
-            if query.trimmed.isEmpty || "Remote MCP".localizedCaseInsensitiveContains(query.trimmed) || Chrome.localized("Remote MCP").localizedCaseInsensitiveContains(query.trimmed) {
-                ChromeSection(title: "Remote MCP") { ChromeCard { RemoteMCPSettingsRows() } }
-            }
         }
         .onChange(of: model.mcp.states) { previous, current in
             guard !reduceMotion else { return }
@@ -358,7 +355,7 @@ private struct MCPServerCard: View {
             // needs a key gets the floating key panel, which opens the page the key is
             // made on and takes the paste (see `MCPKeyPanel`); the card stays clean.
             Button(Chrome.localized(entry.isOAuth ? "Sign in" : "Connect")) { begin() }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .controlSize(.small)
         case .connecting:
             HStack(spacing: 6) {
@@ -372,11 +369,11 @@ private struct MCPServerCard: View {
             EmptyView()
         case .needsSetup(let guide):
             Button("Fix it") { MCPSetupPanel.shared.present(entry: entry, guide: guide, model: model) }
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .controlSize(.small)
         case .failed:
             Button(Chrome.localized(entry.isOAuth ? "Sign in again" : "Try again")) { begin() }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .controlSize(.small)
         }
     }
@@ -545,7 +542,7 @@ private struct MCPCustomRow: View {
         switch state {
         case .notConnected:
             Button("Connect") { begin() }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .controlSize(.small)
         case .connecting:
             HStack(spacing: 6) {
@@ -562,11 +559,11 @@ private struct MCPCustomRow: View {
             ))
         case .needsSetup(let guide):
             Button("Fix it") { MCPSetupPanel.shared.present(entry: entry, guide: guide, model: model) }
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .controlSize(.small)
         case .failed:
             Button("Try again") { begin() }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .controlSize(.small)
         }
     }
@@ -748,7 +745,7 @@ private struct MCPCustomEditor: View {
             HStack {
                 Spacer(minLength: 0)
                 Button(Chrome.localized(server == nil ? "Add server" : "Save")) { save() }
-                    .buttonStyle(.glassProminent)
+                    .chromeGlassButtonStyle(prominent: true)
             }
         }
     }

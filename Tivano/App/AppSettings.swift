@@ -1,9 +1,14 @@
+import AppKit
 import SwiftUI
 
 enum AppLanguage: String, CaseIterable, Identifiable {
     case system
     case english
     case simplifiedChinese
+    case traditionalChinese
+    case japanese
+    case korean
+    case french
 
     var id: String { rawValue }
 
@@ -12,6 +17,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         case .system: "System default"
         case .english: "English"
         case .simplifiedChinese: "简体中文"
+        case .traditionalChinese: "繁體中文"
+        case .japanese: "日本語"
+        case .korean: "한국어"
+        case .french: "Français"
         }
     }
 }
@@ -44,45 +53,6 @@ enum ThreadTitleMode: String, CaseIterable, Identifiable {
         switch self {
         case .firstTurn: "Name once"
         case .continuous: "Keep updated"
-        }
-    }
-}
-
-enum TimelineHapticStyle: String, CaseIterable, Identifiable {
-    case soft
-    case strong
-    case none
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .soft: "Soft"
-        case .strong: "Strong"
-        case .none: "None"
-        }
-    }
-}
-
-enum ActivityThreadStyle: String, CaseIterable, Identifiable {
-    /// The project's emoji or SF Symbol before the thread's name: one line per thread.
-    case icon
-    /// The project's name, with a folder mark, on a line under the thread's title.
-    case projectName
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .icon: "Icon"
-        case .projectName: "Project name"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .icon: "Each project's emoji or symbol before the thread's name, one line per thread"
-        case .projectName: "The project's name, with a folder mark, on a line under the thread's title"
         }
     }
 }
@@ -171,7 +141,6 @@ final class AppSettings {
         static let quickChatEnabled = "quickChatEnabled"
         static let quickChatChord = "quickChatChord"
         static let quickChatChordCleared = "quickChatChordCleared"
-        static let notify = "notifyWhenFinished"
         static let chime = "chimeWhenFinished"
         static let confirmDelete = "confirmBeforeDeleting"
         static let autoShelveDays = "autoShelveDays"
@@ -179,21 +148,20 @@ final class AppSettings {
         static let autoUpdateEnabled = "autoUpdateEnabled"
         static let antiSlopEnabled = "antiSlopEnabled"
         static let showsWorkingCard = "showsWorkingCard"
-        static let timelineHapticStyle = "timelineHapticStyle"
         static let uiFontSize = "uiFontSize"
         static let contentFontSize = "contentFontSize"
         static let codeFontSize = "codeFontSize"
         static let sidebarActivityView = "sidebarActivityView"
         static let sidebarProjectsCollapsed = "sidebarProjectsCollapsed"
-        static let sidebarShelfExpanded = "sidebarShelfExpanded"
         static let sidebarTasksCollapsed = "sidebarTasksCollapsed"
-        static let showsSkylight = "showsSkylight"
+        static let weatherWindow = "weatherWindow"
         static let codexVoice = "codexVoice"
         static let voiceEnabled = "voiceEnabled"
         static let alphaEnabled = "alphaEnabled"
         static let alphaVoiceEnabled = "alphaVoiceEnabled"
         static let promptPredictionsEnabled = "promptPredictionsEnabled"
         static let alphaChimeraEnabled = "alphaChimeraEnabled"
+        static let chimeraLeftAlpha = "chimeraLeftAlpha"
         static let externalControlEnabled = "externalControlEnabled"
         static let remoteMCPEnabled = "remoteMCPEnabled"
         static let controlLeftAlpha = "controlLeftAlpha"
@@ -202,11 +170,14 @@ final class AppSettings {
         static let remoteMCPFullAccess = "remoteMCPFullAccess"
         static let cliInstallationTarget = "cliInstallationTarget"
         static let appTheme = "appTheme"
-        static let backdropOpacity = "backdropOpacity"
         static let appearance = "appearance"
-        static let clearerBackdrop = "clearerBackdrop"
-        static let performanceMode = "performanceMode"
-        static let autoHideTopControls = "autoHideTopControls"
+        static let themeStyle = "themeStyle"
+        static let appIconChoice = "appIconChoice"
+        static let accentThemeBeforeCreation = "accentThemeBeforeCreation"
+        static let appearanceMode = "appearanceMode"
+        static let accentFamiliesMigrated = "accentFamiliesMigrated"
+        static let backdropOpacity = "backdropOpacity"
+        static let collapseTopControls = "collapseTopControls"
         static let binaryPaths = "providerBinaryPaths"
         static let disabledProviders = "disabledProviders"
         static let unmonitoredProviders = "unmonitoredProviderUpdates"
@@ -215,17 +186,15 @@ final class AppSettings {
         static let showsProviderBinaryPaths = "showsProviderBinaryPaths"
         static let models = "lastModels"
         static let efforts = "lastEfforts"
-        static let openCodeProviderMigrated = "openCodeProviderMigrated"
         static let lastHydraPair = "lastHydraPairID"
         static let textGeneration = "textGeneration"
         static let textGenerationModelID = "textGenerationModelID"
         static let textGenerationEffort = "textGenerationEffort"
         static let threadTitleMode = "threadTitleMode"
-        static let preventSleepDuringTasks = "preventSleepDuringTasks"
         static let taskSleepMode = "taskSleepMode"
+        static let preventSleepDuringTasks = "preventSleepDuringTasks"
         static let appLanguage = "appLanguage"
         static let shelfTitle = "shelfTitle"
-        static let commitInstructions = "commitInstructions"
         static let terminalHeight = "terminalHeight"
         static let modelList = "modelList"
         static let modelPreferences = "modelPreferences"
@@ -238,13 +207,7 @@ final class AppSettings {
         static let recentDownloadsPicker = "recentDownloadsPicker"
         static let lastProjectID = "lastProjectID"
         static let lastThreadAffiliation = "lastThreadAffiliation"
-        static let projectsEnabled = "projectsEnabled"
-        static let projectActivationOverrides = "projectActivationOverrides"
-        static let deepseekAPIKey = "deepseekAPIKey"
-        static let metaAPIKey = "metaAPIKey"
-        static let zaiAPIKey = "zaiAPIKey"
         static let zaiRegion = ZaiRegion.defaultsKey
-        static let commandcodeAPIKey = "commandcodeAPIKey"
         static let hydraEnabled = "hydraEnabled"
         static let panelSize = "floatingPanelSize"
         static let hydraDefaultEnabled = AppSettings.hydraDefaultEnabledKey
@@ -259,8 +222,6 @@ final class AppSettings {
         static let hydraAutoPopsHeads = "hydraAutoPopsHeads"
         static let hydraTempersHeadEffort = "hydraTempersHeadEffort"
         static let hydraMaxHeads = "hydraMaxHeads"
-        static let sidebarPanelOrigin = "sidebarPanelOrigin"
-        static let sidebarPanelSize = "sidebarPanelSize"
         static let chimeraPresets = "chimeraPresets"
         static let hydraPairs = "hydraPairs"
         static let hasSeenHydraIntro = "hasSeenHydraIntro"
@@ -306,10 +267,6 @@ final class AppSettings {
         }
     }
 
-    var notifyWhenFinished: Bool {
-        didSet { defaults.set(notifyWhenFinished, forKey: Key.notify) }
-    }
-
     /// A soft chime plays when a turn finishes, whether or not the thread is in view.
     var chimeWhenFinished: Bool {
         didSet { defaults.set(chimeWhenFinished, forKey: Key.chime) }
@@ -352,11 +309,6 @@ final class AppSettings {
     /// of the turn's steps, the time); off, it is the one-line badge with the words and the time.
     var showsWorkingCard: Bool {
         didSet { defaults.set(showsWorkingCard, forKey: Key.showsWorkingCard) }
-    }
-
-    /// The style of haptic feedback played when hovering over timeline ticks and progress bars.
-    var timelineHapticStyle: TimelineHapticStyle {
-        didSet { defaults.set(timelineHapticStyle.rawValue, forKey: Key.timelineHapticStyle) }
     }
 
     /// Base sizes in points. Each shifts its category off the original rendering baseline.
@@ -429,12 +381,8 @@ final class AppSettings {
     var alphaEnabled: Bool {
         didSet {
             defaults.set(alphaEnabled, forKey: Key.alphaEnabled)
-            HydraPrompts.acceptsChimeraFence = isChimeraEnabled
         }
     }
-
-    // Legacy Alpha voice flag, retained only for migration to voiceEnabled.
-    var alphaVoiceEnabled: Bool
 
     var voiceEnabled: Bool {
         didSet { defaults.set(voiceEnabled, forKey: Key.voiceEnabled) }
@@ -449,7 +397,7 @@ final class AppSettings {
         }
     }
 
-    var isChimeraEnabled: Bool { alphaEnabled && alphaChimeraEnabled }
+    var isChimeraEnabled: Bool { alphaChimeraEnabled }
 
     /// Suggest the next message after a reply when text generation is enabled.
     var promptPredictionsEnabled: Bool {
@@ -502,27 +450,91 @@ final class AppSettings {
         didSet { defaults.set(sidebarProjectsCollapsed, forKey: Key.sidebarProjectsCollapsed) }
     }
 
-    var sidebarShelfExpanded: Bool {
-        didSet { defaults.set(sidebarShelfExpanded, forKey: Key.sidebarShelfExpanded) }
-    }
-
     var sidebarTasksCollapsed: Bool {
         didSet { defaults.set(sidebarTasksCollapsed, forKey: Key.sidebarTasksCollapsed) }
     }
 
-    var showsSkylight: Bool {
-        didSet { defaults.set(showsSkylight, forKey: Key.showsSkylight) }
+    var weatherWindowEnabled: Bool {
+        didSet { defaults.set(weatherWindowEnabled, forKey: Key.weatherWindow) }
     }
 
-    var showsSkylightNow: Bool { showsSkylight && !performanceMode }
+    var showsWeatherNow: Bool {
+        weatherWindowEnabled && themeStyle == .liquidGlass && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
 
-    /// The activity list always shows the project's name under the thread title.
-    let activityThreadStyle: ActivityThreadStyle = .projectName
+    @ObservationIgnored private var isSyncingCreationTheme = false
 
     var theme: AppTheme {
         didSet {
             defaults.set(theme.rawValue, forKey: Key.appTheme)
+            guard !isSyncingCreationTheme else { return }
             ThemeManager.current = theme
+            syncTypeScaleWithTheme()
+        }
+    }
+
+    var themeStyle: ThemeStyle {
+        didSet {
+            // Assigning inside its own didSet does not re-run the observer, so coerce and continue.
+            if !themeStyle.isAvailable {
+                themeStyle = .texture
+            }
+            defaults.set(themeStyle.rawValue, forKey: Key.themeStyle)
+            syncCreationTheme(previousStyle: oldValue)
+            ThemeManager.apply(theme: theme, style: themeStyle)
+            syncTypeScaleWithTheme()
+            AppIconManager.shared.applyAfterThemeSwitch(choice: appIconChoice, style: themeStyle)
+        }
+    }
+
+    var appIconChoice: AppIconChoice {
+        didSet {
+            defaults.set(appIconChoice.rawValue, forKey: Key.appIconChoice)
+            AppIconManager.shared.apply(choice: appIconChoice, style: themeStyle)
+        }
+    }
+
+    /// Entering Creation remembers the current accent family and selects Coral Red; leaving
+    /// Creation restores the accent that was active before entering.
+    private func syncCreationTheme(previousStyle: ThemeStyle) {
+        isSyncingCreationTheme = true
+        defer { isSyncingCreationTheme = false }
+        if themeStyle == .create && previousStyle != .create {
+            defaults.set(theme.rawValue, forKey: Key.accentThemeBeforeCreation)
+            theme = AppTheme.creationDefault
+        } else if previousStyle == .create && themeStyle != .create {
+            theme = restoredAccentTheme
+        }
+    }
+
+    private func syncTypeScaleWithTheme() {
+        let spec = ThemeManager.spec
+        if TypeScale.shared.serif != spec.serif {
+            TypeScale.shared.serif = spec.serif
+        }
+        if TypeScale.shared.handDrawnIcons != spec.handDrawnIcons {
+            TypeScale.shared.handDrawnIcons = spec.handDrawnIcons
+        }
+    }
+
+    private var restoredAccentTheme: AppTheme {
+        if let raw = defaults.string(forKey: Key.accentThemeBeforeCreation),
+           let stored = AppTheme.migrated(fromLegacy: raw) {
+            return stored
+        }
+        return .breeze
+    }
+
+    var appearanceMode: AppearanceMode {
+        didSet { defaults.set(appearanceMode.rawValue, forKey: Key.appearanceMode) }
+    }
+
+    var effectiveColorScheme: ColorScheme? {
+        if themeStyle == .create { return .light }
+        switch appearanceMode {
+        case .light: return .light
+        case .dark: return .dark
+        case .system: return nil
         }
     }
 
@@ -534,6 +546,10 @@ final class AppSettings {
     }
     static let defaultBackdropOpacity = 0.5
 
+    var solidSurfaces: SolidSurfaces? {
+        themeStyle == .create ? SolidSurfaces.creation.adjusted(backdrop: backdropOpacity) : nil
+    }
+
     var appLanguage: AppLanguage {
         didSet {
             defaults.set(appLanguage.rawValue, forKey: Key.appLanguage)
@@ -544,25 +560,20 @@ final class AppSettings {
                 UserDefaults.standard.set(["en"], forKey: "AppleLanguages")
             case .simplifiedChinese:
                 UserDefaults.standard.set(["zh-Hans"], forKey: "AppleLanguages")
+            case .traditionalChinese:
+                UserDefaults.standard.set(["zh-Hant"], forKey: "AppleLanguages")
+            case .japanese:
+                UserDefaults.standard.set(["ja"], forKey: "AppleLanguages")
+            case .korean:
+                UserDefaults.standard.set(["ko"], forKey: "AppleLanguages")
+            case .french:
+                UserDefaults.standard.set(["fr"], forKey: "AppleLanguages")
             }
         }
     }
 
-    /// Uses Liquid Glass to show more of the desktop instead of a lighter system blur.
-    var clearerBackdrop: Bool {
-        didSet { defaults.set(clearerBackdrop, forKey: Key.clearerBackdrop) }
-    }
-
-    /// Disables window transparency, blurs, glows and background effects for lowest GPU usage.
-    var performanceMode: Bool {
-        didSet {
-            // Clearer glass keeps its own value: the backdrop ignores it while this is on.
-            defaults.set(performanceMode, forKey: Key.performanceMode)
-        }
-    }
-
-    var autoHideTopControls: Bool {
-        didSet { defaults.set(autoHideTopControls, forKey: Key.autoHideTopControls) }
+    var collapseTopControls: Bool {
+        didSet { defaults.set(collapseTopControls, forKey: Key.collapseTopControls) }
     }
 
     var textGeneration: TextGenerationChoice {
@@ -587,15 +598,11 @@ final class AppSettings {
         didSet { defaults.set(shelfTitle, forKey: Key.shelfTitle) }
     }
 
-    var commitInstructions: String {
-        didSet { defaults.set(commitInstructions, forKey: Key.commitInstructions) }
-    }
-
     var terminalHeight: Double {
         didSet { defaults.set(terminalHeight, forKey: Key.terminalHeight) }
     }
 
-    /// The attach button offers recent downloads first instead of opening Finder straight away.
+    /// Whether the attach menu lists recent downloads.
     var recentDownloadsPicker: Bool {
         didSet { defaults.set(recentDownloadsPicker, forKey: Key.recentDownloadsPicker) }
     }
@@ -619,55 +626,22 @@ final class AppSettings {
         }
     }
 
-    /// Whether projects are active app-wide. This is the default every project follows:
-    /// with it on, all projects are active without any per-project step; a project the
-    /// user explicitly switched off (or on) keeps its own choice.
-    var projectsEnabled: Bool {
-        didSet { defaults.set(projectsEnabled, forKey: Key.projectsEnabled) }
-    }
-
-    /// Per-project activation choices, by project id. Absent means the project follows
-    /// `projectsEnabled`; present means the user explicitly overrode it.
-    private(set) var projectActivationOverrides: [String: Bool] {
-        didSet { store(projectActivationOverrides, forKey: Key.projectActivationOverrides) }
-    }
-
-    /// Whether a project is active: its own explicit choice, else the global switch.
-    func isProjectActive(_ id: UUID) -> Bool {
-        true
-    }
-
-    /// Explicitly switch a project on or off, overriding the global switch.
-    func setProjectActive(_ active: Bool, for id: UUID) {
-        projectActivationOverrides[id.uuidString] = active
-    }
-
-    /// Forget a project's own choice, so it follows the global switch again.
-    func clearProjectActivationOverride(for id: UUID) {
-        projectActivationOverrides[id.uuidString] = nil
-    }
-
-    /// Whether a project has its own explicit choice instead of following the switch.
-    func hasProjectActivationOverride(for id: UUID) -> Bool {
-        projectActivationOverrides[id.uuidString] != nil
-    }
-
     /// DeepSeek talks to its cloud API directly, so it needs an API key instead of a CLI login.
-    /// Stored in the Keychain; older plaintext defaults are migrated when read.
+    /// Stored in the Keychain.
     /// Read once, on the first ask, and cached: a Keychain query on every render made
     /// Settings lag, and two of them before the window exists made launch wait on securityd.
     var deepseekAPIKeyInput: String {
         didSet {
-            storeAPIKeyChange(deepseekAPIKeyInput, from: oldValue, provider: .deepseek, fallbackKey: Key.deepseekAPIKey)
+            storeAPIKeyChange(deepseekAPIKeyInput, from: oldValue, provider: .deepseek)
         }
     }
 
     /// Meta Model API (Muse Spark) talks to https://api.meta.ai/v1 directly,
     /// so it needs a MODEL_API_KEY instead of a CLI login.
-    /// Stored in the Keychain; older plaintext defaults are migrated when read.
+    /// Stored in the Keychain.
     var metaAPIKeyInput: String {
         didSet {
-            storeAPIKeyChange(metaAPIKeyInput, from: oldValue, provider: .meta, fallbackKey: Key.metaAPIKey)
+            storeAPIKeyChange(metaAPIKeyInput, from: oldValue, provider: .meta)
         }
     }
 
@@ -677,12 +651,12 @@ final class AppSettings {
 
     /// Z.ai's GLM Coding Plan talks to api.z.ai or open.bigmodel.cn by region,
     /// so it needs a ZAI_API_KEY instead of a CLI login.
-    /// Stored in the Keychain; older plaintext defaults are migrated when read.
+    /// Stored in the Keychain.
     /// Read once, on the first ask, and cached: a Keychain query on every render made
     /// Settings lag, and two of them before the window exists made launch wait on securityd.
     var zaiAPIKeyInput: String {
         didSet {
-            storeAPIKeyChange(zaiAPIKeyInput, from: oldValue, provider: .zai, fallbackKey: Key.zaiAPIKey)
+            storeAPIKeyChange(zaiAPIKeyInput, from: oldValue, provider: .zai)
         }
     }
 
@@ -690,12 +664,11 @@ final class AppSettings {
     /// handed to the CLI as `COMMAND_CODE_API_KEY`. Stored in the Keychain.
     var commandcodeAPIKeyInput: String {
         didSet {
-            storeAPIKeyChange(commandcodeAPIKeyInput, from: oldValue, provider: .commandcode, fallbackKey: Key.commandcodeAPIKey)
+            storeAPIKeyChange(commandcodeAPIKeyInput, from: oldValue, provider: .commandcode)
         }
     }
 
     private(set) var apiKeyStoreErrors: [ProviderKind: String] = [:]
-    private(set) var apiKeyMigrationFailures: Set<ProviderKind> = []
 
     enum APIKeySource {
         case settings
@@ -706,68 +679,35 @@ final class AppSettings {
     @ObservationIgnored private var didReadKeychain = false
     @ObservationIgnored private var isReadingKeychain = false
 
-    /// One provider's key as read: the Keychain's, or the plaintext copy in the defaults
-    /// for a Mac whose Keychain refused it.
-    private struct StoredKey: Sendable {
-        var value: String
-        var inKeychain: Bool
-        var migrationError: String?
-
-        init(keychain: String, fallback: String) {
-            inKeychain = !keychain.isEmpty
-            value = inKeychain ? keychain : fallback
-        }
-    }
-
     private struct StoredKeys: Sendable {
-        var deepseek: StoredKey
-        var meta: StoredKey
-        var zai: StoredKey
-        var commandcode: StoredKey
+        var deepseek: String
+        var meta: String
+        var zai: String
+        var commandcode: String
     }
 
-    private var keyFallbacks: (deepseek: String, meta: String, zai: String, commandcode: String) {
-        (
-            defaults.string(forKey: Key.deepseekAPIKey) ?? "",
-            defaults.string(forKey: Key.metaAPIKey) ?? "",
-            defaults.string(forKey: Key.zaiAPIKey) ?? "",
-            defaults.string(forKey: Key.commandcodeAPIKey) ?? ""
-        )
-    }
-
-    /// Reads stored keys and migrates any legacy plaintext defaults.
-    private nonisolated static func readKeys(fallbacks: (deepseek: String, meta: String, zai: String, commandcode: String)) -> StoredKeys {
+    /// One Keychain round trip per key.
+    private nonisolated static func readKeys() -> StoredKeys {
         StoredKeys(
-            deepseek: storedKey(for: .deepseek, fallback: fallbacks.deepseek),
-            meta: storedKey(for: .meta, fallback: fallbacks.meta),
-            zai: storedKey(for: .zai, fallback: fallbacks.zai),
-            commandcode: storedKey(for: .commandcode, fallback: fallbacks.commandcode)
+            deepseek: APIKeychain.key(for: .deepseek, fallback: ""),
+            meta: APIKeychain.key(for: .meta, fallback: ""),
+            zai: APIKeychain.key(for: .zai, fallback: ""),
+            commandcode: APIKeychain.key(for: .commandcode, fallback: "")
         )
-    }
-
-    private nonisolated static func storedKey(for provider: ProviderKind, fallback: String) -> StoredKey {
-        guard !CaptureRun.isEnabled else { return StoredKey(keychain: "", fallback: "") }
-        var key = StoredKey(keychain: APIKeychain.key(for: provider, fallback: ""), fallback: fallback)
-        if !key.inKeychain, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            key.migrationError = APIKeychain.store(fallback, for: provider)
-            key.inKeychain = key.migrationError == nil
-        }
-        return key
     }
 
     /// The stored keys, from the Keychain the first time anything asks for one. The fill
     /// bypasses the observers above, which write edited keys back to the Keychain.
     private func readKeychainIfNeeded() {
         guard !didReadKeychain else { return }
-        fillKeys(Self.readKeys(fallbacks: keyFallbacks))
+        fillKeys(Self.readKeys())
     }
 
     /// Reads the keys off the main thread once the window is up, so neither the first
     /// frame nor the first ask waits on securityd. An ask that comes first reads for itself.
     func loadKeychainInBackground() async {
         guard !didReadKeychain else { return }
-        let fallbacks = keyFallbacks
-        let keys = await Task.detached(priority: .userInitiated) { Self.readKeys(fallbacks: fallbacks) }.value
+        let keys = await Task.detached(priority: .userInitiated) { Self.readKeys() }.value
         fillKeys(keys)
     }
 
@@ -775,34 +715,20 @@ final class AppSettings {
         guard !didReadKeychain else { return }
         didReadKeychain = true
         isReadingKeychain = true
-        deepseekAPIKeyInput = keys.deepseek.value
-        metaAPIKeyInput = keys.meta.value
-        zaiAPIKeyInput = keys.zai.value
-        commandcodeAPIKeyInput = keys.commandcode.value
+        deepseekAPIKeyInput = keys.deepseek
+        metaAPIKeyInput = keys.meta
+        zaiAPIKeyInput = keys.zai
+        commandcodeAPIKeyInput = keys.commandcode
         isReadingKeychain = false
-        for (provider, key, fallbackKey) in [
-            (ProviderKind.deepseek, keys.deepseek, Key.deepseekAPIKey),
-            (.meta, keys.meta, Key.metaAPIKey),
-            (.zai, keys.zai, Key.zaiAPIKey),
-            (.commandcode, keys.commandcode, Key.commandcodeAPIKey),
-        ] {
-            if key.inKeychain { defaults.removeObject(forKey: fallbackKey) }
-            if let error = key.migrationError {
-                apiKeyStoreErrors[provider] = error
-                apiKeyMigrationFailures.insert(provider)
-            }
-        }
     }
 
     /// Failed writes keep the edited key in memory without creating a plaintext copy.
-    private func storeAPIKeyChange(_ value: String, from oldValue: String, provider: ProviderKind, fallbackKey: String) {
+    private func storeAPIKeyChange(_ value: String, from oldValue: String, provider: ProviderKind) {
         guard !isReadingKeychain, value != oldValue, !CaptureRun.isEnabled else { return }
-        apiKeyMigrationFailures.remove(provider)
         if let error = APIKeychain.store(value, for: provider) {
             apiKeyStoreErrors[provider] = error
         } else {
             apiKeyStoreErrors.removeValue(forKey: provider)
-            defaults.removeObject(forKey: fallbackKey)
         }
     }
 
@@ -974,28 +900,6 @@ final class AppSettings {
         didSet { defaults.set(hydraTempersHeadEffort, forKey: Key.hydraTempersHeadEffort) }
     }
 
-    /// Where the floating sidebar was last left, from the chat area's top-left.
-    var sidebarPanelOrigin: CGPoint? {
-        didSet {
-            if let sidebarPanelOrigin {
-                defaults.set([sidebarPanelOrigin.x, sidebarPanelOrigin.y], forKey: Key.sidebarPanelOrigin)
-            } else {
-                defaults.removeObject(forKey: Key.sidebarPanelOrigin)
-            }
-        }
-    }
-
-    /// The size it was last dragged to.
-    var sidebarPanelSize: CGSize? {
-        didSet {
-            if let sidebarPanelSize {
-                defaults.set([sidebarPanelSize.width, sidebarPanelSize.height], forKey: Key.sidebarPanelSize)
-            } else {
-                defaults.removeObject(forKey: Key.sidebarPanelSize)
-            }
-        }
-    }
-
     /// The lead-and-heads pairings, in the order Settings and the model picker show them.
     /// Reordering writes this array; nothing else stores the order.
     var chimeraPresets: [ChimeraPreset] {
@@ -1010,14 +914,14 @@ final class AppSettings {
         let defaults = CaptureRun.defaults ?? .standard
         defaultProvider = ProviderKind(storedValue: defaults.string(forKey: Key.defaultProvider) ?? "") ?? .codex
         defaultRuntimeMode = RuntimeMode(rawValue: defaults.string(forKey: Key.runtimeMode) ?? "") ?? .fullAccess
-        defaultWorkspaceMode = WorkspaceMode(rawValue: defaults.string(forKey: Key.workspaceMode) ?? "") ?? .local
+        defaultWorkspaceMode = WorkspaceMode(rawValue: defaults.string(forKey: Key.workspaceMode) ?? "") ?? .auto
         newThreadModelSelection = Self.load(NewThreadModelSelection.self, forKey: Key.newThreadModelSelection)
         newThreadLocation = NewThreadLocation(rawValue: defaults.string(forKey: Key.newThreadLocation) ?? "") ?? .recent
         quickChatEnabled = defaults.bool(forKey: Key.quickChatEnabled)
         quickChatChord = defaults.bool(forKey: Key.quickChatChordCleared) ? nil : (Self.load(KeyChord.self, forKey: Key.quickChatChord) ?? Self.defaultQuickChatChord)
-        notifyWhenFinished = defaults.object(forKey: Key.notify) as? Bool ?? true
         chimeWhenFinished = defaults.object(forKey: Key.chime) as? Bool ?? true
-        // The mode replaced an on/off switch: an earlier "off" stays off, an earlier "on" keeps the Mac awake.
+        // Read-only fallbacks: these older keys are never rewritten, so a preference saved
+        // under them before 2.0 still applies until the user changes it.
         taskSleepMode = TaskSleepMode(rawValue: defaults.string(forKey: Key.taskSleepMode) ?? "")
             ?? (defaults.object(forKey: Key.preventSleepDuringTasks) as? Bool == false ? .off : .system)
         confirmBeforeDeleting = defaults.object(forKey: Key.confirmDelete) as? Bool ?? true
@@ -1029,21 +933,20 @@ final class AppSettings {
         autoUpdateEnabled = defaults.object(forKey: Key.autoUpdateEnabled) as? Bool ?? true
         antiSlopEnabled = defaults.object(forKey: Key.antiSlopEnabled) as? Bool ?? true
         showsWorkingCard = defaults.object(forKey: Key.showsWorkingCard) as? Bool ?? true
-        timelineHapticStyle = TimelineHapticStyle(rawValue: defaults.string(forKey: Key.timelineHapticStyle) ?? "") ?? .soft
         zaiRegion = ZaiRegion(rawValue: defaults.string(forKey: Key.zaiRegion) ?? "") ?? .global
         uiFontSize = Self.clampedFontSize(defaults, key: Key.uiFontSize, stock: TypeScale.defaultUI, range: TypeScale.uiRange)
         contentFontSize = Self.clampedFontSize(defaults, key: Key.contentFontSize, stock: TypeScale.defaultContent, range: TypeScale.contentRange)
         codeFontSize = Self.clampedFontSize(defaults, key: Key.codeFontSize, stock: TypeScale.defaultCode, range: TypeScale.codeRange)
         sidebarActivityView = defaults.bool(forKey: Key.sidebarActivityView)
         sidebarProjectsCollapsed = defaults.bool(forKey: Key.sidebarProjectsCollapsed)
-        sidebarShelfExpanded = defaults.bool(forKey: Key.sidebarShelfExpanded)
         sidebarTasksCollapsed = defaults.bool(forKey: Key.sidebarTasksCollapsed)
-        showsSkylight = defaults.object(forKey: Key.showsSkylight) as? Bool ?? true
+        weatherWindowEnabled = (defaults.object(forKey: Key.weatherWindow) as? Bool)
+            ?? (defaults.object(forKey: "showsSkylight") as? Bool)
+            ?? true
         codexVoice = defaults.string(forKey: Key.codexVoice)
         let storedAlphaEnabled = defaults.bool(forKey: Key.alphaEnabled)
         let storedAlphaVoiceEnabled = defaults.bool(forKey: Key.alphaVoiceEnabled)
         alphaEnabled = storedAlphaEnabled
-        alphaVoiceEnabled = storedAlphaVoiceEnabled
         if defaults.object(forKey: Key.voiceEnabled) == nil {
             let migratedVoiceEnabled = storedAlphaEnabled && storedAlphaVoiceEnabled
             voiceEnabled = migratedVoiceEnabled
@@ -1052,8 +955,15 @@ final class AppSettings {
             voiceEnabled = defaults.bool(forKey: Key.voiceEnabled)
         }
         promptPredictionsEnabled = defaults.object(forKey: Key.promptPredictionsEnabled) as? Bool ?? true
-        alphaChimeraEnabled = defaults.bool(forKey: Key.alphaChimeraEnabled)
-        HydraPrompts.acceptsChimeraFence = storedAlphaEnabled && defaults.bool(forKey: Key.alphaChimeraEnabled)
+        // Chimera used to need Alpha too; keep what was in effect when leaving Labs.
+        var storedChimera = defaults.bool(forKey: Key.alphaChimeraEnabled)
+        if !defaults.bool(forKey: Key.chimeraLeftAlpha) {
+            storedChimera = storedAlphaEnabled && storedChimera
+            defaults.set(storedChimera, forKey: Key.alphaChimeraEnabled)
+            defaults.set(true, forKey: Key.chimeraLeftAlpha)
+        }
+        alphaChimeraEnabled = storedChimera
+        HydraPrompts.acceptsChimeraFence = storedChimera
         // Local control and Remote MCP used to need Alpha too; keep what was in effect.
         var storedExternalControl = defaults.bool(forKey: Key.externalControlEnabled)
         var storedRemoteMCP = defaults.bool(forKey: Key.remoteMCPEnabled)
@@ -1071,22 +981,69 @@ final class AppSettings {
         remoteMCPFullAccess = defaults.bool(forKey: Key.remoteMCPFullAccess)
         cliInstallationTarget = defaults.string(forKey: Key.cliInstallationTarget)
         backdropOpacity = defaults.object(forKey: Key.backdropOpacity) as? Double ?? Self.defaultBackdropOpacity
-        clearerBackdrop = defaults.object(forKey: Key.clearerBackdrop) as? Bool ?? true
-        performanceMode = defaults.bool(forKey: Key.performanceMode)
-        autoHideTopControls = defaults.bool(forKey: Key.autoHideTopControls)
-        // The old System/Light/Dark choice maps straight onto the same themes.
-        let initialTheme = AppTheme(rawValue: defaults.string(forKey: Key.appTheme) ?? "")
-            ?? AppTheme(rawValue: defaults.string(forKey: Key.appearance) ?? "")
-            ?? .breeze
+        collapseTopControls = defaults.object(forKey: Key.collapseTopControls) as? Bool ?? true
+        // Migrate legacy light/dark theme variants onto merged accent families and appearanceMode.
+        let rawAppTheme = defaults.string(forKey: Key.appTheme)
+        let rawAppearanceTheme = defaults.string(forKey: Key.appearance)
+        let storedThemeRaw = [rawAppTheme, rawAppearanceTheme]
+            .compactMap { $0 }
+            .first { AppTheme.migrated(fromLegacy: $0) != nil }
+        let initialTheme = storedThemeRaw.flatMap(AppTheme.migrated(fromLegacy:)) ?? .breeze
+        var initialThemeStyle: ThemeStyle
+        if let rawStyle = defaults.string(forKey: Key.themeStyle),
+           let storedStyle = ThemeStyle(rawValue: rawStyle) {
+            initialThemeStyle = storedStyle
+        } else if defaults.object(forKey: Key.themeStyle) != nil {
+            initialThemeStyle = .liquidGlass
+        } else if defaults.object(forKey: "performanceMode") as? Bool == true
+            || defaults.object(forKey: "clearerBackdrop") as? Bool == false {
+            initialThemeStyle = .texture
+        } else {
+            initialThemeStyle = .liquidGlass
+        }
+        if !initialThemeStyle.isAvailable {
+            initialThemeStyle = .texture
+            defaults.set(initialThemeStyle.rawValue, forKey: Key.themeStyle)
+        }
         theme = initialTheme
-        ThemeManager.current = initialTheme
+        themeStyle = initialThemeStyle
+        appIconChoice = AppIconChoice(rawValue: defaults.string(forKey: Key.appIconChoice) ?? "") ?? .automatic
+        ThemeManager.apply(theme: initialTheme, style: initialThemeStyle)
+        TypeScale.shared.serif = ThemeManager.spec.serif
+        TypeScale.shared.handDrawnIcons = ThemeManager.spec.handDrawnIcons
+        let legacyScheme = storedThemeRaw.flatMap(AppTheme.legacyScheme(ofRaw:))
+        let hasMigratedAccentFamilies = defaults.bool(forKey: Key.accentFamiliesMigrated)
+        if let rawAppearance = defaults.string(forKey: Key.appearanceMode),
+           let storedAppearance = AppearanceMode(rawValue: rawAppearance) {
+            if storedAppearance == .system, !hasMigratedAccentFamilies, let legacyScheme {
+                let migrated: AppearanceMode = legacyScheme == .light ? .light : .dark
+                appearanceMode = migrated
+                defaults.set(migrated.rawValue, forKey: Key.appearanceMode)
+            } else {
+                appearanceMode = storedAppearance
+            }
+        } else {
+            let derived: AppearanceMode = switch legacyScheme {
+            case .light: .light
+            case .dark: .dark
+            case nil: .system
+            @unknown default: .system
+            }
+            appearanceMode = derived
+            defaults.set(derived.rawValue, forKey: Key.appearanceMode)
+        }
+        if !hasMigratedAccentFamilies {
+            defaults.set(true, forKey: Key.accentFamiliesMigrated)
+            defaults.set(initialTheme.rawValue, forKey: Key.appTheme)
+        } else if storedThemeRaw != nil, rawAppTheme != initialTheme.rawValue {
+            defaults.set(initialTheme.rawValue, forKey: Key.appTheme)
+        }
         appLanguage = AppLanguage(rawValue: defaults.string(forKey: Key.appLanguage) ?? "") ?? .system
         textGeneration = TextGenerationChoice(rawValue: defaults.string(forKey: Key.textGeneration) ?? "") ?? .automatic
         textGenerationModelID = defaults.string(forKey: Key.textGenerationModelID)
         textGenerationEffort = defaults.string(forKey: Key.textGenerationEffort)
         threadTitleMode = ThreadTitleMode(rawValue: defaults.string(forKey: Key.threadTitleMode) ?? "") ?? .firstTurn
         shelfTitle = defaults.string(forKey: Key.shelfTitle) ?? ""
-        commitInstructions = defaults.string(forKey: Key.commitInstructions) ?? ""
         terminalHeight = defaults.object(forKey: Key.terminalHeight) as? Double ?? 260
         recentDownloadsPicker = defaults.object(forKey: Key.recentDownloadsPicker) as? Bool ?? true
         if let stored = defaults.string(forKey: Key.lastProjectID) {
@@ -1100,8 +1057,6 @@ final class AppSettings {
             lastThreadAffiliation = defaults.string(forKey: Key.lastProjectID)
                 .flatMap(UUID.init(uuidString:)).map(ThreadAffiliation.project)
         }
-        projectsEnabled = defaults.object(forKey: Key.projectsEnabled) as? Bool ?? true
-        projectActivationOverrides = Self.load([String: Bool].self, forKey: Key.projectActivationOverrides) ?? [:]
         // Read from the Keychain later (see `loadKeychainInBackground`), not before the first frame.
         deepseekAPIKeyInput = ""
         metaAPIKeyInput = ""
@@ -1151,59 +1106,11 @@ final class AppSettings {
         hydraShowsHeadDetails = defaults.object(forKey: Key.hydraShowsHeadDetails) as? Bool ?? false
         hydraAutoPopsHeads = defaults.object(forKey: Key.hydraAutoPopsHeads) as? Bool ?? false
         hydraTempersHeadEffort = defaults.object(forKey: Key.hydraTempersHeadEffort) as? Bool ?? true
-        if let stored = defaults.array(forKey: Key.sidebarPanelOrigin) as? [Double], stored.count == 2 {
-            sidebarPanelOrigin = CGPoint(x: stored[0], y: stored[1])
-        } else {
-            sidebarPanelOrigin = nil
-        }
-        if let stored = defaults.array(forKey: Key.sidebarPanelSize) as? [Double], stored.count == 2 {
-            sidebarPanelSize = CGSize(width: stored[0], height: stored[1])
-        } else {
-            sidebarPanelSize = nil
-        }
         chimeraPresets = Self.load([Lenient<ChimeraPreset>].self, forKey: Key.chimeraPresets)?.compactMap(\.value) ?? []
         hydraPairs = Self.load([Lenient<HydraPair>].self, forKey: Key.hydraPairs)?.compactMap(\.value) ?? []
-        // The window zoom is gone. Drop a stored percent instead of turning it into a font size.
-        defaults.removeObject(forKey: "appZoom")
         TypeScale.shared.ui = uiFontSize
         TypeScale.shared.content = contentFontSize
         TypeScale.shared.code = codeFontSize
-        migrateOpenCodeGo()
-    }
-
-    private func migrateOpenCodeGo() {
-        // A second pass would re-enable OpenCode when both old entries were disabled.
-        guard !defaults.bool(forKey: Key.openCodeProviderMigrated) else { return }
-        let legacy = "opencodeGo"
-        let current = ProviderKind.opencode.rawValue
-        let goDisabled = disabledProviders.contains(legacy)
-        disabledProviders.removeAll { $0 == legacy || (!goDisabled && $0 == current) }
-        let goUnmonitored = unmonitoredProviders.contains(legacy)
-        unmonitoredProviders.removeAll { $0 == legacy || (!goUnmonitored && $0 == current) }
-        if let value = binaryPaths[legacy] {
-            if binaryPaths[current]?.isEmpty ?? true { binaryPaths[current] = value }
-            binaryPaths[legacy] = nil
-        }
-        if let value = lastModels[legacy] {
-            if lastModels[current]?.isEmpty ?? true { lastModels[current] = value }
-            lastModels[legacy] = nil
-        }
-        if let value = lastEfforts[legacy] {
-            if lastEfforts[current]?.isEmpty ?? true { lastEfforts[current] = value }
-            lastEfforts[legacy] = nil
-        }
-        // Effort and speed choices are keyed `provider/modelID`; Go's keep working under OpenCode.
-        let legacyPrefix = legacy + "/"
-        if modelPreferences.keys.contains(where: { $0.hasPrefix(legacyPrefix) }) {
-            var preferences = modelPreferences
-            for (key, value) in modelPreferences where key.hasPrefix(legacyPrefix) {
-                preferences[key] = nil
-                let moved = current + "/" + key.dropFirst(legacyPrefix.count)
-                if preferences[moved] == nil { preferences[moved] = value }
-            }
-            modelPreferences = preferences
-        }
-        defaults.set(true, forKey: Key.openCodeProviderMigrated)
     }
 
     /// A stored size outside its range is written back clamped. A missing key stays missing
@@ -1285,6 +1192,13 @@ final class AppSettings {
     func addToModelList(_ pin: ModelPin) {
         guard !modelList.contains(pin), modelList.count < Self.modelListLimit else { return }
         modelList.append(pin)
+    }
+
+    /// Adds `pin` at the end of the group `sectionID` (nil: the ungrouped models at the top).
+    func addToModelList(_ pin: ModelPin, toSection sectionID: UUID?) {
+        guard !modelList.contains(pin), modelList.count < Self.modelListLimit else { return }
+        modelList.append(pin)
+        moveModel(pin, toSection: sectionID)
     }
 
     func removeFromModelList(_ pin: ModelPin) {
