@@ -36,7 +36,7 @@ def main():
     claude = claude.replace(transport, 'FixtureHTTP.data(for: request)')
     if 'URLSession' in claude:
         raise SystemExit('Claude production transport changed: URLSession remains after replacement; refusing to run to avoid accessing real api.anthropic.com')
-    source = 'import Foundation\n'
+    source = 'import Foundation\nimport Synchronization\n'
     source += (ROOT / 'Tivano/Core/Support/JSONValue.swift').read_text()
     source += (ROOT / 'Tivano/Core/Support/ISO8601.swift').read_text()
     source += declaration(production, 'struct PlanLimits:')
@@ -72,6 +72,12 @@ enum ProviderAccounts {
     static func endRead(_ id: UUID) { locks -= 1 }
     static func safeClaudeError(_ error: Error) -> String { "Fixture denied" }
 }
+enum Shell {
+    static var runs = 0
+    static func run(_ executable: URL, _ arguments: [String], timeout: TimeInterval) async throws -> (succeeded: Bool, output: String) {
+        runs += 1; return (false, "")
+    }
+}
 enum FixtureHTTP {
     static var calls = 0
     static var status = 200
@@ -82,6 +88,7 @@ enum FixtureHTTP {
         precondition(request.httpMethod == "GET" && request.httpBody == nil)
         precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-only")
         precondition(request.timeoutInterval == 15)
+        precondition(request.value(forHTTPHeaderField: "User-Agent") == "claude-cli/2.1.321 (external, cli)")
         return (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
 }
@@ -94,6 +101,8 @@ enum FixtureHTTP {
 @main struct Checks {
     @MainActor static func main() async throws {
         let env = ["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1", "CLAUDE_CONFIG_DIR": "/fixture/claude"]
+        // Native installs name the binary after its version, so the User-Agent needs no CLI run.
+        let exe = URL(fileURLWithPath: "/fixture/claude-native/versions/2.1.321")
         func login(expired: Bool) throws -> Data {
             try JSONSerialization.data(withJSONObject: ["claudeAiOauth": [
                 "accessToken": "fixture-only", "refreshToken": "never-used",
@@ -101,30 +110,30 @@ enum FixtureHTTP {
             ]])
         }
         ProviderAccountStore.credential = try login(expired: true)
-        let expired = await PlanLimitsReader.readClaude(environment: env)
+        let expired = await PlanLimitsReader.readClaude(executable: exe, environment: env)
         precondition(expired?.problemKind == .unavailable && FixtureHTTP.calls == 0)
         ProviderAccountStore.credential = try login(expired: false)
-        let success = await PlanLimitsReader.readClaude(environment: env)
+        let success = await PlanLimitsReader.readClaude(executable: exe, environment: env)
         precondition(success?.windows.map(\.percent) == [25, 42] && FixtureHTTP.calls == 1)
         FixtureHTTP.status = 401
-        let unauthorized = await PlanLimitsReader.readClaude(environment: env)
+        let unauthorized = await PlanLimitsReader.readClaude(executable: exe, environment: env)
         precondition(unauthorized?.problemKind == .unavailable && FixtureHTTP.calls == 2)
         ProviderAccountStore.denied = true
-        let denied = await PlanLimitsReader.readClaude(environment: env)
+        let denied = await PlanLimitsReader.readClaude(executable: exe, environment: env)
         precondition(denied?.problemKind == .unavailable && FixtureHTTP.calls == 2)
         let reads = ProviderAccountStore.reads
         ProviderAccountStore.accounts[0].requiresClaudeActivation = true
-        let pending = await PlanLimitsReader.readClaude(environment: env)
+        let pending = await PlanLimitsReader.readClaude(executable: exe, environment: env)
         precondition(pending == nil && ProviderAccountStore.reads == reads)
         ProviderAccountStore.accounts[0].requiresClaudeActivation = false
         ProviderAccountStore.accounts[0].requiresClaudeCleanup = true
-        let cleanup = await PlanLimitsReader.readClaude(environment: env)
+        let cleanup = await PlanLimitsReader.readClaude(executable: exe, environment: env)
         precondition(cleanup == nil && ProviderAccountStore.reads == reads)
         ProviderAccountStore.accounts[0].requiresClaudeCleanup = false
         CaptureRun.isEnabled = true
-        let capture = await PlanLimitsReader.readClaude(environment: env)
-        precondition(capture == nil && ProviderAccountStore.reads == reads && ProviderAccounts.locks == 0)
-        print("PASS: Claude usage is read-only; expired/401, denied, pending, cleanup and capture paths use no refresh or CLI.")
+        let capture = await PlanLimitsReader.readClaude(executable: exe, environment: env)
+        precondition(capture == nil && ProviderAccountStore.reads == reads && ProviderAccounts.locks == 0 && Shell.runs == 0)
+        print("PASS: Claude usage is read-only; expired/401, denied, pending, cleanup and capture paths use no refresh or CLI; the request carries the CLI User-Agent.")
     }
 }
 '''

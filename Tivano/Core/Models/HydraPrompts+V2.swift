@@ -280,10 +280,14 @@ extension HydraPrompts {
         "\(name) worked on this part in an earlier request of this chat; its changes are already in the checkout. Continue from them:\n\n" + prompt
     }
 
-    /// The cross-vendor reviewer's whole prompt: request, head notes and the job's diff.
+    /// The cross-vendor reviewer's whole prompt: request, head notes and the job's diff; the reviewer may read the checkouts.
     static func v2ReviewPrompt(request: String, notes: String, patch: String) -> String {
         """
-        You are an independent reviewer from another vendor, with no tools. Use only the material below. Find only problems that would make the change behave wrongly or fail the user's request: bugs, broken callers, missing pieces of the request and unsafe operations. Report no style, naming or preference issues.
+        You are an independent reviewer from another vendor, reviewing this job's change. You may read files in the checkouts named by the `# checkout:` headers in the diff to confirm declarations, callers and surrounding code before you report; read only, change nothing and run nothing that writes. If you cannot read files, use only the material below.
+
+        Report only problems that would make the change behave wrongly or fail the user's request: bugs, broken callers, missing pieces of the request and unsafe operations. Report a problem only when the diff or the files you read show it; leave out claims about compiler, OS or library behaviour you have not confirmed. Report no style, naming or preference issues.
+
+        You do not see the lead's chat replies, the builds and checks it ran, deployments, or files outside Git, so do not report something as missing, unbuilt or unverified on that basis. The diff starts from the tree at the beginning of the job, so it can include commits the user asked to merge or earlier approved work; do not ask to revert them unless they break the request.
 
         If there are none, output exactly NO FINDINGS. Otherwise output at most 8 lines, most severe first. Each line starts `Finding N:` and gives `path:line`, the concrete failure scenario and the fix. Add no introduction or summary.
 
@@ -309,7 +313,7 @@ extension HydraPrompts {
 
         ---
         For the lead:
-        For each finding, write one line `Finding N: accepted - <what you changed>` or `Finding N: rejected - <why>`. Fix accepted findings yourself, send no heads out, and run the narrowest build if you changed code. Then answer the user in one or two lines about what the review changed.
+        Check each finding against the checkout before acting, and reject any that is already handled, out of scope or false. For each finding, write one plain line, without bullets or bold, `Finding N: accepted - <what you changed>` or `Finding N: rejected - <why>`. Fix accepted findings yourself, send no heads out, and run the narrowest build if you changed code. Then answer the user in one or two lines about what the review changed.
         """
     }
 }

@@ -79,9 +79,7 @@ swift += r'''
 enum Storage {
     static let root = StoragePaths.root
     static let libraryURL = root.appendingPathComponent("library.json")
-    static let preStandaloneLibraryURL = root.appendingPathComponent("library-before-standalone.json")
 '''
-swift += declaration("Tivano/Services/Store/Storage.swift", "    nonisolated static func prepareLibraryWrite(")
 swift += "\n}\n"
 swift += r'''
 final class ModelHarness {
@@ -226,24 +224,6 @@ func makeThread(_ projectID: UUID? = nil) -> ChatThread {
         model.threads = [cycle, helper]
         expectFailure { _ = try model.executionDirectory(for: cycle) }
         print("PASS: task isolation, helper routing, explicit worktrees, restart files and missing/cyclic ancestry")
-
-        var legacyLibrary = Library()
-        legacyLibrary.projects = [project]
-        legacyLibrary.threads = [restored]
-        let original = try encoder.encode(legacyLibrary)
-        try original.write(to: Storage.libraryURL)
-        try Storage.prepareLibraryWrite(legacyLibrary, to: Storage.libraryURL)
-        check(!manager.fileExists(atPath: Storage.preStandaloneLibraryURL.path), "Legacy-only save created migration backup")
-        try Storage.prepareLibraryWrite(library, to: Storage.libraryURL)
-        let backup = try Data(contentsOf: Storage.preStandaloneLibraryURL)
-        check(backup == original, "Backup does not preserve original library")
-        try encoder.encode(library).write(to: Storage.libraryURL, options: .atomic)
-        try Storage.prepareLibraryWrite(library, to: Storage.libraryURL)
-        check(try Data(contentsOf: Storage.preStandaloneLibraryURL) == original, "Later save replaced migration backup")
-        try manager.removeItem(at: Storage.preStandaloneLibraryURL)
-        try manager.createDirectory(at: Storage.preStandaloneLibraryURL, withIntermediateDirectories: false)
-        expectFailure { try Storage.prepareLibraryWrite(library, to: Storage.libraryURL) }
-        print("PASS: pre-migration backup, no overwrite and invalid-backup failure")
     }
 }
 '''

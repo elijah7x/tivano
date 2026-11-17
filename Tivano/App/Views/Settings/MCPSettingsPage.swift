@@ -1,41 +1,45 @@
 import AppKit
 import SwiftUI
 
-/// The MCP servers: a grid of cards where one tap connects, with the connected
-/// ones gathered in a section on top.
+/// The MCP servers: connected and custom servers in rows on top, and an Add a server
+/// section below where category and server chips open an inline detail panel to connect.
 struct MCPSettingsPage: View {
     let query: String
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Servers flashing their success before they leave the grid for Connected.
+    /// Servers flashing their success before they leave Add a server for Connected.
     @State private var celebrating: Set<String> = []
+    @State private var selectedCategory: MCPCategory? = nil
+    @State private var selectedID: String? = nil
+    @State private var isAddingCustom = false
 
-    private static let columns = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10),
-    ]
     private static let sortedEntries = MCPCatalog.entries.sorted { $0.name < $1.name }
-    private static let catalogSections = MCPCatalog.byCategory
 
     private var connected: [MCPCatalogEntry] {
         Self.sortedEntries
             .filter { !celebrating.contains($0.id) && model.mcp.state(for: $0.id).isConnected }
     }
 
-    private var visibleSections: [(category: MCPCategory, entries: [MCPCatalogEntry])] {
-        Self.catalogSections.compactMap { group in
-            let entries = group.entries.filter { entry in
-                (!model.mcp.state(for: entry.id).isConnected || celebrating.contains(entry.id))
-                    && Self.matches(entry, query: query)
-            }
-            return entries.isEmpty ? nil : (category: group.category, entries: entries)
+    private var matchingUnconnected: [MCPCatalogEntry] {
+        Self.sortedEntries.filter { entry in
+            (!model.mcp.state(for: entry.id).isConnected || celebrating.contains(entry.id))
+                && Self.matches(entry, query: query)
         }
     }
 
     var body: some View {
         let connected = connected
-        let visibleSections = visibleSections
+        let matchingUnconnected = matchingUnconnected
+        let availableCategories = MCPCategory.allCases.filter { category in
+            matchingUnconnected.contains { $0.category == category }
+        }
+        let activeCategory = selectedCategory.flatMap { availableCategories.contains($0) ? $0 : nil }
+        let visibleEntries = activeCategory.map { category in
+            matchingUnconnected.filter { $0.category == category }
+        } ?? matchingUnconnected
+        let selectedEntry = selectedID.flatMap { id in visibleEntries.first { $0.id == id } }
+
         VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
             MCPLeadCard()
             if let error = model.mcp.configurationLoadError {
@@ -46,7 +50,7 @@ struct MCPSettingsPage: View {
                             detail: "Your files and credentials are unchanged. Repair the configuration file, then retry."
                         ) {
                             Button("Retry") { model.mcp.retryConfigurationLoad() }
-                                .buttonStyle(.glass)
+                                .chromeGlassButtonStyle()
                                 .controlSize(.small)
                         }
                         ChromeRowDivider()
@@ -74,36 +78,158 @@ struct MCPSettingsPage: View {
                     }
                 }
                 MCPCustomSection(query: query)
-                ForEach(visibleSections, id: \.category) { section in
-                    ChromeSection(title: section.category.title) {
-                        LazyVGrid(columns: Self.columns, spacing: 10) {
-                            ForEach(section.entries) { entry in
-                                MCPServerCard(entry: entry, state: model.mcp.state(for: entry.id), celebrating: celebrating.contains(entry.id))
-                                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+                ChromeSection(title: "Add a server") {
+                    ChromeCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            FlowLayout {
+                                categoryChip(title: "All", category: nil, activeCategory: activeCategory)
+                                ForEach(availableCategories) { category in
+                                    categoryChip(title: category.title, category: category, activeCategory: activeCategory)
+                                }
+                            }
+                            FlowLayout(spacing: 7) {
+                                if visibleEntries.isEmpty {
+                                    if !query.trimmed.isEmpty {
+                                        Text("No servers match your search.")
+                                            .font(.ui(.callout))
+                                            .foregroundStyle(Chrome.secondaryText)
+                                            .padding(.vertical, 5)
+                                    }
+                                } else {
+                                    ForEach(visibleEntries) { entry in
+                                        MCPServerChip(
+                                            entry: entry,
+                                            state: model.mcp.state(for: entry.id),
+                                            isSelected: selectedID == entry.id
+                                        ) {
+                                            let nextID: String? = selectedID == entry.id ? nil : entry.id
+                                            if reduceMotion {
+                                                selectedID = nextID
+                                            } else {
+                                                withAnimation(.spring(duration: 0.3)) {
+                                                    selectedID = nextID
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                customChip
+                            }
+                            if let selectedEntry {
+                                MCPServerDetailPanel(
+                                    entry: selectedEntry,
+                                    state: model.mcp.state(for: selectedEntry.id),
+                                    celebrating: celebrating.contains(selectedEntry.id)
+                                ) {
+                                    if reduceMotion {
+                                        selectedID = nil
+                                    } else {
+                                        withAnimation(.spring(duration: 0.3)) {
+                                            selectedID = nil
+                                        }
+                                    }
+                                }
                             }
                         }
+                        .padding(14)
+                        .animation(reduceMotion ? nil : .spring(duration: 0.3), value: selectedEntry?.id)
+                        .animation(reduceMotion ? nil : .spring(duration: 0.3), value: celebrating)
                     }
-                    .animation(.spring(duration: 0.35), value: celebrating)
                 }
             }
             .disabled(!model.mcp.isConfigurationLoaded)
             Text("Connected servers reach every provider except Antigravity when a thread starts: the CLIs at launch, the API models through Tivano itself. Antigravity's CLI only reads its own global MCP settings.")
                 .font(.ui(.subheadline))
                 .foregroundStyle(Chrome.secondaryText)
-            if query.trimmed.isEmpty || "Remote MCP".localizedCaseInsensitiveContains(query.trimmed) || Chrome.localized("Remote MCP").localizedCaseInsensitiveContains(query.trimmed) {
-                ChromeSection(title: "Remote MCP") { ChromeCard { RemoteMCPSettingsRows() } }
-            }
         }
         .onChange(of: model.mcp.states) { previous, current in
-            guard !reduceMotion else { return }
-            for (id, state) in current where state.isConnected && !(previous[id]?.isConnected ?? false) {
-                celebrating.insert(id)
-                SettleChime.play()
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(900))
-                    celebrating.remove(id)
+            for (id, state) in current {
+                // The moment a catalog server asks for a step on its side, the panel with
+                // the steps opens by itself: the user came back from the browser expecting a result.
+                if case .needsSetup(let guide) = state {
+                    if case .needsSetup = previous[id] {
+                        // Already in needsSetup before this state update.
+                    } else if let entry = MCPCatalog.entry(id: id) {
+                        MCPSetupPanel.shared.present(entry: entry, guide: guide, model: model)
+                    }
+                }
+                if state.isConnected, !(previous[id]?.isConnected ?? false) {
+                    if reduceMotion {
+                        if selectedID == id {
+                            selectedID = nil
+                        }
+                    } else {
+                        celebrating.insert(id)
+                        SettleChime.play()
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(900))
+                            withAnimation(.spring(duration: 0.3)) {
+                                celebrating.remove(id)
+                                if selectedID == id, model.mcp.state(for: id).isConnected {
+                                    selectedID = nil
+                                }
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    private func categoryChip(title: String, category: MCPCategory?, activeCategory: MCPCategory?) -> some View {
+        let isSelected = activeCategory == category
+        return Button {
+            let next: MCPCategory? = (category != nil && activeCategory == category) ? nil : category
+            if reduceMotion {
+                selectedCategory = next
+            } else {
+                withAnimation(.spring(duration: 0.3)) {
+                    selectedCategory = next
+                }
+            }
+        } label: {
+            Text(verbatim: Chrome.localized(title))
+                .font(.ui(.subheadline, weight: .medium))
+                .foregroundStyle(isSelected ? Chrome.glassTint : Chrome.secondaryText)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 4)
+                .background(
+                    isSelected ? Chrome.primaryText : Chrome.overlay(0.06),
+                    in: Capsule(style: .continuous)
+                )
+                .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var customChip: some View {
+        Button {
+            isAddingCustom = true
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "plus")
+                    .font(Chrome.inlineIconFont)
+                Text("Custom")
+                    .font(.ui(.callout, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Chrome.secondaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .overlay {
+                Capsule(style: .continuous)
+                    .strokeBorder(
+                        Chrome.secondaryText.opacity(0.4),
+                        style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                    )
+            }
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isAddingCustom, arrowEdge: .bottom) {
+            MCPCustomEditor(server: nil)
+                .presentedChrome()
         }
     }
 
@@ -120,33 +246,36 @@ struct MCPSettingsPage: View {
 
 private struct MCPLeadCard: View {
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(spacing: 8) {
             Image(systemName: "checkmark.shield.fill")
-                .font(.ui(.title))
+                .font(.ui(.body))
                 .foregroundStyle(Chrome.accent)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Text("Connected servers lead")
-                        .font(.ui(.body, weight: .semibold))
-                        .foregroundStyle(Chrome.primaryText)
-                    // The three facts live behind the `i`: stacked in the card they took
-                    // more room than the point they made.
-                    MCPHoverInfoButton(label: "About connected servers") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            fact(symbol: "lock.fill", text: "Keys stay in your Keychain")
-                            fact(symbol: "arrow.uturn.backward", text: "Disconnect to go back to your own setup")
-                            fact(symbol: "sparkles", text: "Every provider except Antigravity, whatever the model")
-                        }
-                        .padding(14)
-                    }
-                }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Connected servers lead")
+                    .font(.ui(.body, weight: .semibold))
+                    .foregroundStyle(Chrome.primaryText)
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 Text("Connect a server here and every thread can use it. Anything set up in a terminal or another app stays just as it is.")
                     .font(.ui(.callout))
                     .foregroundStyle(Chrome.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 4)
+            // The three facts live behind the `i`: stacked in the card they took
+            // more room than the point they made.
+            MCPHoverInfoButton(label: "About connected servers") {
+                VStack(alignment: .leading, spacing: 8) {
+                    fact(symbol: "lock.fill", text: "Keys stay in your Keychain")
+                    fact(symbol: "arrow.uturn.backward", text: "Disconnect to go back to your own setup")
+                    fact(symbol: "sparkles", text: "Every provider except Antigravity, whatever the model")
+                }
+                .padding(14)
             }
         }
-        .padding(16)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -262,15 +391,67 @@ private struct MCPConnectedRow: View {
     }
 }
 
-/// One server in the grid: its icon, name, summary and sample tools, with a
-/// Connect button that either connects at once or opens its fields inline.
-private struct MCPServerCard: View {
-    @Environment(AppModel.self) private var model
+/// One unconnected server chip in Add a server: icon, name and a trailing status indicator
+/// when connecting, waiting on setup or failed.
+private struct MCPServerChip: View {
+    let entry: MCPCatalogEntry
+    let state: MCPConnectionState
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                MCPIcon(entry: entry, size: 14)
+                Text(verbatim: entry.name)
+                    .font(.ui(.callout, weight: .medium))
+                    .foregroundStyle(Chrome.primaryText)
+                    .lineLimit(1)
+                statusIndicator
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Chrome.overlay(0.06), in: Capsule(style: .continuous))
+            .overlay {
+                if isSelected {
+                    Capsule(style: .continuous)
+                        .strokeBorder(Chrome.accent, lineWidth: 1.5)
+                }
+            }
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
+        switch state {
+        case .connecting:
+            WorkingSpinner(cellSize: 2)
+        case .needsSetup:
+            Circle()
+                .fill(Chrome.warning)
+                .frame(width: 6, height: 6)
+        case .failed:
+            Circle()
+                .fill(Chrome.danger)
+                .frame(width: 6, height: 6)
+        case .notConnected, .connected:
+            EmptyView()
+        }
+    }
+}
+
+/// The inline detail panel opened beneath the server chips when one is selected.
+private struct MCPServerDetailPanel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let entry: MCPCatalogEntry
     let state: MCPConnectionState
-    var celebrating = false
+    let celebrating: Bool
+    let onClose: () -> Void
 
+    @State private var showTools = false
     @State private var successPopped = false
 
     private var toolCount: Int {
@@ -284,81 +465,133 @@ private struct MCPServerCard: View {
                 successView
             } else {
                 headerRow
-                // Every card keeps the same shape: two lines held for the summary whether
-                // it needs them or not, one line of tools, so the grid reads as a grid.
                 Text(verbatim: Chrome.localized(entry.summary))
                     .font(.ui(.callout))
                     .foregroundStyle(Chrome.secondaryText)
-                    .lineLimit(2, reservesSpace: true)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(verbatim: entry.sampleTools.isEmpty ? " " : entry.sampleTools.joined(separator: " · "))
-                    .font(.ui(size: 10.5, design: .monospaced))
-                    .foregroundStyle(Chrome.secondaryText.opacity(0.8))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    // Clear of the info button in the corner.
-                    .padding(.trailing, 24)
+                toolsAndInfoRow
+                if showTools, !entry.sampleTools.isEmpty {
+                    FlowChips(entry.sampleTools)
+                }
                 if case .failed(let message) = state {
                     Text(verbatim: message)
                         .font(.ui(.subheadline))
                         .foregroundStyle(Chrome.danger)
                         .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if case .needsSetup(let guide) = state {
                     Text(verbatim: Chrome.localized(guide.title))
                         .font(.ui(.subheadline))
                         .foregroundStyle(Chrome.warning)
                         .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
-        .padding(14)
-        .onChange(of: state) { _, now in
-            // The moment the server asks for a step on its side, the panel with the steps
-            // opens by itself: the user came back from the browser expecting a result.
-            if case .needsSetup(let guide) = now {
-                MCPSetupPanel.shared.present(entry: entry, guide: guide, model: model)
-            }
-        }
-        // The cell fills its row: a card whose fields are open makes its neighbour as tall.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Chrome.primaryText.opacity(0.05))
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Chrome.overlay(0.05))
         )
-        .overlay(alignment: .bottomTrailing) {
-            if !celebrating {
-                MCPInfoButton(entry: entry)
-                    .padding(10)
-            }
+        .onChange(of: entry.id) { _, _ in
+            showTools = false
+            successPopped = false
         }
     }
 
     private var headerRow: some View {
-        HStack(alignment: .top, spacing: 10) {
-            MCPIcon(entry: entry, size: 26)
-            VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: 8) {
+            MCPIcon(entry: entry, size: 24)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(verbatim: entry.name)
                     .font(.ui(.body, weight: .semibold))
                     .foregroundStyle(Chrome.primaryText)
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 Text(verbatim: entry.vendor)
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
+                    .lineLimit(1)
             }
             Spacer(minLength: 8)
-            action
+            MCPEntryAction(entry: entry, state: state)
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.ui(.subheadline, weight: .semibold))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .frame(width: 22, height: 22)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Close"))
         }
     }
 
-    @ViewBuilder
-    private var action: some View {
+    private var toolsAndInfoRow: some View {
+        HStack(spacing: 6) {
+            if !entry.sampleTools.isEmpty {
+                Button {
+                    if reduceMotion {
+                        showTools.toggle()
+                    } else {
+                        withAnimation(.spring(duration: 0.3)) {
+                            showTools.toggle()
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(verbatim: Chrome.localized(showTools ? "Hide tools" : "Show tools"))
+                            .font(.ui(.subheadline, weight: .medium))
+                        Image(systemName: showTools ? "chevron.down" : "chevron.right")
+                            .font(Chrome.chevronFont)
+                    }
+                    .foregroundStyle(Chrome.accent)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+            MCPInfoButton(entry: entry)
+        }
+    }
+
+    private var successView: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.ui(size: 34))
+                .foregroundStyle(Chrome.success)
+                .scaleEffect(successPopped ? 1 : 0.5)
+            Text(verbatim: String(format: Chrome.localized("Connected · %lld tools"), toolCount))
+                .font(.ui(.callout, weight: .medium))
+                .foregroundStyle(Chrome.primaryText)
+        }
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+        .onAppear {
+            if reduceMotion {
+                successPopped = true
+            } else {
+                withAnimation(.spring(duration: 0.5, bounce: 0.4)) { successPopped = true }
+            }
+        }
+    }
+}
+
+/// The Connect / Sign in / Fix it / Try again control for a catalog server.
+private struct MCPEntryAction: View {
+    @Environment(AppModel.self) private var model
+    let entry: MCPCatalogEntry
+    let state: MCPConnectionState
+
+    var body: some View {
         switch state {
         case .notConnected:
             // Sign in for a server that signs in; Connect for the rest. A server that
             // needs a key gets the floating key panel, which opens the page the key is
-            // made on and takes the paste (see `MCPKeyPanel`); the card stays clean.
+            // made on and takes the paste (see `MCPKeyPanel`).
             Button(Chrome.localized(entry.isOAuth ? "Sign in" : "Connect")) { begin() }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .controlSize(.small)
         case .connecting:
             HStack(spacing: 6) {
@@ -372,11 +605,11 @@ private struct MCPServerCard: View {
             EmptyView()
         case .needsSetup(let guide):
             Button("Fix it") { MCPSetupPanel.shared.present(entry: entry, guide: guide, model: model) }
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .controlSize(.small)
         case .failed:
             Button(Chrome.localized(entry.isOAuth ? "Sign in again" : "Try again")) { begin() }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .controlSize(.small)
         }
     }
@@ -389,33 +622,14 @@ private struct MCPServerCard: View {
             MCPKeyPanel.shared.present(entry: entry, model: model)
         }
     }
-
-    private var successView: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 34))
-                .foregroundStyle(Chrome.success)
-                .scaleEffect(successPopped ? 1 : 0.5)
-            Text(verbatim: String(format: Chrome.localized("Connected · %lld tools"), toolCount))
-                .font(.ui(.callout, weight: .medium))
-                .foregroundStyle(Chrome.primaryText)
-        }
-        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.spring(duration: 0.5, bounce: 0.4)) { successPopped = true }
-        }
-    }
 }
 
-/// The user's own servers, between Connected and the catalog: one row each (state, switch
-/// and menu like a connected row, a Connect button like a card's), and the row that adds
-/// one. The section steps aside when a search matches none of them.
+/// The user's own servers, between Connected and Add a server: one row each (state, switch
+/// and menu like a connected row, a Connect button like the detail panel's). Hidden when
+/// the user has none or a search matches none of them.
 private struct MCPCustomSection: View {
     @Environment(AppModel.self) private var model
     let query: String
-
-    @State private var isAdding = false
 
     private var visible: [MCPCustomServer] {
         guard !query.trimmed.isEmpty else { return model.mcp.customs }
@@ -423,55 +637,16 @@ private struct MCPCustomSection: View {
     }
 
     var body: some View {
-        let isSearching = !query.trimmed.isEmpty
         let visible = visible
-        if !visible.isEmpty || !isSearching {
+        if !visible.isEmpty {
             ChromeSection(title: "Custom") {
                 ChromeCard {
-                    if visible.isEmpty {
-                        Text("Servers of your own: a command that runs on this Mac, or a remote address, with the variables they need.")
-                            .font(.ui(.callout))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 11)
-                        ChromeRowDivider()
-                    } else {
-                        ForEach(Array(visible.enumerated()), id: \.element.id) { index, server in
-                            if index > 0 { ChromeRowDivider() }
-                            MCPCustomRow(server: server, state: model.mcp.state(for: server.id), connection: model.mcp.connection(for: server.id))
-                        }
-                        ChromeRowDivider()
+                    ForEach(Array(visible.enumerated()), id: \.element.id) { index, server in
+                        if index > 0 { ChromeRowDivider() }
+                        MCPCustomRow(server: server, state: model.mcp.state(for: server.id), connection: model.mcp.connection(for: server.id))
                     }
-                    addRow
                 }
             }
-        }
-    }
-
-    private var addRow: some View {
-        Button {
-            isAdding = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "plus.circle")
-                    .font(.ui(.body))
-                    .foregroundStyle(Chrome.accent)
-                    .frame(width: 26, alignment: .center)
-                Text("Add server")
-                    .font(.ui(.body, weight: .medium))
-                    .foregroundStyle(Chrome.primaryText)
-                Spacer(minLength: 12)
-            }
-            .padding(.leading, 16)
-            .padding(.trailing, Chrome.rowControlTrailingPadding)
-            .padding(.vertical, 11)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $isAdding, arrowEdge: .bottom) {
-            MCPCustomEditor(server: nil)
-                .presentedChrome()
         }
     }
 }
@@ -545,7 +720,7 @@ private struct MCPCustomRow: View {
         switch state {
         case .notConnected:
             Button("Connect") { begin() }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .controlSize(.small)
         case .connecting:
             HStack(spacing: 6) {
@@ -562,11 +737,11 @@ private struct MCPCustomRow: View {
             ))
         case .needsSetup(let guide):
             Button("Fix it") { MCPSetupPanel.shared.present(entry: entry, guide: guide, model: model) }
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .controlSize(.small)
         case .failed:
             Button("Try again") { begin() }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .controlSize(.small)
         }
     }
@@ -748,7 +923,7 @@ private struct MCPCustomEditor: View {
             HStack {
                 Spacer(minLength: 0)
                 Button(Chrome.localized(server == nil ? "Add server" : "Save")) { save() }
-                    .buttonStyle(.glassProminent)
+                    .chromeGlassButtonStyle(prominent: true)
             }
         }
     }

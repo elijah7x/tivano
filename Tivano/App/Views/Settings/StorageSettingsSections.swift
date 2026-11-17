@@ -1,10 +1,12 @@
+import AppKit
 import SwiftUI
 
-/// The storage page: what Tivano keeps on this Mac, the worktrees it made, and the
-/// archived chats, so freeing space and tidying chats happen in one place.
+/// The storage page: what Tivano keeps on this Mac, a quick find into archived chats,
+/// the worktrees it made, and advanced cleanup controls.
 struct StorageSettingsPage: View {
     @Environment(AppModel.self) private var model
     @Binding var filter: ArchiveFilter
+    @State private var showingAllArchived = false
     @State private var usage: StorageUsage?
     @State private var generation = 0
     @State private var libraryGeneration = 0
@@ -19,20 +21,48 @@ struct StorageSettingsPage: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
-            StorageOverviewSection(usage: usage, diagnostics: diagnostics, updates: updates, isBusy: isBusy) {
-                guard !isBusy else { return }
-                refreshing = true
-                generation += 1
+        Group {
+            if showingAllArchived {
+                ArchivedChatsPage(filter: $filter) {
+                    showingAllArchived = false
+                }
+            } else {
+                VStack(alignment: .leading, spacing: Chrome.pageSectionSpacing) {
+                    StorageOverviewSection(
+                        usage: usage,
+                        diagnostics: diagnostics,
+                        updates: updates,
+                        isBusy: isBusy,
+                        refresh: {
+                            guard !isBusy else { return }
+                            refreshing = true
+                            generation += 1
+                        },
+                        cleaned: {
+                            generation += 1
+                        }
+                    )
+                    StorageFindChatSection(filter: $filter) {
+                        showingAllArchived = true
+                    }
+                    StorageWorktreesSection(usage: usage) {
+                        libraryGeneration += 1
+                    }
+                    StorageAdvancedSection(diagnostics: diagnostics, updates: updates)
+                }
             }
-            RuntimeStorageSection(diagnostics: diagnostics, updates: updates)
-            if let usage, !usage.worktrees.isEmpty {
-                StorageWorktreesSection(worktrees: usage.worktrees) { libraryGeneration += 1 }
-            }
-            ArchivedChatsSection(filter: $filter, usage: usage)
         }
-        // Deleting a chat can take its worktree with it, so the measure follows the library.
-        .task(id: "\(model.threads.count)-\(generation)-\(libraryGeneration)") {
+        // Deleting chats (and their worktrees) anywhere on the page frees space.
+        .onChange(of: model.threads.count) { old, new in
+            if new < old { libraryGeneration += 1 }
+        }
+        .onChange(of: showingAllArchived) { _, showing in
+            if !showing {
+                libraryGeneration += 1
+            }
+        }
+        // Deleting a chat or cleaning build files changes disk usage, so re-measure on demand.
+        .task(id: "\(generation)-\(libraryGeneration)") {
             guard !Task.isCancelled else { return }
             measuringLibrary = true
             let measured = await Storage.measureUsage()
@@ -56,18 +86,6 @@ private func formattedSize(_ bytes: Int64) -> String {
     bytes.formatted(.byteCount(style: .file))
 }
 
-/// A section's one-line explanation, under its header.
-private struct StorageSectionNote: View {
-    let text: String
-
-    var body: some View {
-        Text(verbatim: Chrome.localized(text))
-            .font(.ui(.subheadline))
-            .foregroundStyle(Chrome.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
 // MARK: - Overview
 
 private struct StorageOverviewSection: View {
@@ -77,6 +95,17 @@ private struct StorageOverviewSection: View {
     let updates: RuntimeStorageState
     let isBusy: Bool
     let refresh: () -> Void
+    let cleaned: () -> Void
+
+    @State private var showingCleanPopover = false
+    @State private var includeIdleWorktrees = true
+    @State private var includeUpdates = true
+    @State private var includeDiagnostics = true
+    @State private var includeActiveWorktrees = false
+    @State private var isCleaningWorktrees = false
+    @State private var worktreeCleanupError: String?
+    @State private var lastCleanIncludedDiagnostics = false
+    @State private var lastCleanIncludedUpdates = false
 
     private struct Part: Identifiable {
         let title: String
@@ -85,29 +114,50 @@ private struct StorageOverviewSection: View {
         var id: String { title }
     }
 
+    private struct Metrics {
+        let worktreesWithBuild: [(worktree: WorktreeUsage, isIdle: Bool)]
+        let idleWorktreeCount: Int
+        let idleBuildBytes: Int64
+        let activeBuildBytes: Int64
+        let cleanableUpdatesBytes: Int64
+        let cleanableDiagnosticsBytes: Int64
+        let defaultCleanableBytes: Int64
+        let parts: [Part]
+        let totalBytes: Int64
+    }
+
     var body: some View {
+        let metrics = makeMetrics()
+        let selectedBytes = (includeIdleWorktrees ? metrics.idleBuildBytes : 0)
+            + (includeUpdates ? metrics.cleanableUpdatesBytes : 0)
+            + (includeDiagnostics ? metrics.cleanableDiagnosticsBytes : 0)
+            + (includeActiveWorktrees ? metrics.activeBuildBytes : 0)
+        let cleanTitle = cleanButtonTitle(metrics)
         ChromeSection(title: "On this Mac") {
-            StorageSectionNote(text: "Measured categories below, not all app data on this Mac.")
             ChromeCard {
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Text(verbatim: usage.map { String(format: Chrome.localized("Measured storage: %@"), formattedSize(total($0))) }
-                            ?? Chrome.localized("Measuring…"))
-                            .font(.ui(.body, weight: .semibold))
-                            .foregroundStyle(Chrome.primaryText)
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: usage.map { _ in formattedSize(metrics.totalBytes) } ?? Chrome.localized("Measuring…"))
+                                .font(.ui(.title2, weight: .semibold))
+                                .foregroundStyle(Chrome.primaryText)
+                                .monospacedDigit()
+                            Text(verbatim: Chrome.localized("Tivano data"))
+                                .font(.ui(.subheadline))
+                                .foregroundStyle(Chrome.secondaryText)
+                        }
                         Spacer(minLength: 12)
-                        if isBusy {
+                        if anyBusy {
                             ProgressView().controlSize(.small)
                         }
                         Button("Refresh", action: refresh)
-                            .buttonStyle(.glass)
+                            .chromeGlassButtonStyle()
                             .controlSize(.small)
-                            .disabled(isBusy)
+                            .disabled(anyBusy)
                     }
-                    let parts = parts
-                    bar(parts)
+                    bar(metrics.parts)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 24, alignment: .leading)], alignment: .leading, spacing: 14) {
-                        ForEach(parts) { part in
+                        ForEach(metrics.parts) { part in
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
                                     Circle().fill(part.color).frame(width: 8, height: 8)
@@ -123,48 +173,133 @@ private struct StorageOverviewSection: View {
                             }
                         }
                     }
-                    if diagnostics.usage == nil {
-                        StorageSectionNote(text: "Diagnostics are not included in the measured total yet.")
-                    }
-                    if updates.usage == nil {
-                        StorageSectionNote(text: "Update files are not included in the measured total yet.")
-                    }
-                    if let usage, usage.buildFilesTotal > 0 {
-                        Text(verbatim: String(format: Chrome.localized("%@ of the worktrees is dependencies and build output, which can be deleted and rebuilt."),
-                                              formattedSize(usage.buildFilesTotal)))
+                }
+                .padding(16)
+                ChromeRowDivider()
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: "checkmark.shield")
+                        .font(.ui(.title3, weight: .medium))
+                        .foregroundStyle(Chrome.accent)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: Chrome.localized("Clean up regenerable files"))
+                            .font(.ui(.body))
+                            .foregroundStyle(Chrome.primaryText)
+                        Text(verbatim: Chrome.localized("Old diagnostic reports, obsolete update files, and dependencies and build output in idle worktrees. Chats, code and uncommitted changes are never touched."))
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    Spacer(minLength: 12)
+                    Button(cleanTitle) {
+                        includeIdleWorktrees = true
+                        includeUpdates = true
+                        includeDiagnostics = true
+                        includeActiveWorktrees = false
+                        showingCleanPopover = true
+                    }
+                    .chromeGlassButtonStyle(prominent: true)
+                    .controlSize(.small)
+                    .disabled(anyBusy || isCleaning || metrics.defaultCleanableBytes + metrics.activeBuildBytes == 0)
+                    .popover(isPresented: $showingCleanPopover, arrowEdge: .bottom) {
+                        cleanPopover(metrics, selectedBytes: selectedBytes)
+                            .presentedChrome()
+                    }
                 }
-                .padding(16)
+                .padding(.leading, 16)
+                .padding(.trailing, Chrome.rowControlTrailingPadding)
+                .padding(.vertical, 11)
+                if let error = combinedCleanupError {
+                    Text(verbatim: String(format: Chrome.localized("Cleanup did not finish. Some files may already have been removed. %@"), error))
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 16)
+                        .padding(.trailing, Chrome.rowControlTrailingPadding)
+                        .padding(.bottom, 11)
+                }
             }
         }
     }
 
-    private var parts: [Part] {
-        let archivedIDs = Set(model.threads.filter(\.isArchived).map(\.id))
-        let archived = usage?.chatSizes.reduce(Int64(0)) { $0 + (archivedIDs.contains($1.key) ? $1.value : 0) } ?? 0
+    private var anyBusy: Bool {
+        isBusy || isCleaningWorktrees
+    }
+
+    private var isCleaning: Bool {
+        isCleaningWorktrees || diagnostics.isClearing || updates.isClearing
+    }
+
+    private func makeMetrics() -> Metrics {
+        var worktreesWithBuild: [(worktree: WorktreeUsage, isIdle: Bool)] = []
+        var idleWorktreeCount = 0
+        var idleBuildBytes: Int64 = 0
+        var activeBuildBytes: Int64 = 0
+        for worktree in usage?.worktrees ?? [] {
+            let isIdle = model.isIdle(worktree)
+            if isIdle {
+                idleBuildBytes += worktree.buildFilesSize
+            } else if worktree.buildFilesSize > 0 {
+                activeBuildBytes += worktree.buildFilesSize
+            }
+            if worktree.buildFilesSize > 0 {
+                worktreesWithBuild.append((worktree, isIdle))
+                if isIdle { idleWorktreeCount += 1 }
+            }
+        }
+
+        let cleanableUpdatesBytes = updates.usage?.cleanableBytes ?? 0
+        let cleanableDiagnosticsBytes = diagnostics.usage?.cleanableBytes ?? 0
         var parts = [
-            Part(title: "Chats", bytes: (usage.map { $0.chats + $0.attachments } ?? 0) - archived, color: Chrome.blue),
-            Part(title: "Archived chats", bytes: archived, color: Chrome.orange),
-            Part(title: "Worktrees", bytes: usage?.worktreesTotal ?? 0, color: Chrome.success),
+            Part(title: "Chats and attachments", bytes: usage.map { $0.chats + $0.attachments } ?? 0, color: Chrome.blue),
+            Part(title: "Worktrees", bytes: max(0, (usage?.worktreesTotal ?? 0) - idleBuildBytes), color: Chrome.success),
+            Part(title: "Safe to clean up", bytes: idleBuildBytes + cleanableDiagnosticsBytes + cleanableUpdatesBytes, color: Chrome.accent),
         ]
         if let patches = usage?.patches, patches > 0 {
             parts.append(Part(title: "Recovery patches", bytes: patches, color: Chrome.gray))
         }
-        if let measured = diagnostics.usage {
-            parts.append(Part(title: "Diagnostic files", bytes: measured.totalBytes, color: Chrome.accent))
+        // Files cleanup keeps (latest hang report, pending installs, rollback) still count.
+        let keptDiagnostics = (diagnostics.usage?.totalBytes ?? 0) - cleanableDiagnosticsBytes
+        if keptDiagnostics > 0 {
+            parts.append(Part(title: "Diagnostic files", bytes: keptDiagnostics, color: Chrome.gray))
         }
-        if let measured = updates.usage {
-            parts.append(Part(title: "Update files", bytes: measured.totalBytes, color: Chrome.warning))
+        let keptUpdates = (updates.usage?.totalBytes ?? 0) - cleanableUpdatesBytes
+        if keptUpdates > 0 {
+            parts.append(Part(title: "Update files", bytes: keptUpdates, color: Chrome.gray))
         }
-        return parts
+        return Metrics(
+            worktreesWithBuild: worktreesWithBuild,
+            idleWorktreeCount: idleWorktreeCount,
+            idleBuildBytes: idleBuildBytes,
+            activeBuildBytes: activeBuildBytes,
+            cleanableUpdatesBytes: cleanableUpdatesBytes,
+            cleanableDiagnosticsBytes: cleanableDiagnosticsBytes,
+            defaultCleanableBytes: idleBuildBytes + cleanableUpdatesBytes + cleanableDiagnosticsBytes,
+            parts: parts,
+            totalBytes: parts.reduce(0) { $0 + $1.bytes }
+        )
     }
 
-    private func total(_ usage: StorageUsage) -> Int64 {
-        usage.chats + usage.attachments + usage.worktreesTotal + usage.patches
-            + (diagnostics.usage?.totalBytes ?? 0) + (updates.usage?.totalBytes ?? 0)
+    private func cleanButtonTitle(_ metrics: Metrics) -> String {
+        if isCleaning {
+            return Chrome.localized("Cleaning up…")
+        }
+        if metrics.defaultCleanableBytes > 0 {
+            return String(format: Chrome.localized("Free up %@…"), formattedSize(metrics.defaultCleanableBytes))
+        }
+        if metrics.activeBuildBytes > 0 {
+            return String(format: Chrome.localized("Free up %@…"), formattedSize(metrics.activeBuildBytes))
+        }
+        return Chrome.localized("Nothing to clean up")
+    }
+
+    private var combinedCleanupError: String? {
+        let errors = [
+            worktreeCleanupError,
+            lastCleanIncludedDiagnostics ? diagnostics.cleanupError : nil,
+            lastCleanIncludedUpdates ? updates.cleanupError : nil,
+        ].compactMap { $0 }.filter { !$0.isEmpty }
+        return errors.isEmpty ? nil : errors.joined(separator: " ")
     }
 
     private func bar(_ parts: [Part]) -> some View {
@@ -185,6 +320,132 @@ private struct StorageOverviewSection: View {
         }
         .frame(height: 10)
         .accessibilityHidden(true)
+    }
+
+    private func cleanPopover(_ metrics: Metrics, selectedBytes: Int64) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: String(format: Chrome.localized("Free up %@"), formattedSize(selectedBytes)))
+                    .font(.ui(.headline))
+                    .foregroundStyle(Chrome.primaryText)
+                    .monospacedDigit()
+                Text(verbatim: Chrome.localized("These files come back on their own when needed."))
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                if metrics.idleBuildBytes > 0 {
+                    cleanOptionRow(
+                        title: Chrome.localized("Dependencies and build output in idle worktrees"),
+                        detail: String(
+                            format: Chrome.localized("%lld worktrees · node_modules, DerivedData, .venv and similar. The next install or build brings them back."),
+                            metrics.idleWorktreeCount
+                        ),
+                        bytes: metrics.idleBuildBytes,
+                        isOn: $includeIdleWorktrees
+                    )
+                }
+                if metrics.cleanableUpdatesBytes > 0 {
+                    cleanOptionRow(
+                        title: Chrome.localized("Obsolete update files"),
+                        detail: Chrome.localized("Keeps pending installations and rollback files."),
+                        bytes: metrics.cleanableUpdatesBytes,
+                        isOn: $includeUpdates
+                    )
+                }
+                if metrics.cleanableDiagnosticsBytes > 0 {
+                    cleanOptionRow(
+                        title: Chrome.localized("Old diagnostic reports"),
+                        detail: Chrome.localized("Keeps the latest hang report and current logs."),
+                        bytes: metrics.cleanableDiagnosticsBytes,
+                        isOn: $includeDiagnostics
+                    )
+                }
+                if metrics.activeBuildBytes > 0 {
+                    cleanOptionRow(
+                        title: Chrome.localized("Build output in worktrees chats are using"),
+                        detail: Chrome.localized("Off by default: an active chat may need it soon."),
+                        bytes: metrics.activeBuildBytes,
+                        isOn: $includeActiveWorktrees
+                    )
+                }
+            }
+            Text(verbatim: Chrome.localized("Never deleted: chats, attachments, code and uncommitted changes in worktrees, branches and commits, recovery patches."))
+                .font(.ui(.footnote))
+                .foregroundStyle(Chrome.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { showingCleanPopover = false }
+                    .chromeGlassButtonStyle()
+                Button("Clean up") { startCleanup(metrics) }
+                    .chromeGlassButtonStyle(prominent: true)
+                    .disabled(selectedBytes == 0)
+            }
+        }
+        .padding(18)
+        .frame(width: 380)
+    }
+
+    private func cleanOptionRow(title: String, detail: String, bytes: Int64, isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: title)
+                    .font(.ui(.body))
+                    .foregroundStyle(Chrome.primaryText)
+                Text(verbatim: detail)
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Text(verbatim: formattedSize(bytes))
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+                .monospacedDigit()
+            SettingsSwitch(isOn: isOn)
+                .accessibilityLabel(Text(verbatim: title))
+        }
+    }
+
+    private func startCleanup(_ metrics: Metrics) {
+        // Classified again at the click: a worktree may have become active since the last render.
+        let worktreesToClean: [WorktreeUsage] = metrics.worktreesWithBuild.compactMap { classified -> WorktreeUsage? in
+            guard model.isIdle(classified.worktree) ? includeIdleWorktrees : includeActiveWorktrees else { return nil }
+            return classified.worktree
+        }
+        let clearUpdates = includeUpdates && metrics.cleanableUpdatesBytes > 0
+        let clearDiagnostics = includeDiagnostics && metrics.cleanableDiagnosticsBytes > 0
+
+        showingCleanPopover = false
+        worktreeCleanupError = nil
+        lastCleanIncludedDiagnostics = clearDiagnostics
+        lastCleanIncludedUpdates = clearUpdates
+        isCleaningWorktrees = !worktreesToClean.isEmpty
+
+        if clearDiagnostics {
+            diagnostics.clear()
+        }
+        if clearUpdates {
+            updates.clear()
+        }
+
+        Task {
+            var failures: [String] = []
+            for worktree in worktreesToClean {
+                do {
+                    try await Storage.removeBuildFiles(of: worktree)
+                } catch {
+                    failures.append("\(worktree.name): \(error.localizedDescription)")
+                }
+            }
+            if !failures.isEmpty {
+                worktreeCleanupError = failures.joined(separator: " ")
+            }
+            isCleaningWorktrees = false
+            cleaned()
+        }
     }
 }
 
@@ -270,16 +531,361 @@ private final class RuntimeStorageState {
     }
 }
 
-private struct RuntimeStorageSection: View {
-    let diagnostics: RuntimeStorageState
-    let updates: RuntimeStorageState
+// MARK: - Worktrees
+
+private struct StorageWorktreesSection: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let usage: StorageUsage?
+    let changed: () -> Void
+    @State private var busy: Set<String> = []
+    @State private var pendingRemoval: WorktreeUsage?
+    @State private var rowsCache = WorktreeRowsCache()
+    @State private var showingEachWorktree = false
+    @State private var copiedPrompt = false
+    @State private var copyResetTask: Task<Void, Never>?
+
+    private var worktrees: [WorktreeUsage] { usage?.worktrees ?? [] }
+
+    private struct WorktreeRow: Identifiable {
+        let worktree: WorktreeUsage
+        let detail: String
+        let canRemove: Bool
+        let reason: String?
+        var id: String { worktree.path }
+    }
+
+    @MainActor
+    private final class WorktreeRowsCache {
+        private struct ThreadRef: Equatable {
+            let id: UUID
+            let worktreePath: String?
+            let targetCheckout: String?
+            let title: String
+            let isArchived: Bool
+        }
+
+        private struct Signature: Equatable {
+            let worktrees: [WorktreeUsage]
+            let threads: [ThreadRef]
+            let projectPaths: [String]
+        }
+
+        private var lastSignature: Signature?
+        private var cached: [WorktreeRow] = []
+
+        func rows(worktrees: [WorktreeUsage], threads: [ChatThread], projects: [Project]) -> [WorktreeRow] {
+            let threadRefs: [ThreadRef] = threads.compactMap { thread in
+                guard thread.worktreePath != nil || thread.hydra?.targetCheckout != nil else { return nil }
+                return ThreadRef(
+                    id: thread.id,
+                    worktreePath: thread.worktreePath,
+                    targetCheckout: thread.hydra?.targetCheckout,
+                    title: thread.title,
+                    isArchived: thread.isArchived
+                )
+            }
+            let signature = Signature(
+                worktrees: worktrees,
+                threads: threadRefs,
+                projectPaths: projects.map(\.path)
+            )
+            if lastSignature == signature {
+                return cached
+            }
+            let result: [WorktreeRow]
+            if worktrees.isEmpty {
+                result = []
+            } else {
+                var resolvedCache: [String: String] = [:]
+                func resolve(_ path: String) -> String {
+                    if let cached = resolvedCache[path] { return cached }
+                    let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+                    resolvedCache[path] = resolved
+                    return resolved
+                }
+                let threadPaths: [(thread: ChatThread, paths: [String])] = threads.compactMap { thread in
+                    var paths: [String] = []
+                    if let wt = thread.worktreePath, !wt.isEmpty { paths.append(resolve(wt)) }
+                    if let target = thread.hydra?.targetCheckout, !target.isEmpty { paths.append(resolve(target)) }
+                    return paths.isEmpty ? nil : (thread, paths)
+                }
+                let projectPaths = projects.map { resolve($0.path) }
+                result = worktrees.map { worktree in
+                    let path = resolve(worktree.path)
+                    let prefix = path + "/"
+                    let users = threadPaths.compactMap { entry in
+                        entry.paths.contains { $0 == path || $0.hasPrefix(prefix) } ? entry.thread : nil
+                    }
+                    let usedByProject = projectPaths.contains { $0 == path || $0.hasPrefix(prefix) }
+                    let canRemove = users.isEmpty && !usedByProject
+                        && (worktree.isRegistered ? worktree.changedFiles == 0 : true)
+                    return WorktreeRow(
+                        worktree: worktree,
+                        detail: StorageWorktreesSection.detail(for: worktree, users: users),
+                        canRemove: canRemove,
+                        reason: StorageWorktreesSection.reason(for: worktree, users: users, canRemove: canRemove)
+                    )
+                }
+            }
+            lastSignature = signature
+            cached = result
+            return result
+        }
+    }
 
     var body: some View {
-        ChromeSection(title: "Diagnostics and update files") {
+        let idleCount = usage.map { $0.worktrees.filter { model.isIdle($0) }.count }
+        let uncommittedCount = usage.map { $0.worktrees.filter { ($0.changedFiles ?? 0) > 0 }.count }
+        let hasWorktrees = !(usage?.worktrees.isEmpty ?? true)
+        ChromeSection(title: "Worktrees") {
             ChromeCard {
-                RuntimeStorageRow(state: diagnostics)
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        metricText("%lld worktrees", value: usage?.worktrees.count)
+                        Text(verbatim: usage.map { formattedSize($0.worktreesTotal) } ?? "—")
+                            .font(.ui(.subheadline))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .monospacedDigit()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    metricText("%lld not used by an active chat", value: idleCount)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    metricText("%lld with uncommitted changes", value: uncommittedCount)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
                 ChromeRowDivider()
-                RuntimeStorageRow(state: updates)
+                ChromeRow(
+                    title: "Not sure which to delete? Let an agent review them",
+                    detail: String(
+                        format: Chrome.localized("Opens a new chat with a prompt and a list of these %lld worktrees already written. Read it, then send it yourself. It only inspects and deletes nothing."),
+                        worktrees.count
+                    ),
+                    localizesDetail: false
+                ) {
+                    HStack(spacing: 8) {
+                        Button {
+                            guard let usage, !usage.worktrees.isEmpty else { return }
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(model.worktreeReviewPrompt(for: usage), forType: .string)
+                            copiedPrompt = true
+                            copyResetTask?.cancel()
+                            copyResetTask = Task {
+                                try? await Task.sleep(for: .seconds(1.5))
+                                guard !Task.isCancelled else { return }
+                                copiedPrompt = false
+                            }
+                        } label: {
+                            Text(verbatim: Chrome.localized(copiedPrompt ? "Copied" : "Copy prompt"))
+                        }
+                        .chromeGlassButtonStyle()
+                        .disabled(!hasWorktrees)
+                        Button("Start review chat") {
+                            guard let usage, !usage.worktrees.isEmpty else { return }
+                            model.startWorktreeReview(for: usage)
+                        }
+                        .chromeGlassButtonStyle(prominent: true)
+                        .disabled(!hasWorktrees)
+                    }
+                    .controlSize(.small)
+                }
+                ChromeRowDivider()
+                Button {
+                    withAnimation(reduceMotion ? nil : Chrome.panelSlide) {
+                        showingEachWorktree.toggle()
+                    }
+                } label: {
+                    ChromeRow(title: "Show each worktree") {
+                        Image(systemName: "chevron.right")
+                            .font(.ui(.caption, weight: .semibold))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .rotationEffect(.degrees(showingEachWorktree ? 90 : 0))
+                            .animation(reduceMotion ? nil : Chrome.panelSlide, value: showingEachWorktree)
+                            .frame(width: 20, height: 20)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(Text(verbatim: Chrome.localized(showingEachWorktree ? "Expanded" : "Collapsed")))
+                ChromeReveal(isExpanded: showingEachWorktree) {
+                    let rows = rowsCache.rows(worktrees: worktrees, threads: model.threads, projects: model.projects)
+                    VStack(alignment: .leading, spacing: 0) {
+                        ChromeRowDivider()
+                        ChromeRow(title: "Worktrees", detail: Storage.worktreesDirectory.path, localizesDetail: false) {
+                            Button("Reveal") { Workspace.revealInFinder(Storage.worktreesDirectory.path) }
+                                .chromeGlassButtonStyle()
+                                .controlSize(.small)
+                        }
+                        ForEach(rows) { row in
+                            let worktree = row.worktree
+                            ChromeRowDivider()
+                            ChromeRow(title: worktree.name, detail: row.detail, localizesDetail: false) {
+                                if busy.contains(worktree.path) {
+                                    ProgressView().controlSize(.small)
+                                } else if worktree.buildFilesSize > 0 || row.canRemove {
+                                    FreeSpaceButton(worktree: worktree, canRemove: row.canRemove,
+                                                    reason: row.reason) { action in
+                                        switch action {
+                                        case .buildFiles: run(worktree) { await model.removeBuildFiles(of: worktree) }
+                                        case .worktree: pendingRemoval = worktree
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .confirmationDialog(
+            pendingRemoval.map { String(format: Chrome.localized("Delete the worktree \"%@\"?"), $0.name) } ?? "",
+            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+            presenting: pendingRemoval
+        ) { worktree in
+            Button(String(format: Chrome.localized("Delete worktree (%@)"), formattedSize(worktree.size)), role: .destructive) {
+                pendingRemoval = nil
+                run(worktree) { _ = await model.removeUnusedWorktree(worktree) }
+            }
+        } message: { worktree in
+            Text(worktree.isRegistered
+                ? "The whole folder is deleted. Its branch and commits stay in the repository."
+                : "Git no longer knows this folder, so it is moved to the Trash.")
+        }
+        .onDisappear { copyResetTask?.cancel() }
+    }
+
+    private func metricText(_ key: String, value: Int?) -> Text {
+        let parts = Chrome.localized(key).components(separatedBy: "%lld")
+        let number = Text(verbatim: value.map(String.init) ?? "—")
+            .font(.ui(.title2, weight: .semibold))
+            .foregroundColor(Chrome.primaryText)
+            .monospacedDigit()
+        let before = Text(verbatim: parts.first ?? "")
+            .font(.ui(.subheadline))
+            .foregroundColor(Chrome.secondaryText)
+        let after = Text(verbatim: parts.count > 1 ? parts[1] : "")
+            .font(.ui(.subheadline))
+            .foregroundColor(Chrome.secondaryText)
+        return before + number + after
+    }
+
+    private static func detail(for worktree: WorktreeUsage, users: [ChatThread]) -> String {
+        var parts: [String]
+        if let thread = users.first(where: { !$0.isHelper }) ?? users.first {
+            parts = [String(format: Chrome.localized(thread.isArchived ? "Used by archived chat “%@”" : "Used by chat “%@”"), thread.title)]
+        } else {
+            parts = [Chrome.localized(worktree.isRegistered ? "Not used by any chat" : "Leftover folder, not a worktree")]
+        }
+        if worktree.buildFilesSize > 0 {
+            parts.append(String(format: Chrome.localized("%@, of which %@ build files"), formattedSize(worktree.size), formattedSize(worktree.buildFilesSize)))
+        } else {
+            parts.append(formattedSize(worktree.size))
+        }
+        if let changed = worktree.changedFiles, changed > 0 {
+            parts.append(String(format: Chrome.localized("%lld uncommitted changes"), changed))
+        }
+        if let branch = worktree.branch, !branch.isEmpty {
+            parts.append(branch)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Why the whole worktree cannot go from here, shown under the greyed-out choice.
+    private static func reason(for worktree: WorktreeUsage, users: [ChatThread], canRemove: Bool) -> String? {
+        guard !canRemove else { return nil }
+        if !users.isEmpty {
+            return "A chat still uses it. Delete that chat to delete its worktree."
+        }
+        if (worktree.changedFiles ?? 0) > 0 {
+            return "It has uncommitted changes. Commit or discard them first."
+        }
+        return "It is in use by a project."
+    }
+
+    private func run(_ worktree: WorktreeUsage, _ action: @escaping () async -> Void) {
+        busy.insert(worktree.path)
+        Task {
+            await action()
+            busy.remove(worktree.path)
+            changed()
+        }
+    }
+}
+
+/// One button per worktree; its menu spells out the two ways to free space.
+private struct FreeSpaceButton: View {
+    enum Action { case buildFiles, worktree }
+
+    let worktree: WorktreeUsage
+    let canRemove: Bool
+    let reason: String?
+    let perform: (Action) -> Void
+    @State private var isPresented = false
+
+    var body: some View {
+        Button("Free up space…") { isPresented = true }
+            .chromeGlassButtonStyle()
+            .controlSize(.small)
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                PopoverMenu {
+                    if worktree.buildFilesSize > 0 {
+                        PopoverItem("Delete build files", detail: formattedSize(worktree.buildFilesSize), symbol: "hammer") {
+                            isPresented = false
+                            perform(.buildFiles)
+                        }
+                        PopoverNote("Deletes node_modules and other dependency and build folders. Your code and changes stay; the next install or build brings them back.")
+                        PopoverDivider()
+                    }
+                    PopoverItem("Delete worktree", detail: formattedSize(worktree.size), symbol: "trash",
+                                isEnabled: canRemove, isDestructive: true) {
+                        isPresented = false
+                        perform(.worktree)
+                    }
+                    PopoverNote(reason ?? "Deletes this whole copy. Its branch and commits stay in the repository.")
+                }
+                .frame(width: 320)
+            }
+    }
+}
+
+// MARK: - Advanced
+
+private struct StorageAdvancedSection: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let diagnostics: RuntimeStorageState
+    let updates: RuntimeStorageState
+    @State private var isExpanded = false
+
+    var body: some View {
+        ChromeSection(title: "Advanced") {
+            ChromeCard {
+                Button {
+                    withAnimation(reduceMotion ? nil : Chrome.panelSlide) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    ChromeRow(title: "Diagnostics, update files and folders") {
+                        Image(systemName: "chevron.right")
+                            .font(.ui(.caption, weight: .semibold))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .animation(reduceMotion ? nil : Chrome.panelSlide, value: isExpanded)
+                            .frame(width: 20, height: 20)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(Text(verbatim: Chrome.localized(isExpanded ? "Expanded" : "Collapsed")))
+                ChromeReveal(isExpanded: isExpanded) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ChromeRowDivider()
+                        RuntimeStorageRow(state: diagnostics)
+                        ChromeRowDivider()
+                        RuntimeStorageRow(state: updates)
+                    }
+                }
             }
         }
     }
@@ -296,7 +902,7 @@ private struct RuntimeStorageRow: View {
                     ProgressView().controlSize(.small)
                 }
                 Button("Clean up…") { confirming = true }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     .disabled(!state.canClear)
                     .accessibilityLabel(Text(verbatim: Chrome.localized(state.kind == .diagnostics
                         ? "Clean up diagnostic files" : "Clean up update files")))
@@ -342,319 +948,5 @@ private struct RuntimeStorageRow: View {
             lines.append(String(format: Chrome.localized("Cleanup did not finish. Some files may already have been removed. %@"), error))
         }
         return lines.joined(separator: "\n")
-    }
-}
-
-// MARK: - Worktrees
-
-private struct StorageWorktreesSection: View {
-    @Environment(AppModel.self) private var model
-    let worktrees: [WorktreeUsage]
-    let changed: () -> Void
-    @State private var busy: Set<String> = []
-    @State private var pendingRemoval: WorktreeUsage?
-
-    var body: some View {
-        ChromeSection(title: "Worktrees") {
-            StorageSectionNote(text: "Each worktree is a separate copy of a project, made so a chat can work without touching your checkout. Most of its space is usually dependencies and build output.")
-            ChromeCard {
-                ForEach(worktrees) { worktree in
-                    if worktree.id != worktrees.first?.id { ChromeRowDivider() }
-                    ChromeRow(title: worktree.name, detail: detail(for: worktree), localizesDetail: false) {
-                        if busy.contains(worktree.path) {
-                            ProgressView().controlSize(.small)
-                        } else if worktree.buildFilesSize > 0 || model.canRemove(worktree) {
-                            FreeSpaceButton(worktree: worktree, canRemove: model.canRemove(worktree),
-                                            reason: reason(for: worktree)) { action in
-                                switch action {
-                                case .buildFiles: run(worktree) { await model.removeBuildFiles(of: worktree) }
-                                case .worktree: pendingRemoval = worktree
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .confirmationDialog(
-            pendingRemoval.map { String(format: Chrome.localized("Delete the worktree \"%@\"?"), $0.name) } ?? "",
-            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
-            presenting: pendingRemoval
-        ) { worktree in
-            Button(String(format: Chrome.localized("Delete worktree (%@)"), formattedSize(worktree.size)), role: .destructive) {
-                pendingRemoval = nil
-                run(worktree) { _ = await model.removeUnusedWorktree(worktree) }
-            }
-        } message: { worktree in
-            Text(worktree.isRegistered
-                ? "The whole folder is deleted. Its branch and commits stay in the repository."
-                : "Git no longer knows this folder, so it is moved to the Trash.")
-        }
-    }
-
-    private func detail(for worktree: WorktreeUsage) -> String {
-        let users = model.threadsUsing(worktree)
-        var parts: [String]
-        if let thread = users.first(where: { !$0.isHelper }) ?? users.first {
-            parts = [String(format: Chrome.localized(thread.isArchived ? "Used by archived chat “%@”" : "Used by chat “%@”"), thread.title)]
-        } else {
-            parts = [Chrome.localized(worktree.isRegistered ? "Not used by any chat" : "Leftover folder, not a worktree")]
-        }
-        if worktree.buildFilesSize > 0 {
-            parts.append(String(format: Chrome.localized("%@, of which %@ build files"), formattedSize(worktree.size), formattedSize(worktree.buildFilesSize)))
-        } else {
-            parts.append(formattedSize(worktree.size))
-        }
-        if let changed = worktree.changedFiles, changed > 0 {
-            parts.append(String(format: Chrome.localized("%lld uncommitted changes"), changed))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    /// Why the whole worktree cannot go from here, shown under the greyed-out choice.
-    private func reason(for worktree: WorktreeUsage) -> String? {
-        guard !model.canRemove(worktree) else { return nil }
-        if !model.threadsUsing(worktree).isEmpty {
-            return "A chat still uses it. Delete that chat to delete its worktree."
-        }
-        if (worktree.changedFiles ?? 0) > 0 {
-            return "It has uncommitted changes. Commit or discard them first."
-        }
-        return "It is in use by a project."
-    }
-
-    private func run(_ worktree: WorktreeUsage, _ action: @escaping () async -> Void) {
-        busy.insert(worktree.path)
-        Task {
-            await action()
-            busy.remove(worktree.path)
-            changed()
-        }
-    }
-}
-
-/// One button per worktree; its menu spells out the two ways to free space.
-private struct FreeSpaceButton: View {
-    enum Action { case buildFiles, worktree }
-
-    let worktree: WorktreeUsage
-    let canRemove: Bool
-    let reason: String?
-    let perform: (Action) -> Void
-    @State private var isPresented = false
-
-    var body: some View {
-        Button("Free up space…") { isPresented = true }
-            .buttonStyle(.glass)
-            .controlSize(.small)
-            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-                PopoverMenu {
-                    if worktree.buildFilesSize > 0 {
-                        PopoverItem("Delete build files", detail: formattedSize(worktree.buildFilesSize), symbol: "hammer") {
-                            isPresented = false
-                            perform(.buildFiles)
-                        }
-                        PopoverNote("Deletes node_modules and other dependency and build folders. Your code and changes stay; the next install or build brings them back.")
-                        PopoverDivider()
-                    }
-                    PopoverItem("Delete worktree", detail: formattedSize(worktree.size), symbol: "trash",
-                                isEnabled: canRemove, isDestructive: true) {
-                        isPresented = false
-                        perform(.worktree)
-                    }
-                    PopoverNote(reason ?? "Deletes this whole copy. Its branch and commits stay in the repository.")
-                }
-                .frame(width: 320)
-            }
-    }
-}
-
-// MARK: - Archived chats
-
-private struct ArchivedChatsSection: View {
-    @Environment(AppModel.self) private var model
-    @Binding var filter: ArchiveFilter
-    let usage: StorageUsage?
-    @State private var pendingDeletion: ArchiveRow?
-
-    private struct ArchiveRow: Identifiable {
-        let thread: ChatThread
-        let title: String
-        var id: UUID { thread.id }
-    }
-
-    private struct ArchiveGroup: Identifiable {
-        let id: ArchiveFilter.ProjectScope
-        let title: String
-        let rows: [ArchiveRow]
-    }
-
-    var body: some View {
-        let archived = model.archivedThreads
-        let projects = ArchiveFilter.projects(in: archived, from: model.projects)
-        let known = Set(projects.map(\.id))
-        let options: [(value: ArchiveFilter.ProjectScope, title: String)] = [(.all, "All projects")]
-            + projects.map { (.project($0.id), $0.name) } + [(.none, "No project")]
-        let shown = filter.apply(to: archived, known: known)
-        let rows = shown.map { thread in
-            let title: String
-            if let info = thread.hydra, !info.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                title = "\(info.persona.name) · \(info.task)"
-            } else {
-                title = thread.title
-            }
-            return ArchiveRow(thread: thread, title: title)
-        }
-        let grouped = Dictionary(grouping: rows) { ArchiveFilter.scope(of: $0.thread, known: known) }
-        let groups = options.filter { $0.value != .all }.compactMap { option -> ArchiveGroup? in
-            guard let rows = grouped[option.value], !rows.isEmpty else { return nil }
-            return ArchiveGroup(id: option.value, title: option.title, rows: rows)
-        }
-        ChromeSection(
-            title: "Archived chats",
-            trailing: archived.isEmpty ? nil : AnyView(ArchiveDeleteAllButton(threadIDs: Set(shown.map(\.id)), isFiltered: filter.isActive))
-        ) {
-            StorageSectionNote(text: archived.isEmpty
-                ? "Chats you archive leave the sidebar and wait here. Nothing is archived yet."
-                : "Restore a chat to the sidebar, or delete it for good. A chat's worktree can go with it.")
-            if !archived.isEmpty {
-                HStack(spacing: 8) {
-                    ChromeSearchField(query: $filter.query, prompt: "Search archived chats")
-                    GlassPickerButton(options: ArchiveFilter.ChatType.allCases.map { ($0, $0.title) }, selection: $filter.chatType)
-                        .accessibilityLabel(Text("Chat type"))
-                    GlassPickerButton(options: options, selection: $filter.project, symbol: { _ in "folder" })
-                        .accessibilityLabel(Text("Project"))
-                }
-                if groups.isEmpty {
-                    Text("No matching chats")
-                        .font(.ui(.body))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, Chrome.sectionSpacing)
-                }
-                ForEach(groups) { group in
-                    VStack(alignment: .leading, spacing: 8) {
-                        // A project label, quieter than the section title, so it reads as a
-                        // group within Archived chats rather than a section of its own.
-                        HStack(spacing: 6) {
-                            Image(systemName: "folder")
-                            Text(verbatim: Chrome.localized(group.title))
-                            Spacer(minLength: 8)
-                            Text(verbatim: String(format: Chrome.localized("%lld chats"), group.rows.count))
-                        }
-                        .font(.ui(.subheadline))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .padding(.horizontal, 4)
-                        ChromeCard(lazy: true) {
-                            ForEach(group.rows) { row in
-                                if row.id != group.rows.first?.id { ChromeRowDivider() }
-                                ChromeRow(title: row.title, detail: detail(for: row.thread), localizesDetail: false) {
-                                    HStack(spacing: 8) {
-                                        Button("Restore") { model.unarchive(row.id) }
-                                            .buttonStyle(.glass)
-                                        Button("Delete", role: .destructive) {
-                                            // A chat holding a worktree always asks, since the
-                                            // answer decides whether its space is freed.
-                                            if model.settings.confirmBeforeDeleting || model.ownWorktree(of: row.thread) != nil {
-                                                pendingDeletion = row
-                                            } else {
-                                                model.delete(row.id)
-                                            }
-                                        }
-                                        .buttonStyle(.glass)
-                                    }
-                                    .controlSize(.small)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.top, 6)
-                }
-            }
-        }
-        .confirmationDialog(
-            pendingDeletion.map { String(format: Chrome.localized("Delete \"%@\"?"), $0.title) } ?? Chrome.localized("Delete the archived thread?"),
-            isPresented: Binding(
-                get: { pendingDeletion != nil },
-                set: { if !$0 { pendingDeletion = nil } }
-            ),
-            presenting: pendingDeletion
-        ) { row in
-            if model.ownWorktree(of: row.thread) != nil {
-                Button("Delete thread and worktree", role: .destructive) {
-                    model.delete(row.id, removeWorktree: true)
-                    pendingDeletion = nil
-                }
-                Button("Delete thread, keep worktree") {
-                    model.delete(row.id)
-                    pendingDeletion = nil
-                }
-            } else {
-                Button("Delete thread", role: .destructive) {
-                    model.delete(row.id)
-                    pendingDeletion = nil
-                }
-            }
-        } message: { row in
-            if model.ownWorktree(of: row.thread) != nil {
-                Text("Its history will be removed. Removing its worktree frees its space; its branch and commits stay, and a worktree with uncommitted changes is kept.")
-            } else {
-                Text("Its history will be removed. Files in your project stay as they are.")
-            }
-        }
-    }
-
-    /// When it was last active, and the space its worktree holds.
-    private func detail(for thread: ChatThread) -> String {
-        var parts = [thread.updatedAt.formatted(date: .abbreviated, time: .shortened)]
-        if let path = model.ownWorktree(of: thread),
-           let worktree = usage?.worktrees.first(where: { $0.path == path }) {
-            parts.append(String(format: Chrome.localized("Worktree %@"), formattedSize(worktree.size)))
-        }
-        return parts.joined(separator: " · ")
-    }
-}
-
-struct ArchiveDeleteAllButton: View {
-    @Environment(AppModel.self) private var model
-    let threadIDs: Set<UUID>
-    let isFiltered: Bool
-    @State private var pending: PendingDeletion?
-
-    /// The chats a confirmation is about, handed to the popover with its presentation:
-    /// separate state read by `isPresented` content could still be empty when it renders.
-    private struct PendingDeletion: Identifiable {
-        let id = UUID()
-        let ids: Set<UUID>
-        let isFiltered: Bool
-    }
-
-    var body: some View {
-        ChromeTextButton(
-            symbol: "trash",
-            title: String(format: Chrome.localized(isFiltered ? "Delete matching chats (%lld)" : "Delete all archived chats (%lld)"), threadIDs.count),
-            help: isFiltered ? "Delete matching archived chats" : "Delete every archived thread",
-            isEnabled: !threadIDs.isEmpty,
-            isDestructive: true
-        ) {
-            if model.settings.confirmBeforeDeleting {
-                pending = PendingDeletion(ids: threadIDs, isFiltered: isFiltered)
-            } else {
-                model.deleteArchivedThreads(ids: threadIDs)
-            }
-        }
-        .popover(item: $pending, arrowEdge: .bottom) { pending in
-            PopoverMenu(scrolls: false) {
-                PopoverSectionHeader(pending.isFiltered ? "Delete matching archived chats?" : "Delete all archived chats?")
-                PopoverNote(String(format: Chrome.localized(pending.isFiltered
-                    ? "The histories of the %lld matching chats will be removed. Files in your projects stay as they are."
-                    : "The histories of all %lld threads will be removed. Files in your projects stay as they are."), pending.ids.count))
-                PopoverDivider()
-                PopoverItem(String(format: Chrome.localized("Delete %lld threads"), pending.ids.count), symbol: "trash", isDestructive: true) {
-                    model.deleteArchivedThreads(ids: pending.ids)
-                    self.pending = nil
-                }
-            }
-        }
     }
 }

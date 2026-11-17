@@ -1,5 +1,8 @@
 # DSH acceptance plan
 
+> Archived: the scripts and app-side probes this document runs were moved out of the repository on 2026-11-15 to `private-artifacts/retired-probes-20261115/` under the artifact root (the parent of the long-lived checkout). They remain in Git history before branch `slim/3.0-pre`. The rest of this page is a historical record.
+
+
 A successful build, simulated ACP peer, native CLI, actual Swift adapter, App workflow and performance probe are different evidence layers. No layer substitutes for the next. No existing assertion, timeout or performance threshold is weakened by this task.
 
 ## Executable checks without launching Tivano

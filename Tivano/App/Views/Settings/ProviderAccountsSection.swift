@@ -56,7 +56,7 @@ struct ProviderAccountsSection: View {
                         Image(systemName: "plus")
                             .frame(height: Chrome.rowButtonLabelHeight)
                     }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     .disabled(isAdding)
                     .help(Text(verbatim: Chrome.localized("Add account")))
                     .accessibilityLabel(Text(verbatim: Chrome.localized("Add account")))
@@ -112,7 +112,7 @@ struct ProviderAccountsSection: View {
                             isImporting = false
                         }
                     }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     .disabled(isImporting)
                 }
             }
@@ -163,7 +163,7 @@ struct ProviderAccountsSection: View {
                     }
                 }
             }
-            .buttonStyle(.glass)
+            .chromeGlassButtonStyle()
             .disabled(isImporting)
         }
         if didPreviewClaude && claudeCandidates.isEmpty {
@@ -195,7 +195,7 @@ struct ProviderAccountsSection: View {
                         isImporting = false
                     }
                 }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .disabled(isImporting || selectedClaudeCandidates.isEmpty)
             }
         }
@@ -368,6 +368,8 @@ private struct ProviderAccountMenu: View {
 
 @MainActor
 private enum AccountSupport {
+    static let resetFormatter = RelativeDateTimeFormatter()
+
     static func windows(for account: ProviderAccount, state: ProviderAccounts.State?) -> [PlanLimits.Window] {
         guard !account.requiresClaudeActivation, !account.requiresClaudeCleanup else { return [] }
         let windows = (state?.limits?.windows ?? []).filter { !$0.id.contains("extra") }
@@ -443,8 +445,7 @@ private enum AccountSupport {
                 ? Chrome.localized("Login expired")
                 : localizedProblem)
         } else if let reset = state?.exhaustedUntil, reset > .now {
-            let formatter = RelativeDateTimeFormatter()
-            parts.append(String(format: Chrome.localized("Usage limit reached · resets %@"), formatter.localizedString(for: reset, relativeTo: .now)))
+            parts.append(String(format: Chrome.localized("Usage limit reached · resets %@"), Self.resetFormatter.localizedString(for: reset, relativeTo: .now)))
         } else if isActive {
             parts.append(Chrome.localized(account.provider == .claude ? "Selected for new chats" : "In use"))
         }

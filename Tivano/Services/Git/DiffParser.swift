@@ -79,6 +79,8 @@ enum DiffParser {
             closeHunk()
             if var finished = current {
                 finished.revision = content.finalize()
+                finished.reportedAdditions = additions
+                finished.reportedDeletions = deletions
                 if deferred {
                     finished.hunks = []
                     let rawPatch = String(patch[fileStart..<end])
@@ -87,8 +89,6 @@ enum DiffParser {
                     rawContent.combine(rawPatch)
                     finished.revision = rawContent.finalize()
                     finished.deferredLineCount = hunkLines
-                    finished.reportedAdditions = additions
-                    finished.reportedDeletions = deletions
                 }
                 files.append(finished)
             }

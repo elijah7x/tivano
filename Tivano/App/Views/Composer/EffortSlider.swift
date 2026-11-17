@@ -57,18 +57,30 @@ struct ModelEffortButton: View {
 
     @State private var isPresented = false
 
-    /// The chip's content width, in points, as it lays out on its own: a short name and
-    /// effort make a narrow chip, a long one a wide chip. Read only while the chip is
-    /// free to size itself, so the value is always the content's own width and never the
-    /// locked box's.
-    @State private var naturalWidth: CGFloat?
-    /// The width the chip is held at while its popover is open. The popover hangs from
-    /// the chip's center, so a chip that grew or shrank under it, as the slider changes
-    /// the effort's title or the list picks a model with a longer name, would drag the
-    /// popover along. Held at the width the chip had when it opened; a name that no
-    /// longer fits is cut with an ellipsis until the popover closes and the chip is free
-    /// again.
-    @State private var lockedWidth: CGFloat?
+    /// The chip's width, in points. The chip always takes its content's width, so it
+    /// grows and shrinks as the effort's title, the model or the preset name changes.
+    @State private var chipWidth: CGFloat = 0
+
+    /// Where the popover's arrow hangs, measured from the chip's leading edge: about the
+    /// center of a typical "model · effort · preset" chip. A fixed point keeps the open
+    /// popover still while the chip resizes under it; centering on the chip would drag
+    /// it sideways with every name change.
+    private static let popoverAnchorX: CGFloat = 100
+
+    /// The anchor point chosen when the popover opened, held until it closes so a chip
+    /// that shrinks below the point while open never moves the popover.
+    @State private var openAnchorX: CGFloat?
+
+    /// A chip too narrow to reach the fixed point hangs the arrow near its trailing end,
+    /// so the arrow never points past the chip as it opens.
+    private var anchorX: CGFloat {
+        min(Self.popoverAnchorX, max(chipWidth - 14, chipWidth / 2))
+    }
+
+    private var popoverAnchor: PopoverAttachmentAnchor {
+        guard !compact, chipWidth > 0 else { return .rect(.bounds) }
+        return .rect(.rect(CGRect(x: openAnchorX ?? anchorX, y: 0, width: 1, height: 1)))
+    }
 
     private var fallbackName: String {
         thread.model.map { ModelPin(provider: thread.provider, modelID: $0).displayName } ?? thread.provider.displayName
@@ -77,16 +89,14 @@ struct ModelEffortButton: View {
     var body: some View {
         let registry = model.providers
         let current = registry.model(thread.model, for: thread.provider)
-        // The pair this chat leads with, while Hydra is on: the chip wears the fused
-        // mark of lead and heads, so a chat that leads a team says so without opening anything.
-        let pair = model.hydraIsOn(thread) ? model.hydraPair(for: thread) : nil
+        let isHydra = model.hydraModeIsOn(thread)
+        let isChimera = model.chimeraIsOn(thread)
+        let pair = isHydra ? model.hydraPair(for: thread) : nil
         Button {
             isPresented.toggle()
         } label: {
             HStack(spacing: 5) {
-                if let pair {
-                    // In a pair the chip wears the two of them as one mark: the lead's icon fused
-                    // with the heads', the way the slider's track runs one colour into the other.
+                if compact, let pair {
                     HydraFusedPairIcon(lead: pair.provider, heads: model.hydraHeadsProvider(of: pair), size: 15)
                         .id(pair.id)
                 } else {
@@ -98,44 +108,71 @@ struct ModelEffortButton: View {
                         .foregroundStyle(.yellow)
                 }
                 if !compact {
-                    // The chip keeps the model and effort while its popover is open: they
-                    // are what the popover edits, and a label that swapped for "Select
-                    // effort" resized the chip under the popover's own arrow. The open
-                    // state reads from the chip style's active look instead. The name is
-                    // the one flexible part of the row, so inside the fixed width below it
-                    // is what gets cut; the effort and the marks keep their size. A pair
-                    // the user named goes by that name here, in place of the lead's model.
-                    Text(verbatim: pair?.customName ?? current?.chipName ?? fallbackName)
+                    Text(verbatim: current?.chipName ?? fallbackName)
                         .foregroundStyle(Chrome.primaryText)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if let current, !current.efforts.isEmpty {
+                        Text(verbatim: "·")
+                            .foregroundStyle(Chrome.secondaryText)
+                            .fixedSize()
                         Text(verbatim: Chrome.localized(ModelOption.effortTitle((thread.provider == .minimaxCode ? thread.effort.flatMap { current.efforts.contains($0) ? $0 : nil } : thread.effort) ?? current.defaultEffort ?? "")))
                             .foregroundStyle(Chrome.primaryText.opacity(0.72))
                             .lineLimit(1)
                             .fixedSize()
+                    }
+                    if let pair {
+                        Text(verbatim: "·")
+                            .foregroundStyle(Chrome.secondaryText)
+                            .fixedSize()
+                        HStack(spacing: 4) {
+                            HydraFusedPairIcon(lead: pair.provider, heads: model.hydraHeadsProvider(of: pair), size: 13, animates: false)
+                                .id(pair.id)
+                            Text(verbatim: pair.customName?.trimmed.nilIfEmpty ?? Chrome.localized("Preset"))
+                                .foregroundStyle(Chrome.primaryText.opacity(0.85))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    } else if isHydra {
+                        Text(verbatim: "·")
+                            .foregroundStyle(Chrome.secondaryText)
+                            .fixedSize()
+                        HStack(spacing: 3) {
+                            HydraMarkImage()
+                                .frame(width: 12, height: 12)
+                            Text(verbatim: Chrome.localized("Same-model"))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(Chrome.accent)
+                        .fixedSize()
+                    } else if isChimera {
+                        Text(verbatim: "·")
+                            .foregroundStyle(Chrome.secondaryText)
+                            .fixedSize()
+                        HStack(spacing: 3) {
+                            ChimeraMarkImage()
+                                .frame(width: 14, height: 12)
+                            Text(verbatim: Chrome.localized("Adaptive"))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(Chrome.accent)
+                        .fixedSize()
                     }
                     Image(systemName: "chevron.down")
                         .font(Chrome.chevronFont)
                         .foregroundStyle(Chrome.secondaryText)
                 }
             }
-            // The chip takes its content's width, and holds it while the popover is open
-            // so the popover hanging from its center never moves; the content stays
-            // centered in the held box while the effort's title or the name changes.
-            .frame(width: compact ? nil : lockedWidth)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-                if lockedWidth == nil { naturalWidth = width }
-            }
         }
         .buttonStyle(.chip(active: isPresented))
         .focusable(false)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipWidth = $0 }
         .onChange(of: isPresented) { _, isOpen in
-            lockedWidth = isOpen ? naturalWidth : nil
+            openAnchorX = isOpen ? anchorX : nil
         }
-        .help(Text(verbatim: helpText(current: current, pair: pair)))
-        .accessibilityLabel(Text(verbatim: helpText(current: current, pair: pair)))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .help(Text(verbatim: helpText(current: current, isHydra: isHydra, isChimera: isChimera, pair: pair)))
+        .accessibilityLabel(Text(verbatim: helpText(current: current, isHydra: isHydra, isChimera: isChimera, pair: pair)))
+        .popover(isPresented: $isPresented, attachmentAnchor: popoverAnchor, arrowEdge: .bottom) {
             ModelEffortPanel(threadID: thread.id, hasHistory: hasHistory)
                 .presentedChrome()
         }
@@ -163,15 +200,20 @@ struct ModelEffortButton: View {
         }
     }
 
-    /// The full model and effort, plus the pair the chat leads with, for the tooltip and
-    /// VoiceOver when the chip shows only the icon.
-    private func helpText(current: ModelOption?, pair: HydraPair?) -> String {
+    /// The full model, effort and sub-agent mode, for the tooltip and VoiceOver.
+    private func helpText(current: ModelOption?, isHydra: Bool, isChimera: Bool, pair: HydraPair?) -> String {
         var parts = [current?.shortName ?? fallbackName]
         if let current, !current.efforts.isEmpty {
             parts.append(Chrome.localized(ModelOption.effortTitle((thread.provider == .minimaxCode ? thread.effort.flatMap { current.efforts.contains($0) ? $0 : nil } : thread.effort) ?? current.defaultEffort ?? "")))
         }
         parts.append(thread.provider.routeSummary)
-        if let pair { parts.append(HydraPairSummary.title(pair, registry: model.providers)) }
+        if let pair {
+            parts.append(HydraPairSummary.title(pair, registry: model.providers))
+        } else if isHydra {
+            parts.append(Chrome.localized("Same-model sub-agents"))
+        } else if isChimera {
+            parts.append(Chrome.localized("Adaptive sub-agents"))
+        }
         return parts.joined(separator: " · ")
     }
 }
@@ -255,7 +297,7 @@ private struct ModelEffortPanel: View {
                 .foregroundStyle(Chrome.secondaryText)
                 .help(Text(verbatim: Chrome.localized("Back")))
                 .accessibilityLabel(Text(verbatim: Chrome.localized("Back")))
-                Text("Temporary pair")
+                Text("Temporary combo")
                     .font(.ui(.body))
                     .foregroundStyle(Chrome.secondaryText)
             }
@@ -270,7 +312,7 @@ private struct ModelEffortPanel: View {
                 }
             })
 
-            Text("Used by this chat only, not saved to Settings › Hydra.")
+            Text("Used by this chat only, not saved to Settings › Sub-agent control.")
                 .font(.ui(size: 11))
                 .foregroundStyle(Chrome.secondaryText)
                 .lineLimit(1)
@@ -283,8 +325,8 @@ private struct ModelEffortPanel: View {
     private func slider(for thread: ChatThread) -> some View {
         let option = model.providers.model(thread.model, for: thread.provider)
         let fallbackName = thread.model.map { ModelPin(provider: thread.provider, modelID: $0).displayName } ?? thread.provider.displayName
-        // In a pair the slider is the lead's: it wears the pair's fusion, says whose effort
-        // it sets, and resets to the pair's lead effort rather than the model's default.
+        // In a pair the slider is the lead's: it wears the pair's fusion and says whose
+        // effort it sets.
         let pair = model.hydraIsOn(thread) ? model.hydraPair(for: thread) : nil
         let pairLook = pair.map { EffortPairLook($0, registry: model.providers, resolvedHeadsEffort: model.hydraLaunch(for: thread)?.workerEffort) }
         return EffortSliderCard(
@@ -314,16 +356,9 @@ private struct ModelEffortPanel: View {
                     model.updateThread(thread.id) { $0.dshMode = mode == .standard ? nil : mode }
                 }
             ) : nil,
-            onTitleTap: { page = .models },
-            onReset: {
-                let leadEffort = pair?.orchestratorEffort.flatMap { option?.efforts.contains($0) == true ? $0 : nil }
-                model.updateThread(thread.id) {
-                    $0.effort = leadEffort
-                    $0.fastMode = false
-                    $0.dshMode = nil
-                }
-                remember(thread.id)
-            }
+            threadID: thread.isHelper ? nil : thread.id,
+            hasHistory: hasHistory,
+            onTitleTap: { page = .models }
         )
     }
 
@@ -386,9 +421,17 @@ struct ModelList: View {
 
     @State private var query = ""
     @State private var showsOtherModels = false
+    @State private var selectedCategory: Category?
+    @State private var highlightedRowID: String?
+    @State private var rightScrollRequest: ScrollRequest?
+    @State private var leftScrollRequest: ScrollRequest?
+    @State private var scrollNonce = 0
     @State private var hoveredHeading: String?
     @FocusState private var searchIsFocused: Bool
 
+    private static let groupColumnWidth: CGFloat = 128
+    private static let groupedPopoverWidth: CGFloat = 460
+    private static let maxListHeight: CGFloat = 440
     /// A pair row carries two lines, like a model row with its provider under it.
     private static let pairRowHeight: CGFloat = 42
     /// What a group title takes: an 11 pt line with its own padding above and below.
@@ -396,25 +439,79 @@ struct ModelList: View {
     /// The same for Recent, Pairs and Models, which read one size larger than the groups under them.
     private static let topHeaderHeight: CGFloat = 25
 
+    fileprivate enum Category: Hashable, Identifiable {
+        case all
+        case group(UUID)
+        case ungrouped
+        case combos
+
+        var id: String {
+            switch self {
+            case .all: "all"
+            case .group(let id): "group/\(id.uuidString)"
+            case .ungrouped: "ungrouped"
+            case .combos: "combos"
+            }
+        }
+    }
+
+    fileprivate enum CategoryIcon {
+        case all
+        case provider(ProviderKind)
+        case emptyGroup
+        case pair(lead: ProviderKind, heads: ProviderKind)
+        case hydra
+    }
+
+    fileprivate struct CategoryItem: Identifiable {
+        let category: Category
+        let title: String
+        let count: Int
+        let icon: CategoryIcon
+
+        var id: String { category.id }
+    }
+
+    private struct GroupBlock: Identifiable {
+        let section: ModelSection
+        var entries: [ModelCatalog.Entry]
+        var id: UUID { section.id }
+    }
+
+    private enum ScrollAnchor: Equatable {
+        case automatic
+        case top
+    }
+
+    private struct ScrollRequest: Equatable {
+        let id: String
+        let anchor: ScrollAnchor
+        let nonce: Int
+    }
+
     private enum DisplayRow: Identifiable {
         case header(String)
+        case searchHeader(id: String, title: String)
         case pair(HydraPair, temporary: Bool, recent: Bool)
         case newTemporaryPair
         case entry(ModelCatalog.Entry, recent: Bool)
         case section(ModelSection, hiddenCount: Int)
         case otherFold(Int)
         case empty(searching: Bool)
+        case emptyGroup
         case noPairsMatch
 
         var id: String {
             switch self {
             case .header(let title): "header/\(title)"
+            case .searchHeader(let id, _): "search-header/\(id)"
             case .pair(let pair, let temporary, let recent): "\(recent ? "recent-pair" : (temporary ? "temporary-pair" : "pair"))/\(pair.id)"
             case .newTemporaryPair: "new-temporary-pair"
             case .entry(let entry, let recent): "\(recent ? "recent" : "model")/\(entry.id)"
             case .section(let section, _): "section/\(section.id)"
             case .otherFold: "other-fold"
             case .empty: "empty"
+            case .emptyGroup: "empty-group"
             case .noPairsMatch: "no-pairs-match"
             }
         }
@@ -422,10 +519,10 @@ struct ModelList: View {
         func height(modelRowHeight: CGFloat) -> CGFloat {
             switch self {
             case .header: ModelList.topHeaderHeight
-            case .section: ModelList.sectionHeaderHeight
+            case .searchHeader, .section: ModelList.sectionHeaderHeight
             case .pair, .newTemporaryPair: ModelList.pairRowHeight
             case .otherFold: 34
-            case .entry, .empty, .noPairsMatch: modelRowHeight
+            case .entry, .empty, .emptyGroup, .noPairsMatch: modelRowHeight
             }
         }
     }
@@ -434,23 +531,114 @@ struct ModelList: View {
         let entries = ModelCatalog.entries(model, including: thread)
         // The pairs are Hydra's: on offer while it is on, out of sight otherwise.
         let pairs = model.hydraIsOn(thread) ? model.hydraPickerPairs : []
+        let activeTemporaryPair = model.temporaryHydraPair(for: thread)
         let searchQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let searchEntries = searchQuery.isEmpty ? entries : ModelCatalog.fullCatalogueEntries(model, forProvidersIn: entries)
+        let isSearching = !searchQuery.isEmpty
+        let searchEntries = isSearching ? ModelCatalog.fullCatalogueEntries(model, forProvidersIn: entries) : entries
         // A chat leads with one pair or runs one model, never both: the checkmark sits on
         // the pair while the chat is in one, even though the pair's lead model is a row too.
-        let leadsWithTemporaryPair = model.temporaryHydraPair(for: thread) != nil
+        let leadsWithTemporaryPair = activeTemporaryPair != nil
         let leadsWithPair = leadsWithTemporaryPair || pairs.contains { model.leadsWithHydraPair($0, thread: thread) }
+        let currentModelID = model.providers.model(thread.model, for: thread.provider)?.id ?? thread.model
         let showsProviders = Set(entries.map(\.provider)).count > 1
         // Fixed row heights let the popover size itself in one pass instead of measuring and resizing.
         let rowHeight: CGFloat = showsProviders || (hasHistory && entries.contains { $0.provider != thread.provider }) ? 42 : 32
-        let showsPairs = !pairs.isEmpty || (!hasHistory && model.hydraIsOn(thread))
-        let twoColumns = allowsPairColumns && showsPairs
-        let leftRows = pairRows(pairs: pairs, query: searchQuery)
-        let rows = modelColumnRows(entries: entries, searchEntries: searchEntries, query: searchQuery)
-        let singleRows = displayRows(entries: entries, searchEntries: searchEntries, pairs: pairs, query: searchQuery)
-        let contentHeight = twoColumns
+        let hasUserGroups = !model.settings.modelSections.isEmpty
+        let showsPairs = !pairs.isEmpty || (hasUserGroups && activeTemporaryPair != nil) || (!hasHistory && model.hydraIsOn(thread))
+
+        let partitioned = hasUserGroups ? partitionedGroups(entries: entries) : (groups: [], ungrouped: [])
+        let categories = hasUserGroups ? buildCategories(
+            groups: partitioned.groups,
+            ungrouped: partitioned.ungrouped,
+            pairs: pairs,
+            activeTemporaryPair: activeTemporaryPair,
+            showsPairs: showsPairs
+        ) : []
+        let initialCategory = hasUserGroups ? defaultCategory(
+            groups: partitioned.groups,
+            showsPairs: showsPairs,
+            leadsWithPair: leadsWithPair,
+            currentModelID: currentModelID
+        ) : .all
+        let activeCategory = hasUserGroups ? resolvedCategory(available: categories, fallback: initialCategory) : .all
+
+        let groupedRightRows: [DisplayRow] = if !hasUserGroups {
+            []
+        } else if isSearching {
+            groupedSearchRows(
+                entries: entries,
+                searchEntries: searchEntries,
+                groups: partitioned.groups,
+                ungrouped: partitioned.ungrouped,
+                pairs: pairs,
+                activeTemporaryPair: activeTemporaryPair,
+                showsPairs: showsPairs,
+                query: searchQuery
+            )
+        } else {
+            groupedCategoryRows(
+                for: activeCategory,
+                groups: partitioned.groups,
+                ungrouped: partitioned.ungrouped,
+                pairs: pairs,
+                activeTemporaryPair: activeTemporaryPair,
+                showsOtherModels: showsOtherModels
+            )
+        }
+
+        let twoColumns = !hasUserGroups && allowsPairColumns && showsPairs
+        let leftRows = hasUserGroups ? [] : pairRows(pairs: pairs, query: searchQuery)
+        let rows = hasUserGroups ? [] : modelColumnRows(entries: entries, searchEntries: searchEntries, query: searchQuery)
+        let singleRows = hasUserGroups ? [] : displayRows(entries: entries, searchEntries: searchEntries, pairs: pairs, query: searchQuery)
+
+        let activeKeyboardRows: [DisplayRow] = if hasUserGroups {
+            groupedRightRows
+        } else if twoColumns {
+            isSearching ? rows + leftRows : leftRows + rows
+        } else {
+            singleRows
+        }
+        let interactiveIDs = activeKeyboardRows.filter(isInteractive).map(\.id)
+
+        let groupRowHeight = max(Chrome.rowHeight, TypeScale.shared.ui(28))
+        let leftColumnHeight = CGFloat(categories.count) * groupRowHeight + CGFloat(max(0, categories.count - 1)) * 2 + 4
+        let groupedBodyHeight: CGFloat = if hasUserGroups {
+            min(
+                max(
+                    leftColumnHeight,
+                    contentHeight(
+                        groupedCategoryRows(
+                            for: .all,
+                            groups: partitioned.groups,
+                            ungrouped: partitioned.ungrouped,
+                            pairs: pairs,
+                            activeTemporaryPair: activeTemporaryPair,
+                            showsOtherModels: false
+                        ),
+                        rowHeight: rowHeight
+                    ),
+                    showsPairs ? contentHeight(
+                        groupedCategoryRows(
+                            for: .combos,
+                            groups: partitioned.groups,
+                            ungrouped: partitioned.ungrouped,
+                            pairs: pairs,
+                            activeTemporaryPair: activeTemporaryPair,
+                            showsOtherModels: false
+                        ),
+                        rowHeight: rowHeight
+                    ) : 0,
+                    contentHeight(groupedRightRows, rowHeight: rowHeight)
+                ),
+                Self.maxListHeight
+            )
+        } else {
+            0
+        }
+        let legacyContentHeight = twoColumns
             ? max(contentHeight(leftRows, rowHeight: rowHeight), contentHeight(rows, rowHeight: rowHeight))
             : contentHeight(singleRows, rowHeight: rowHeight)
+
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Button(action: onBack) {
@@ -460,46 +648,192 @@ struct ModelList: View {
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
                 .foregroundStyle(Chrome.secondaryText)
                 .help(Text(verbatim: Chrome.localized("Back")))
                 .accessibilityLabel(Text(verbatim: Chrome.localized("Back")))
                 TextField("Search models", text: $query)
                     .textFieldStyle(.plain)
+                    .focusEffectDisabled()
                     .font(.ui(.body))
-                    .foregroundStyle(Chrome.secondaryText)
+                    .foregroundStyle(Chrome.primaryText)
                     .focused($searchIsFocused)
                     .onSubmit {
-                        if !searchQuery.isEmpty,
-                           let first = searchEntries.first(where: {
-                               !isLocked($0) && ModelsSettingsPage.matches($0.option, id: $0.option.id, provider: $0.provider, query: searchQuery)
-                           }) {
-                            onChoose(first)
-                        }
+                        _ = submitHighlighted(in: activeKeyboardRows)
                     }
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                        searchIsFocused = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.ui(.callout))
+                            .foregroundStyle(Chrome.secondaryText.opacity(0.75))
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .accessibilityLabel(Text(verbatim: Chrome.localized("Clear search")))
+                }
             }
             .padding(.horizontal, 8)
             .padding(.top, 8)
-            .padding(.bottom, 4)
+            .padding(.bottom, hasUserGroups ? 6 : 4)
 
-            if twoColumns {
+            if hasUserGroups {
+                Divider()
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 4)
+
                 HStack(alignment: .top, spacing: 0) {
-                    column(leftRows, label: "Pairs", rowHeight: rowHeight, showsProviders: showsProviders, leadsWithPair: leadsWithPair, leadsWithTemporaryPair: leadsWithTemporaryPair)
-                        .frame(width: 250)
+                    groupColumn(
+                        categories: categories,
+                        selected: activeCategory,
+                        isEnabled: !isSearching,
+                        rowHeight: groupRowHeight
+                    )
+                    .frame(width: Self.groupColumnWidth)
+                    .opacity(isSearching ? 0.45 : 1)
+                    .allowsHitTesting(!isSearching)
+
+                    Divider()
+                        .frame(width: 1)
+                        .padding(.vertical, 4)
+
+                    column(
+                        groupedRightRows,
+                        allEntries: entries,
+                        label: activeCategory == .combos && !isSearching ? "Combos" : "Models",
+                        rowHeight: rowHeight,
+                        showsProviders: showsProviders,
+                        leadsWithPair: leadsWithPair,
+                        leadsWithTemporaryPair: leadsWithTemporaryPair,
+                        currentModelID: currentModelID
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .frame(height: groupedBodyHeight)
+            } else if twoColumns {
+                HStack(alignment: .top, spacing: 0) {
+                    column(
+                        leftRows,
+                        allEntries: entries,
+                        label: "Combos",
+                        rowHeight: rowHeight,
+                        showsProviders: showsProviders,
+                        leadsWithPair: leadsWithPair,
+                        leadsWithTemporaryPair: leadsWithTemporaryPair,
+                        currentModelID: currentModelID
+                    )
+                    .frame(width: 250)
                     Divider()
                         .frame(width: 1)
                         .padding(.vertical, 6)
-                    column(rows, label: "Models", rowHeight: rowHeight, showsProviders: showsProviders, leadsWithPair: leadsWithPair, leadsWithTemporaryPair: leadsWithTemporaryPair)
-                        .frame(maxWidth: .infinity)
+                    column(
+                        rows,
+                        allEntries: entries,
+                        label: "Models",
+                        rowHeight: rowHeight,
+                        showsProviders: showsProviders,
+                        leadsWithPair: leadsWithPair,
+                        leadsWithTemporaryPair: leadsWithTemporaryPair,
+                        currentModelID: currentModelID
+                    )
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(height: min(contentHeight, 440))
+                .frame(height: min(legacyContentHeight, Self.maxListHeight))
             } else {
-                column(singleRows, label: "Models", rowHeight: rowHeight, showsProviders: showsProviders, leadsWithPair: leadsWithPair, leadsWithTemporaryPair: leadsWithTemporaryPair, horizontalPadding: 0)
-                    .frame(height: min(contentHeight, 440))
+                column(
+                    singleRows,
+                    allEntries: entries,
+                    label: "Models",
+                    rowHeight: rowHeight,
+                    showsProviders: showsProviders,
+                    leadsWithPair: leadsWithPair,
+                    leadsWithTemporaryPair: leadsWithTemporaryPair,
+                    currentModelID: currentModelID,
+                    horizontalPadding: 0
+                )
+                .frame(height: min(legacyContentHeight, Self.maxListHeight))
             }
         }
         .padding(6)
-        .frame(width: twoColumns ? 580 : 330)
-        .onAppear { searchIsFocused = true }
+        .frame(width: hasUserGroups ? Self.groupedPopoverWidth : (twoColumns ? 580 : 330))
+        .background {
+            ModelListKeyMonitor(
+                onMoveRow: { offset in
+                    moveHighlight(by: offset, in: activeKeyboardRows)
+                },
+                onMoveGroup: { offset in
+                    guard hasUserGroups, query.isEmpty else { return false }
+                    moveCategory(by: offset, categories: categories, current: activeCategory)
+                    return true
+                },
+                onSubmit: {
+                    submitHighlighted(in: activeKeyboardRows)
+                }
+            )
+        }
+        .onAppear {
+            if hasUserGroups {
+                selectedCategory = initialCategory
+            }
+            let preferred = preferredHighlightID(
+                in: activeKeyboardRows,
+                isSearching: isSearching,
+                leadsWithPair: leadsWithPair,
+                leadsWithTemporaryPair: leadsWithTemporaryPair,
+                currentModelID: currentModelID
+            )
+            highlightedRowID = preferred
+            if let preferred {
+                requestRightScroll(to: preferred, anchor: .automatic)
+            }
+            if hasUserGroups {
+                requestLeftScroll(to: initialCategory.id, anchor: .automatic)
+            }
+            searchIsFocused = true
+        }
+        .onChange(of: query) { _, _ in
+            let preferred = preferredHighlightID(
+                in: activeKeyboardRows,
+                isSearching: isSearching,
+                leadsWithPair: leadsWithPair,
+                leadsWithTemporaryPair: leadsWithTemporaryPair,
+                currentModelID: currentModelID
+            )
+            highlightedRowID = preferred
+            if let topID = activeKeyboardRows.first?.id {
+                requestRightScroll(to: topID, anchor: .top)
+            }
+        }
+        .onChange(of: activeCategory) { _, updatedCategory in
+            guard hasUserGroups else { return }
+            let preferred = preferredHighlightID(
+                in: activeKeyboardRows,
+                isSearching: isSearching,
+                leadsWithPair: leadsWithPair,
+                leadsWithTemporaryPair: leadsWithTemporaryPair,
+                currentModelID: currentModelID
+            )
+            highlightedRowID = preferred
+            requestLeftScroll(to: updatedCategory.id, anchor: .automatic)
+            let firstInteractiveID = activeKeyboardRows.first(where: isInteractive)?.id
+            if preferred == firstInteractiveID, let topID = activeKeyboardRows.first?.id {
+                requestRightScroll(to: topID, anchor: .top)
+            } else if let preferred {
+                requestRightScroll(to: preferred, anchor: .automatic)
+            }
+        }
+        .onChange(of: interactiveIDs) { _, updated in
+            if let current = highlightedRowID, updated.contains(current) { return }
+            highlightedRowID = preferredHighlightID(
+                in: activeKeyboardRows,
+                isSearching: isSearching,
+                leadsWithPair: leadsWithPair,
+                leadsWithTemporaryPair: leadsWithTemporaryPair,
+                currentModelID: currentModelID
+            )
+        }
         .task {
             // A pair on another provider, or with its heads on one, names its models from
             // that provider's catalogue, which this chat may never have loaded.
@@ -513,60 +847,143 @@ struct ModelList: View {
         rows.reduce(CGFloat.zero) { $0 + $1.height(modelRowHeight: rowHeight) + 1 }
     }
 
-    private func column(_ rows: [DisplayRow], label: String, rowHeight: CGFloat, showsProviders: Bool, leadsWithPair: Bool, leadsWithTemporaryPair: Bool, horizontalPadding: CGFloat = 4) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 1) {
-                ForEach(rows) { row in
-                    rowView(row, rows: rows, rowHeight: rowHeight, showsProviders: showsProviders, leadsWithPair: leadsWithPair, leadsWithTemporaryPair: leadsWithTemporaryPair)
+    private func groupColumn(
+        categories: [CategoryItem],
+        selected: Category,
+        isEnabled: Bool,
+        rowHeight: CGFloat
+    ) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(categories) { item in
+                        GroupNavRow(
+                            item: item,
+                            isSelected: item.category == selected,
+                            isEnabled: isEnabled,
+                            rowHeight: rowHeight
+                        ) {
+                            selectedCategory = item.category
+                            searchIsFocused = true
+                        }
+                        .id(item.id)
+                    }
+                }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .accessibilityLabel(Text(verbatim: Chrome.localized("Model groups")))
+            .onChange(of: leftScrollRequest) { _, request in
+                guard let request else { return }
+                switch request.anchor {
+                case .automatic: proxy.scrollTo(request.id)
+                case .top: proxy.scrollTo(request.id, anchor: .top)
                 }
             }
-            .padding(.horizontal, horizontalPadding)
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .accessibilityLabel(Text(verbatim: Chrome.localized(label)))
+    }
+
+    private func column(
+        _ rows: [DisplayRow],
+        allEntries: [ModelCatalog.Entry],
+        label: String,
+        rowHeight: CGFloat,
+        showsProviders: Bool,
+        leadsWithPair: Bool,
+        leadsWithTemporaryPair: Bool,
+        currentModelID: String?,
+        horizontalPadding: CGFloat = 4
+    ) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(rows) { row in
+                        rowView(
+                            row,
+                            rows: rows,
+                            allEntries: allEntries,
+                            rowHeight: rowHeight,
+                            showsProviders: showsProviders,
+                            leadsWithPair: leadsWithPair,
+                            leadsWithTemporaryPair: leadsWithTemporaryPair,
+                            currentModelID: currentModelID
+                        )
+                        .id(row.id)
+                    }
+                }
+                .padding(.horizontal, horizontalPadding)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .accessibilityLabel(Text(verbatim: Chrome.localized(label)))
+            .onChange(of: rightScrollRequest) { _, request in
+                // Each column scrolls only for rows it shows, so a highlighted combo scrolls the combo column.
+                guard let request, rows.contains(where: { $0.id == request.id }) else { return }
+                switch request.anchor {
+                case .automatic: proxy.scrollTo(request.id)
+                case .top: proxy.scrollTo(request.id, anchor: .top)
+                }
+            }
+        }
     }
 
     @ViewBuilder
-    private func rowView(_ row: DisplayRow, rows: [DisplayRow], rowHeight: CGFloat, showsProviders: Bool, leadsWithPair: Bool, leadsWithTemporaryPair: Bool) -> some View {
+    private func rowView(
+        _ row: DisplayRow,
+        rows: [DisplayRow],
+        allEntries: [ModelCatalog.Entry],
+        rowHeight: CGFloat,
+        showsProviders: Bool,
+        leadsWithPair: Bool,
+        leadsWithTemporaryPair: Bool,
+        currentModelID: String?
+    ) -> some View {
+        let isHighlighted = highlightedRowID == row.id
         switch row {
         case .header(let title):
             PopoverSectionHeader(title, weight: .bold, style: .callout)
                 .frame(height: Self.topHeaderHeight)
+        case .searchHeader(_, let title):
+            Text(verbatim: title)
+                .font(.ui(.subheadline, weight: .semibold))
+                .foregroundStyle(Chrome.secondaryText)
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
+                .padding(.bottom, 3)
+                .frame(maxWidth: .infinity, minHeight: Self.sectionHeaderHeight, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
         case .pair(let pair, let temporary, let recent):
-            let locked = hasHistory && pair.provider != thread.provider && switchBlocker != nil
+            let locked = isPairLocked(pair)
             HydraPairListRow(
                 pair: pair,
                 title: HydraPairSummary.title(pair, registry: model.providers),
                 detail: locked ? (switchBlocker ?? "") : detail(for: pair, temporary: temporary),
                 rowHeight: Self.pairRowHeight,
-                isSelected: temporary ? (!recent || model.leadsWithHydraPair(pair, thread: thread)) : (!leadsWithTemporaryPair && model.leadsWithHydraPair(pair, thread: thread)),
+                isSelected: isPairSelected(pair, temporary: temporary, recent: recent, leadsWithTemporaryPair: leadsWithTemporaryPair),
+                isHighlighted: isHighlighted,
                 isEnabled: !locked
             ) {
-                if temporary {
-                    if recent { onEnterTemporaryPair(pair) }
-                    else { onEditTemporaryPair() }
-                } else {
-                    onEnterPair(pair)
-                }
+                activate(row)
             }
             .help(locked ? (switchBlocker ?? "") : "")
         case .newTemporaryPair:
-            NewTemporaryPairListRow(rowHeight: Self.pairRowHeight) {
-                model.startTemporaryHydraPair(for: thread.id)
-                onEditTemporaryPair()
+            NewTemporaryPairListRow(rowHeight: Self.pairRowHeight, isHighlighted: isHighlighted) {
+                activate(row)
             }
         case .entry(let entry, _):
             let locked = isLocked(entry)
             ModelListRow(
                 entry: entry,
                 // A model listed on two routes here says which route under its name.
-                detail: locked ? switchBlocker : ([showsProviders ? entry.provider.displayName : nil, routeShown(entry, in: rows)].compactMap { $0 }.joined(separator: " · ").nilIfEmpty),
+                detail: locked ? switchBlocker : ([showsProviders ? entry.provider.displayName : nil, routeShown(entry, in: rows, allEntries: allEntries)].compactMap { $0 }.joined(separator: " · ").nilIfEmpty),
                 showsIcon: showsProviders,
                 rowHeight: rowHeight,
-                isSelected: !leadsWithPair && entry.provider == thread.provider && entry.option.id == thread.model,
+                isSelected: !leadsWithPair && entry.provider == thread.provider && entry.option.id == currentModelID,
+                isHighlighted: isHighlighted,
                 isEnabled: !locked
             ) {
-                onChoose(entry)
+                activate(row)
             }
             .help(locked ? (switchBlocker ?? "") : "")
         case .section(let section, let hiddenCount):
@@ -577,7 +994,8 @@ struct ModelList: View {
                 style: .subheadline,
                 collapsed: model.settings.isModelSectionCollapsed(section.id),
                 count: hiddenCount > 0 ? hiddenCount : nil,
-                height: Self.sectionHeaderHeight
+                height: Self.sectionHeaderHeight,
+                isHighlighted: false
             ) {
                 model.settings.toggleModelSectionCollapsed(section.id)
             }
@@ -589,12 +1007,19 @@ struct ModelList: View {
                 style: .callout,
                 collapsed: !showsOtherModels,
                 count: count,
-                height: 34
+                height: 34,
+                isHighlighted: isHighlighted
             ) {
-                showsOtherModels.toggle()
+                activate(row)
             }
+        case .emptyGroup:
+            Text(verbatim: Chrome.localized("No models in this group"))
+                .font(.ui(.body))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(10)
+                .frame(height: rowHeight)
         case .noPairsMatch:
-            Text(verbatim: Chrome.localized("No pairs match"))
+            Text(verbatim: Chrome.localized("No combos match"))
                 .font(.ui(.body))
                 .foregroundStyle(Chrome.secondaryText)
                 .padding(10)
@@ -607,6 +1032,433 @@ struct ModelList: View {
                 .frame(height: rowHeight)
         }
     }
+
+    // MARK: - Grouped mode
+
+    private func resolvedEntry(for pin: ModelPin, in entries: [ModelCatalog.Entry]) -> ModelCatalog.Entry? {
+        if let exact = entries.first(where: { $0.provider == pin.provider && $0.option.id == pin.modelID }) {
+            return exact
+        }
+        guard let option = model.providers.model(pin.modelID, for: pin.provider) else { return nil }
+        return entries.first(where: { $0.provider == pin.provider && $0.option.id == option.id })
+    }
+
+    private func partitionedGroups(entries: [ModelCatalog.Entry]) -> (groups: [GroupBlock], ungrouped: [ModelCatalog.Entry]) {
+        let items = model.settings.modelListItems
+        var groups: [GroupBlock] = []
+        var ungroupedPinned: [ModelCatalog.Entry] = []
+        var placedIDs: Set<String> = []
+
+        for item in items {
+            switch item {
+            case .section(let section):
+                groups.append(GroupBlock(section: section, entries: []))
+            case .pin(let pin):
+                guard let entry = resolvedEntry(for: pin, in: entries),
+                      placedIDs.insert(entry.id).inserted else { continue }
+                if groups.isEmpty {
+                    ungroupedPinned.append(entry)
+                } else {
+                    groups[groups.count - 1].entries.append(entry)
+                }
+            }
+        }
+        let unpinned = entries.filter { placedIDs.insert($0.id).inserted }
+        return (groups, unpinned + ungroupedPinned)
+    }
+
+    private func buildCategories(
+        groups: [GroupBlock],
+        ungrouped: [ModelCatalog.Entry],
+        pairs: [HydraPair],
+        activeTemporaryPair: HydraPair?,
+        showsPairs: Bool
+    ) -> [CategoryItem] {
+        let totalModelCount = groups.reduce(0) { $0 + $1.entries.count } + ungrouped.count
+        var result: [CategoryItem] = [
+            CategoryItem(
+                category: .all,
+                title: Chrome.localized("All"),
+                count: totalModelCount,
+                icon: .all
+            )
+        ]
+        for group in groups {
+            result.append(
+                CategoryItem(
+                    category: .group(group.id),
+                    title: group.section.name,
+                    count: group.entries.count,
+                    icon: group.entries.first.map { .provider($0.provider) } ?? .emptyGroup
+                )
+            )
+        }
+        if !ungrouped.isEmpty {
+            result.append(
+                CategoryItem(
+                    category: .ungrouped,
+                    title: Chrome.localized("Ungrouped"),
+                    count: ungrouped.count,
+                    icon: ungrouped.first.map { .provider($0.provider) } ?? .emptyGroup
+                )
+            )
+        }
+        if showsPairs {
+            let firstPair = activeTemporaryPair ?? pairs.first
+            let comboIcon: CategoryIcon = if let firstPair {
+                .pair(lead: firstPair.provider, heads: model.hydraHeadsProvider(of: firstPair))
+            } else {
+                .hydra
+            }
+            result.append(
+                CategoryItem(
+                    category: .combos,
+                    title: Chrome.localized("Combos"),
+                    count: pairs.count + (activeTemporaryPair == nil ? 0 : 1),
+                    icon: comboIcon
+                )
+            )
+        }
+        return result
+    }
+
+    private func defaultCategory(
+        groups: [GroupBlock],
+        showsPairs: Bool,
+        leadsWithPair: Bool,
+        currentModelID: String?
+    ) -> Category {
+        if leadsWithPair, showsPairs {
+            return .combos
+        }
+        if let currentModelID,
+           let match = groups.first(where: { group in
+               group.entries.contains { $0.provider == thread.provider && $0.option.id == currentModelID }
+           }) {
+            return .group(match.id)
+        }
+        return .all
+    }
+
+    private func resolvedCategory(available: [CategoryItem], fallback: Category) -> Category {
+        if let selectedCategory, available.contains(where: { $0.category == selectedCategory }) {
+            return selectedCategory
+        }
+        return fallback
+    }
+
+    private func groupedCategoryRows(
+        for category: Category,
+        groups: [GroupBlock],
+        ungrouped: [ModelCatalog.Entry],
+        pairs: [HydraPair],
+        activeTemporaryPair: HydraPair?,
+        showsOtherModels: Bool
+    ) -> [DisplayRow] {
+        switch category {
+        case .all:
+            let allEntries = groups.flatMap(\.entries) + ungrouped
+            let selectable = allEntries.filter { !hasHistory || $0.provider == thread.provider }
+            let other = allEntries.filter { hasHistory && $0.provider != thread.provider }
+            var rows: [DisplayRow] = []
+            let recents = recentRows(selectable: selectable, pairs: pairs)
+            if !recents.isEmpty {
+                rows.append(.header("Recent"))
+                rows.append(contentsOf: recents)
+                if !selectable.isEmpty {
+                    rows.append(.header("Models"))
+                }
+            }
+            rows.append(contentsOf: selectable.map { .entry($0, recent: false) })
+            if !other.isEmpty {
+                rows.append(.otherFold(other.count))
+                if showsOtherModels {
+                    rows.append(contentsOf: other.map { .entry($0, recent: false) })
+                }
+            }
+            if allEntries.isEmpty {
+                rows.append(.empty(searching: false))
+            }
+            return rows
+
+        case .group(let sectionID):
+            let groupEntries = groups.first(where: { $0.id == sectionID })?.entries ?? []
+            guard !groupEntries.isEmpty else { return [.emptyGroup] }
+            return scopedModelRows(from: groupEntries, showsOtherModels: showsOtherModels)
+
+        case .ungrouped:
+            guard !ungrouped.isEmpty else { return [.empty(searching: false)] }
+            return scopedModelRows(from: ungrouped, showsOtherModels: showsOtherModels)
+
+        case .combos:
+            var rows: [DisplayRow] = []
+            if !hasHistory, model.hydraIsOn(thread), let stored = model.settings.lastNewChatPair {
+                if let saved = model.settings.hydraPair(stored.id), pairs.contains(where: { $0.id == saved.id }) {
+                    rows.append(.header("Recent"))
+                    rows.append(.pair(saved, temporary: false, recent: true))
+                    rows.append(.header("Combos"))
+                } else if model.settings.hydraPair(stored.id) == nil, stored.id != activeTemporaryPair?.id {
+                    rows.append(.header("Recent"))
+                    rows.append(.pair(stored, temporary: true, recent: true))
+                    rows.append(.header("Combos"))
+                }
+            }
+            if let activeTemporaryPair {
+                rows.append(.pair(activeTemporaryPair, temporary: true, recent: false))
+            }
+            rows.append(contentsOf: pairs.map { .pair($0, temporary: false, recent: false) })
+            if !hasHistory, model.hydraIsOn(thread) {
+                rows.append(.newTemporaryPair)
+            }
+            return rows
+        }
+    }
+
+    private func scopedModelRows(from entries: [ModelCatalog.Entry], showsOtherModels: Bool) -> [DisplayRow] {
+        let selectable = entries.filter { !hasHistory || $0.provider == thread.provider }
+        let other = entries.filter { hasHistory && $0.provider != thread.provider }
+        var rows = selectable.map { DisplayRow.entry($0, recent: false) }
+        if !other.isEmpty {
+            rows.append(.otherFold(other.count))
+            if showsOtherModels {
+                rows.append(contentsOf: other.map { .entry($0, recent: false) })
+            }
+        }
+        return rows
+    }
+
+    private func groupedSearchRows(
+        entries: [ModelCatalog.Entry],
+        searchEntries: [ModelCatalog.Entry],
+        groups: [GroupBlock],
+        ungrouped: [ModelCatalog.Entry],
+        pairs: [HydraPair],
+        activeTemporaryPair: HydraPair?,
+        showsPairs: Bool,
+        query: String
+    ) -> [DisplayRow] {
+        var rows: [DisplayRow] = []
+        for group in groups {
+            let matches = matchingModelEntries(in: group.entries, query: query)
+            if !matches.isEmpty {
+                rows.append(.searchHeader(id: "group/\(group.id.uuidString)", title: group.section.name))
+                rows.append(contentsOf: matches.map { .entry($0, recent: false) })
+            }
+        }
+        let ungroupedMatches = matchingModelEntries(in: ungrouped, query: query)
+        if !ungroupedMatches.isEmpty {
+            rows.append(.searchHeader(id: "ungrouped", title: Chrome.localized("Ungrouped")))
+            rows.append(contentsOf: ungroupedMatches.map { .entry($0, recent: false) })
+        }
+        if showsPairs {
+            let comboMatches = matchingComboRows(pairs: pairs, activeTemporaryPair: activeTemporaryPair, query: query)
+            if !comboMatches.isEmpty {
+                rows.append(.searchHeader(id: "combos", title: Chrome.localized("Combos")))
+                rows.append(contentsOf: comboMatches)
+            }
+        }
+        let entryIDs = Set(entries.map(\.id))
+        let extraCandidates = searchEntries.filter { !entryIDs.contains($0.id) }
+        let extraMatches = matchingModelEntries(in: extraCandidates, query: query)
+        if !extraMatches.isEmpty {
+            rows.append(.searchHeader(id: "other-models", title: Chrome.localized("Other models")))
+            rows.append(contentsOf: extraMatches.map { .entry($0, recent: false) })
+        }
+        return rows.isEmpty ? [.empty(searching: true)] : rows
+    }
+
+    private func matchingModelEntries(in source: [ModelCatalog.Entry], query: String) -> [ModelCatalog.Entry] {
+        let selectable = source.filter { !hasHistory || $0.provider == thread.provider }
+        let other = source.filter { hasHistory && $0.provider != thread.provider }
+        return (selectable + other).filter {
+            ModelsSettingsPage.matches($0.option, id: $0.option.id, provider: $0.provider, query: query)
+        }
+    }
+
+    private func matchingComboRows(
+        pairs: [HydraPair],
+        activeTemporaryPair: HydraPair?,
+        query: String
+    ) -> [DisplayRow] {
+        var candidates: [(pair: HydraPair, temporary: Bool, recent: Bool)] = []
+        var listedIDs: Set<UUID> = []
+        if let activeTemporaryPair {
+            candidates.append((activeTemporaryPair, true, false))
+            listedIDs.insert(activeTemporaryPair.id)
+        }
+        for pair in pairs where listedIDs.insert(pair.id).inserted {
+            candidates.append((pair, false, false))
+        }
+        if !hasHistory, model.hydraIsOn(thread),
+           let stored = model.settings.lastNewChatPair,
+           model.settings.hydraPair(stored.id) == nil,
+           listedIDs.insert(stored.id).inserted {
+            candidates.append((stored, true, true))
+        }
+        return candidates.compactMap { item in
+            let matches = HydraPairSummary.title(item.pair, registry: model.providers).localizedCaseInsensitiveContains(query)
+                || detail(for: item.pair, temporary: item.temporary).localizedCaseInsensitiveContains(query)
+            return matches ? .pair(item.pair, temporary: item.temporary, recent: item.recent) : nil
+        }
+    }
+
+    private func recentRows(selectable: [ModelCatalog.Entry], pairs: [HydraPair]) -> [DisplayRow] {
+        guard !hasHistory else { return [] }
+        var recents: [DisplayRow] = []
+        if model.hydraIsOn(thread), let stored = model.settings.lastNewChatPair {
+            if let saved = model.settings.hydraPair(stored.id), pairs.contains(where: { $0.id == saved.id }) {
+                recents.append(.pair(saved, temporary: false, recent: true))
+            } else if model.settings.hydraPair(stored.id) == nil {
+                recents.append(.pair(stored, temporary: true, recent: true))
+            }
+        }
+        if let pin = model.settings.lastNewChatModel,
+           let entry = resolvedEntry(for: pin, in: selectable) {
+            recents.append(.entry(entry, recent: true))
+        }
+        return recents
+    }
+
+    // MARK: - Keyboard navigation
+
+    private func isPairLocked(_ pair: HydraPair) -> Bool {
+        hasHistory && pair.provider != thread.provider && switchBlocker != nil
+    }
+
+    private func isPairSelected(_ pair: HydraPair, temporary: Bool, recent: Bool, leadsWithTemporaryPair: Bool) -> Bool {
+        temporary
+            ? (!recent || model.leadsWithHydraPair(pair, thread: thread))
+            : (!leadsWithTemporaryPair && model.leadsWithHydraPair(pair, thread: thread))
+    }
+
+    private func isInteractive(_ row: DisplayRow) -> Bool {
+        switch row {
+        case .entry(let entry, _):
+            return !isLocked(entry)
+        case .pair(let pair, _, _):
+            return !isPairLocked(pair)
+        case .newTemporaryPair, .otherFold:
+            return true
+        case .header, .searchHeader, .section, .empty, .emptyGroup, .noPairsMatch:
+            return false
+        }
+    }
+
+    private func preferredHighlightID(
+        in rows: [DisplayRow],
+        isSearching: Bool,
+        leadsWithPair: Bool,
+        leadsWithTemporaryPair: Bool,
+        currentModelID: String?
+    ) -> String? {
+        let interactive = rows.filter(isInteractive)
+        guard !interactive.isEmpty else { return nil }
+        if isSearching {
+            return interactive.first?.id
+        }
+        if let activeNonRecent = interactive.first(where: { row in
+            switch row {
+            case .pair(let pair, let temporary, false):
+                return isPairSelected(pair, temporary: temporary, recent: false, leadsWithTemporaryPair: leadsWithTemporaryPair)
+            case .entry(let entry, false):
+                return !leadsWithPair && entry.provider == thread.provider && entry.option.id == currentModelID
+            default:
+                return false
+            }
+        }) {
+            return activeNonRecent.id
+        }
+        if let activeAny = interactive.first(where: { row in
+            switch row {
+            case .pair(let pair, let temporary, let recent):
+                return isPairSelected(pair, temporary: temporary, recent: recent, leadsWithTemporaryPair: leadsWithTemporaryPair)
+            case .entry(let entry, _):
+                return !leadsWithPair && entry.provider == thread.provider && entry.option.id == currentModelID
+            default:
+                return false
+            }
+        }) {
+            return activeAny.id
+        }
+        return interactive.first {
+            if case .otherFold = $0 { return false }
+            return true
+        }?.id ?? interactive.first?.id
+    }
+
+    private func moveHighlight(by offset: Int, in rows: [DisplayRow]) {
+        let interactive = rows.filter(isInteractive)
+        guard !interactive.isEmpty else {
+            highlightedRowID = nil
+            return
+        }
+        let nextID: String
+        if let current = highlightedRowID,
+           let index = interactive.firstIndex(where: { $0.id == current }) {
+            let clamped = min(max(0, index + offset), interactive.count - 1)
+            nextID = interactive[clamped].id
+        } else {
+            nextID = offset < 0 ? interactive[interactive.count - 1].id : interactive[0].id
+        }
+        highlightedRowID = nextID
+        requestRightScroll(to: nextID, anchor: .automatic)
+    }
+
+    private func moveCategory(by offset: Int, categories: [CategoryItem], current: Category) {
+        guard !categories.isEmpty else { return }
+        let index = categories.firstIndex(where: { $0.category == current }) ?? 0
+        let clamped = min(max(0, index + offset), categories.count - 1)
+        let next = categories[clamped].category
+        guard next != current else { return }
+        selectedCategory = next
+        searchIsFocused = true
+    }
+
+    @discardableResult
+    private func submitHighlighted(in rows: [DisplayRow]) -> Bool {
+        let interactive = rows.filter(isInteractive)
+        guard let target = highlightedRowID.flatMap({ id in interactive.first { $0.id == id } }) ?? interactive.first else {
+            return false
+        }
+        activate(target)
+        return true
+    }
+
+    private func activate(_ row: DisplayRow) {
+        switch row {
+        case .entry(let entry, _):
+            guard !isLocked(entry) else { return }
+            onChoose(entry)
+        case .pair(let pair, let temporary, let recent):
+            guard !isPairLocked(pair) else { return }
+            if temporary {
+                if recent { onEnterTemporaryPair(pair) }
+                else { onEditTemporaryPair() }
+            } else {
+                onEnterPair(pair)
+            }
+        case .newTemporaryPair:
+            model.startTemporaryHydraPair(for: thread.id)
+            onEditTemporaryPair()
+        case .otherFold:
+            showsOtherModels.toggle()
+            searchIsFocused = true
+        case .header, .searchHeader, .section, .empty, .emptyGroup, .noPairsMatch:
+            break
+        }
+    }
+
+    private func requestRightScroll(to id: String, anchor: ScrollAnchor) {
+        scrollNonce &+= 1
+        rightScrollRequest = ScrollRequest(id: id, anchor: anchor, nonce: scrollNonce)
+    }
+
+    private func requestLeftScroll(to id: String, anchor: ScrollAnchor) {
+        scrollNonce &+= 1
+        leftScrollRequest = ScrollRequest(id: id, anchor: anchor, nonce: scrollNonce)
+    }
+
+    // MARK: - Unchanged single-list layout
 
     private func pairRows(pairs: [HydraPair], query: String) -> [DisplayRow] {
         let rows = displayRows(entries: [], searchEntries: [], pairs: pairs, query: "").filter {
@@ -636,7 +1488,7 @@ struct ModelList: View {
                 result.append(row)
             }
         }
-        result.append(.header("Pairs"))
+        result.append(.header("Combos"))
         result.append(contentsOf: rows.filter {
             if case .pair(_, _, true) = $0 { return false }
             return true
@@ -649,7 +1501,7 @@ struct ModelList: View {
             switch $0 {
             case .pair, .newTemporaryPair: return false
             case .header(let title):
-                if title == "Pairs" { return false }
+                if title == "Combos" { return false }
                 let hasRecentModel = !hasHistory && entries.contains {
                     !isLocked($0) && $0.provider == model.settings.lastNewChatModel?.provider
                         && $0.option.id == model.settings.lastNewChatModel?.modelID
@@ -681,20 +1533,7 @@ struct ModelList: View {
 
         var rows: [DisplayRow] = []
         // Recent: the last pair and the last model new chats started on, each when there is one.
-        var recents: [DisplayRow] = []
-        if !hasHistory {
-            if model.hydraIsOn(thread), let stored = model.settings.lastNewChatPair {
-                if let saved = model.settings.hydraPair(stored.id), pairs.contains(where: { $0.id == saved.id }) {
-                    recents.append(.pair(saved, temporary: false, recent: true))
-                } else if model.settings.hydraPair(stored.id) == nil {
-                    recents.append(.pair(stored, temporary: true, recent: true))
-                }
-            }
-            if let pin = model.settings.lastNewChatModel,
-               let entry = selectable.first(where: { $0.provider == pin.provider && $0.option.id == pin.modelID }) {
-                recents.append(.entry(entry, recent: true))
-            }
-        }
+        let recents = recentRows(selectable: selectable, pairs: pairs)
         let recent = recents.first
         if !recents.isEmpty {
             rows.append(.header("Recent"))
@@ -703,7 +1542,7 @@ struct ModelList: View {
         let showsTemporaryRows = !hasHistory && model.hydraIsOn(thread)
         let showsPairs = !pairs.isEmpty || showsTemporaryRows
         if showsPairs {
-            rows.append(.header("Pairs"))
+            rows.append(.header("Combos"))
             if showsTemporaryRows, let pair = model.temporaryHydraPair(for: thread) {
                 rows.append(.pair(pair, temporary: true, recent: false))
             }
@@ -759,22 +1598,36 @@ struct ModelList: View {
         rows.append(contentsOf: entries.map { .entry($0, recent: false) })
     }
 
-    /// The route a row names under its model, when this list also holds the same model of
+    /// The route a row names under its model, when the picker also holds the same model of
     /// that provider on another route.
-    private func routeShown(_ entry: ModelCatalog.Entry, in rows: [DisplayRow]) -> String? {
-        let others = rows.compactMap { row -> ModelOption? in
-            guard case .entry(let other, _) = row, other.provider == entry.provider else { return nil }
-            return other.option
+    private func routeShown(_ entry: ModelCatalog.Entry, in rows: [DisplayRow], allEntries: [ModelCatalog.Entry]) -> String? {
+        var others = allEntries.filter { $0.provider == entry.provider }.map(\.option)
+        for row in rows {
+            if case .entry(let other, _) = row, other.provider == entry.provider,
+               !others.contains(where: { $0.id == other.option.id }) {
+                others.append(other.option)
+            }
         }
         return entry.option.label(among: others) == entry.option.shortName ? nil : entry.option.group
     }
 
-    private func headingRow(_ title: Text, id: String, weight: Font.Weight, style: Font.TextStyle, collapsed: Bool, count: Int?, height: CGFloat, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    private func headingRow(
+        _ title: Text,
+        id: String,
+        weight: Font.Weight,
+        style: Font.TextStyle,
+        collapsed: Bool,
+        count: Int?,
+        height: CGFloat,
+        isHighlighted: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isHovering = hoveredHeading == id
+        return Button(action: action) {
             HStack(spacing: 6) {
                 title
                     .lineLimit(1)
-                DisclosureChevron(collapsed: collapsed, hovering: hoveredHeading == id)
+                DisclosureChevron(collapsed: collapsed, hovering: isHovering)
                 Spacer()
                 if let count { Text(verbatim: "\(count)") }
             }
@@ -784,28 +1637,205 @@ struct ModelList: View {
             .padding(.top, 6)
             .padding(.bottom, 3)
             .frame(height: height)
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isHighlighted ? Chrome.overlay(0.1) : (isHovering ? Chrome.overlay(0.06) : Color.clear))
+            }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .onHover { hoveredHeading = $0 ? id : (hoveredHeading == id ? nil : hoveredHeading) }
         .accessibilityValue(Text(verbatim: Chrome.localized(collapsed ? "Collapsed" : "Expanded")))
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
 
     /// The line under a pair's title: the providers, and the efforts when any is set. The
     /// title names the models, so this never repeats them, unless the user named the pair:
     /// then the title is that name and the models come first here.
     private func detail(for pair: HydraPair, temporary: Bool = false) -> String {
-        let models = pair.customName == nil ? nil : HydraPairSummary.modelsTitle(pair, registry: model.providers)
-        let detail = [models, HydraPairSummary.providers(pair), HydraPairSummary.efforts(pair)].compactMap { $0 }.joined(separator: " · ")
-        return temporary ? detail + " · " + Chrome.localized("Temporary") : detail
+        hydraPairDetail(pair, temporary: temporary, model: model)
     }
 }
 
-private struct NewTemporaryPairListRow: View {
+private struct GroupNavRow: View {
+    let item: ModelList.CategoryItem
+    let isSelected: Bool
+    let isEnabled: Bool
     let rowHeight: CGFloat
     let action: () -> Void
 
     @State private var isHovering = false
+
+    private var fill: Color {
+        if isSelected { return Chrome.overlay(0.12) }
+        if isHovering && isEnabled { return Chrome.overlay(0.06) }
+        return .clear
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+        Button(action: action) {
+            HStack(spacing: 6) {
+                leadingIcon
+                    .frame(width: 15, height: 15, alignment: .center)
+                Text(verbatim: item.title)
+                    .font(.ui(.callout, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(Chrome.primaryText.opacity(isSelected ? 1 : 0.88))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                Text(verbatim: "\(item.count)")
+                    .font(.ui(size: 11).monospacedDigit())
+                    .foregroundStyle(Chrome.secondaryText)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 7)
+            .frame(height: rowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                shape
+                    .fill(fill)
+                    .animation(Chrome.hover, value: isSelected)
+                    .animation(Chrome.hover, value: isHovering)
+            }
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .disabled(!isEnabled)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .help(Text(verbatim: item.title))
+        .accessibilityLabel(Text(verbatim: "\(item.title), \(item.count)"))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    @ViewBuilder
+    private var leadingIcon: some View {
+        switch item.icon {
+        case .all:
+            Image(systemName: "square.grid.2x2")
+                .font(.ui(size: 12, weight: .medium))
+                .foregroundStyle(Chrome.primaryText.opacity(isSelected ? 0.95 : 0.78))
+        case .provider(let provider):
+            ProviderIcon(provider: provider, size: 13)
+                .foregroundStyle(Chrome.primaryText.opacity(isSelected ? 0.95 : 0.8))
+        case .emptyGroup:
+            Image(systemName: "square.stack")
+                .font(.ui(size: 12, weight: .medium))
+                .foregroundStyle(Chrome.secondaryText)
+        case .pair(let lead, let heads):
+            HydraFusedPairIcon(lead: lead, heads: heads, size: 13, animates: false)
+        case .hydra:
+            HydraMarkImage()
+                .foregroundStyle(Chrome.primaryText.opacity(isSelected ? 0.95 : 0.8))
+                .frame(width: 13, height: 13)
+        }
+    }
+}
+
+private struct ModelListKeyMonitor: NSViewRepresentable {
+    var onMoveRow: (Int) -> Void
+    var onMoveGroup: (Int) -> Bool
+    var onSubmit: () -> Bool
+
+    func makeNSView(context: Context) -> ModelListKeyMonitorHost {
+        let view = ModelListKeyMonitorHost()
+        view.onMoveRow = onMoveRow
+        view.onMoveGroup = onMoveGroup
+        view.onSubmit = onSubmit
+        return view
+    }
+
+    func updateNSView(_ nsView: ModelListKeyMonitorHost, context: Context) {
+        nsView.onMoveRow = onMoveRow
+        nsView.onMoveGroup = onMoveGroup
+        nsView.onSubmit = onSubmit
+    }
+}
+
+private final class ModelListKeyMonitorHost: NSView {
+    var onMoveRow: (Int) -> Void = { _ in }
+    var onMoveGroup: (Int) -> Bool = { _ in false }
+    var onSubmit: () -> Bool = { false }
+    private var monitor: Any?
+
+    deinit { MainActor.assumeIsolated { removeMonitor() } }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { removeMonitor() } else { installMonitor() }
+    }
+
+    private func installMonitor() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.handle(event) else { return event }
+            return nil
+        }
+    }
+
+    private func removeMonitor() {
+        guard let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+    }
+
+    private func handle(_ event: NSEvent) -> Bool {
+        guard let window, event.window === window, !isHiddenOrHasHiddenAncestor else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard modifiers.isEmpty else { return false }
+        if let textView = window.firstResponder as? NSTextView, textView.hasMarkedText() {
+            return false
+        }
+        switch event.keyCode {
+        case 126: // Up arrow
+            onMoveRow(-1)
+            return true
+        case 125: // Down arrow
+            onMoveRow(1)
+            return true
+        case 123: // Left arrow
+            if let textView = window.firstResponder as? NSTextView, !textView.string.isEmpty {
+                return false
+            }
+            return onMoveGroup(-1)
+        case 124: // Right arrow
+            if let textView = window.firstResponder as? NSTextView, !textView.string.isEmpty {
+                return false
+            }
+            return onMoveGroup(1)
+        case 36, 76: // Return, keypad Enter
+            return onSubmit()
+        default:
+            return false
+        }
+    }
+}
+
+@MainActor
+private func hydraPairDetail(_ pair: HydraPair, temporary: Bool = false, model: AppModel) -> String {
+    let models = pair.customName == nil ? nil : HydraPairSummary.modelsTitle(pair, registry: model.providers)
+    let detail = [models, HydraPairSummary.providers(pair), HydraPairSummary.efforts(pair)].compactMap { $0 }.joined(separator: " · ")
+    return temporary ? detail + " · " + Chrome.localized("Temporary") : detail
+}
+
+private struct NewTemporaryPairListRow: View {
+    let rowHeight: CGFloat
+    var isHighlighted = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    private var rowFill: Color {
+        if isHighlighted { return Chrome.overlay(0.1) }
+        if isHovering { return Chrome.overlay(0.06) }
+        return .clear
+    }
 
     var body: some View {
         Button(action: action) {
@@ -813,7 +1843,7 @@ private struct NewTemporaryPairListRow: View {
                 Image(systemName: "plus")
                     .font(.ui(.body))
                     .frame(width: 16)
-                Text("New temporary pair")
+                Text("New temporary combo")
                     .font(.ui(size: 13))
                     .lineLimit(1)
                 Spacer(minLength: 12)
@@ -823,7 +1853,7 @@ private struct NewTemporaryPairListRow: View {
             .frame(height: rowHeight)
             .background {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(isHovering ? Chrome.overlay(0.1) : Color.clear)
+                    .fill(rowFill)
             }
             .contentShape(.rect)
         }
@@ -831,6 +1861,7 @@ private struct NewTemporaryPairListRow: View {
         .onHover { hovering in
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
 }
 
@@ -843,10 +1874,17 @@ private struct HydraPairListRow: View {
     let detail: String
     let rowHeight: CGFloat
     let isSelected: Bool
+    var isHighlighted = false
     let isEnabled: Bool
     let action: () -> Void
 
     @State private var isHovering = false
+
+    private var rowFill: Color {
+        if isHighlighted && isEnabled { return Chrome.overlay(0.1) }
+        if isHovering && isEnabled { return Chrome.overlay(0.06) }
+        return .clear
+    }
 
     var body: some View {
         Button(action: action) {
@@ -873,7 +1911,7 @@ private struct HydraPairListRow: View {
             .frame(height: rowHeight)
             .background {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(isHovering && isEnabled ? Chrome.overlay(0.1) : Color.clear)
+                    .fill(rowFill)
             }
             .contentShape(.rect)
         }
@@ -883,6 +1921,7 @@ private struct HydraPairListRow: View {
         .onHover { hovering in
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
 }
 
@@ -892,10 +1931,17 @@ private struct ModelListRow: View {
     let showsIcon: Bool
     let rowHeight: CGFloat
     let isSelected: Bool
+    var isHighlighted = false
     let isEnabled: Bool
     let action: () -> Void
 
     @State private var isHovering = false
+
+    private var rowFill: Color {
+        if isHighlighted && isEnabled { return Chrome.overlay(0.1) }
+        if isHovering && isEnabled { return Chrome.overlay(0.06) }
+        return .clear
+    }
 
     var body: some View {
         Button(action: action) {
@@ -930,7 +1976,7 @@ private struct ModelListRow: View {
             .frame(height: rowHeight)
             .background {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(isHovering && isEnabled ? Chrome.overlay(0.1) : Color.clear)
+                    .fill(rowFill)
             }
             .contentShape(.rect)
         }
@@ -940,6 +1986,7 @@ private struct ModelListRow: View {
         .onHover { hovering in
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
 }
 
@@ -963,10 +2010,10 @@ struct EffortPairLook: Hashable {
         headsEffort = (pair.workerEffort ?? resolvedHeadsEffort).map { Chrome.localizedLowercased(ModelOption.effortTitle($0)) }
     }
 
-    /// Whose effort the slider sets, and what the heads run at.
+    /// Whose effort the slider sets, and what the sub-agents run at.
     var caption: String {
-        if let headsEffort { return String(format: Chrome.localized("The lead's effort · heads run at %@ effort"), headsEffort) }
-        return Chrome.localized("The lead's effort · heads keep their own")
+        if let headsEffort { return String(format: Chrome.localized("The lead's effort · sub-agents run at %@ effort"), headsEffort) }
+        return Chrome.localized("The lead's effort · sub-agents keep their own")
     }
 }
 
@@ -981,8 +2028,9 @@ struct EffortSliderCard: View {
     @Binding var effort: String?
     @Binding var fastMode: Bool
     var dshMode: Binding<DshAgentMode>? = nil
+    var threadID: UUID? = nil
+    var hasHistory = false
     var onTitleTap: (() -> Void)?
-    let onReset: () -> Void
 
     @State private var isTitleHovering = false
 
@@ -1025,12 +2073,11 @@ struct EffortSliderCard: View {
     var body: some View {
         VStack(spacing: 16) {
             ZStack {
-                HStack {
-                    if supportsFast {
+                if supportsFast {
+                    HStack {
                         FastModeButton(isOn: $fastMode)
+                        Spacer()
                     }
-                    Spacer()
-                    RoundIconButton(symbol: "arrow.counterclockwise", help: "Reset to default", action: onReset)
                 }
                 VStack(spacing: 2) {
                     Button {
@@ -1049,6 +2096,9 @@ struct EffortSliderCard: View {
                         .foregroundStyle(titleStyle)
                         .animation(.smooth(duration: 0.3), value: isMaxEffort)
                         .animation(.smooth(duration: 0.3), value: isFast)
+                        // Picking Adaptive swaps the pair's gradient for a flat colour while the
+                        // popover shrinks; unanimated, that swap left the title blank until redrawn.
+                        .animation(.smooth(duration: 0.3), value: pair == nil)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
                         .background {
@@ -1082,8 +2132,9 @@ struct EffortSliderCard: View {
                             .minimumScaleFactor(0.85)
                     }
                 }
-                .padding(.horizontal, 44)
+                .padding(.horizontal, supportsFast ? 38 : 0)
             }
+            .frame(maxWidth: .infinity)
 
             if efforts.isEmpty {
                 Text(verbatim: Chrome.localized(provider == .minimaxCode
@@ -1118,8 +2169,15 @@ struct EffortSliderCard: View {
                 }
             }
 
-            // Whose effort this is, so a pair's slider is never taken for the heads'.
-            if let pair, !efforts.isEmpty {
+            if let threadID {
+                SubagentsCardSection(
+                    threadID: threadID,
+                    hasHistory: hasHistory,
+                    hasLeadEfforts: !efforts.isEmpty,
+                    pairLook: pair
+                )
+            } else if let pair, !efforts.isEmpty {
+                // Whose effort this is, so a pair's slider is never taken for the heads'.
                 Text(verbatim: pair.caption)
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
@@ -1133,6 +2191,410 @@ struct EffortSliderCard: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 16)
+    }
+}
+
+private struct SubagentsCardSection: View {
+    @Environment(AppModel.self) private var model
+    let threadID: UUID
+    let hasHistory: Bool
+    let hasLeadEfforts: Bool
+    let pairLook: EffortPairLook?
+
+    @State private var isComboMenuPresented = false
+    @State private var isIntroShown = false
+
+    /// The combo the combo row offers: the active one, else the thread's temporary pairing,
+    /// the last used, then the best match for the thread's provider and model.
+    private func preferredPair(active: HydraPair?, temporary: HydraPair?, selectable: [HydraPair], thread: ChatThread) -> HydraPair? {
+        if let active { return active }
+        if let temporary { return temporary }
+        if let last = model.settings.hydraPair(model.settings.lastHydraPairID),
+           let match = selectable.first(where: { $0.id == last.id }) { return match }
+        if let match = selectable.first(where: { $0.provider == thread.provider && $0.orchestratorModel == thread.model }) { return match }
+        if let match = selectable.first(where: { $0.provider == thread.provider && $0.orchestratorModel == nil }) { return match }
+        if let match = selectable.first(where: { $0.provider == thread.provider }) { return match }
+        return selectable.first
+    }
+
+    var body: some View {
+        if let thread = model.thread(threadID), !thread.isHelper {
+            let isHydra = model.hydraModeIsOn(thread)
+            let isChimera = model.chimeraIsOn(thread)
+            let isSubagentsOn = isHydra || isChimera
+            let activePair = isHydra ? model.hydraPair(for: thread) : nil
+            let canSwitchChimera = model.canSwitchChimeraMode(thread.id)
+            let chimeraAvailable = model.chimeraAvailable(thread)
+            // With the team switch off, Chimera can still be chosen here when it is available.
+            let globallyOff = !model.settings.hydraEnabled && !isChimera && !chimeraAvailable
+            let lockedInChimera = isChimera && !canSwitchChimera
+            let savedPairs = model.hydraPickerPairs
+            let switchBlocker = model.existingRuntime(for: thread.id)?.providerSwitchBlocker
+            let selectablePairs = savedPairs.filter { !(hasHistory && $0.provider != thread.provider && switchBlocker != nil) }
+            let temporaryPair = thread.temporaryHydraPair
+            let hasAnyCombo = !savedPairs.isEmpty || temporaryPair != nil
+            let canSelectComboRow = (!selectablePairs.isEmpty || temporaryPair != nil) && !lockedInChimera
+            let preferredPair = preferredPair(active: activePair, temporary: temporaryPair, selectable: selectablePairs, thread: thread)
+
+            VStack(alignment: .leading, spacing: 10) {
+                PopoverDivider()
+                    .padding(.horizontal, -6)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 6) {
+                        Text("Sub-agents")
+                            .font(.ui(.callout, weight: .semibold))
+                            .foregroundStyle(Chrome.primaryText)
+                        if model.settings.hydraEnabled && model.settings.hydraDefaultEnabled {
+                            Text("on by default")
+                                .font(.ui(.subheadline))
+                                .foregroundStyle(Chrome.secondaryText)
+                        }
+                        Spacer(minLength: 8)
+                        SettingsSwitch(isOn: Binding(
+                            get: { isSubagentsOn },
+                            set: { on in
+                                if on {
+                                    if model.settings.hydraEnabled {
+                                        model.setHydra(true, for: thread.id)
+                                        presentIntroIfNeeded()
+                                    } else if chimeraAvailable {
+                                        model.setChimera(true, for: thread.id)
+                                    }
+                                } else {
+                                    guard !lockedInChimera else { return }
+                                    model.setChimera(false, for: thread.id)
+                                    model.setHydra(false, for: thread.id)
+                                }
+                            }
+                        ))
+                        .disabled(globallyOff || lockedInChimera)
+                        .accessibilityLabel(Text("Sub-agents"))
+                    }
+                    .popover(isPresented: $isIntroShown, arrowEdge: .bottom) {
+                        HydraIntroPopover {
+                            model.settings.hasSeenHydraIntro = true
+                            isIntroShown = false
+                        }
+                        .interactiveDismissDisabled()
+                    }
+
+                    if globallyOff {
+                        Text("Turn on sub-agents in Settings › Sub-agent control.")
+                            .font(.ui(.subheadline))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if isSubagentsOn {
+                        VStack(spacing: 6) {
+                            SubagentModeRow(
+                                title: "Same-model sub-agents",
+                                detail: Chrome.localized("This model splits the work and hands parts to sub-agents running the same model."),
+                                isSelected: isHydra && activePair == nil,
+                                isEnabled: !lockedInChimera,
+                                action: { selectCurrentModelHydra(thread) }
+                            ) {
+                                HydraMarkImage()
+                                    .foregroundStyle(Chrome.primaryText.opacity(0.85))
+                                    .frame(width: 12, height: 12)
+                            } trailing: {
+                                EmptyView()
+                            }
+
+                            let comboDetail: String = if !hasAnyCombo {
+                                Chrome.localized("Set up combos in Settings › Sub-agent control.")
+                            } else if selectablePairs.isEmpty && temporaryPair == nil, let switchBlocker {
+                                switchBlocker
+                            } else {
+                                Chrome.localized("A saved lead and sub-agent combo; sub-agents run the combo's models.")
+                            }
+
+                            SubagentModeRow(
+                                title: "Preset sub-agents",
+                                detail: comboDetail,
+                                isSelected: isHydra && activePair != nil,
+                                isEnabled: canSelectComboRow,
+                                action: {
+                                    if activePair != nil {
+                                        if savedPairs.count + (temporaryPair == nil ? 0 : 1) > 1 {
+                                            isComboMenuPresented.toggle()
+                                        }
+                                    } else if let temporaryPair {
+                                        selectCombo(temporaryPair, for: thread, temporary: true)
+                                    } else if let preferredPair {
+                                        selectCombo(preferredPair, for: thread)
+                                    }
+                                }
+                            ) {
+                                HydraMarkImage()
+                                    .foregroundStyle(Chrome.primaryText.opacity(0.85))
+                                    .frame(width: 12, height: 12)
+                            } trailing: {
+                                if hasAnyCombo {
+                                    comboMenuButton(
+                                        thread: thread,
+                                        activePair: activePair,
+                                        preferredPair: preferredPair,
+                                        temporaryPair: temporaryPair,
+                                        savedPairs: savedPairs,
+                                        switchBlocker: switchBlocker,
+                                        isEnabled: canSelectComboRow
+                                    )
+                                }
+                            }
+
+                            let chimeraDetail: String = if !chimeraAvailable {
+                                Chrome.localized("Turn on adaptive sub-agents in Settings › Sub-agent control.")
+                            } else if !canSwitchChimera {
+                                Chrome.localized("Switch when no sub-agents are at work.")
+                            } else {
+                                Chrome.localized("The lead splits the work into roles and matches each to a model across providers.")
+                            }
+
+                            SubagentModeRow(
+                                title: "Adaptive sub-agents",
+                                detail: chimeraDetail,
+                                isSelected: isChimera,
+                                isEnabled: chimeraAvailable && canSwitchChimera,
+                                dimsWhenDisabled: !isChimera,
+                                action: {
+                                    guard chimeraAvailable, canSwitchChimera else { return }
+                                    model.setChimera(true, for: thread.id)
+                                }
+                            ) {
+                                ChimeraMarkImage()
+                                    .foregroundStyle(Chrome.primaryText.opacity(0.85))
+                                    .frame(width: 14, height: 12)
+                            } trailing: {
+                                EmptyView()
+                            }
+                        }
+
+                        if let effortCaption = subagentEffortCaption(for: thread, isHydra: isHydra) {
+                            Text(verbatim: effortCaption)
+                                .font(.ui(.subheadline))
+                                .foregroundStyle(Chrome.secondaryText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .minimumScaleFactor(0.9)
+                        }
+                    }
+                }
+                .opacity(globallyOff ? 0.55 : 1)
+            }
+            .task {
+                for provider in Set(savedPairs.flatMap { [$0.provider, $0.headsProvider] }) where provider != thread.provider {
+                    await model.providers.loadCatalog(provider)
+                }
+            }
+        }
+    }
+
+    private func presentIntroIfNeeded() {
+        if !model.settings.hasSeenHydraIntro {
+            isIntroShown = true
+        }
+    }
+
+    private func selectCurrentModelHydra(_ thread: ChatThread) {
+        let savedModel = thread.model
+        let savedEffort = thread.effort
+        if model.chimeraIsOn(thread) {
+            guard model.canSwitchChimeraMode(thread.id) else { return }
+            model.settings.hydraEnabled = true
+        }
+        model.setChimera(false, for: thread.id)
+        model.setHydra(true, for: thread.id)
+        model.leaveHydraPair(for: thread.id)
+        if let refreshed = model.thread(thread.id), refreshed.model != savedModel || refreshed.effort != savedEffort {
+            model.updateThread(thread.id) {
+                $0.model = savedModel
+                $0.effort = savedEffort
+            }
+        }
+        if !hasHistory, let savedModel {
+            model.settings.noteNewChatChoice(.model(ModelPin(provider: thread.provider, modelID: savedModel)))
+        }
+        presentIntroIfNeeded()
+    }
+
+    private func selectCombo(_ pair: HydraPair, for thread: ChatThread, temporary: Bool = false) {
+        if model.chimeraIsOn(thread) {
+            guard model.canSwitchChimeraMode(thread.id) else { return }
+            model.settings.hydraEnabled = true
+        }
+        if !hasHistory {
+            model.settings.noteNewChatChoice(.pair(pair))
+        }
+        model.enterHydraPair(pair, for: thread.id, temporary: temporary)
+        isComboMenuPresented = false
+        presentIntroIfNeeded()
+    }
+
+    private func subagentEffortCaption(for thread: ChatThread, isHydra: Bool) -> String? {
+        guard isHydra, hasLeadEfforts else { return nil }
+        if let pairLook { return pairLook.caption }
+        if let workerEffort = model.hydraLaunch(for: thread)?.workerEffort {
+            return String(format: Chrome.localized("The lead's effort · sub-agents run at %@ effort"), Chrome.localizedLowercased(ModelOption.effortTitle(workerEffort)))
+        }
+        return Chrome.localized("The lead's effort · sub-agents keep their own")
+    }
+
+    @ViewBuilder
+    private func comboMenuButton(
+        thread: ChatThread,
+        activePair: HydraPair?,
+        preferredPair: HydraPair?,
+        temporaryPair: HydraPair?,
+        savedPairs: [HydraPair],
+        switchBlocker: String?,
+        isEnabled: Bool
+    ) -> some View {
+        let displayedPair = activePair ?? preferredPair ?? savedPairs.first
+        let buttonTitle = displayedPair.map { HydraPairSummary.title($0, registry: model.providers) } ?? Chrome.localized("Preset")
+        Button {
+            isComboMenuPresented.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                if let displayedPair {
+                    HydraFusedPairIcon(lead: displayedPair.provider, heads: model.hydraHeadsProvider(of: displayedPair), size: 12, animates: false)
+                        .id(displayedPair.id)
+                }
+                Text(verbatim: buttonTitle)
+                    .font(.ui(.subheadline, weight: .medium))
+                    .foregroundStyle(Chrome.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.down")
+                    .font(Chrome.chevronFont)
+                    .foregroundStyle(Chrome.secondaryText)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(isComboMenuPresented ? Chrome.accent.opacity(0.18) : Chrome.overlay(0.08))
+            }
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .frame(maxWidth: 120, alignment: .trailing)
+        .help(Text(verbatim: buttonTitle))
+        .popover(isPresented: $isComboMenuPresented, arrowEdge: .bottom) {
+            PopoverMenu(scrolls: savedPairs.count > 7) {
+                PopoverSectionHeader("Combos")
+                if let temporaryPair {
+                    HydraPairListRow(
+                        pair: temporaryPair,
+                        title: HydraPairSummary.title(temporaryPair, registry: model.providers),
+                        detail: hydraPairDetail(temporaryPair, temporary: true, model: model),
+                        rowHeight: 42,
+                        isSelected: activePair?.id == temporaryPair.id,
+                        isEnabled: true
+                    ) {
+                        selectCombo(temporaryPair, for: thread, temporary: true)
+                    }
+                }
+                ForEach(savedPairs) { pair in
+                    let locked = hasHistory && pair.provider != thread.provider && switchBlocker != nil
+                    HydraPairListRow(
+                        pair: pair,
+                        title: HydraPairSummary.title(pair, registry: model.providers),
+                        detail: locked ? (switchBlocker ?? "") : hydraPairDetail(pair, model: model),
+                        rowHeight: 42,
+                        isSelected: activePair?.id == pair.id && temporaryPair?.id != pair.id,
+                        isEnabled: !locked
+                    ) {
+                        selectCombo(pair, for: thread)
+                    }
+                    .help(locked ? (switchBlocker ?? "") : "")
+                }
+            }
+            .frame(width: 280)
+        }
+    }
+}
+
+private struct SubagentModeRow<Leading: View, Trailing: View>: View {
+    let title: String
+    let detail: String
+    let isSelected: Bool
+    let isEnabled: Bool
+    var dimsWhenDisabled = true
+    let action: () -> Void
+    @ViewBuilder let leading: () -> Leading
+    @ViewBuilder let trailing: () -> Trailing
+
+    @State private var isHovering = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Button(action: action) {
+                    HStack(spacing: 8) {
+                        ZStack {
+                            Circle()
+                                .strokeBorder(isSelected ? Chrome.accent : Chrome.overlay(0.32), lineWidth: 1.5)
+                                .frame(width: 14, height: 14)
+                            if isSelected {
+                                Circle()
+                                    .fill(Chrome.accent)
+                                    .frame(width: 7, height: 7)
+                            }
+                        }
+                        HStack(spacing: 5) {
+                            leading()
+                            Text(verbatim: Chrome.localized(title))
+                                .font(.ui(.callout, weight: .medium))
+                                .foregroundStyle(Chrome.primaryText)
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(!isEnabled)
+
+                trailing()
+            }
+
+            Button(action: action) {
+                Text(verbatim: detail)
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 22)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .disabled(!isEnabled)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(isSelected ? Chrome.accent.opacity(0.14) : Chrome.overlay(isHovering && isEnabled ? 0.08 : 0.04))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(isSelected ? Chrome.accent.opacity(0.45) : Chrome.overlay(0.08), lineWidth: 1)
+        }
+        .opacity(!isEnabled && dimsWhenDisabled ? 0.45 : 1)
+        // The whole highlighted card selects, not just the title and detail
+        // buttons: clicks in its padding and row gaps used to do nothing.
+        .contentShape(.rect(cornerRadius: 9))
+        .onTapGesture {
+            if isEnabled { action() }
+        }
+        .onHover { hovering in
+            withAnimation(Chrome.hover) { isHovering = hovering }
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -1162,31 +2624,6 @@ private struct FastModeButton: View {
     }
 }
 
-private struct RoundIconButton: View {
-    let symbol: String
-    let help: String
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.ui(.body, weight: .medium))
-                .foregroundStyle(Chrome.secondaryText)
-                .frame(width: 30, height: 30)
-                .background { Circle().fill(isHovering ? Chrome.overlay(0.1) : Color.clear) }
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(Chrome.hover) { isHovering = hovering }
-        }
-        .help(Text(verbatim: Chrome.localized(help)))
-        .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
-    }
-}
-
 /// A thick capsule track with a dot per level, filled up to a large glass knob that snaps to each level.
 struct EffortSlider: View {
     static let trackHeight: CGFloat = 34
@@ -1205,7 +2642,7 @@ struct EffortSlider: View {
     let accessibilityTitle: String
 
     @State private var dragX: CGFloat?
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
 
     private var look: TrackLook {
         let isMax = count > 1 && index == count - 1
@@ -1239,7 +2676,7 @@ struct EffortSlider: View {
                     .fill(look.fill)
                     .frame(width: x + inset, height: Self.trackHeight)
                     .overlay(alignment: .leading) {
-                        if !performanceMode && (look.kind != .plain || look.pair != nil) {
+                        if look.kind != .plain || look.pair != nil {
                             TrackEffect(look: look)
                                 .frame(width: x + inset, height: Self.trackHeight)
                                 .clipShape(Capsule(style: .continuous))
@@ -1260,25 +2697,21 @@ struct EffortSlider: View {
                 // disc beneath the lens rather than a shadow on it, because a shadow that
                 // changes colour and radius on glass makes the lens flash as the look changes.
                 ZStack {
-                    if !performanceMode {
+                    Circle()
+                        .fill(look.glow)
+                        .blur(radius: look.kind == .plain ? 4 : 8)
+                        .offset(y: 1)
+                    if let solid {
                         Circle()
-                            .fill(look.glow)
-                            .blur(radius: look.kind == .plain ? 4 : 8)
-                            .offset(y: 1)
-                    }
-                    if !performanceMode {
+                            .fill(solid.elevated)
+                            .overlay { Circle().strokeBorder(solid.hairlineStrong, lineWidth: 1) }
+                    } else {
                         Circle()
                             .fill(.clear)
-                            .glassEffect(.regular.tint(Color.white.opacity(look.isLightFill ? 0.55 : 0.32)).interactive(), in: Circle())
+                            .chromeGlassEffect(.regular.tint(Color.white.opacity(look.isLightFill ? 0.55 : 0.32)).interactive(), in: Circle())
                             // On a white fill the lens needs an edge to read against it.
                             .overlay {
                                 Circle().strokeBorder(Color.black.opacity(look.isLightFill ? 0.14 : 0), lineWidth: 1)
-                            }
-                    } else {
-                        Circle()
-                            .fill(Color(nsColor: .controlColor))
-                            .overlay {
-                                Circle().strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
                             }
                     }
                 }
@@ -1530,42 +2963,37 @@ struct TrackLook: Hashable {
 struct TrackEffect: View {
     let look: TrackLook
     @Environment(\.chatColumnIsShown) private var columnIsShown
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var startedAt = Date.now
     @State private var traits = TraitCache()
 
     var body: some View {
-        if performanceMode {
-            EmptyView()
-        } else {
-            let kind = look.kind
-            let spark = look.spark
-            let pair = look.pair
-            let paused = reduceMotion || !FrontMonitor.shared.isVisible || !columnIsShown
-            TimelineView(.animation(minimumInterval: 1.0 / (kind == .supercharged && pair == nil ? 30 : 60), paused: paused)) { timeline in
-                let time = timeline.date.timeIntervalSince(startedAt)
-                Canvas { context, size in
-                    guard size.width > 8 else { return }
-                    if let pair {
-                        Self.drawFusion(context, size: size, time: time, lead: look.brand.fillColor, heads: pair.colors)
-                    }
-                    let traits = traits.traits(width: Double(size.width))
-                    if kind == .supercharged || kind == .fusion {
-                        Self.drawParticles(context, size: size, time: time, color: spark, particles: traits.particles)
-                    }
-                    if kind == .fast || kind == .fusion {
-                        Self.drawStreaks(context, size: size, time: time, streaks: traits.streaks)
-                        Self.drawBolts(context, size: size, time: time)
-                    }
-                    if kind == .fusion {
-                        Self.drawSheen(context, size: size, time: time, color: spark)
-                    }
+        let kind = look.kind
+        let spark = look.spark
+        let pair = look.pair
+        let paused = reduceMotion || !FrontMonitor.shared.isVisible || !columnIsShown
+        TimelineView(.animation(minimumInterval: 1.0 / (kind == .supercharged && pair == nil ? 30 : 60), paused: paused)) { timeline in
+            let time = timeline.date.timeIntervalSince(startedAt)
+            Canvas { context, size in
+                guard size.width > 8 else { return }
+                if let pair {
+                    Self.drawFusion(context, size: size, time: time, lead: look.brand.fillColor, heads: pair.colors)
+                }
+                let traits = traits.traits(width: Double(size.width))
+                if kind == .supercharged || kind == .fusion {
+                    Self.drawParticles(context, size: size, time: time, color: spark, particles: traits.particles)
+                }
+                if kind == .fast || kind == .fusion {
+                    Self.drawStreaks(context, size: size, time: time, streaks: traits.streaks)
+                    Self.drawBolts(context, size: size, time: time)
+                }
+                if kind == .fusion {
+                    Self.drawSheen(context, size: size, time: time, color: spark)
                 }
             }
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
         }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     struct Particle: Equatable {

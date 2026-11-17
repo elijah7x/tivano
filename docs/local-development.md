@@ -36,10 +36,6 @@ If macOS asks whether `codesign` may use the signing private key, authorize
 that tool using Keychain's “Always Allow” option. Do not enable access for all
 applications. A locked Keychain can still require its password.
 
-`scripts/setup_local_signing.sh` is a legacy local-certificate utility; it is
-not used by the current packaging workflow. Existing local certificates are
-left in Keychain for older builds.
-
 ## Build without launching
 
 ```bash

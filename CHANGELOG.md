@@ -2,11 +2,171 @@
 
 All notable changes to Tivano are documented here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are the release tags without the `v`. The dated entries below are inherited from Droppy Code and kept as written.
 
-`scripts/publish_release.sh` reads the section whose heading matches the version in `config/release.xcconfig` (for example `## [1.5.4] - 2026-09-17`) and publishes it as the GitHub release notes, which Settings › About shows as its New features / Bug fixes / Refinements cards. Work that has merged but not shipped sits under `## [Unreleased]`, which publishing skips; the next release renames that heading to its version and date. A `### Thanks` heading under a version names every outside contributor whose pull request shipped in it, in the form `- Name (@github-handle): what they did (#PR).`; `python3 scripts/release_credits.py` prints the block for the changes since the previous tag, and publishing stops until every contributor is named.
+`scripts/publish_release.sh` reads the section whose heading matches the version in `config/release.xcconfig` (for example `## [1.5.4] - 2026-09-17`) and publishes it as the GitHub release notes, which Settings › Version shows as its New / Bugs / Refinements cards (opening New features / Bug fixes / Refinements popovers). Work that has merged but not shipped sits under `## [Unreleased]`, which publishing skips; the next release renames that heading to its version and date. A `### Thanks` heading under a version names every outside contributor whose pull request shipped in it, in the form `- Name (@github-handle): what they did (#PR).`; `python3 scripts/release_credits.py` prints the block for the changes since the previous tag, and publishing stops until every contributor is named.
 
-New entries use `### English` and `### 简体中文` sections, each with the existing third-level category headings: New features / Bug fixes / Refinements in English, 新功能 / 问题修复 / 优化改进 in Chinese. About selects the app's active language; a missing Chinese section, or one containing only whitespace and category headings, falls back to English. A single shared `### Thanks` section follows both languages.
+New entries use `### English` and `### 简体中文` sections, each with the existing third-level category headings: New features / Bug fixes / Refinements in English, 新功能 / 问题修复 / 优化改进 in Chinese. Settings › Version selects the app's active language; a missing Chinese section, or one containing only whitespace and category headings, falls back to English. A single shared `### Thanks` section follows both languages.
 
 ## [Unreleased]
+
+## [3.0.0-preview.32] - 2026-11-17
+
+### English
+
+### Refinements
+
+- Tables in replies wrap long cells to fit the chat width instead of stretching sideways, so narrow chats (for example beside Hydra cards) need far less horizontal scrolling; only a table with too many columns to fit still scrolls.
+- Less overhead in everyday work: DeepSeek, Meta and Z.ai replies and remote MCP responses are read in chunks instead of byte by byte, the Hydra recovery check no longer opens chats whose work is all merged, reverting a turn looks up only its own files instead of listing the whole repository, a chat's activity no longer rebuilds the whole library index, and agent CLIs are asked for their version and model list once instead of twice at launch.
+- Tivano does less work in the background: animations, timers and glass effects pause while the app is inactive, minimized or out of view, and resume where they were when you come back. Streaming replies add only the new text to the paragraph being written, the timeline outline finds your place without rescanning, and the snapshot taken after each command reuses the file changes macOS already reports.
+- With the old Performance Mode retired, the sidebar magnifier and the shadow under the settings icon rail now work for everyone who had it turned on.
+- Hydra's independent review gives fewer false alarms: the reviewer may now read the project's code to check callers and declarations, and it no longer flags work as missing or unverified just because it cannot see the lead's replies, builds or files outside Git. Review statistics count findings and accepted fixes more accurately.
+- The app icon is refined for Liquid Glass and Creation: the Liquid Glass icon's sky is a clearer blue at the top so the doll's head stands apart from it, and a stray ink line at the hem of the Creation icon is gone.
+- Settings › Connections is far more compact: connected servers stay on top, and every other server appears as a small chip you can filter by category. Click a chip to see what it does and connect; tool names stay hidden until you ask for them, and adding a custom server is the last chip.
+- The Concise AI replies setting is gone. Tivano no longer adds its own reply-style guidance to Claude Code, Codex, Copilot, OMP and other agents, which manage that themselves; the guidance is now a fixed part of Tivano's own harness for DeepSeek, Meta and Z.ai.
+- The default model for new chats in Settings › Conversation, and the model picker in Quick Chat, can now pick a sub-agent preset, so new chats start with that preset's lead model and sub-agents. If the preset is deleted, new chats go back to Last selection; if its provider is unavailable, they use Last selection until it is back.
+- Codex background work uses far less network data: thread titles, prompt predictions, commit messages, Hydra reviews, and model, usage and reset-credit checks start Codex without plugins, apps or telemetry, so each run downloads under 1 MB instead of 35–65 MB of plugin catalog, and finishes faster. Regular Codex chats keep your plugins.
+- Settings › Storage is reorganized around what you come there to do: one total with a single Free up button for files that come back on their own (old diagnostic reports, obsolete updates, and dependencies and build output in idle worktrees), a search box with your latest archived chats, and a worktree summary with a button that opens a new chat prefilled with a review prompt and a list of your worktrees, so an agent can suggest which are safe to delete. It is not sent until you send it. The full archive, the per-worktree list and the diagnostics controls are one click away, and the page no longer slows down while other chats are working.
+- Archiving a chat feels instant: its row leaves the sidebar right away, and the next chat opens just after instead of holding the sidebar back while it loads. A chat with many sub-agents archives with them in one step.
+
+### Bug fixes
+
+- In Today's focus, thread titles show more before truncating: the row now reserves only the width its project or task tag actually takes, not a fixed maximum.
+- The model and effort popover above the composer no longer slides sideways when you pick another sub-agent preset, and the preset name in the chip no longer briefly shrinks to an ellipsis.
+- The mouse pointer no longer gets stuck as the text cursor across the whole window, including the sidebar and toolbar, after passing over a link in a message.
+- Sub-agent mode cards in the model and effort popover select on a click anywhere in the card, including its edges, instead of only on the title and description text.
+- A finished reply no longer sometimes stays hidden under the turn's Worked for summary until you switch to another chat and back.
+- A Codex chat that had sub-agents turned off no longer keeps following the earlier sub-agent instructions after it is resumed.
+
+### 简体中文
+
+### 优化改进
+
+- 回复中的表格会按对话宽度自动换行，不再整体横向撑开；对话变窄时（例如旁边有 Hydra 卡片）基本不用左右滚动，只有列数多到放不下的表格才保留横向滚动。
+- 日常开销更低：DeepSeek、Meta 和 Z.ai 的回复以及远程 MCP 响应改为成块读取，不再逐字节处理；Hydra 恢复检查不再打开工作已全部合并的对话；撤销一轮时只查这一轮涉及的文件，不再列出整个仓库；对话有活动时不再重建整个库的索引；启动时向各 agent CLI 查询版本和模型列表各只查一次，不再两次。
+- Tivano 在后台做的事更少：应用未激活、最小化或界面不可见时，动画、计时器和玻璃效果会暂停，回来后从原处继续。流式回复只往正在写的段落追加新文字，时间线大纲不再每次重新扫描就能定位，每条命令结束后的快照直接复用 macOS 已报告的文件变化。
+- 旧的性能模式已退役，之前开过它的用户现在也能用侧栏放大效果，设置图标栏下的阴影也恢复了。
+- Hydra 独立审查误报更少：审查者现在可以只读查看项目代码，核对调用方和声明；也不会再因为看不到主智能体的回复、构建或 Git 之外的文件，就把工作报成缺失或未验证。审查统计对问题数和采纳数的计数更准确。
+- 应用图标细修：液态玻璃图标顶部改为更清澈的晴空蓝，娃娃的头不再和背景融在一起；创作图标去掉了裙摆下沿多出的一笔墨线。
+- 设置 › 连接页面大幅精简：已连接的服务保留在顶部，其余服务改为可按分类筛选的小标签，点开即可查看说明并连接；工具名默认隐藏，需要时再展开，添加自定义服务器也收进最后一个标签。
+- 移除「简洁 AI 回复」设置。Tivano 不再向 Claude Code、Codex、Copilot、OMP 等自带管理的 Agent 额外注入回复风格指引；这套指引改为 Tivano 自有 harness（DeepSeek、Meta、Z.ai）的固定部分。
+- 设置 › 对话中的新对话默认模型，以及 Quick Chat 的模型选择，现在都可以选子代理预设，新对话直接以该预设的主模型和子代理开始。预设被删除后改回「上一次选择」；预设的 provider 不可用时暂时使用「上一次选择」，恢复后自动生效。
+- Codex 后台任务大幅节省网络流量：生成对话标题、预测下一句、写提交信息、Hydra 审查，以及读取模型、用量和重置额度时，启动 Codex 不再加载插件、apps 和遥测，单次下载从 35–65 MB 的插件目录降到 1 MB 以内，也更快完成。正常的 Codex 对话仍保留你的插件。
+- 设置 › 存储按用途重新组织：顶部是总占用和一个「释放空间」按钮，只清理会自动重新生成的文件（旧诊断报告、过期更新包、闲置工作树里的依赖和构建产物）；中间是搜索框和最近归档的对话；工作树部分给出概况，并可一键新建一个预填好整理 prompt 和工作树清单的对话，让 AI 建议哪些可以安全删除，由你决定是否发送。完整归档列表、逐个工作树和诊断文件管理都收在下一层，其他对话运行时页面也不再卡顿。
+- 归档对话更跟手：对话行立即从侧栏移走，下一个对话随后再打开，不再等它加载完侧栏才动。带多个子代理的对话会连同子代理一次归档。
+
+### 问题修复
+
+- 今日聚焦中的对话标题能显示更多内容：行尾只按项目或任务标签的实际宽度留位，不再固定预留最大宽度。
+- 切换子代理预设时，输入框上方的模型与强度面板不再左右跳动，胶囊里的预设名也不再短暂缩成省略号。
+- 鼠标经过消息里的链接后，指针不再卡在文字输入的竖杠形态，在侧栏和工具栏也能正常恢复。
+- 模型与强度面板里的子代理模式卡片，点卡片任意位置（包括边缘）都能选中，不再只有标题和说明文字可点。
+- 一轮结束后的回复不会再偶尔不显示，只剩「已工作」摘要、要切到别的对话再切回来才看得到。
+- Codex 对话关闭子代理后再恢复，不会再沿用之前的子代理指令。
+
+## [3.0.0-preview.10] - 2026-11-16
+
+### English
+
+### New features
+
+- Tivano runs on macOS 15 Sequoia again. Below macOS 26 it uses the Texture theme, drawn without Liquid Glass, and Liquid Glass is unavailable in Settings › Appearance with a note that it needs macOS 26 or later; Creation works on both. On macOS 26 nothing changes.
+
+### Bug fixes
+
+- On a first launch with no earlier version recorded, What's new no longer labels an older version's notes as the current version's.
+
+### 简体中文
+
+### 新功能
+
+- Tivano 重新支持 macOS 15 Sequoia。低于 macOS 26 时使用不依赖液态玻璃绘制的质感主题，「设置 › 外观」中的液态玻璃不可选，并提示需要 macOS 26 或更高版本；创作主题在两种系统上都可用。macOS 26 上没有变化。
+
+### 问题修复
+
+- 首次启动且没有记录过旧版本时，「新功能」不再把较早版本的说明标成当前版本。
+
+## [3.0.0-preview.8] - 2026-11-16
+
+### English
+
+### New features
+
+- After Tivano updates, including a silent automatic update, Settings › Version shows a one-time Updated to banner; View or close it and the Version information card keeps a What's new row that expands into the new features, fixes and refinements of every version since the last one you ran.
+
+### Bug fixes
+
+- The effort name above the slider (for example Medium) no longer disappears after switching a new chat from Preset sub-agents to Adaptive sub-agents.
+- Scrolling up through a long chat with the trackpad no longer jumps while earlier messages load: the loaded page is compensated in the same layout pass, so the reading place stays under your fingers.
+
+### Refinements
+
+- Switching into or out of the Creation theme no longer freezes the window: the hitch drops from about half a second to about a tenth with several chats open, and the Dock icon follows a moment later instead of holding up the switch.
+- A message's right-click menu now has one copy item: Copy copies the selected text, and when nothing is selected it reads Copy all and copies the whole message as Markdown. Copy message as markdown and Copy last code block are gone; code blocks keep their own copy button.
+- Settings pages no longer show a search field in the top-right corner.
+- The chat header's More controls (…) stay open or closed across chats: expanding them in one chat keeps them expanded when you switch, and collapsing them collapses them everywhere.
+- Settings › Conversation has the Concise AI replies switch again, and a choice to turn it off made before 3.0 is kept.
+
+### 简体中文
+
+### 新功能
+
+- Tivano 更新后（包括静默自动更新），「设置 › 版本」会显示一次「已更新到」横幅；点「查看」或关闭后，「版本信息」卡片保留一行「更新内容」，展开即可看到自上次运行的版本以来的新功能、问题修复和优化改进。
+
+### 问题修复
+
+- 新对话从「预设子代理」切换到「自适应子代理」后，滑块上方的强度名称（如「中」）不再消失。
+- 用触控板在长对话中往上滑动时，加载更早的消息不再让页面跳动：新加载的内容在同一次布局中完成补偿，阅读位置跟手不变。
+
+### 优化改进
+
+- 切换到「创作」主题或从它切回时窗口不再卡住：开着多个对话时，卡顿从约半秒降到约十分之一秒；程序坞图标稍后跟着更新，不再拖慢切换。
+- 消息右键菜单只保留一个复制项：选中内容时为「复制」，只复制选中部分；未选中时为「复制全文」，以 Markdown 复制整条消息。移除「以 Markdown 复制消息」和「复制最后一个代码块」，代码块自带的复制按钮保留。
+- 设置各页面右上角不再显示搜索框。
+- 对话顶部的「更多控制」（…）展开状态在各对话间保持一致：在一个对话里展开后切换对话仍保持展开，收起则全部收起。
+- 「设置 › 对话」重新提供「简洁的 AI 回复」开关，在 3.0 之前关闭该选项的设置也会保留。
+
+## [3.0.0-preview.1] - 2026-11-16
+
+### English
+
+### New features
+
+- A new Creation theme (Settings › Appearance): solid near-white surfaces instead of Liquid Glass, New York and Songti SC serif type, and hand-drawn icons. Entering it selects Coral Red, which you can change; Transparency lets the desktop through a little or deepens the page tone. Coral Red is retuned closer to Claude's coral, slightly softer.
+- Tokens now reads usage from Token Taken, a companion app, instead of TokenTracker. Settings › Connections detects Token Taken and opens it; without it installed, token usage is unavailable. Previously saved TokenTracker usage is no longer shown.
+- Settings › Conversation › Workspace adds Auto (now the default): new chats edit your project folder directly when it is idle, and create an isolated Git worktree on first send when another chat is already active in that repository.
+- Settings › Appearance › App language adds Traditional Chinese, Japanese, Korean and French.
+- Settings › Appearance adds App icon: Match Theme (default) switches the Dock icon with the theme — a new Liquid Glass icon, the current green Texture icon, or a new engraved Creation icon — or pin any one of them.
+
+### Bug fixes
+
+- A new chat's first message appears as soon as it is sent instead of seconds later while many chats are busy: the bubble no longer waits for the library save, which takes it back and returns the text to the composer if the save fails, and a just-created chat no longer reads history it cannot have.
+
+### Refinements
+
+- Settings › Sub-agent control renames the two sub-agent panel rows to Floating panel content (Progress bar / Live steps) and Floating panel layout (Single panel / One per sub-agent), with live descriptions explaining what each option changes in the floating panel over the chat and that chat messages and the sidebar stay unchanged.
+- Aligns UI wording and localizations across Settings, chat, revert prompts, voice and provider/MCP error messages with current settings pages and runtime behavior.
+- Weather window in the Liquid Glass theme (Settings › Appearance) is redesigned: it shows subtle behind-the-glass wind when a chat waits for an answer or approval, warm sunlight on completion, and fine rain with ground ripples on failure, staying completely idle while agents are working.
+- Chat messages have slightly more room between turns, lines and paragraphs, with aligned list markers, balanced nested-list and heading spacing, clearer quote bars, table dividers and code line spacing that scale cleanly across font sizes.
+
+### 简体中文
+
+### 新功能
+
+- 新增「创作」主题（「设置 › 外观」）：以近白的实色表面取代液态玻璃，使用 New York 与宋体衬线字体和手绘风格图标。每次进入会切换为珊瑚红，可自行更换；透明度可稍稍透出桌面，或让页面色调更沉。珊瑚红调整为更接近 Claude 的珊瑚色，略微柔和。
+- Token 用量改为读取配套应用 Token Taken 的数据，不再使用 TokenTracker。「设置 › 连接」会检测并可直接打开 Token Taken；未安装时该功能不可用。此前保存的 TokenTracker 用量数据不再显示。
+- 「设置 › 对话 › 工作区」新增「自动」选项并设为默认：项目目录空闲时直接就地修改，已有其他对话正在该仓库工作时会在首次发送时自动创建独立的 Git worktree。
+- 「设置 › 外观 › 应用语言」新增繁体中文、日语、韩语和法语。
+- 「设置 › 外观」新增「应用图标」：选「跟随主题」（默认）时 Dock 图标随主题切换——新的液态玻璃图标、现行绿色质感图标或新的铜版创作图标——也可以固定其中任意一个。
+
+### 问题修复
+
+- 多个会话同时运行时，新会话的第一条消息发送后立即显示，不再延迟数秒：消息气泡不再等待会话库保存，保存失败时撤回气泡并把文字放回输入框；刚新建的会话也不再读取不存在的历史。
+
+### 优化改进
+
+- 「设置 › 子代理控制」将两个子代理面板选项更名为「悬浮面板内容」（进度条 / 实时步骤）与「悬浮面板排布」（单个面板 / 独立面板），并随所选项说明对话区上方悬浮面板的变化及主消息流与侧边栏不受影响。
+- 校准设置、对话、还原提示、语音及服务商 / MCP 错误提示的中英文案与实际功能及当前设置路径保持一致。
+- 液态玻璃主题下的「天气窗」（「设置 › 外观」）重新设计：对话等待回答或确认时在玻璃后拂过微风，完成时洒下暖阳，失败时落下细雨并泛起地面涟漪，代理正在工作时则保持完全静止。
+- 适度放大对话消息的回合间距、行距与段距，统一无序与有序列表的标记对齐及嵌套层级留白，并同步优化标题间距、引用竖线、表格分隔线与代码块行距，在不同字号缩放下保持稳定易读。
 
 ## [2.5.41] - 2026-11-15
 
@@ -204,6 +364,7 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 - The README now links prominently to [tivano.app](https://tivano.app/), the new website and download page.
 - Several chats streaming at once keep the app responsive: a chat you are not looking at now updates its text once a second instead of every frame and catches up the moment you open it, and switching back to a chat that is still running no longer rebuilds it from scratch.
+- Sidebar thread rows no longer show an archive button on hover; archive from the row’s … menu, so a stray click can’t archive a thread.
 
 ### 简体中文
 
@@ -211,6 +372,7 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 - README 顶部突出显示新官网与下载页 [tivano.app](https://tivano.app/)。
 - 多个对话同时输出时界面更流畅：未在查看的对话改为每秒刷新一次文字，打开时立即补齐；切回仍在运行的对话也不再从头重建。
+- 侧栏对话行悬停时不再显示归档按钮，归档改从行右侧的 … 菜单进行，避免误触归档。
 
 ### Thanks
 

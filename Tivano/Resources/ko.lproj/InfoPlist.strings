@@ -1,0 +1,1 @@
+"NSMicrophoneUsageDescription" = "Tivano는 음성 세션을 시작할 때만 마이크를 사용합니다. 오디오는 ChatGPT에 로그인한 사용자 본인의 Codex를 통해 OpenAI로 전송됩니다.";

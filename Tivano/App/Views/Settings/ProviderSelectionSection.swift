@@ -17,7 +17,7 @@ struct ProviderSelectionSection: View {
                     } label: {
                         Text(verbatim: Chrome.localized(isExpanded ? "Done" : "Choose providers"))
                     }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     .accessibilityValue(Text(verbatim: Chrome.localized(isExpanded ? "Expanded" : "Collapsed")))
                 }
                 ChromeReveal(isExpanded: isExpanded) {

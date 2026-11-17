@@ -10,7 +10,7 @@ final class QuickChatNSPanel: NSPanel {
 @Observable
 final class QuickChatState {
     var text = ""
-    var modelOverride: NewThreadModelSelection?
+    var modelOverride: NewThreadDefault?
     var focusToken = 0
 }
 
@@ -78,13 +78,16 @@ final class QuickChatPanelController {
                 // Only the draft as handed over: once the chat is open, an edit or a send
                 // of its own belongs to the user, and the delayed send must not take it.
                 let untouched = runtime.turns.isEmpty && runtime.draft.text == trimmed
-                if model.thread(thread.id)?.controlWorkspace?.phase == .ready {
-                    if untouched { runtime.send() }
-                } else if model.thread(thread.id) != nil {
-                    // The draft stays in the chat, where the failure shows.
-                    model.openThread(thread.id)
-                    WindowManager.shared.showMain()
-                    NSApp.activate()
+                if let current = model.thread(thread.id) {
+                    let workspace = current.controlWorkspace
+                    if workspace == nil || workspace?.phase == .ready {
+                        if untouched { runtime.send() }
+                    } else {
+                        // The draft stays in the chat, where the failure shows.
+                        model.openThread(thread.id)
+                        WindowManager.shared.showMain()
+                        NSApp.activate()
+                    }
                 }
             }
         } else {

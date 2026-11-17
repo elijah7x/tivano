@@ -145,9 +145,10 @@ def worktrees(source, git, home):
 
 
 def protected(home, source, destination, trees):
-    roots = [source, destination, *trees, home / ".tivano", home / ".tivano-dev",
+    roots = [source, destination, *trees, home / ".tivano", home / ".tivano-dev", home / ".tivano-preview",
              home / "Library/Application Support/Tivano",
-             home / "Library/Application Support/Tivano Dev"]
+             home / "Library/Application Support/Tivano Dev",
+             home / "Library/Application Support/Tivano Preview"]
     return roots + [root.resolve() for root in roots]
 
 

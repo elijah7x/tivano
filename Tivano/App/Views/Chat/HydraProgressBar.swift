@@ -38,7 +38,6 @@ struct HydraProgressBar: View {
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     fileprivate static let height: CGFloat = 28
     fileprivate static let staveWidth: CGFloat = 3
@@ -134,7 +133,7 @@ struct HydraProgressBar: View {
         let isRunning = status == .running && waiting == nil
         let elapsed = RelativeTime.duration((isRunning ? Date.now : finishedAt ?? .now).timeIntervalSince(startedAt))
         let sweepRuntime = chatColumnIsShown && isRunning ? ObjectIdentifier(runtime) : nil
-        let sweeps = chatColumnIsShown && isRunning && !reduceMotion && !performanceMode && SweepBudget.shared.sweeps(ObjectIdentifier(runtime))
+        let sweeps = chatColumnIsShown && isRunning && !reduceMotion && SweepBudget.shared.sweeps(ObjectIdentifier(runtime))
         let isScrolling = chatColumnIsShown && ScrollActivity.shared.isScrolling
         let colors = HydraStaveColors(tint: waiting.map { Chrome.threadStatusColor($0, isDark: colorScheme == .dark) } ?? tint, colorScheme: colorScheme)
         VStack(alignment: .leading, spacing: 6) {
@@ -145,7 +144,7 @@ struct HydraProgressBar: View {
                 status: status,
                 hoveredIndex: chatColumnIsShown ? hoveredIndex : nil,
                 isSweeping: sweeps,
-                reduceMotion: reduceMotion || performanceMode || waiting != nil,
+                reduceMotion: reduceMotion || waiting != nil,
                 isScrolling: isScrolling,
                 isColumnShown: chatColumnIsShown
             )
@@ -165,11 +164,7 @@ struct HydraProgressBar: View {
                 if picked != hoveredIndex {
                     hoveredIndex = picked
                     if picked != nil {
-                        switch model.settings.timelineHapticStyle {
-                        case .soft: Haptics.perform(.generic)
-                        case .strong: Haptics.perform(.alignment)
-                        case .none: break
-                        }
+                        Haptics.perform(.alignment)
                     }
                 }
             }
@@ -505,9 +500,21 @@ private final class HydraStavesLayerView: NSView {
         layer?.addSublayer(sweepClip)
 
         let center = NotificationCenter.default
-        center.addObserver(self, selector: #selector(appHiddenDidChange), name: NSApplication.didHideNotification, object: nil)
-        center.addObserver(self, selector: #selector(appHiddenDidChange), name: NSApplication.didUnhideNotification, object: nil)
-        center.addObserver(self, selector: #selector(windowDidChangeOcclusionState(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        for name in [
+            NSApplication.didBecomeActiveNotification,
+            NSApplication.didResignActiveNotification,
+            NSApplication.didHideNotification,
+            NSApplication.didUnhideNotification,
+        ] {
+            center.addObserver(self, selector: #selector(visibilityChanged), name: name, object: nil)
+        }
+        for name in [
+            NSWindow.didChangeOcclusionStateNotification,
+            NSWindow.didMiniaturizeNotification,
+            NSWindow.didDeminiaturizeNotification,
+        ] {
+            center.addObserver(self, selector: #selector(windowVisibilityDidChange(_:)), name: name, object: nil)
+        }
     }
 
     @available(*, unavailable)
@@ -607,13 +614,22 @@ private final class HydraStavesLayerView: NSView {
         refreshAnimations()
     }
 
-    @objc private func appHiddenDidChange() {
+    override func viewDidHide() {
+        super.viewDidHide()
         refreshAnimations()
     }
 
-    @objc private func windowDidChangeOcclusionState(_ note: Notification) {
-        // Every window ordered in posts this, popovers and tooltips included: only this
-        // view's own window coming back into view concerns it.
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        refreshAnimations()
+    }
+
+    @objc private func visibilityChanged() {
+        refreshAnimations()
+    }
+
+    @objc private func windowVisibilityDidChange(_ note: Notification) {
+        // Window visibility notifications are global: only this view's own window concerns it.
         guard let window, (note.object as? NSWindow) === window else { return }
         refreshAnimations()
     }
@@ -845,8 +861,8 @@ private final class HydraStavesLayerView: NSView {
     }
 
     private var isVisibleInWindow: Bool {
-        guard !NSApp.isHidden, let window, window.isVisible, !window.isMiniaturized,
-              window.occlusionState.contains(.visible) else { return false }
+        guard !NSApp.isHidden, NSApp.isActive, let window, window.isVisible, !window.isMiniaturized,
+              !isHiddenOrHasHiddenAncestor, window.occlusionState.contains(.visible) else { return false }
         return true
     }
 
@@ -918,13 +934,12 @@ struct HydraWorkingTitle: View {
     let isRunning: Bool
     var alignment: TextAlignment = .center
     @Environment(\.chatColumnIsShown) private var chatColumnIsShown
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     /// One breath, in and out.
     private static let breath: TimeInterval = 3.2
 
     var body: some View {
-        let animates = chatColumnIsShown && isRunning && FrontMonitor.shared.isVisible && !performanceMode && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let animates = chatColumnIsShown && isRunning && FrontMonitor.shared.isVisible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let title = Text(verbatim: text)
             .font(.ui(.body, weight: .medium))
             .foregroundStyle(Chrome.primaryText)
@@ -969,29 +984,32 @@ struct HydraElapsedTime: View {
 private struct ProgressCardSurface: ViewModifier {
     let isOnGlassPanel: Bool
     let isDark: Bool
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
-        if isOnGlassPanel {
-            content.background(shape.fill(Chrome.panelControlFill(isDark: isDark)))
-        } else if performanceMode {
-            content
-                .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
-                .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(Chrome.overlay(isDark ? 0.14 : 0.08), lineWidth: 1)
-                }
-        } else {
-            content
-                .glassEffect(.regular, in: shape)
-                .background {
+        let useGlass = !isOnGlassPanel && solid == nil
+        // Keep content on one unconditional path so Creation switches preserve card identity.
+        content
+            .chromeGlassEffect(useGlass ? .regular : .identity, in: shape)
+            .background {
+                if isOnGlassPanel {
+                    shape.fill(Chrome.panelControlFill(isDark: isDark))
+                } else if let solid {
+                    shape.fill(solid.elevated)
+                        .shadow(color: SolidSurfaces.shadow, radius: 12, y: 3)
+                } else {
                     shape
                         .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
                         .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
                 }
-                .clipShape(shape)
-        }
+            }
+            .clipShape(SwitchableClip(shape: shape, isOn: !isOnGlassPanel))
+            .overlay {
+                if !isOnGlassPanel, let solid {
+                    shape.strokeBorder(solid.hairline, lineWidth: 1)
+                }
+            }
     }
 }
 

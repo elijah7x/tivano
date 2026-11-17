@@ -17,33 +17,33 @@ enum MCPProbeError: LocalizedError, Sendable {
         switch self {
         case .commandMissing(let name):
             switch name {
-            case "npx": return "npx isn't installed. Install Node.js from nodejs.org, then try again."
-            case "uvx": return "uvx isn't installed. Run `brew install uv` in Terminal, then try again."
-            default: return "\(name) isn't installed. Install it, then try again."
+            case "npx": return AppText.localized("npx isn't installed. Install Node.js from nodejs.org, then try again.")
+            case "uvx": return AppText.localized("uvx isn't installed. Run `brew install uv` in Terminal, then try again.")
+            default: return String(format: AppText.localized("%@ isn't installed. Install it, then try again."), name)
             }
         case .exited(let code, let stderr):
             let last = stderr
                 .components(separatedBy: .newlines)
                 .map { $0.trimmed }
                 .last(where: { !$0.isEmpty })
-            if let last { return "The server quit (exit \(code)). \(last)" }
-            return "The server quit (exit \(code))."
+            if let last { return String(format: AppText.localized("The server quit (exit %d). %@"), code, last) }
+            return String(format: AppText.localized("The server quit (exit %d)."), code)
         case .timedOut:
-            return "The server didn't answer in time."
+            return AppText.localized("The server didn't answer in time.")
         case .http(let status, _):
             switch status {
-            case 401, 403: return "That key was refused. Press Try again and paste a new one."
-            case 404: return "Nothing answered at that address. Check the address and try again."
-            default: return "The server answered \(status)."
+            case 401, 403: return AppText.localized("That key was refused. Press Try again and paste a new one.")
+            case 404: return AppText.localized("Nothing answered at that address. Check the address and try again.")
+            default: return String(format: AppText.localized("The server answered %lld."), Int64(status))
             }
         case .unauthorizedOAuth:
-            return "Sign-in was rejected. Sign in again in your browser."
+            return AppText.localized("Sign-in was rejected. Sign in again in your browser.")
         case .needsSetup(let guide):
-            return guide.reason
+            return AppText.localized(guide.reason)
         case .unavailable(let host):
-            return "\(host) didn't answer (404). If the address is right, try again in a few minutes."
+            return String(format: AppText.localized("%@ didn't answer (404). If the address is right, try again in a few minutes."), host)
         case .malformed(let detail):
-            return "The server sent something unexpected: \(detail)"
+            return String(format: AppText.localized("The server sent something unexpected: %@"), AppText.localized(detail))
         }
     }
 }
@@ -166,7 +166,7 @@ enum MCPProbe {
                 if Self.isGitLabMCP(upstream) {
                     throw MCPProbeError.needsSetup(Self.gitLabServerDisabled(upstream: upstream))
                 }
-                throw MCPProbeError.unavailable(host: URL(string: upstream)?.host ?? "The server")
+                throw MCPProbeError.unavailable(host: URL(string: upstream)?.host ?? AppText.localized("The server"))
             } catch let error as MCPHTTPError {
                 guard let status = error.status else { throw MCPProbeError.malformed("invalid reply") }
                 throw MCPProbeError.http(status: status, body: error.body)
