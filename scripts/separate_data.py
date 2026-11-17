@@ -50,7 +50,7 @@ def rewrite_json(root, replacements):
 
 def running_apps():
     result = subprocess.run(["ps", "-axo", "comm="], check=True, capture_output=True, text=True)
-    names = ("/Tivano.app/", "/Tivano Dev.app/", "/Droppy Code.app/", "/Droppy Code Dev.app/", "/Cody.app/")
+    names = ("/Tivano.app/", "/Tivano Dev.app/", "/Tivano Preview.app/", "/Droppy Code.app/", "/Droppy Code Dev.app/", "/Cody.app/")
     return [line.strip() for line in result.stdout.splitlines() if any(name in line for name in names)]
 
 
@@ -82,7 +82,7 @@ def separate(home, apply=False):
     support.mkdir(parents=True, exist_ok=True)
     with contextlib.ExitStack() as stack:
         # Use the old lock inodes; never delete them. This excludes old shared builds.
-        for name in (".tivano-library.lock", ".tivano-migration.lock", ".tivano-release-library.lock", ".tivano-dev-library.lock"):
+        for name in (".tivano-library.lock", ".tivano-migration.lock", ".tivano-release-library.lock", ".tivano-dev-library.lock", ".tivano-preview-library.lock"):
             handle = stack.enter_context((support / name).open("a+"))
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if running_apps():

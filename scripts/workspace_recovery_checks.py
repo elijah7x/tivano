@@ -86,8 +86,7 @@ enum HydraPrompts {
         ]),
         "STORAGE_PRODUCTION": "\n".join(declaration(store, marker) for marker in (
             "    nonisolated static func loadLibraryRecovering(",
-            "    private nonisolated static func recoverLibraryElements(",
-            "    nonisolated static func prepareLibraryWrite(")),
+            "    private nonisolated static func recoverLibraryElements(")),
         "EXECUTION_PRODUCTION": declaration(model, "    func executionDirectory(for"),
         "TASK_PATH_PRODUCTION": declaration(paths, "    nonisolated static func taskWorkspace("),
     }

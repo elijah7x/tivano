@@ -141,7 +141,7 @@ struct KeepsakesSettingsPage: View {
     private var ink: Color { M.color(dark ? 0xa2bbaa : 0x647e6e) }
     private var text: Color { M.color(dark ? 0xf0f0ee : 0x252727) }
     private var busy: Bool { lightingTime != nil || (expanded && flightTime < (reduceMotion ? 0 : (closing ? M.closeEnd : M.openEnd))) }
-    private var restless: Bool { !reduceMotion && !model.settings.performanceMode && ambientTime < motionUntil }
+    private var restless: Bool { !reduceMotion && ambientTime < motionUntil }
     private var idleMotion: Bool { !expanded && restless }
     // The branch keeps swaying while the card flies, so the hand-off continues its motion.
     private var swaying: Bool { restless && (!expanded || closing || flightTime < M.openEnd) }
@@ -152,14 +152,14 @@ struct KeepsakesSettingsPage: View {
     // The unlit view's drop swells on flightTime for a few cycles, then rests.
     private var pillBobbing: Bool {
         expanded && !closing && keepsake?.litAt == nil && lightingTime == nil
-            && !reduceMotion && !model.settings.performanceMode && flightTime < M.swellCycle * 3
+            && !reduceMotion && flightTime < M.swellCycle * 3
     }
     private var animating: Bool {
         idleMotion || lightingTime != nil || releaseTime != nil || noteTime != nil || pillBobbing
             || (expanded && (closing || busy || (!hintDismissed && hintTime < hintEnd)))
     }
     private var sway: Double {
-        guard !reduceMotion, !model.settings.performanceMode else { return 0 }
+        guard !reduceMotion else { return 0 }
         let phase = ambientTime.truncatingRemainder(dividingBy: 6)
         return (-3 + 6 * Motion.easeInOut.value(phase <= 3 ? phase / 3 : (6 - phase) / 3)) * motionEnvelope
     }
@@ -168,10 +168,10 @@ struct KeepsakesSettingsPage: View {
         TimelineView(.animation(paused: !visible || !windowVisible || !animating)) { timeline in
             VStack(alignment: .leading, spacing: 0) {
                 Text("Keep the keepsakes from along the way.")
-                    .font(.system(size: 12)).frame(height: 18)
+                    .font(.ui(size: 12)).frame(height: 18)
                 Text(verbatim: Chrome.localized(keepsake?.litAt == nil
                     ? "Open it to light it" : "Open one to read its story"))
-                    .font(.system(size: 11)).frame(height: 16)
+                    .font(.ui(size: 11)).frame(height: 16)
                     .opacity(0.75 * noteOpacity).padding(.top, 7)
                 scene
                     .frame(height: M.cardHeight)
@@ -367,7 +367,7 @@ struct KeepsakesSettingsPage: View {
                 HStack(spacing: 6) {
                     Color.clear.frame(width: 16, height: 22)
                     Rectangle().fill(ink.opacity(0.45)).frame(width: 14, height: 1)
-                    Text("Light it").font(.system(size: 11)).tracking(2).foregroundStyle(text.opacity(0.62))
+                    Text("Light it").font(.ui(size: 11)).tracking(2).foregroundStyle(text.opacity(0.62))
                 }
                 .padding(8).contentShape(Rectangle())
             }
@@ -472,13 +472,13 @@ struct KeepsakesSettingsPage: View {
                 // Measured outside the flight transforms, so the target is the card's resting layout frame.
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("keepsake-page")) } action: { flightFrame = $0 }
                 VStack(spacing: 0) {
-                    Text(verbatim: Chrome.localized(definition.title)).font(.system(size: 15, weight: .medium))
+                    Text(verbatim: Chrome.localized(definition.title)).font(.ui(size: 15, weight: .medium))
                         .foregroundStyle(text)
-                    Text(verbatim: earnedText(keepsake)).font(.system(size: 12)).padding(.top, 8)
+                    Text(verbatim: earnedText(keepsake)).font(.ui(size: 12)).padding(.top, 8)
                     Text(verbatim: Chrome.localized(definition.detail))
-                        .font(.system(size: 13)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
+                        .font(.ui(size: 13)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 12)
-                    Text("Tap to flip").font(.system(size: 12)).padding(.top, 20)
+                    Text("Tap to flip").font(.ui(size: 12)).padding(.top, 20)
                         .opacity(keepsake.litAt == nil || lightingTime != nil || hintDismissed ? 0 : hint * (closing
                             ? (reduceMotion ? 0 : 1 - Motion.ease.value(flightTime / 0.8)) : 1))
                 }
@@ -546,12 +546,6 @@ struct KeepsakesSettingsPage: View {
     }
 
     private func open() {
-        #if DEBUG
-        // Preview runs: Option-click unlights the keepsake so the light-up can be replayed.
-        if KeepsakePreview.isRequested && NSEvent.modifierFlags.contains(.option) {
-            model.prepareKeepsakePreview(); releaseOnClose = false; releaseTime = nil; noteTime = nil
-        }
-        #endif
         expanded = true; closing = false; flightTime = 0; hintTime = 0
         hintDismissed = false; flipped = false; focus = keepsake?.litAt == nil ? .light : .badge
     }
@@ -678,6 +672,12 @@ private struct KeepsakeDetailBounds: NSViewRepresentable {
                         MainActor.assumeIsolated { self?.sample() }
                     })
                 }
+            }
+            if let clipView = enclosingScrollView?.contentView {
+                clipView.postsBoundsChangedNotifications = true
+                observers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.sample() }
+                })
             }
             sample()
         }

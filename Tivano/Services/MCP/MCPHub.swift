@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import Synchronization
 
 enum MCPHubError: LocalizedError, Sendable {
@@ -16,6 +17,7 @@ enum MCPHubError: LocalizedError, Sendable {
 }
 
 actor MCPHub {
+    private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "mcp-hub")
     static let shared = MCPHub()
 
     /// Every server process started this run, so the app can end them as it quits: a
@@ -57,6 +59,7 @@ actor MCPHub {
     private var specs: [String: MCPServerSpec]?
     private var clients: [String: MCPClient] = [:]
     private var toolCache: [String: [Tool]] = [:]
+    private var combinedToolCache: [Tool]?
     private var failed: Set<String> = []
     private var generation = UUID()
     private var shuttingDown = false
@@ -64,10 +67,12 @@ actor MCPHub {
     func tools() async throws -> [Tool] {
         try Task.checkCancellation()
         guard !shuttingDown else { throw CancellationError() }
+        if let cached = combinedToolCache { return cached }
         if specs == nil { specs = Self.readSpecs() }
         guard let current = specs else { return [] }
         let generation = self.generation
         var all: [Tool] = []
+        var complete = true
         for id in current.keys.sorted() {
             try Task.checkCancellation()
             guard !shuttingDown, generation == self.generation else { throw CancellationError() }
@@ -75,7 +80,10 @@ actor MCPHub {
                 all += cached
                 continue
             }
-            if failed.contains(id) { continue }
+            if failed.contains(id) {
+                complete = false
+                continue
+            }
             guard let spec = current[id] else { continue }
             let client = self.client(for: id, spec: spec)
             do {
@@ -83,22 +91,26 @@ actor MCPHub {
                 try Task.checkCancellation()
                 guard !shuttingDown, generation == self.generation else { throw CancellationError() }
                 toolCache[id] = listed
+                combinedToolCache = nil
                 all += listed
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 try Task.checkCancellation()
                 guard !shuttingDown, generation == self.generation else { throw CancellationError() }
-                print("MCPHub: \(id): \(error.localizedDescription)")
+                Self.log.error("MCPHub: \(id): \(error.localizedDescription)")
                 failed.insert(id)
+                complete = false
             }
         }
         try Task.checkCancellation()
         guard !shuttingDown, generation == self.generation else { throw CancellationError() }
-        return all.sorted {
+        let sorted = all.sorted {
             if $0.server != $1.server { return $0.server < $1.server }
             return $0.name < $1.name
         }
+        if complete { combinedToolCache = sorted }
+        return sorted
     }
 
     func call(_ callName: String, arguments: JSONValue) async throws -> Result {
@@ -134,6 +146,7 @@ actor MCPHub {
         let existing = clients
         clients = [:]
         toolCache = [:]
+        combinedToolCache = nil
         failed = []
         specs = nil
         for client in existing.values { Task { await client.stop() } }
@@ -400,14 +413,7 @@ private actor MCPClient {
                 connection.stop()
                 stdio = nil
             }
-            let environmentBase: [String: String]
-            if DshIntegrationConfiguration.isOfflineNative {
-                environmentBase = DshIntegrationConfiguration.environment
-                guard DshIntegrationConfiguration.paths != nil, !environmentBase.isEmpty,
-                      command.hasPrefix("/") else { throw MCPHubError.server("Invalid offline native fixture") }
-            } else {
-                environmentBase = LoginEnvironment.current
-            }
+            let environmentBase = LoginEnvironment.current
             guard let executable = LoginEnvironment.which(command, in: environmentBase) else {
                 throw MCPHubError.server(String(format: String(localized: "%@ isn't installed."), command))
             }
@@ -415,9 +421,7 @@ private actor MCPClient {
             for (key, value) in env { environment[key] = value }
             let connection: MCPStdioConnection
             do {
-                let directory = DshIntegrationConfiguration.isOfflineNative
-                    ? environmentBase["HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) } : nil
-                connection = try MCPStdioConnection.launch(executable: executable, arguments: args, environment: environment, directory: directory)
+                connection = try MCPStdioConnection.launch(executable: executable, arguments: args, environment: environment)
             } catch {
                 throw MCPHubError.server(error.localizedDescription)
             }

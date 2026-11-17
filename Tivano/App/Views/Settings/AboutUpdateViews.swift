@@ -420,7 +420,7 @@ struct SmoothedUpdateProgressSlider: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: settled || ScrollActivity.shared.isScrolling)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: settled || ScrollActivity.shared.isScrolling || !FrontMonitor.shared.isVisible)) { timeline in
             let fraction = chase.advance(
                 to: timeline.date.timeIntervalSinceReferenceDate,
                 target: target.value,
@@ -508,7 +508,7 @@ private struct FillCanvas: View {
     let sparkles: [SparkleParticle]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: sparkles.isEmpty || ScrollActivity.shared.isScrolling)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: sparkles.isEmpty || UpdateProgressSlider.fillOpacity(for: fraction) == 0 || ScrollActivity.shared.isScrolling || !FrontMonitor.shared.isVisible)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
             Canvas { context, size in
                 let opacity = UpdateProgressSlider.fillOpacity(for: fraction)
@@ -586,11 +586,13 @@ private struct SparkleParticle {
 
 /// The unread dot, on the Settings row and the About row while a release waits.
 struct UpdateAvailableDot: View {
+    var inline = false
+
     var body: some View {
         Circle()
             .fill(Chrome.accent)
             .frame(width: 7, height: 7)
-            .offset(x: 2.5, y: -2.5)
+            .offset(x: inline ? 0 : 2.5, y: inline ? 0 : -2.5)
             .accessibilityLabel(Text("Update available"))
     }
 }
@@ -612,7 +614,7 @@ struct AboutUpdateChromeAccessory: View {
 private struct AboutIdentityPill: View {
     var body: some View {
         HStack(spacing: 6) {
-            Image(nsImage: NSApp.applicationIconImage)
+            Image(nsImage: AppIconManager.shared.image)
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 20, height: 20)
@@ -634,20 +636,20 @@ private struct AboutIdentityPill: View {
 @MainActor
 private enum BackgroundUpdateStatus {
     static var isReady: Bool {
-        guard !AppInfo.isDevelopment else { return false }
+        guard AppInfo.allowsAppUpdates else { return false }
         if case .ready = AppUpdater.shared.autoUpdate { return true }
         return false
     }
 
     /// A background download in progress; the manual install waits for it instead.
     static var isDownloading: Bool {
-        guard !AppInfo.isDevelopment else { return false }
+        guard AppInfo.allowsAppUpdates else { return false }
         if case .downloading = AppUpdater.shared.autoUpdate { return true }
         return false
     }
 
     static var message: String? {
-        guard !AppInfo.isDevelopment else { return nil }
+        guard AppInfo.allowsAppUpdates else { return nil }
         switch AppUpdater.shared.autoUpdate {
         case .idle:
             return nil
@@ -800,7 +802,7 @@ private struct AboutVersionPill: View {
             if model.hasActiveTurns {
                 return Chrome.localized(model.activeWorkIsLimitWait
                     ? "Available once chats waiting for their usage limit have continued, or when you stop their wait"
-                    : "Available after running chats finish") + " " + Chrome.localized("Settings › About lists what it waits for.")
+                    : "Available after running chats finish") + " " + Chrome.localized("Settings › Version lists what it waits for.")
             }
             if let message = BackgroundUpdateStatus.message { return message }
             return String(format: Chrome.localized("Installs Tivano %@ and relaunches"), checker.update?.version ?? "")
@@ -848,7 +850,7 @@ struct AboutSoftwareUpdateSection: View {
                     ChromeRow(title: message) {
                         if BackgroundUpdateStatus.isReady {
                             Button("Restart now") { AppUpdater.shared.restartToInstallStaged() }
-                                .buttonStyle(.glass)
+                                .chromeGlassButtonStyle()
                                 .disabled(model.hasActiveTurns)
                         }
                     }
@@ -856,9 +858,9 @@ struct AboutSoftwareUpdateSection: View {
             }
             if progress.phase == .waitingForMerge {
                 ChromeCard {
-                    ChromeRow(title: "Waiting for Hydra merges to finish.") {
+                    ChromeRow(title: "Waiting for sub-agent merges to finish.") {
                         Button("Cancel") { AppUpdater.shared.cancelInstall() }
-                            .buttonStyle(.glass)
+                            .chromeGlassButtonStyle()
                     }
                 }
             }
@@ -914,7 +916,7 @@ struct AboutSoftwareUpdateSection: View {
                             model.selectedThreadID = id
                             SettingsNavigation.shared.dismiss()
                         }
-                        .buttonStyle(.glass)
+                        .chromeGlassButtonStyle()
                     }
                 }
             }
@@ -1009,7 +1011,7 @@ struct AboutUpdateCheckRow: View {
             Button(Chrome.localized(checker.isChecking ? "Checking…" : "Check now")) {
                 Task { await checker.check() }
             }
-            .buttonStyle(.glass)
+            .chromeGlassButtonStyle()
             .controlSize(.small)
             .disabled(checker.isChecking)
         }

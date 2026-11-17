@@ -8,7 +8,7 @@ extension Font {
     }
 
     @MainActor static func chat(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
-        .system(size: TypeScale.shared.content(size), weight: weight, design: design)
+        themed(size: TypeScale.shared.content(size), weight: weight, design: design)
     }
 
     /// Code at the Code size. Design defaults to monospaced. The stock base is 12:

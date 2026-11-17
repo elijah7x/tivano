@@ -1,10 +1,21 @@
 import Foundation
 
+enum AppEdition: String, Sendable { case release, dev, preview }
+
 enum AppInfo {
     static let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Tivano"
-    static let isDevelopment = Bundle.main.bundleIdentifier == "dev.tivano.Tivano.dev"
-    static let libraryName = isDevelopment ? "Tivano Dev" : "Tivano"
-    static let stateDirectoryName = isDevelopment ? ".tivano-dev" : ".tivano"
+    static let edition: AppEdition = {
+        switch Bundle.main.bundleIdentifier {
+        case "dev.tivano.Tivano.dev": .dev
+        case "dev.tivano.Tivano.preview": .preview
+        default: .release
+        }
+    }()
+    static let isDevelopment = edition == .dev
+    static let isPreview = edition == .preview
+    static let allowsAppUpdates = edition == .release
+    static let libraryName = isDevelopment ? "Tivano Dev" : isPreview ? "Tivano Preview" : "Tivano"
+    static let stateDirectoryName = isDevelopment ? ".tivano-dev" : isPreview ? ".tivano-preview" : ".tivano"
     static let numericVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.1"
     static let releaseVersion = releaseVersion(in: Bundle.main) ?? numericVersion
     static let version = isDevelopment ? "dev-" + numericVersion : releaseVersion

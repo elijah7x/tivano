@@ -51,7 +51,7 @@ final class MetaSession: OpenAICompatibleSession {
     override func friendlyError(_ message: String, statusCode: Int) -> String {
         let lower = message.lowercased()
         if statusCode == 401 || (lower.contains("invalid") && lower.contains("key")) || lower.contains("invalid_api_key") || lower.contains("authentication_error") {
-            return AppText.localized("Meta rejected the API key. Check it in Settings › Providers › Meta (MODEL_API_KEY from dev.meta.ai).")
+            return AppText.localized("Meta rejected the API key. Check it in Settings › Provider management › Meta (MODEL_API_KEY from dev.meta.ai).")
         }
         if statusCode == 404 || lower.contains("model_not_found") || (lower.contains("model") && lower.contains("not exist")) {
             return AppText.localized("Meta no longer offers that model. Pick Muse Spark 1.3 in the model picker.")

@@ -294,7 +294,7 @@ final class AppUpdater {
     }
 
     private init() {
-        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
+        guard AppInfo.allowsAppUpdates, !CaptureRun.isEnabled else { return }
         powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
         ) { _ in
@@ -320,7 +320,7 @@ final class AppUpdater {
     }
 
     func measureStorage() async throws -> RuntimeStorageUsage {
-        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return RuntimeStorageUsage() }
+        guard AppInfo.allowsAppUpdates, !CaptureRun.isEnabled else { return RuntimeStorageUsage() }
         let root = updatesRoot
         let appName = Bundle.main.bundleURL.lastPathComponent
         let version = AppInfo.version
@@ -347,7 +347,7 @@ final class AppUpdater {
     }
 
     func clearObsoleteStorage() async throws {
-        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
+        guard AppInfo.allowsAppUpdates, !CaptureRun.isEnabled else { return }
         guard !storageIsInUse, !isClearingStorage else {
             throw CocoaError(.fileLocking, userInfo: [NSFilePathErrorKey: updatesRoot.path])
         }
@@ -879,7 +879,7 @@ final class AppUpdater {
     private func scheduleIdleInstall() {
         idleTimer?.cancel()
         idleTimer = nil
-        guard automaticEnabled, !handedOff, !isClearingStorage, !AppInfo.isDevelopment, !CaptureRun.isEnabled,
+        guard automaticEnabled, !handedOff, !isClearingStorage, AppInfo.allowsAppUpdates, !CaptureRun.isEnabled,
               case .ready = autoUpdate else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + max(WindowManager.shared.model.secondsUntilInputIdle, 300), leeway: .seconds(15))
@@ -904,7 +904,7 @@ final class AppUpdater {
     }
 
     func prepareInBackground(_ release: AvailableUpdate) {
-        guard automaticEnabled, !AppInfo.isDevelopment, !CaptureRun.isEnabled,
+        guard automaticEnabled, AppInfo.allowsAppUpdates, !CaptureRun.isEnabled,
               prepareTask == nil, installTask == nil, !handedOff,
               let version = AppVersion(release.version), let current = AppVersion(AppInfo.releaseVersion),
               version > current, (current.isPrerelease || !version.isPrerelease), !release.version.contains("/"), release.version != ".." else { return }
@@ -965,7 +965,7 @@ final class AppUpdater {
 
     @discardableResult
     func installStagedOnQuit() -> Bool {
-        guard automaticEnabled, !AppInfo.isDevelopment, !CaptureRun.isEnabled, !handedOff, !isPoweringOff, !isClearingStorage,
+        guard automaticEnabled, AppInfo.allowsAppUpdates, !CaptureRun.isEnabled, !handedOff, !isPoweringOff, !isClearingStorage,
               case .ready(let version) = autoUpdate else { return false }
         do {
             try handOff(staged: stagedApp(version), version: version, relaunch: false)
@@ -985,7 +985,7 @@ final class AppUpdater {
     }
 
     func restartToInstallStaged() {
-        guard !AppInfo.isDevelopment, !CaptureRun.isEnabled, !handedOff, !isClearingStorage,
+        guard AppInfo.allowsAppUpdates, !CaptureRun.isEnabled, !handedOff, !isClearingStorage,
               installTask == nil, case .ready(let version) = autoUpdate else { return }
         let model = WindowManager.shared.model
         model.updateTaskSleepPrevention()
@@ -1016,7 +1016,7 @@ final class AppUpdater {
     }
 
     func install(_ update: AvailableUpdate) {
-        guard installTask == nil, prepareTask == nil, !handedOff, !isClearingStorage, !AppInfo.isDevelopment, !CaptureRun.isEnabled else { return }
+        guard installTask == nil, prepareTask == nil, !handedOff, !isClearingStorage, AppInfo.allowsAppUpdates, !CaptureRun.isEnabled else { return }
         guard let target = AppVersion(update.version), let current = AppVersion(AppInfo.releaseVersion),
               target > current, current.isPrerelease || !target.isPrerelease else { return }
         installTask = Task { [self] in

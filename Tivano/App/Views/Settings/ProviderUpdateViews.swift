@@ -206,7 +206,7 @@ struct ProviderUpdateAction: View {
             Text(verbatim: title)
                 .frame(height: Chrome.rowButtonLabelHeight)
         }
-        .buttonStyle(.glass)
+        .chromeGlassButtonStyle()
         .disabled(!enabled)
         .help(Text(verbatim: help))
         .accessibilityLabel(Text(verbatim: title))

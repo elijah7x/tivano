@@ -40,7 +40,7 @@ struct MCPKeyPanelView: View {
                 Button(Chrome.localized(entry.isOAuth ? "Sign in" : "Save and connect")) {
                     save()
                 }
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .disabled(!model.mcp.canConnect(entry))
             }
         }

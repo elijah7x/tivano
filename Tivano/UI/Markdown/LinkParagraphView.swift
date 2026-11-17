@@ -10,6 +10,8 @@ struct LinkParagraphView: NSViewRepresentable {
     let source: String
     var pointSize: CGFloat = TypeScale.shared.content(13)
     var codePointSize: CGFloat = TypeScale.shared.code(12)
+    var serif: Bool = TypeScale.shared.serif
+    var lineSpacingOverride: CGFloat? = nil
     var dimmed: Bool = false
     /// Whether the text is still arriving, so its parses bypass the shared caches.
     var streaming: Bool = false
@@ -18,6 +20,7 @@ struct LinkParagraphView: NSViewRepresentable {
     var mentions: [HydraPersona] = []
     var targets: [String: HydraMentionTarget] = [:]
     var linkBase: String? = nil
+    var hugsContent: Bool = false
     var onOpenHead: ((URL) -> Void)?
 
     /// Receives the text view, so the hover that sets the cursor can ask it what is under
@@ -51,25 +54,30 @@ struct LinkParagraphView: NSViewRepresentable {
         let coordinator = context.coordinator
         let veiled = context.environment.markdownVeiled
         let scope = context.environment.veilRenderScope
+        let mentionNames = mentions.map(\.name)
+        let effectiveLineSpacing = lineSpacingOverride ?? TypeScale.proseLineSpacing(pointSize)
         var rendered = false
         if coordinator.lastSource != source || coordinator.lastPointSize != pointSize
-            || coordinator.lastCodePointSize != codePointSize
+            || coordinator.lastCodePointSize != codePointSize || coordinator.lastSerif != serif
+            || coordinator.lastLineSpacing != effectiveLineSpacing
             || coordinator.lastDimmed != dimmed || coordinator.lastStreaming != streaming
-            || coordinator.lastRevision != revision || coordinator.lastVeiled != veiled
-            || coordinator.lastMentions != mentions.map(\.name) || coordinator.lastTargets != targets {
+            || coordinator.lastRevision != revision
+            || coordinator.lastMentions != mentionNames || coordinator.lastTargets != targets {
             coordinator.lastSource = source
             coordinator.lastPointSize = pointSize
             coordinator.lastCodePointSize = codePointSize
+            coordinator.lastSerif = serif
+            coordinator.lastLineSpacing = effectiveLineSpacing
             coordinator.lastDimmed = dimmed
             coordinator.lastStreaming = streaming
             coordinator.lastRevision = revision
-            coordinator.lastVeiled = veiled
-            coordinator.lastMentions = mentions.map(\.name)
+            coordinator.lastMentions = mentionNames
             coordinator.lastTargets = targets
-            view.render(Self.attributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: streaming, mentions: mentions, targets: targets))
+            view.render(Self.attributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: streaming, mentions: mentions, targets: targets, lineSpacingOverride: lineSpacingOverride))
             rendered = true
         }
-        if rendered || coordinator.lastRenderScope !== scope {
+        if rendered || coordinator.lastVeiled != veiled || coordinator.lastRenderScope !== scope {
+            coordinator.lastVeiled = veiled
             coordinator.lastRenderScope = scope
             view.streamVeil.update(view, active: veiled, scope: scope)
         }
@@ -78,6 +86,10 @@ struct LinkParagraphView: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: LinkTextView, context: Context) -> CGSize? {
         guard let width = proposal.width else { return nil }
+        guard width > 0 else { return .zero }
+        if !hugsContent, !width.isFinite {
+            return CGSize(width: width, height: nsView.cachedHeightHint)
+        }
         return CGSize(width: width, height: nsView.height(forWidth: width))
     }
 
@@ -102,6 +114,8 @@ struct LinkParagraphView: NSViewRepresentable {
         var lastBlocks: [MarkdownBlock]?
         var lastPointSize: CGFloat = 0
         var lastCodePointSize: CGFloat = 0
+        var lastSerif = false
+        var lastLineSpacing: CGFloat = -1
         var lastDimmed = false
         var lastStreaming = false
         var lastRevision: Int = 0
@@ -126,9 +140,9 @@ struct LinkParagraphView: NSViewRepresentable {
     /// Same pretty string the `Text` path renders (short titles, bold
     /// links), rebuilt on AppKit types with an explicit base font, adaptive
     /// colors and favicon attachments.
-    /// The four faces per point size, looked up once: the italic conversion goes through
+    /// The four faces per point size and typeface, looked up once: the italic conversion goes through
     /// the font manager, and a streaming link paragraph rebuilds its string every flush.
-    private struct FontKey: Hashable { let prose: CGFloat; let code: CGFloat }
+    private struct FontKey: Hashable { let prose: CGFloat; let code: CGFloat; let serif: Bool }
     /// Quote and thinking text. `withAlphaComponent` on `labelColor` resolves it once,
     /// in the appearance current when the string is built (the system's, not the chat's),
     /// so dark chats on a light system drew near-black quotes; this resolves per draw.
@@ -141,14 +155,83 @@ struct LinkParagraphView: NSViewRepresentable {
     }
 
     @MainActor private static var fonts: [FontKey: (base: NSFont, bold: NSFont, italic: NSFont, mono: NSFont)] = [:]
+    private struct ParagraphStyleKey: Hashable {
+        let lineSpacing: CGFloat
+        let paragraphSpacing: CGFloat
+    }
+    @MainActor private static var paragraphStyles: [ParagraphStyleKey: NSParagraphStyle] = [:]
 
     @MainActor
-    static func attributed(source: String, pointSize: CGFloat, codePointSize: CGFloat = TypeScale.shared.code(12), dimmed: Bool, streaming: Bool = false, mentions: [HydraPersona] = [], targets: [String: HydraMentionTarget] = [:]) -> NSAttributedString {
+    static func sharedParagraphStyle(lineSpacing: CGFloat, paragraphSpacing: CGFloat = 0) -> NSParagraphStyle {
+        let key = ParagraphStyleKey(lineSpacing: lineSpacing, paragraphSpacing: paragraphSpacing)
+        if let cached = paragraphStyles[key] { return cached }
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = lineSpacing
+        style.paragraphSpacing = paragraphSpacing
+        let frozen = style.copy() as! NSParagraphStyle
+        paragraphStyles[key] = frozen
+        return frozen
+    }
+
+    private struct AttributedCacheKey: Hashable {
+        let source: String
+        let pointSize: CGFloat
+        let codePointSize: CGFloat
+        let lineSpacing: CGFloat
+        let dimmed: Bool
+        let mentions: [HydraPersona]
+        let targetURLs: [String: URL]
+        let assetGeneration: Int
+    }
+
+    @MainActor private static var attributedCache = RecentCache<AttributedCacheKey, NSAttributedString>(
+        limit: 512,
+        costLimit: 12 * 1024 * 1024,
+        entryCostLimit: 1 * 1024 * 1024
+    )
+
+    @MainActor
+    static func clearCache() {
+        attributedCache = RecentCache<AttributedCacheKey, NSAttributedString>(
+            limit: 512,
+            costLimit: 12 * 1024 * 1024,
+            entryCostLimit: 1 * 1024 * 1024
+        )
+    }
+
+    @MainActor
+    static func attributed(source: String, pointSize: CGFloat, codePointSize: CGFloat = TypeScale.shared.code(12), dimmed: Bool, streaming: Bool = false, mentions: [HydraPersona] = [], targets: [String: HydraMentionTarget] = [:], lineSpacingOverride: CGFloat? = nil) -> NSAttributedString {
+        let resolvedLineSpacing = lineSpacingOverride ?? TypeScale.proseLineSpacing(pointSize)
+        if !streaming {
+            let key = AttributedCacheKey(
+                source: source,
+                pointSize: pointSize,
+                codePointSize: codePointSize,
+                lineSpacing: resolvedLineSpacing,
+                dimmed: dimmed,
+                mentions: mentions,
+                targetURLs: targets.mapValues(\.url),
+                assetGeneration: RichLink.assetGeneration
+            )
+            if let hit = attributedCache.value(for: key) { return hit }
+            let style = sharedParagraphStyle(lineSpacing: resolvedLineSpacing)
+            let built = mutableAttributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: false, mentions: mentions, targets: targets, paragraphStyle: style)
+            let frozen = NSAttributedString(attributedString: built)
+            attributedCache.insert(frozen, for: key, cost: max(64, frozen.length * 4))
+            return frozen
+        }
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = resolvedLineSpacing
+        return mutableAttributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: true, mentions: mentions, targets: targets, paragraphStyle: style)
+    }
+
+    @MainActor
+    static func mutableAttributed(source: String, pointSize: CGFloat, codePointSize: CGFloat = TypeScale.shared.code(12), dimmed: Bool, streaming: Bool = false, mentions: [HydraPersona] = [], targets: [String: HydraMentionTarget] = [:], paragraphStyle: NSParagraphStyle? = nil) -> NSMutableAttributedString {
         let pretty = RichLink.prettyAttributed(source, streaming: streaming)
-        let key = FontKey(prose: pointSize, code: codePointSize)
+        let key = FontKey(prose: pointSize, code: codePointSize, serif: TypeScale.shared.serif)
         let (base, bold, italic, mono) = fonts[key] ?? {
-            let base = NSFont.systemFont(ofSize: pointSize)
-            let set = (base, NSFont.boldSystemFont(ofSize: pointSize),
+            let base = ThemeTypeface.nsFont(size: pointSize)
+            let set = (base, ThemeTypeface.nsFont(size: pointSize, weight: .bold),
                        NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask),
                        NSFont.monospacedSystemFont(ofSize: codePointSize, weight: .regular))
             fonts[key] = set
@@ -172,7 +255,9 @@ struct LinkParagraphView: NSViewRepresentable {
                    let icon = FaviconCache.cached(host: host) {
                     let attachment = NSTextAttachment()
                     attachment.image = icon
-                    attachment.bounds = NSRect(x: 0, y: base.descender + 1, width: 14, height: 14)
+                    let iconSize = min(20, max(12, (pointSize * 0.95).rounded()))
+                    let iconY = ((base.capHeight - iconSize) * 0.5).rounded()
+                    attachment.bounds = NSRect(x: 0, y: iconY, width: iconSize, height: iconSize)
                     out.append(NSAttributedString(attachment: attachment))
                     out.append(NSAttributedString(string: " ", attributes: [
                         .font: base,
@@ -188,8 +273,7 @@ struct LinkParagraphView: NSViewRepresentable {
                 appendProse(string, font: font, color: textColor, base: base, bold: bold, mentions: mentions, targets: targets, into: out)
             }
         }
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = TypeScale.proseLineSpacing(pointSize)
+        let style = paragraphStyle ?? sharedParagraphStyle(lineSpacing: TypeScale.proseLineSpacing(pointSize))
         out.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: out.length))
         return out
     }
@@ -318,15 +402,6 @@ extension EnvironmentValues {
 /// Non-editable selectable text view that sizes itself to its content width.
 /// No continuous work: layout runs once per text or width change.
 final class LinkTextView: NSTextView {
-    #if DEBUG
-    private static let legacyFullReplace = CaptureRun.isEnabled && CommandLine.arguments.contains("--legacy-native-render-probe")
-    private static var captureAppends = 0
-    private static var captureReplacements = 0
-
-    static func captureMutationCounts() -> [String: Int] {
-        ["appends": captureAppends, "fullReplacements": captureReplacements]
-    }
-    #endif
     private var lastLaidOutWidth: CGFloat = 0
     private var lastMeasuredHeight: CGFloat = 0
 
@@ -569,10 +644,12 @@ final class LinkTextView: NSTextView {
     private var measuredHeights: [CGFloat: CGFloat] = [:]
     private var measuredWidthOrder: [CGFloat] = []
     private var needsSettleAfterResize = false
+    private var intrinsicInvalidationQueued = false
+    var cachedHeightHint: CGFloat {
+        lastMeasuredHeight > 0 ? lastMeasuredHeight : (measuredHeights.values.first ?? 20)
+    }
 
-    /// New content; skips the layout pass when nothing changed (favicons and
-    /// streaming rebuilds both funnel through here).
-    func render(_ text: NSAttributedString) {
+    private func updateLinkTextAttributes() {
         // Links wear the theme's accent with no underline, like the rest of
         // the chrome; the system accent for System/Light/Dark. Set per render
         // so a theme change recolours links already on screen.
@@ -581,19 +658,19 @@ final class LinkTextView: NSTextView {
             .underlineStyle: 0,
             .cursor: NSCursor.pointingHand,
         ]
-        #if DEBUG
-        if Self.legacyFullReplace {
-            if textStorage?.isEqual(to: text) != true {
-                textStorage?.setAttributedString(text)
-                Self.captureReplacements += 1
-                lastMeasuredHeight = 0
-                measuredHeights.removeAll()
-                measuredWidthOrder.removeAll()
-            }
-            invalidateIntrinsicContentSize()
-            return
-        }
-        #endif
+    }
+
+    private func invalidateMeasuredText() {
+        lastMeasuredHeight = 0
+        measuredHeights.removeAll()
+        measuredWidthOrder.removeAll()
+        invalidateIntrinsicContentSize()
+    }
+
+    /// New content; skips the layout pass when nothing changed (favicons and
+    /// streaming rebuilds both funnel through here).
+    func render(_ text: NSAttributedString) {
+        updateLinkTextAttributes()
         if let storage = textStorage, !storage.isEqual(to: text) {
             let count = storage.length
             let extends = text.length >= count && text.string.utf16.starts(with: storage.string.utf16)
@@ -603,21 +680,38 @@ final class LinkTextView: NSTextView {
             if text.length > count, extends,
                text.attributedSubstring(from: NSRange(location: 0, length: count)).isEqual(to: storage) {
                 storage.append(text.attributedSubstring(from: NSRange(location: count, length: text.length - count)))
-                #if DEBUG
-                if CaptureRun.isEnabled { Self.captureAppends += 1 }
-                #endif
             } else {
                 storage.setAttributedString(text)
-                #if DEBUG
-                if CaptureRun.isEnabled { Self.captureReplacements += 1 }
-                #endif
             }
             if !selection.isEmpty { selectedRanges = selection }
-            lastMeasuredHeight = 0
-            measuredHeights.removeAll()
-            measuredWidthOrder.removeAll()
-            invalidateIntrinsicContentSize()
+            invalidateMeasuredText()
         }
+    }
+
+    /// A literal tail extension follows `render`'s selection rule; anything else needs its full path.
+    @discardableResult
+    func replaceStreamingTail(from utf16Offset: Int, with tail: NSAttributedString) -> Bool {
+        guard let storage = textStorage, utf16Offset >= 0, utf16Offset <= storage.length else { return false }
+        let oldTailLength = storage.length - utf16Offset
+        guard tail.length >= oldTailLength,
+              tail.string.utf16.starts(with: storage.string.utf16.dropFirst(utf16Offset)) else { return false }
+        updateLinkTextAttributes()
+        let range = NSRange(location: utf16Offset, length: oldTailLength)
+        if oldTailLength == tail.length,
+           storage.attributedSubstring(from: range).isEqual(to: tail) { return true }
+        let selection = selectedRange().length > 0 ? selectedRanges : []
+        // Like `render`: an unchanged attributed tail keeps its glyph layout and only the
+        // new characters are appended; a restyled tail is replaced whole.
+        if tail.length > oldTailLength,
+           tail.attributedSubstring(from: NSRange(location: 0, length: oldTailLength))
+               .isEqual(to: storage.attributedSubstring(from: range)) {
+            storage.append(tail.attributedSubstring(from: NSRange(location: oldTailLength, length: tail.length - oldTailLength)))
+        } else {
+            storage.replaceCharacters(in: range, with: tail)
+        }
+        if !selection.isEmpty { selectedRanges = selection }
+        invalidateMeasuredText()
+        return true
     }
 
     func height(forWidth width: CGFloat) -> CGFloat {
@@ -635,6 +729,16 @@ final class LinkTextView: NSTextView {
         measuredWidthOrder.append(width)
         measuredHeights[width] = height
         return height
+    }
+
+    private func queueIntrinsicContentSizeInvalidation() {
+        guard !intrinsicInvalidationQueued else { return }
+        intrinsicInvalidationQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            intrinsicInvalidationQueued = false
+            invalidateIntrinsicContentSize()
+        }
     }
 
     override var intrinsicContentSize: NSSize {
@@ -661,10 +765,17 @@ final class LinkTextView: NSTextView {
         }
         guard width > 0, abs(width - lastLaidOutWidth) > 0.5 else { return }
         lastLaidOutWidth = width
-        let height = height(forWidth: width)
+        let existing = measuredHeights[width]
+        let height = existing ?? height(forWidth: width)
+        // Skip the second invalidation when SwiftUI's `sizeThatFits` already measured this width.
+        if lastMeasuredHeight == 0, existing != nil {
+            lastMeasuredHeight = height
+            return
+        }
         guard abs(height - lastMeasuredHeight) > 0.5 else { return }
         lastMeasuredHeight = height
-        invalidateIntrinsicContentSize()
+        // Invalidating during layout makes the hosting view skip the whole pass, which could leave a just-mounted reply undrawn.
+        queueIntrinsicContentSizeInvalidation()
     }
 
     override func viewDidEndLiveResize() {

@@ -1,5 +1,8 @@
 # Hydra benchmark
 
+> Archived: the scripts and app-side probes this document runs were moved out of the repository on 2026-11-15 to `private-artifacts/retired-probes-20261115/` under the artifact root (the parent of the long-lived checkout). They remain in Git history before branch `slim/3.0-pre`. The rest of this page is a historical record.
+
+
 Use three layers together. Quality comes first, then cost, then time. No single score should conceal a correctness regression or missing evidence.
 
 ## Layer 1: observational scorecard

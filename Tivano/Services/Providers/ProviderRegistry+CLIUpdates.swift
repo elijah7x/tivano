@@ -34,11 +34,22 @@ struct CLICheckCache: Equatable {
     var checkedAt: Date
 }
 
+struct CLIVersionCache: Equatable {
+    var executable: String
+    var resolvedExecutable: String
+    var channelIdentity: String
+    var releaseIdentity: String
+    var version: String
+    var readAt: Date
+}
+
 extension ProviderRegistry {
     /// A check this fresh is kept when the app opens or monitoring is switched back on.
     nonisolated static let cliCheckFreshnessOnOpen: TimeInterval = 15 * 60
     /// How often the open app reads versions again. This does not install.
     nonisolated static let cliCheckInterval: TimeInterval = 6 * 3600
+    /// Only the update check immediately following a status refresh reuses its version read.
+    nonisolated static let cliVersionReuse: TimeInterval = 60
     /// Every single check and every batch shares this many runs at once.
     nonisolated static let cliCheckConcurrency = 3
     nonisolated static let cliUpdateTimeout: TimeInterval = 900
@@ -53,6 +64,7 @@ extension ProviderRegistry {
         cliCheckTasks[provider]?.task.cancel()
         cliCheckGeneration[provider] = UUID()
         cliCheckCache[provider] = nil
+        cliVersionCache[provider] = nil
         if ![.waiting, .updating].contains(cliUpdates[provider]?.phase) {
             setCLIUpdateStatus(nil, for: provider)
         }
@@ -62,10 +74,9 @@ extension ProviderRegistry {
             }
             return
         }
-        cliCheckTasks[provider]?.task.cancel()
         guard cliUpdates[provider]?.phase == .waiting, let executable = executable(for: provider) else { return }
         let lock = cliInstallLock(for: executable)
-        guard cliUpdateRequesters[lock] == provider, !cliRecoveryLocks.contains(lock),
+        guard cliUpdateRequesters[lock] == provider,
               providersSharingCLIInstall(lock).allSatisfy({ cliUpdates[$0]?.phase != .updating }) else { return }
         cliUpdateTasks[lock]?.task.cancel()
     }
@@ -124,10 +135,10 @@ extension ProviderRegistry {
 
     /// Asks for an install. Callers that share an install await the one already running.
     /// A custom binary path, an unknown channel, and a provider that is off or unmonitored do not install.
-    func updateCLI(_ provider: ProviderKind, recovery: Bool = false) async -> Bool {
+    func updateCLI(_ provider: ProviderKind) async -> Bool {
         // MiniMax Code needs its official installer/npm flags for native optional dependencies.
         // Until that update transaction is integrated, offer read-only version checks only.
-        guard !recovery, !CaptureRun.isEnabled, !provider.isAPIKeyBased, provider != .minimaxCode, provider != .zcode else { return false }
+        guard !CaptureRun.isEnabled, !provider.isAPIKeyBased, provider != .minimaxCode, provider != .zcode else { return false }
         guard let executable = executable(for: provider) else { return false }
         guard settings.isEnabled(provider), monitorsCLIUpdates(provider), settings.binaryPath(for: provider).isEmpty else { return false }
         let lock = cliInstallLock(for: executable)
@@ -148,7 +159,6 @@ extension ProviderRegistry {
                 if self.cliUpdateTasks[lock]?.id == id {
                     self.cliUpdateTasks[lock] = nil
                     self.cliUpdateRequesters[lock] = nil
-                    self.cliRecoveryLocks.remove(lock)
                 }
             }
             return await self.performCLIUpdate(provider, lock: lock, sharers: sharers, snapshot: snapshot)
@@ -183,6 +193,43 @@ extension ProviderRegistry {
             .first { !$0.isEmpty }
         guard let line, CLIUpdates.compare(line, with: line) == .equal else { return nil }
         return line
+    }
+
+    func recordCLIVersion(_ version: String?, for provider: ProviderKind, executable: URL) async {
+        cliVersionCache[provider] = nil
+        guard let version, settings.isEnabled(provider), monitorsCLIUpdates(provider) else { return }
+        let readAt = Date.now
+        do {
+            let channel = try await CLIUpdates.channel(
+                for: provider,
+                executable: executable,
+                environment: CLIInstallEnvironment.current,
+                probe: cliProbe
+            )
+            guard !Task.isCancelled else { return }
+            cliVersionCache[provider] = CLIVersionCache(
+                executable: cliProbe.standardize(executable.path),
+                resolvedExecutable: cliProbe.standardize(cliProbe.resolve(executable).path),
+                channelIdentity: channel?.identity ?? "",
+                releaseIdentity: cliReleaseIdentity(for: provider),
+                version: version,
+                readAt: readAt
+            )
+        } catch {
+            return
+        }
+    }
+
+    func consumeCLIVersion(for provider: ProviderKind, executable: URL, channel: CLIInstallChannel?, allowReuse: Bool) -> String? {
+        defer { cliVersionCache[provider] = nil }
+        guard allowReuse, let cached = cliVersionCache[provider] else { return nil }
+        let age = Date.now.timeIntervalSince(cached.readAt)
+        guard (0..<Self.cliVersionReuse).contains(age),
+              cached.executable == cliProbe.standardize(executable.path),
+              cached.resolvedExecutable == cliProbe.standardize(cliProbe.resolve(executable).path),
+              cached.channelIdentity == (channel?.identity ?? ""),
+              cached.releaseIdentity == cliReleaseIdentity(for: provider) else { return nil }
+        return cached.version
     }
 
     // MARK: - Checks
@@ -221,10 +268,19 @@ extension ProviderRegistry {
         )
         if !force, cliCheckIsFresh(provider, key: key, freshness: freshness) { return }
         beginCLIChecking(provider)
-        let raw = if provider == .zcode {
-            ZCodeCLI.version(entry: executable)
+        let sharedVersion = consumeCLIVersion(
+            for: provider,
+            executable: executable,
+            channel: channel,
+            allowReuse: !force && provider != .zcode
+        )
+        let raw: String?
+        if provider == .zcode {
+            raw = ZCodeCLI.version(entry: executable)
+        } else if let sharedVersion {
+            raw = sharedVersion
         } else {
-            await cliCommandRunner.readVersion(executable, environment)
+            raw = await cliCommandRunner.readVersion(executable, environment)
         }
         guard cliCheckStillCurrent(provider, generation: generation, epoch: epoch) else { return }
         if Task.isCancelled {
@@ -545,7 +601,7 @@ extension ProviderRegistry {
     /// The executable still on this install, or nil when the wait should stop.
     /// A custom path, a disabled provider, and monitoring switched off are nil as well.
     private func preparedCLIExecutable(_ provider: ProviderKind, lock: String) -> URL? {
-        guard !Task.isCancelled, settings.isEnabled(provider), (cliRecoveryLocks.contains(lock) || monitorsCLIUpdates(provider)),
+        guard !Task.isCancelled, settings.isEnabled(provider), monitorsCLIUpdates(provider),
               settings.binaryPath(for: provider).isEmpty,
               let executable = executable(for: provider), cliInstallLock(for: executable) == lock else { return nil }
         return executable
@@ -570,7 +626,7 @@ extension ProviderRegistry {
         sharers: [ProviderKind],
         snapshot: [ProviderKind: CLIUpdateStatus]
     ) -> Bool {
-        if Task.isCancelled || !settings.isEnabled(requester) || (!cliRecoveryLocks.contains(lock) && !monitorsCLIUpdates(requester))
+        if Task.isCancelled || !settings.isEnabled(requester) || !monitorsCLIUpdates(requester)
             || !settings.binaryPath(for: requester).isEmpty {
             restoreCLIWait(sharers, snapshot: snapshot)
             return true
@@ -634,6 +690,7 @@ extension ProviderRegistry {
     }
 
     private func reloadCLIProvider(_ provider: ProviderKind, expected: String) async -> Bool {
+        cliVersionCache[provider] = nil
         if let cliProviderReloader {
             return await cliProviderReloader(provider)
         }
@@ -777,7 +834,6 @@ extension ProviderRegistry {
             if end <= parts.count { return "package:" + NSString.path(withComponents: Array(parts[..<end])) }
         }
         if let brew = homebrewInstallLock(path) { return brew }
-        if let pnpm = pnpmInstallLock(path) { return pnpm }
         return "path:" + path
     }
 

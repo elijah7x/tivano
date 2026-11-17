@@ -4,7 +4,7 @@ import Observation
 /// The user's MCP connections: which catalog servers are connected, their field values,
 /// and what each announced when it was last probed. Persists to `MCPPaths.connectionsURL`
 /// (secrets to the Keychain) and, on every change, rewrites the provider config files under
-/// `MCPPaths.directory` and syncs the file-based CLIs (Cursor, OpenCode, Gemini).
+/// `MCPPaths.directory`.
 @MainActor
 @Observable
 final class MCPStore {
@@ -350,7 +350,7 @@ final class MCPStore {
         try? data.write(to: MCPPaths.customsURL, options: .atomic)
     }
 
-    /// Rewrites every provider's config from `enabledServers` and runs the one-time external-CLI cleanup.
+    /// Rewrites every provider's config from `enabledServers`.
     private func exportAll() {
         guard isConfigurationLoaded else { return }
         let servers = enabledServers
@@ -360,7 +360,6 @@ final class MCPStore {
             return (serverID: server.id, upstream: remote, headers: [:], usesOAuth: true)
         })
         MCPProviderConfig.writeAll(servers)
-        MCPExternalSync.sync(servers)
         // The in-app clients (API providers) pick the new list up on their next use.
         Task { await MCPHub.shared.reload() }
     }

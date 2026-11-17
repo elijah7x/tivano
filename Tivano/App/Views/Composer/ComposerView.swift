@@ -20,11 +20,11 @@ struct ComposerArea: View {
     /// `runtime.isDiffVisible`, so every opener (tab, Review, ⌘D) shares it.
     @State private var diffPopover = DiffPopoverCoordinator()
     @State private var repositoryDirectory: String?
+    @MainActor private static var repositoryStatusCache = RecentCache<String, Bool>(limit: 32)
 
     private var canShowChanges: Bool {
         showsChanges && workingDirectory != nil && repositoryDirectory == workingDirectory
     }
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     var body: some View {
         areaContent
@@ -43,7 +43,7 @@ struct ComposerArea: View {
                 ApprovalCard(request: request, runtime: runtime)
             }
             VStack(alignment: .center, spacing: -ThreadChangesTab.overlap) {
-                TabSlot(runtime: runtime, diffPopover: diffPopover, showsChanges: canShowChanges)
+                TabSlot(runtime: runtime)
                     .zIndex(0)
                 ComposerView(runtime: runtime, workingDirectory: workingDirectory, compactModelChip: compactModelChip, takesFocusOnAppear: takesFocusOnAppear)
                     .zIndex(1)
@@ -66,12 +66,22 @@ struct ComposerArea: View {
                 if canShowChanges { diffPopover.reopen(runtime: runtime) }
             }
             .task(id: workingDirectory) {
-                repositoryDirectory = nil
                 diffPopover.close()
-                guard showsChanges, let workingDirectory else { return }
+                guard showsChanges, let workingDirectory else {
+                    if repositoryDirectory != nil { repositoryDirectory = nil }
+                    return
+                }
+                if let cached = Self.repositoryStatusCache.value(for: workingDirectory) {
+                    let resolved = cached ? workingDirectory : nil
+                    if repositoryDirectory != resolved { repositoryDirectory = resolved }
+                    return
+                }
+                if repositoryDirectory != nil { repositoryDirectory = nil }
                 let isRepository = await Git(workingDirectory).isRepository()
+                Self.repositoryStatusCache.insert(isRepository, for: workingDirectory)
                 guard !Task.isCancelled else { return }
-                repositoryDirectory = isRepository ? workingDirectory : nil
+                let resolved = isRepository ? workingDirectory : nil
+                if repositoryDirectory != resolved { repositoryDirectory = resolved }
             }
             .onDisappear { diffPopover.close() }
             .onChange(of: isColumnShown) { _, shown in if !shown { diffPopover.close() } }
@@ -104,15 +114,13 @@ struct ThreadDirectoryError: View {
     }
 }
 
-/// The tab above the pill: a pending provider switch, else a usage-limit offer, else the queue while
-/// any follow-ups are queued, else the changes tab. The agent's questions are badges in the conversation now.
-/// Reading them here keeps stats refreshes and question arrivals off the area,
+/// The tab above the pill: a usage-limit offer, else a pending provider switch, else the queue while
+/// any follow-ups are queued. The agent's questions are badges in the conversation now.
+/// Reading them here keeps queue changes and question arrivals off the area,
 /// whose body watches approvals alone.
 private struct TabSlot: View {
     @Environment(AppModel.self) private var model
     let runtime: ThreadRuntime
-    let diffPopover: DiffPopoverCoordinator
-    let showsChanges: Bool
 
     var body: some View {
         // One slot, its tabs stacked on the box's top edge rather than on each
@@ -122,7 +130,7 @@ private struct TabSlot: View {
         // pull an empty slot's box up by that much.
         let limitOffer = model.autoContinue.offer(for: runtime.threadID)
         let hasPendingProviderSwitch = model.thread(runtime.threadID)?.pendingProviderSwitch != nil
-        if hasPendingProviderSwitch || limitOffer != nil || !runtime.followUps.isEmpty || (showsChanges && runtime.changeStats != nil) {
+        if hasPendingProviderSwitch || limitOffer != nil || !runtime.followUps.isEmpty {
             ZStack(alignment: .bottom) {
                 if let limitOffer {
                     UsageLimitTab(threadID: runtime.threadID, offer: limitOffer)
@@ -131,23 +139,8 @@ private struct TabSlot: View {
                     ProviderSwitchTab(threadID: runtime.threadID)
                         .transition(.softAppear)
                 } else if !runtime.followUps.isEmpty {
-                    // The queued steering prompts take the tab slot while any are queued:
-                    // the changes tab hides behind them and reappears once the queue empties.
                     FollowUpQueueTab(runtime: runtime)
                         .transition(.softAppear)
-                } else if showsChanges, let stats = runtime.changeStats {
-                    ThreadChangesTab(
-                        stats: stats,
-                        anchor: { diffPopover.setAnchor($0) }
-                    ) {
-                        runtime.clearDiffFocus()
-                        runtime.diffAnchor = nil
-                        if runtime.diffSelection != nil { runtime.diffSelection = nil }
-                        // Set last so a redundant write never restarts the diff load
-                        // or steals the presentation.
-                        if !runtime.isDiffVisible { runtime.isDiffVisible = true }
-                    }
-                    .transition(.softAppear)
                 }
             }
         }
@@ -196,14 +189,15 @@ struct ComposerView: View {
         // Layout only: the resolved thread and help strings are plain values handed down,
         // so neither a keystroke nor a thread write re-evaluates the pill itself.
         let thread = model.thread(runtime.threadID)
+        let needsLead = headNeedsLead(for: thread)
         // The text owns the full width; the controls have their own bottom row,
         // so wrapping never reserves an empty column above the buttons.
         VStack(alignment: .leading, spacing: 8) {
             ComposerTextColumn(
                 runtime: runtime,
                 controller: controller,
-                placeholder: placeholder(for: thread),
-                placeholderHint: showsPrediction ? Chrome.localized("Press Tab to accept") : "",
+                fallbackPlaceholder: fallbackPlaceholder(for: thread, headNeedsLead: needsLead),
+                allowsPrediction: thread != nil && !needsLead,
                 takesFocusOnAppear: takesFocusOnAppear,
                 attachmentNotice: attachmentNotice,
                 onKey: handleKey,
@@ -220,7 +214,6 @@ struct ComposerView: View {
                     runtime: runtime,
                     thread: thread,
                     compact: compactModelChip,
-                    recentDownloadsPicker: model.settings.recentDownloadsPicker,
                     headsProvider: headsProvider(thread),
                     showingRecents: $showingRecents,
                     onAttach: { attach($0.map(AttachmentSource.file)) },
@@ -240,7 +233,7 @@ struct ComposerView: View {
             ComposerWorkingDotsSlot(runtime: runtime)
         }
         .modifier(ComposerSurface())
-        .disabled(headNeedsLead)
+        .disabled(needsLead)
         // The pill's width glides as the panels take or give room; the text view and the
         // controls move as one with the glass rather than each on their own frame.
         .geometryGroup()
@@ -252,7 +245,13 @@ struct ComposerView: View {
             }
         }
         .onDisappear { controller.tearDownSuggestions() }
-        .onChange(of: runtime.threadID) { _, _ in controller.hideSuggestions() }
+        .onChange(of: runtime.threadID) { _, _ in
+            controller.hideSuggestions()
+            controller.suggestionRefresh?.cancel()
+            if suggestions.isVisible { suggestions = SuggestionState() }
+            historyIndex = nil
+            if attachmentNotice != nil { attachmentNotice = nil }
+        }
         // The column shown again takes the keyboard back, as it did when it first appeared;
         // one going behind another drops its list.
         .onChange(of: isColumnShown) { _, shown in
@@ -270,11 +269,14 @@ struct ComposerView: View {
         .onChange(of: suggestions.isVisible) { _, visible in
             if visible, suggestions.kind == .command { Task { await loadCommands() } }
         }
-        .task(id: workingDirectory) {
+        .onChange(of: workingDirectory) { _, _ in
             controller.suggestionRefresh?.cancel()
             suggestions = SuggestionState()
             fileIndex.reset()
-            if let workingDirectory { await fileIndex.prepare(workingDirectory) }
+        }
+        .task(id: FileIndexPrepareKey(directory: workingDirectory, isShown: isColumnShown)) {
+            guard isColumnShown, let workingDirectory else { return }
+            await fileIndex.prepare(workingDirectory)
             guard !Task.isCancelled else { return }
             if controller.hasFocus { cursorMoved(to: controller.cursorLocation) }
         }
@@ -285,6 +287,11 @@ struct ComposerView: View {
             guard !Task.isCancelled else { return }
             withAnimation(Chrome.panelSlide) { attachmentNotice = nil }
         }
+    }
+
+    private struct FileIndexPrepareKey: Equatable {
+        let directory: String?
+        let isShown: Bool
     }
 
     private func blur() {
@@ -335,7 +342,11 @@ struct ComposerView: View {
     }
 
     private var headNeedsLead: Bool {
-        guard let thread = model.thread(runtime.threadID), thread.hydra?.isFinished == true else { return false }
+        headNeedsLead(for: model.thread(runtime.threadID))
+    }
+
+    private func headNeedsLead(for thread: ChatThread?) -> Bool {
+        guard let thread, thread.hydra?.isFinished == true else { return false }
         return model.hydraHeadIsInOpenJob(thread)
     }
 
@@ -344,12 +355,9 @@ struct ComposerView: View {
             && !headNeedsLead && runtime.draft.isEmpty && runtime.draft.quotes.isEmpty
     }
 
-    private func placeholder(for thread: ChatThread?) -> String {
+    private func fallbackPlaceholder(for thread: ChatThread?, headNeedsLead: Bool) -> String {
         guard let thread else { return "" }
-        if headNeedsLead { return Chrome.localized("Ask the lead to send this head back") }
-        if showsPrediction, let prediction = runtime.promptPrediction {
-            return prediction
-        }
+        if headNeedsLead { return Chrome.localized("Ask the lead to send this sub-agent back") }
         if thread.interactionMode == .plan { return Chrome.localized("Describe what you want to plan") }
         if model.hydraIsOn(thread) {
             return String(format: Chrome.localized("Ask %@ for anything; the lead decides what to do itself and what to delegate"), thread.provider.displayName)
@@ -607,32 +615,16 @@ struct ComposerView: View {
 /// The pill's full-width text area: the attachment strip, the notice and the text view. It owns the
 /// draft-text binding and the growth math, so a keystroke never reaches the pill itself.
 private struct ComposerTextColumn: View {
-    @Environment(WindowLiveResize.self) private var liveResize
-    @Bindable var runtime: ThreadRuntime
+    let runtime: ThreadRuntime
     let controller: ComposerController
-    let placeholder: String
-    let placeholderHint: String
+    let fallbackPlaceholder: String
+    let allowsPrediction: Bool
     let takesFocusOnAppear: Bool
     let attachmentNotice: String?
     let onKey: (ComposerKey) -> Bool
     let onAttach: ([AttachmentSource]) -> Void
     let onCursorChange: (Int) -> Void
     let onBlur: () -> Void
-
-    @State private var textHeight: CGFloat = 20
-
-    private static var minComposerHeight: CGFloat { TypeScale.shared.content(20) }
-    private static let maxComposerLines = 5
-    private static var maxComposerHeight: CGFloat {
-        let font = NSFont.systemFont(ofSize: TypeScale.shared.content(14))
-        let line = ceil(font.ascender - font.descender + font.leading)
-        // Matches ComposerTextView's textContainerInset.height * 2.
-        return line * CGFloat(maxComposerLines) + 4
-    }
-
-    private var composerHeight: CGFloat {
-        min(max(textHeight, Self.minComposerHeight), Self.maxComposerHeight)
-    }
 
     var body: some View {
         // Spacing 0 and the strip carries its own gap: the strip reads the draft
@@ -651,40 +643,92 @@ private struct ComposerTextColumn: View {
                     .padding(.bottom, 6)
                     .transition(.softAppear)
             }
-            ComposerTextView(
-                text: $runtime.draft.text,
-                height: $textHeight,
-                placeholder: placeholder,
-                placeholderHint: placeholderHint,
+            ComposerEditorField(
+                runtime: runtime,
                 controller: controller,
+                fallbackPlaceholder: fallbackPlaceholder,
+                allowsPrediction: allowsPrediction,
+                takesFocusOnAppear: takesFocusOnAppear,
                 onKey: onKey,
                 onAttach: onAttach,
                 onCursorChange: onCursorChange,
-                onBlur: onBlur,
-                takesFocusOnAppear: takesFocusOnAppear
+                onBlur: onBlur
             )
-            // The text view itself takes its new height at once, so it lays out
-            // every line with nothing to scroll; only the clip around it grows
-            // and shrinks. Animating the scroll view's own frame made AppKit
-            // scroll the caret into a too-short view and then snap back.
-            .frame(height: composerHeight)
-            .transaction { $0.animation = nil }
-            .frame(height: composerHeight, alignment: .top)
-            .clipped()
-            // While the window is being dragged the box's height follows the rewrap at once; a spring restarted per frame lagged it behind the window.
-            .animation(liveResize.isReshaping ? nil : .smooth(duration: 0.28), value: composerHeight)
         }
     }
 }
 
-/// The pill's bottom controls: the attach button, the model chip, the context ring
-/// and send. It takes the resolved thread and help values as plain values, so a thread
-/// write repaints the controls without reaching the pill or the text.
+/// Hosts the text view and resolves draft-dependent prediction placeholders inside its
+/// own body so keystrokes never re-evaluate `ComposerView` or `ComposerControls`.
+private struct ComposerEditorField: View {
+    @Environment(AppModel.self) private var model
+    @Environment(WindowLiveResize.self) private var liveResize
+    @Bindable var runtime: ThreadRuntime
+    let controller: ComposerController
+    let fallbackPlaceholder: String
+    let allowsPrediction: Bool
+    let takesFocusOnAppear: Bool
+    let onKey: (ComposerKey) -> Bool
+    let onAttach: ([AttachmentSource]) -> Void
+    let onCursorChange: (Int) -> Void
+    let onBlur: () -> Void
+
+    @State private var textHeight: CGFloat = 20
+
+    private static var minComposerHeight: CGFloat { TypeScale.shared.content(20) }
+    private static let maxComposerLines = 5
+    private static var maxComposerHeight: CGFloat {
+        let font = ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
+        let line = ceil(font.ascender - font.descender + font.leading)
+        // Matches ComposerTextView's textContainerInset.height * 2.
+        return line * CGFloat(maxComposerLines) + 4
+    }
+
+    private var composerHeight: CGFloat {
+        min(max(textHeight, Self.minComposerHeight), Self.maxComposerHeight)
+    }
+
+    var body: some View {
+        let showsPrediction = allowsPrediction
+            && model.settings.isPromptPredictionsEnabled
+            && !(runtime.promptPrediction?.isEmpty ?? true)
+            && runtime.draft.isEmpty
+            && runtime.draft.quotes.isEmpty
+        let placeholder = showsPrediction ? (runtime.promptPrediction ?? fallbackPlaceholder) : fallbackPlaceholder
+        let placeholderHint = showsPrediction ? Chrome.localized("Press Tab to accept") : ""
+        ComposerTextView(
+            text: $runtime.draft.text,
+            height: $textHeight,
+            placeholder: placeholder,
+            placeholderHint: placeholderHint,
+            controller: controller,
+            onKey: onKey,
+            onAttach: onAttach,
+            onCursorChange: onCursorChange,
+            onBlur: onBlur,
+            takesFocusOnAppear: takesFocusOnAppear
+        )
+        // The text view itself takes its new height at once, so it lays out
+        // every line with nothing to scroll; only the clip around it grows
+        // and shrinks. Animating the scroll view's own frame made AppKit
+        // scroll the caret into a too-short view and then snap back.
+        .frame(height: composerHeight)
+        .transaction { $0.animation = nil }
+        .frame(height: composerHeight, alignment: .top)
+        .clipped()
+        // While the window is being dragged the box's height follows the rewrap at once; a spring restarted per frame lagged it behind the window.
+        .animation(liveResize.isReshaping ? nil : .smooth(duration: 0.28), value: composerHeight)
+    }
+}
+
+/// The pill's bottom controls: the model chip on the left; attach, permissions, the
+/// context ring, voice and send on the right. It takes the resolved thread and help values
+/// as plain values, so a thread write repaints the controls without reaching the pill or
+/// the text.
 private struct ComposerControls: View {
     let runtime: ThreadRuntime
     let thread: ChatThread
     let compact: Bool
-    let recentDownloadsPicker: Bool
     let headsProvider: ProviderKind?
     @Binding var showingRecents: Bool
     let onAttach: ([URL]) -> Void
@@ -693,15 +737,19 @@ private struct ComposerControls: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            PermissionMenu(thread: thread)
-            Button {
-                if recentDownloadsPicker {
-                    showingRecents.toggle()
-                } else {
-                    onChooseFiles()
+            ViewThatFits(in: .horizontal) {
+                ModelEffortSlot(runtime: runtime, thread: thread, compact: compact)
+                    .fixedSize()
+                if !compact {
+                    ModelEffortSlot(runtime: runtime, thread: thread, compact: true)
+                        .fixedSize()
                 }
+            }
+            Spacer(minLength: 8)
+            Button {
+                showingRecents.toggle()
             } label: {
-                Image(systemName: "paperclip")
+                Image.themed("paperclip")
                     .font(Chrome.iconFont)
             }
             .buttonStyle(.iconChip(active: showingRecents))
@@ -714,15 +762,8 @@ private struct ComposerControls: View {
                     chooseOther: { showingRecents = false; onChooseFiles() }
                 )
             }
-            ViewThatFits(in: .horizontal) {
-                ModelEffortSlot(runtime: runtime, thread: thread, compact: compact)
-                    .fixedSize()
-                if !compact {
-                    ModelEffortSlot(runtime: runtime, thread: thread, compact: true)
-                        .fixedSize()
-                }
-            }
-            Spacer(minLength: 8)
+            PermissionMenu(thread: thread, compact: compact)
+                .fixedSize()
             // A floating panel's box (compact chip) leaves the ring out: a head's context
             // is not what the panel is for, and the row is short of room as it is.
             if !compact {
@@ -738,15 +779,53 @@ private struct ComposerControls: View {
 private struct PermissionMenu: View {
     @Environment(AppModel.self) private var model
     let thread: ChatThread
+    var compact: Bool = false
+
+    @State private var isPresented = false
+
+    private static var symbolFont: Font {
+        .ui(size: TypeScale.stockPointSize(.callout) + 1.5, weight: .semibold)
+    }
+
+    private static var symbolFrameSize: CGFloat {
+        TypeScale.shared.ui(14)
+    }
 
     var body: some View {
         let runtimeMode = thread.provider.supported(thread.runtimeMode)
-        // The shield's closed outline reads a point smaller than the paperclip beside it.
-        ChromeMenuButton(symbol: runtimeMode.symbol, secondary: true, glyphBoost: runtimeMode == .fullAccess ? 1 : 0, help: "\(Chrome.localized(runtimeMode.title)) · \(Chrome.localized(runtimeMode.summary))") {
-            PopoverSectionHeader("Permissions")
-            ForEach(RuntimeMode.allCases.filter { thread.provider.supports($0) }) { mode in
-                PopoverItem(mode.title, symbol: mode.symbol, isChecked: runtimeMode == mode) {
-                    model.updateThread(thread.id) { $0.runtimeMode = $0.provider.supported(mode) }
+        Button {
+            isPresented.toggle()
+        } label: {
+            if compact {
+                Image(systemName: runtimeMode.symbol)
+                    .font(Self.symbolFont)
+            } else {
+                HStack(spacing: 5) {
+                    Image(systemName: runtimeMode.symbol)
+                        .font(Self.symbolFont)
+                        .frame(width: Self.symbolFrameSize, height: Self.symbolFrameSize)
+                    Text(verbatim: Chrome.localized(runtimeMode.title))
+                        .foregroundStyle(Chrome.primaryText)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(Chrome.chevronFont)
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+            }
+        }
+        .buttonStyle(compact ? .iconChip(active: isPresented) : .chip(active: isPresented))
+        .focusable(false)
+        .help(Text(verbatim: "\(Chrome.localized(runtimeMode.title)) · \(Chrome.localized(runtimeMode.summary))"))
+        .accessibilityLabel(Text("Permissions"))
+        .accessibilityValue(Text(verbatim: Chrome.localized(runtimeMode.title)))
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            PopoverMenu {
+                PopoverSectionHeader("Permissions")
+                ForEach(RuntimeMode.allCases.filter { thread.provider.supports($0) }) { mode in
+                    PopoverItem(mode.title, symbol: mode.symbol, isChecked: runtimeMode == mode) {
+                        model.updateThread(thread.id) { $0.runtimeMode = $0.provider.supported(mode) }
+                        isPresented = false
+                    }
                 }
             }
         }
@@ -757,12 +836,9 @@ private struct PermissionMenu: View {
 /// off the run flag, so starting and stopping a turn repaints the dots alone.
 private struct ComposerWorkingDotsSlot: View {
     let runtime: ThreadRuntime
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     var body: some View {
-        if performanceMode {
-            EmptyView()
-        } else if runtime.isRunning {
+        if runtime.isRunning {
             ComposerWorkingDots()
                 .frame(height: 24)
                 .frame(maxHeight: .infinity, alignment: .bottom)
@@ -889,8 +965,8 @@ private struct SendRunState: View {
     }
 }
 
-/// The draft-empty reader: watches `draft.isEmpty` alone, so a keystroke toggles the
-/// button without re-running the heads state or the help text above it.
+/// The draft-empty reader: watches `draftIsEmpty` alone, so only an empty/non-empty
+/// transition repaints the button without re-running the heads state or help text above it.
 private struct SendDraftState: View {
     let runtime: ThreadRuntime
     let isRunning: Bool
@@ -898,12 +974,12 @@ private struct SendDraftState: View {
     let send: () -> Void
 
     var body: some View {
-        let draftEmpty = runtime.draft.isEmpty
+        let draftEmpty = runtime.draftIsEmpty
         let isEnabled = isRunning || !draftEmpty
         Button {
             if isRunning { runtime.interrupt() } else { send() }
         } label: {
-            Image(systemName: isRunning ? "stop.fill" : "arrow.up")
+            Image.themed(isRunning ? "stop.fill" : "arrow.up")
                 .font(Chrome.iconFont)
                 .foregroundStyle(.white)
                 .contentTransition(.symbolEffect(.replace))
@@ -926,14 +1002,14 @@ private struct SendDraftState: View {
             // Return does not steer while heads work, it queues: the help says where the
             // message lands rather than promising a stop that never comes.
             if headsWorking {
-                return Chrome.localized("Heads are at work: your message waits for the lead")
+                return Chrome.localized("Sub-agents are at work: your message waits for the lead")
             }
             var parts = [String(format: Chrome.localized("Stop%@"), SendShortcutText.stop), Chrome.localized("Return steers")]
             if let queues { parts.append(String(format: Chrome.localized("%@ queues"), queues)) }
             return parts.joined(separator: " · ")
         }
         var parts = [Chrome.localized("Send (Return)")]
-        if let queues { parts.append(String(format: Chrome.localized(headsWorking ? "%@ queues until the heads report" : "%@ queues while running"), queues)) }
+        if let queues { parts.append(String(format: Chrome.localized(headsWorking ? "%@ queues until the sub-agents report" : "%@ queues while running"), queues)) }
         return parts.joined(separator: " · ")
     }
 }
@@ -1197,7 +1273,7 @@ final class FileIndex {
     /// never lists and lowercases its files again. A stale index is served and rebuilt behind it.
     /// A composer that finds its directory already building joins that build rather than
     /// waiting on nothing; two builds run at most, and two indexes are kept.
-    private static var built = RecentCache<String, (entries: [Entry], builtAt: Date)>(limit: 2)
+    private static var built = RecentCache<String, (entries: [Entry], builtAt: Date)>(limit: 12)
     private static var building: [String: Task<[Entry], Never>] = [:]
     private static let freshness: TimeInterval = 60
 
@@ -1388,37 +1464,15 @@ final class FileIndex {
 private struct ComposerSurface: ViewModifier {
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "upstream"
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-        let isDark = colorScheme == .dark
-        if floatingGlassStyle == "upstream" {
-            if isOnGlassPanel {
-                content
-                    .background(shape.fill(Chrome.panelControlFill(isDark: isDark)))
-                    .clipShape(shape)
-            } else {
-                content.floatingGlass(shape)
-            }
-        } else if isOnGlassPanel || performanceMode {
+        if isOnGlassPanel {
             content
-                .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
+                .background(shape.fill(Chrome.panelControlFill(isDark: colorScheme == .dark)))
                 .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(Chrome.overlay(isDark ? 0.14 : 0.08), lineWidth: 1)
-                }
         } else {
-            content
-                .glassEffect(.regular, in: shape)
-                .materialActiveAppearance(.active)
-                .background {
-                    shape
-                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
-                        .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
-                }
-                .clipShape(shape)
+            content.floatingGlass(shape)
         }
     }
 }

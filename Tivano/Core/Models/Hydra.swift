@@ -1049,15 +1049,6 @@ enum HydraPrompts {
             + "\nMake the assigned edits and report; the lead handles all validation."
     }
 
-    /// What the lead's chat looked like when a queued task was handed to a head, so the
-    /// head knows what is going on without the lead's context. Built from the timeline,
-    /// not from another model call, so a queued task costs nothing extra.
-    struct ChatContext {
-        var lastUserPrompt: String?
-        var lastReply: String?
-        var touchedPaths: [String] = []
-    }
-
     /// One line on where a head's work went, for its section of the report. Nothing for
     /// a head that worked in the checkout itself: its changes are simply there.
     static func landingLine(for report: HydraReport) -> String? {
