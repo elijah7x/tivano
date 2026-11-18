@@ -110,15 +110,14 @@ final class OmpSession: ProviderSession {
         try gate.data().write(to: gateURL, options: .atomic)
     }
 
-    /// Appended to omp's system prompt: the lead's Hydra policy with a team, the anti-slop
-    /// guidance, and plan mode's rule. omp keeps no copy of it in the conversation, so a
-    /// resumed thread gets the current one.
+    /// Appended to omp's system prompt: the lead's Hydra policy with a team and plan
+    /// mode's rule. omp keeps no copy of it in the conversation, so a resumed thread
+    /// gets the current one.
     private var systemPrompt: String {
         var parts: [String] = []
         if let hydra = configuration.hydra {
             parts.append(HydraPrompts.fallbackPolicy(hydra))
         }
-        parts.append(AntiSlopPolicy.instructions(enabled: configuration.antiSlopEnabled))
         if interactionMode == .plan { parts.append(Self.planPrompt) }
         return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
@@ -140,7 +139,7 @@ final class OmpSession: ProviderSession {
         let extensionURL = try OmpCLI.installExtension()
         let settings: URL
         do {
-            settings = try OmpCLI.writeLaunchSettings(id: launchID, hydra: configuration.hydra, leadModel: model)
+            settings = try OmpCLI.writeLaunchSettings(id: launchID)
             settingsFile = settings
             gateURL = try OmpCLI.gateFile(id: launchID)
             try writeGate(finalReport: false)

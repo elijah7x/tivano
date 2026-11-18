@@ -173,9 +173,8 @@ struct ActivityHeaderLabel: View {
 /// seconds; a still frame while the reader scrolls, and none at all with reduced motion.
 private struct ActivityShimmer: ViewModifier {
     let isActive: Bool
-    @Environment(\.chatColumnIsShown) private var columnIsShown
+    @Environment(\.chatColumnVisibility) private var columnVisibility
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var width: CGFloat = 0
 
     private static let period: TimeInterval = 3.4
@@ -196,13 +195,13 @@ private struct ActivityShimmer: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        if !isActive || reduceMotion || performanceMode {
+        if !isActive || reduceMotion {
             content
         } else {
             content
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
                 .overlay {
-                    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: ScrollActivity.shared.isScrolling || !columnIsShown)) { context in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ScrollActivity.shared.isScrolling || !columnVisibility.isShown || !FrontMonitor.shared.isVisible)) { context in
                         let centre = Self.bandCentre(at: context.date)
                         content
                             .foregroundStyle(Chrome.primaryText)
@@ -260,7 +259,6 @@ private struct ActivityStep<Content: View>: View {
     let continues: Bool
     @ViewBuilder let content: Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var connector: CGFloat
     @State private var revealed: Bool
     private let delay: TimeInterval
@@ -276,7 +274,7 @@ private struct ActivityStep<Content: View>: View {
         delay = isFirstOfNewGroup ? ActivityMetrics.firstStepDelay : 0
     }
 
-    private var motionEnabled: Bool { !reduceMotion && !performanceMode }
+    private var motionEnabled: Bool { !reduceMotion }
 
     var body: some View {
         // Opacity, offset and line trim leave the measured row height at its final value.
@@ -328,7 +326,6 @@ struct ActivityTreeGroup: View {
     @Environment(\.timelineBlockID) private var blockID
     @Environment(\.timelineLiveAppearance) private var liveAppearance
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var fallbackCollapsed: Bool
     @State private var stepLimit = ActivityMetrics.stepPage
     private var disclosureID: String { blockID + "/work/" + (entries.first.map { "\($0.id)" } ?? "") }
@@ -374,7 +371,7 @@ struct ActivityTreeGroup: View {
         }
     }
 
-    private var motionEnabled: Bool { !reduceMotion && !performanceMode }
+    private var motionEnabled: Bool { !reduceMotion }
 
     var body: some View {
         let facts = GroupFacts(entries: entries)
@@ -467,7 +464,6 @@ struct ActivityTreeGroup: View {
 private struct ActivityThoughtStep: View {
     let entry: TimelineEntry
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var pin: Bool?
     @State private var isHovering = false
 
@@ -476,7 +472,7 @@ private struct ActivityThoughtStep: View {
             let isOpen = pin ?? block.isStreaming
             VStack(alignment: .leading, spacing: 6) {
                 Button {
-                    withAnimation(reduceMotion || performanceMode ? nil : ActivityMetrics.fold) { pin = !isOpen }
+                    withAnimation(reduceMotion ? nil : ActivityMetrics.fold) { pin = !isOpen }
                 } label: {
                     HStack(spacing: TimelineMetrics.iconSpacing) {
                         Image(systemName: "bubble.left")
@@ -504,7 +500,7 @@ private struct ActivityThoughtStep: View {
                         .environment(\.markdownDimmed, true)
                         .padding(.leading, TimelineMetrics.iconWidth + TimelineMetrics.iconSpacing)
                         .padding(.trailing, 12)
-                        .transition(reduceMotion || performanceMode ? .identity : .opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                 }
             }
         }

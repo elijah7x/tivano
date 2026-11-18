@@ -29,6 +29,10 @@ enum Chrome {
     static let sheetInset: CGFloat = 0
     /// The rounding of surfaces that sit on the sheet, like the terminal's top corners.
     static let sheetCornerRadius: CGFloat = 16
+    static let sidebarTrayInset: CGFloat = 8
+    static let sidebarTrayCornerRadius: CGFloat = 16
+    static let trayCornerRadius: CGFloat = 12
+    static let trayGap: CGFloat = 8
 
     static let trafficLightDiameter: CGFloat = 14
     static let trafficLightSpacing: CGFloat = 9
@@ -98,7 +102,11 @@ enum Chrome {
     }
 
     // Dynamic system colors resolve at draw time, so one wrapped value serves every appearance.
-    static let primaryText = Color(nsColor: .labelColor)
+    /// A solid theme writes in its own warm ink rather than the system's near black.
+    static let primaryText = Color(nsColor: NSColor(name: nil) { _ in
+        ThemeManager.spec.isSolid ? solidInk : .labelColor
+    })
+    private static let solidInk = NSColor(srgbRed: 0x24 / 255.0, green: 0x22 / 255.0, blue: 0x1E / 255.0, alpha: 1)
     /// Supporting copy: captions, metadata lines, row details. Primary at 70% clears the
     /// 4.5:1 floor on both grounds; `secondaryLabelColor`'s 50% alpha does not.
     static let secondaryText = primaryText.opacity(0.7)
@@ -132,14 +140,6 @@ enum Chrome {
     /// land together.
     static let glideSpring = Spring(response: 0.6, dampingRatio: 0.86)
 
-    /// The rows making room as a thread settles to the bottom of the sidebar or comes back
-    /// up: the glide's own spring, so the ghost and the rows land together.
-    static var settleFlight: Animation {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            ? .easeOut(duration: 0.2)
-            : .spring(glideSpring)
-    }
-
     static let gray = Color(red: 0.556, green: 0.557, blue: 0.576)
     static let blue = Color(red: 0.040, green: 0.478, blue: 1.000)
     static let orange = Color(red: 1.000, green: 0.584, blue: 0.000)
@@ -167,9 +167,12 @@ extension View {
         modifier(ChromeGlassSurface(shape: .circle))
     }
 
-    /// The inset content sheet the detail pane floats on.
-    func detailSheet() -> some View {
-        modifier(DetailSheetModifier())
+    func sidebarTray() -> some View {
+        modifier(SidebarTrayModifier())
+    }
+
+    func trayPanel(cornerRadius: CGFloat = Chrome.trayCornerRadius) -> some View {
+        modifier(TrayPanelModifier(cornerRadius: cornerRadius))
     }
 
     /// The timeline's floating surfaces share a theme wash and a hairline. A tab's
@@ -187,6 +190,11 @@ extension View {
     func floatingGlassContainer() -> some View {
         modifier(FloatingGlassContainer())
     }
+
+    /// Solid themes use opaque capsule buttons instead of Liquid Glass.
+    func themedGlassButton(prominent: Bool = false) -> some View {
+        modifier(ThemedGlassButtonModifier(prominent: prominent))
+    }
 }
 
 extension Chrome {
@@ -201,14 +209,43 @@ extension Chrome {
     }
 }
 
+/// Clips to `shape` when on and leaves the content unclipped when off, so a modifier can
+/// clip only its solid look without branching (a branch would rebuild the wrapped content).
+struct SwitchableClip<S: Shape>: Shape {
+    let shape: S
+    let isOn: Bool
+
+    func path(in rect: CGRect) -> Path {
+        isOn ? shape.path(in: rect) : Path(rect.insetBy(dx: -100_000, dy: -100_000))
+    }
+}
+
 private struct FloatingGlassContainer: ViewModifier {
-    @AppStorage("floatingGlassStyle", store: CaptureRun.defaults ?? .standard) private var floatingGlassStyle = "upstream"
+    func body(content: Content) -> some View {
+        // Keep one unconditional path so Creation switches preserve wrapped content identity.
+        ChromeGlassEffectContainer(spacing: 0) { content }
+    }
+}
+
+private struct ThemedGlassButtonModifier: ViewModifier {
+    let prominent: Bool
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
-        if floatingGlassStyle == "upstream" {
-            GlassEffectContainer(spacing: 0) { content }
+        if solid != nil {
+            if prominent {
+                content
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+            } else {
+                content
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+            }
+        } else if prominent {
+            content.chromeGlassButtonStyle(prominent: true)
         } else {
-            content
+            content.chromeGlassButtonStyle()
         }
     }
 }
@@ -221,30 +258,32 @@ private struct FloatingGlassSurface<S: InsettableShape>: ViewModifier {
     let hiddenRimBottom: CGFloat
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
+        let useSolid = reduceTransparency || solid != nil
         let edge = shape
-            .strokeBorder(rim ?? Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1)
+            .strokeBorder(rim ?? solid?.hairline ?? Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1)
             .mask(alignment: .top) { Rectangle().padding(.bottom, hiddenRimBottom) }
-        if reduceTransparency || performanceMode {
-            content
-                .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
-                .clipShape(shape)
-                .overlay { edge }
-        } else {
-            // An opaque base behind glass becomes its sample and hides the timeline.
-            // Pinned active: switching back to the app otherwise whitens the glass while it
-            // animates from its inactive appearance.
-            content
-                .glassEffect(glass(isDark: isDark), in: shape)
-                .materialActiveAppearance(.active)
-                .overlay { edge }
-        }
+        // Keep content on one unconditional path so Creation switches preserve wrapped subtree identity.
+        // An opaque base behind glass becomes its sample and hides the timeline.
+        // Pinned active: switching back to the app otherwise whitens the glass while it
+        // animates from its inactive appearance.
+        content
+            .background {
+                if useSolid {
+                    shape.fill(solid?.elevated ?? Color(nsColor: .controlBackgroundColor))
+                        .shadow(color: solid == nil ? .clear : SolidSurfaces.shadow, radius: 12, y: 3)
+                }
+            }
+            .clipShape(SwitchableClip(shape: shape, isOn: useSolid))
+            .chromeGlassEffect(useSolid ? .identity : glass(isDark: isDark), in: shape)
+            .materialActiveAppearance(useSolid ? .automatic : .active)
+            .overlay { edge }
     }
 
-    private func glass(isDark: Bool) -> Glass {
+    private func glass(isDark: Bool) -> ChromeGlass {
         let wash = tint ?? Chrome.floatingGlassWash(isDark: isDark)
         return isInteractive ? .regular.tint(wash).interactive() : .regular.tint(wash)
     }
@@ -258,7 +297,7 @@ private struct ChromeGlassSurface: ViewModifier {
     /// Whether the glass answers a press; off for a field that takes the caret instead.
     var isInteractive = true
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
         switch shape {
@@ -271,50 +310,132 @@ private struct ChromeGlassSurface: ViewModifier {
 
     @ViewBuilder
     private func surface<S: InsettableShape>(_ content: Content, in shape: S) -> some View {
-        if isOnGlassPanel || performanceMode {
-            content
-                .modifier(ChromePanelControlSurface(shape: shape, performanceMode: performanceMode))
-        } else if isInteractive {
-            content.glassEffect(.regular.tint(Chrome.glassTint.opacity(0.3)).interactive(), in: shape)
-                .materialActiveAppearance(.active)
-        } else {
-            content.glassEffect(.regular.tint(Chrome.glassTint.opacity(0.3)), in: shape)
-                .materialActiveAppearance(.active)
-        }
+        let isFlat = isOnGlassPanel || solid != nil
+        let regularGlass: ChromeGlass = isInteractive
+            ? .regular.tint(Chrome.glassTint.opacity(0.3)).interactive()
+            : .regular.tint(Chrome.glassTint.opacity(0.3))
+        // Keep one unconditional path so Creation / panel switches preserve wrapped control identity.
+        content
+            .chromeGlassEffect(isFlat ? .identity : regularGlass, in: shape)
+            .materialActiveAppearance(isFlat ? .automatic : .active)
+            .modifier(ChromePanelControlSurface(shape: shape, isEnabled: isFlat, solid: solid))
     }
 }
 
 private struct ChromePanelControlSurface<S: InsettableShape>: ViewModifier {
     let shape: S
-    let performanceMode: Bool
+    var isEnabled = true
+    var solid: SolidSurfaces? = nil
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered = false
 
     func body(content: Content) -> some View {
         content
             .background {
-                shape.fill(Chrome.panelControlFill(isDark: colorScheme == .dark, hovered: isHovered))
-                    .animation(performanceMode ? nil : Chrome.hover, value: isHovered)
+                if isEnabled {
+                    // A solid theme draws paper-white controls with a hairline that darkens
+                    // under the pointer, in place of the glass's brightening.
+                    shape.fill(solid?.elevated ?? Chrome.panelControlFill(isDark: colorScheme == .dark, hovered: isHovered))
+                        .overlay {
+                            if let solid {
+                                shape.strokeBorder(isHovered ? solid.hairlineStrong : solid.hairline, lineWidth: 1)
+                            }
+                        }
+                        .animation(Chrome.hover, value: isHovered)
+                }
             }
             .contentShape(shape)
             .onHover { hovering in
-                guard isHovered != hovering else { return }
-                isHovered = hovering
+                let next = isEnabled && hovering
+                guard isHovered != next else { return }
+                isHovered = next
+            }
+            .onChange(of: isEnabled) { _, enabled in
+                if !enabled, isHovered {
+                    isHovered = false
+                }
             }
     }
 }
 
-private struct DetailSheetModifier: ViewModifier {
+private struct SidebarTrayModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.solidSurfaces) private var solid
+
+    private func fillColor(isDark: Bool) -> Color {
+        if reduceTransparency {
+            return isDark
+                ? Color(.sRGB, red: 34 / 255, green: 42 / 255, blue: 55 / 255, opacity: 1)
+                : Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 1)
+        }
+        return Color(.sRGB, red: 1, green: 1, blue: 1, opacity: isDark ? 0.075 : 0.78)
+    }
+
+    private func rimColor(isDark: Bool) -> Color {
+        isDark
+            ? Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 0.10)
+            : Color(.sRGB, red: 15 / 255, green: 23 / 255, blue: 42 / 255, opacity: 0.08)
+    }
 
     func body(content: Content) -> some View {
-        // Square: the window's own clip rounds the sheet's outer corners with everything
-        // else, so the sheet never draws a corner of its own inside the window's. Flat
-        // fills, so performance mode keeps them.
+        let shape = RoundedRectangle(cornerRadius: Chrome.sidebarTrayCornerRadius, style: .continuous)
+        let isDark = colorScheme == .dark
         content
+            .environment(\.isOnGlassPanel, true)
+            .clipShape(shape)
             .background {
-                Rectangle().fill(colorScheme == .dark ? Color.black.opacity(0.22) : Color.white.opacity(0.3))
-                Rectangle().fill(Chrome.glassTint.opacity(colorScheme == .dark ? 0.22 : 0.16))
+                shape
+                    .fill(solid?.sidebar ?? fillColor(isDark: isDark))
+                    .shadow(
+                        color: .black.opacity(reduceTransparency || solid != nil ? 0 : (isDark ? 0.30 : 0.07)),
+                        radius: 14,
+                        x: 0,
+                        y: 4
+                    )
+            }
+            .overlay {
+                shape
+                    .strokeBorder(solid?.hairline ?? rimColor(isDark: isDark), lineWidth: solid != nil ? 1 : 0.5)
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
+private struct TrayPanelModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.solidSurfaces) private var solid
+    var cornerRadius: CGFloat
+
+    private static func baseColor(isDark: Bool) -> Color {
+        isDark ? Color.black.opacity(0.22) : Color.white.opacity(0.3)
+    }
+
+    private static func tintColor(isDark: Bool) -> Color {
+        Chrome.glassTint.opacity(isDark ? 0.22 : 0.16)
+    }
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let isDark = colorScheme == .dark
+        content
+            .clipShape(shape)
+            .background {
+                if let solid {
+                    shape
+                        .fill(solid.elevated)
+                        .shadow(color: SolidSurfaces.shadow, radius: 12, y: 3)
+                } else {
+                    // Keep the shadow on a static shape so streamed content never redraws its blur.
+                    shape
+                        .fill(Self.baseColor(isDark: isDark))
+                        .shadow(color: .black.opacity(isDark ? 0.3 : 0.12), radius: 12, y: 4)
+                    shape.fill(Self.tintColor(isDark: isDark))
+                }
+            }
+            .overlay {
+                shape.strokeBorder(solid?.hairline ?? Chrome.floatingGlassRim(isDark: isDark), lineWidth: solid != nil ? 1 : 0.5)
+                    .allowsHitTesting(false)
             }
     }
 }
@@ -323,8 +444,7 @@ private struct DetailSheetModifier: ViewModifier {
 struct WindowBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @AppStorage("clearerBackdrop", store: CaptureRun.defaults ?? .standard) private var clearerBackdrop = true
+    @State private var themeRevision = 0
     /// The backdrop setting, 0 for bare glass and 1 for a solid base.
     let opacity: Double
     /// The user's wallpaper, painted edge to edge at the transparency setting's own opacity; nil for the stock glass.
@@ -350,54 +470,67 @@ struct WindowBackdrop: View {
             .overlay { shape.fill(Chrome.glassTint.opacity(0.12)) }
     }
 
+    @Environment(\.solidSurfaces) private var solid
+
     var body: some View {
+        let _ = themeRevision
         let isDark = colorScheme == .dark
         let isSolid = opacity >= 0.98
-        if performanceMode || ((isSolid || reduceTransparency) && wallpaper == nil) {
-            solidBackdrop
-        } else {
-            Group {
-                if let wallpaper {
-                    // The picture's opacity follows the transparency slider, with no scrim.
-                    shape.fill(.clear)
-                        .overlay {
-                            Image(nsImage: wallpaper)
-                                .resizable()
-                                .interpolation(.high)
-                                .aspectRatio(contentMode: .fill)
-                                .opacity(opacity)
-                        }
-                        .clipShape(shape)
-                        .overlay {
-                            if !isSolid {
+        Group {
+            if let solid {
+                // In preview the sidebar sits in its own inset tray, so the window backdrop is
+                // the conversation page itself; solid themes ignore the wallpaper and glass.
+                shape.fill(solid.canvas)
+            } else if (isSolid || reduceTransparency) && wallpaper == nil {
+                solidBackdrop
+            } else {
+                Group {
+                    if let wallpaper {
+                        // The picture's opacity follows the transparency slider, with no scrim.
+                        shape.fill(.clear)
+                            .overlay {
+                                Image(nsImage: wallpaper)
+                                    .resizable()
+                                    .interpolation(.high)
+                                    .aspectRatio(contentMode: .fill)
+                                    .opacity(opacity)
+                            }
+                            .clipShape(shape)
+                            .overlay {
+                                if !isSolid {
+                                    shape
+                                        .fill(.clear)
+                                        .chromeGlassEffect(in: shape)
+                                }
+                            }
+                            .transition(.opacity)
+                    } else {
+                        Group {
+                            switch ThemeManager.style {
+                            case .liquidGlass:
                                 shape
                                     .fill(.clear)
-                                    .glassEffect(in: shape)
+                                    .chromeGlassEffect(in: shape)
+                            case .texture, .create:
+                                BehindWindowBlur()
+                                    .clipShape(shape)
                             }
                         }
-                        .transition(.opacity)
-                } else {
-                    Group {
-                        if clearerBackdrop {
+                        .overlay {
                             shape
-                                .fill(.clear)
-                                .glassEffect(in: shape)
-                        } else {
-                            BehindWindowBlur()
-                                .clipShape(shape)
+                                .fill(isDark ? Color.black : Color.white)
+                                .opacity(Self.scrim(for: opacity, isDark: isDark))
                         }
                     }
-                    .overlay {
-                        shape
-                            .fill(isDark ? Color.black : Color.white)
-                            .opacity(Self.scrim(for: opacity, isDark: isDark))
-                    }
+                }
+                .animation(.easeInOut(duration: 0.3), value: wallpaper != nil)
+                .overlay {
+                    shape.fill(Chrome.glassTint.opacity(0.12))
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: wallpaper != nil)
-            .overlay {
-                shape.fill(Chrome.glassTint.opacity(0.12))
-            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ThemeManager.didChange)) { _ in
+            themeRevision &+= 1
         }
     }
 
@@ -421,68 +554,6 @@ struct BehindWindowBlur: NSViewRepresentable {
 struct ChromeQuietButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-    }
-}
-
-/// Reveals its single child by height: fraction 1 gives the slot the child's natural
-/// height, 0 collapses the slot to nothing while the child stays mounted, laid out
-/// top-leading at full size so it never travels — the clip reveals it in place.
-/// Animatable, so a panelSlide transaction slides the fraction, not the child.
-struct ChromeRevealLayout: Layout {
-    var fraction: CGFloat
-
-    var animatableData: CGFloat {
-        get { fraction }
-        set { fraction = newValue }
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let child = subviews.first else { return .zero }
-        let natural = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
-        return CGSize(width: natural.width, height: natural.height * min(max(fraction, 0), 1))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard let child = subviews.first else { return }
-        child.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
-    }
-}
-
-struct ChromeReveal<Content: View>: View {
-    let isExpanded: Bool
-    private let content: () -> Content
-    @State private var mountID: UUID?
-
-    init(isExpanded: Bool, @ViewBuilder content: @escaping () -> Content) {
-        self.isExpanded = isExpanded
-        self.content = content
-        _mountID = State(initialValue: isExpanded ? UUID() : nil)
-    }
-
-    var body: some View {
-        ChromeRevealLayout(fraction: isExpanded ? 1 : 0) {
-            if isExpanded || mountID != nil {
-                content()
-                    .transition(.identity)
-            }
-        }
-        .onChange(of: isExpanded) { _, expanded in
-            if expanded {
-                withTransaction(Transaction(animation: nil)) {
-                    mountID = UUID()
-                }
-            }
-        }
-        .transaction(value: isExpanded) { transaction in
-            guard !isExpanded, let collapsingID = mountID else { return }
-            // Unmount only after the slide finishes so settled cards do no hidden layout work.
-            transaction.addAnimationCompletion(criteria: .removed) {
-                guard mountID == collapsingID else { return }
-                withTransaction(Transaction(animation: nil)) {
-                    mountID = nil
-                }
-            }
-        }
     }
 }
 
@@ -526,7 +597,7 @@ struct ChromeIconLabel: View {
 
     /// "asset:" names a template image in the asset catalog, for glyphs SF Symbols lacks.
     private var glyph: Image {
-        symbol.hasPrefix("asset:") ? Image(String(symbol.dropFirst(6))) : Image(systemName: symbol)
+        Image.themed(symbol)
     }
 
     var body: some View {
@@ -696,7 +767,7 @@ struct ChromeCircleButton: View {
 
     private var button: some View {
         Button(action: action) {
-            Image(systemName: symbol)
+            Image.themed(symbol)
                 .font(Chrome.iconFont)
                 .frame(width: Chrome.capsuleHeight, height: Chrome.capsuleHeight)
                 .contentShape(Circle())
@@ -719,7 +790,7 @@ struct ChromeTextMenu<Content: View>: View {
             isPresented.toggle()
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: symbol)
+                Image.themed(symbol)
                     .font(Chrome.inlineIconFont)
                 Text(verbatim: Chrome.localized(title))
                     .font(.ui(size: 12.5, weight: .medium))
@@ -759,7 +830,7 @@ struct ChromeTextButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: symbol)
+                Image.themed(symbol)
                     .font(Chrome.inlineIconFont)
                 Text(verbatim: Chrome.localized(title))
                     .font(.ui(size: 12.5, weight: .medium))
@@ -843,25 +914,6 @@ private struct ChromeEdgeFadeMask: View {
     }
 }
 
-/// The title that fades into the chrome row once the page's own title scrolls away.
-struct ChromeCompactTitle: View {
-    let title: String
-    let model: ChromeScrollModel
-
-    var body: some View {
-        let progress = model.progress
-        Text(verbatim: Chrome.localized(title))
-            .font(.ui(.title3, weight: .semibold))
-            .foregroundStyle(Chrome.primaryText)
-            .lineLimit(1)
-            .opacity(Double(progress))
-            .offset(y: (1 - progress) * 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .allowsHitTesting(false)
-            .accessibilityHidden(progress < 0.5)
-    }
-}
-
 // MARK: - Sidebar pieces
 
 struct SidebarSymbol: View {
@@ -875,7 +927,7 @@ struct SidebarSymbol: View {
 
     /// "asset:" names a template image in the asset catalog, for glyphs SF Symbols lacks.
     private var glyph: Image {
-        name.hasPrefix("asset:") ? Image(String(name.dropFirst(6))) : Image(systemName: name)
+        Image.themed(name)
     }
 
     var body: some View {
@@ -1009,7 +1061,7 @@ struct RowAccessoryIcon: View {
     }
 
     var body: some View {
-        Image(systemName: symbol)
+        Image.themed(symbol)
             .font(Chrome.inlineIconFont)
             .foregroundStyle(Chrome.secondaryText)
             .frame(width: 20, height: 20)
@@ -1043,7 +1095,7 @@ struct SidebarSearchField: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
+            Image.themed("magnifyingglass")
                 .font(.ui(.callout, weight: .medium))
                 .foregroundStyle(Chrome.secondaryText.opacity(0.85))
             TextField(Chrome.localized(prompt), text: $text)
@@ -1092,7 +1144,7 @@ struct ChromeSearchField: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
+            Image.themed("magnifyingglass")
                 .font(.ui(.callout, weight: .semibold))
                 .foregroundStyle(Chrome.secondaryText)
                 .accessibilityHidden(true)
@@ -1153,7 +1205,7 @@ struct GlassPickerButton<Value: Hashable>: View {
                         .frame(width: 14, height: 14)
                 }
                 if let symbol = symbol(selection) {
-                    Image(systemName: symbol)
+                    Image.themed(symbol)
                         .font(.ui(.callout, weight: .medium))
                         .foregroundStyle(Chrome.secondaryText)
                 }
@@ -1261,6 +1313,7 @@ struct ChromeCard<Content: View>: View {
     /// Variable-height rows at the visible bottom edge can rebuild without end.
     var lazy = false
     @ViewBuilder var content: Content
+    @Environment(\.solidSurfaces) private var solid
 
     var body: some View {
         // The card uses a filled shape instead of a clip, avoiding a mask while scrolling.
@@ -1274,7 +1327,13 @@ struct ChromeCard<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
-                .fill(Chrome.overlay(0.03))
+                .fill(solid?.card ?? Chrome.overlay(0.03))
+                .overlay {
+                    if let solid {
+                        RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
+                            .strokeBorder(solid.hairline, lineWidth: 0.5)
+                    }
+                }
         )
     }
 }
@@ -1412,4 +1471,66 @@ final class NoWindowDragView: NSView {
     override func rightMouseDown(with event: NSEvent) { superview?.rightMouseDown(with: event) }
 
     override func rightMouseUp(with event: NSEvent) { superview?.rightMouseUp(with: event) }
+}
+
+/// Reveals its single child by height: fraction 1 gives the slot the child's natural
+/// height, 0 collapses the slot to nothing while the child stays mounted, laid out
+/// top-leading at full size so it never travels — the clip reveals it in place.
+/// Animatable, so a panelSlide transaction slides the fraction, not the child.
+struct ChromeRevealLayout: Layout {
+    var fraction: CGFloat
+
+    var animatableData: CGFloat {
+        get { fraction }
+        set { fraction = newValue }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let natural = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(width: natural.width, height: natural.height * min(max(fraction, 0), 1))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        child.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
+}
+
+struct ChromeReveal<Content: View>: View {
+    let isExpanded: Bool
+    private let content: () -> Content
+    @State private var mountID: UUID?
+
+    init(isExpanded: Bool, @ViewBuilder content: @escaping () -> Content) {
+        self.isExpanded = isExpanded
+        self.content = content
+        _mountID = State(initialValue: isExpanded ? UUID() : nil)
+    }
+
+    var body: some View {
+        ChromeRevealLayout(fraction: isExpanded ? 1 : 0) {
+            if isExpanded || mountID != nil {
+                content()
+                    .transition(.identity)
+            }
+        }
+        .onChange(of: isExpanded) { _, expanded in
+            if expanded {
+                withTransaction(Transaction(animation: nil)) {
+                    mountID = UUID()
+                }
+            }
+        }
+        .transaction(value: isExpanded) { transaction in
+            guard !isExpanded, let collapsingID = mountID else { return }
+            // Unmount only after the slide finishes so settled cards do no hidden layout work.
+            transaction.addAnimationCompletion(criteria: .removed) {
+                guard mountID == collapsingID else { return }
+                withTransaction(Transaction(animation: nil)) {
+                    mountID = nil
+                }
+            }
+        }
+    }
 }

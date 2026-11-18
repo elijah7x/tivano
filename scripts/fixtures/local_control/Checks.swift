@@ -98,6 +98,10 @@ private final class RawClient {
 
     static func connection(_ root: URL) throws {
         print("ROUND 1: connection/isolation")
+        let editions: [ControlEdition] = [.release, .dev, .preview]
+        let socketPaths = editions.map { ControlSocket.directory(edition: $0).appendingPathComponent("control.sock").path }
+        try Checks.check(Set(socketPaths).count == editions.count, "socket paths isolate all three editions")
+        try Checks.check(ControlSocket.directory(edition: .preview).lastPathComponent == "preview", "Preview socket uses its own edition directory")
         let directory = root.appendingPathComponent("t", isDirectory: true)
         try Checks.rejects(.unavailable, "disabled endpoint is absent; no implicit directory creation") {
             _ = try ControlClient(edition: .dev, directory: directory, timeout: 1)
@@ -128,6 +132,7 @@ private final class RawClient {
             try Checks.rejects(.permission, "peer UID mismatch rejects") { try ControlSocket.checkPeer(client.fd, expectedUID: getuid() + 1) }
         }
         try Checks.rejects(.editionMismatch, "edition mismatch rejects") { _ = try ControlClient(edition: .release, directory: directory) }
+        try Checks.rejects(.editionMismatch, "Preview handshake cannot connect to Dev") { _ = try ControlClient(edition: .preview, directory: directory) }
         try Checks.rejects(.instanceMismatch, "expected instance mismatch rejects") { _ = try ControlClient(edition: .dev, expectedInstance: UUID(), directory: directory) }
         do {
             let client = try RawClient(directory: directory)
@@ -170,6 +175,14 @@ private final class RawClient {
         try Checks.rejects(.busy, "live edition lease is not stolen") { try competitor.start() }
         competitor.stop()
         try Checks.check(FileManager.default.fileExists(atPath: socketPath), "failed competing start does not unlink owner endpoint")
+        let previewDirectory = root.appendingPathComponent("v", isDirectory: true)
+        let previewServer = ControlSocketServer(directory: previewDirectory, welcome: ControlWelcome(edition: .preview, instance: UUID())) { _ in ControlResponse(error: ControlFailure(code: .internalError)) }
+        try previewServer.start()
+        defer { previewServer.stop() }
+        try Checks.check(try ControlClient(edition: .preview, directory: previewDirectory).welcome.edition == .preview, "Preview handshake accepts its own edition")
+        for edition in [ControlEdition.release, .dev] {
+            try Checks.rejects(.editionMismatch, "\(edition.rawValue) handshake cannot connect to Preview") { _ = try ControlClient(edition: edition, directory: previewDirectory) }
+        }
     }
 
     static func historyAndInstallation(_ root: URL) throws {
@@ -257,7 +270,16 @@ private final class RawClient {
         try Data("unrelated command".utf8).write(to: link)
         try Checks.rejects(.conflict, "install never overwrites a regular command") { try ControlCLIInstaller.install(directory: bin, helper: helper, name: "tivano-dev", previousTarget: nil) }
         try Checks.check(try String(contentsOf: link, encoding: .utf8) == "unrelated command", "collision leaves unrelated content intact")
-        try Checks.check(ControlCLIInstaller.commandName(.dev) != ControlCLIInstaller.commandName(.release), "PATH names isolate editions")
+        let commandNames = [ControlEdition.release, .dev, .preview].map { ControlCLIInstaller.commandName($0) }
+        try Checks.check(Set(commandNames).count == 3, "PATH names isolate all three editions")
+        let previewName = ControlCLIInstaller.commandName(.preview)
+        try Checks.check(previewName == "tivano-preview", "Preview installs as tivano-preview")
+        try ControlCLIInstaller.install(directory: bin, helper: helper, name: previewName, previousTarget: nil)
+        let previewLink = bin.appendingPathComponent(previewName)
+        try Checks.check(try FileManager.default.destinationOfSymbolicLink(atPath: previewLink.path) == helper.path, "Preview CLI installs its own command")
+        try ControlCLIInstaller.uninstall(directory: bin, name: previewName, previousTarget: helper.path)
+        try Checks.check(!FileManager.default.fileExists(atPath: previewLink.path), "Preview uninstall removes its command")
+        try Checks.check(try String(contentsOf: link, encoding: .utf8) == "unrelated command", "Preview install and uninstall preserve the Dev command")
     }
 
     static func ledgerAndPagination() throws {
@@ -285,17 +307,17 @@ private final class RawClient {
         try Checks.rejects(.instanceMismatch, "old ticket never writes into new instance") { _ = try other.accept(command) }
         var full = ControlLedger(instance: instance)
         for _ in 0..<LocalControl.maxPendingOperations {
-            _ = try full.accept(.settingsSet(ControlSettingsWrite(ticket: ControlTicket(instance: instance), key: .showsSkylight, value: .bool(true))))
+            _ = try full.accept(.settingsSet(ControlSettingsWrite(ticket: ControlTicket(instance: instance), key: .weatherWindow, value: .bool(true))))
         }
-        try Checks.rejects(.busy, "pending write budget is bounded") { _ = try full.accept(.settingsSet(ControlSettingsWrite(ticket: ControlTicket(instance: instance), key: .showsSkylight, value: .bool(true)))) }
+        try Checks.rejects(.busy, "pending write budget is bounded") { _ = try full.accept(.settingsSet(ControlSettingsWrite(ticket: ControlTicket(instance: instance), key: .weatherWindow, value: .bool(true)))) }
         let first = try ControlPagination.page(["a", "b", "c"], request: ControlPage(limit: 2), scope: "filter")
         let second = try ControlPagination.page(["a", "b", "c"], request: ControlPage(limit: 2, cursor: first.nextCursor), scope: "filter")
         try Checks.check(first.items + second.items == ["a", "b", "c"], "metadata pagination preserves order")
         try Checks.rejects(.cursorInvalid, "metadata mutation invalidates cursor") { _ = try ControlPagination.page(["a", "b", "d"], request: ControlPage(limit: 2, cursor: first.nextCursor), scope: "filter") }
         try Checks.rejects(.cursorInvalid, "filter mutation invalidates cursor") { _ = try ControlPagination.page(["a", "b", "c"], request: ControlPage(limit: 2, cursor: first.nextCursor), scope: "other") }
-        let invalid = ControlSettingsWrite(ticket: ticket, key: .showsSkylight, value: .textGeneration(.off))
+        let invalid = ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .textGeneration(.off))
         let decoded = try LocalControl.decoder().decode(ControlSettingsWrite.self, from: LocalControl.encoder().encode(invalid))
-        try Checks.check(decoded.key == .showsSkylight, "typed settings retain key for application-level pair validation")
+        try Checks.check(decoded.key == .weatherWindow, "typed settings retain key for application-level pair validation")
     }
 
     static func transportConcurrencyAndResources(_ root: URL) async throws {
@@ -359,7 +381,7 @@ private final class RawClient {
         do {
             let raw = try RawClient(directory: directory)
             _ = try raw.hello(ControlHello(edition: .dev))
-            let request = ControlRequest(instance: instance, command: .settingsSet(ControlSettingsWrite(ticket: dropped, key: .showsSkylight, value: .bool(false))))
+            let request = ControlRequest(instance: instance, command: .settingsSet(ControlSettingsWrite(ticket: dropped, key: .weatherWindow, value: .bool(false))))
             try raw.write(ControlSocket.frame(LocalControl.encoder().encode(request)))
             usleep(30_000)
         }

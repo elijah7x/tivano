@@ -394,16 +394,6 @@ final class AutoContinue {
         return spent.resetsAt
     }
 
-    #if DEBUG
-    /// Opens an offer without a stop behind it, for `UsageLimitPreview`.
-    func preview(_ threadID: UUID, resetsAt: Date?, waiting: Bool) {
-        guard let thread = app?.thread(threadID) else { return }
-        let turnID = app?.existingRuntime(for: threadID)?.turns.last?.id ?? UUID()
-        offers[threadID] = Offer(id: UUID(), turnID: turnID, provider: thread.provider, model: thread.model, resetsAt: resetsAt)
-        if waiting { wait(threadID) }
-    }
-    #endif
-
     /// The reset time as the tab prints it; the formatter lives with the signal so provider sessions can use it too.
     static func format(_ date: Date) -> String { UsageLimitSignal.format(date) }
 }

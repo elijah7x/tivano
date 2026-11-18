@@ -40,7 +40,7 @@ struct MCPKeyPanelView: View {
                 Button(Chrome.localized(entry.isOAuth ? "Sign in" : "Save and connect")) {
                     save()
                 }
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .disabled(!model.mcp.canConnect(entry))
             }
         }
@@ -99,7 +99,7 @@ struct MCPKeyPanelView: View {
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 stepRow(1, text: Text(verbatim: String(format: Chrome.localized("Enter the %@"), entry.fields.first.map { Chrome.localizedLowercased($0.label) } ?? Chrome.localized("value"))))
-                stepRow(2, text: Text(verbatim: Chrome.localized(entry.isOAuth ? "Sign in in your browser" : "Save")))
+                stepRow(2, text: Text(verbatim: Chrome.localized(entry.isOAuth ? "Sign in in your browser" : "Save and connect")))
             }
         }
     }

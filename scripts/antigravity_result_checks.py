@@ -12,16 +12,21 @@ production decision and classifier are extracted and compiled against fixtures s
 this check exercises their behavior rather than only matching source text.
 """
 from pathlib import Path
+import json
 import subprocess
 import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = ROOT / 'Tivano/Services/Providers/AntigravitySession.swift'
+CATALOG = ROOT / 'Tivano/Resources/Localizable.xcstrings'
 
 START = '// MARK: - Turn outcome'
 END = '// MARK: - Result handling'
 TRANSIENT_SIGNATURE = 'nonisolated static func isTransientFailure(_ message: String) -> Bool'
+START_TIMEOUT_KEY = 'Antigravity did not finish starting in time.'
+START_TIMEOUT_ZH = 'Antigravity 未能及时完成启动。'
+EXPECTED_LANGUAGES = {'fr', 'ja', 'ko', 'zh-Hans', 'zh-Hant'}
 
 
 def fail(message):
@@ -78,6 +83,9 @@ def check_sources():
         'process?.failureReason',
         'process?.exitStatus',
         'authHint(in: trimmedResultError)',
+        'hasCompletedToolWork: hasCompletedToolWork',
+        'priorConversationErrors',
+        'rememberConversationError("request failed: \\(trimmedReason)")',
     ])
 
     is_running = between(text, 'var isRunning: Bool', 'var lastOutputAt: Date?')
@@ -90,6 +98,7 @@ def check_sources():
         'latestCascadeError = nil',
         'cascadeErrorMessages.removeAll()',
         'completedAgentResponseIndex = nil',
+        'hasCompletedToolWork = false',
         'reportedErrors.removeAll()',
     ])
     if send.index('!isStopping') > send.index('turnActive = true'):
@@ -114,6 +123,32 @@ def check_sources():
     if 'latestCascadeError' in tool or 'cascadeErrorMessages' in tool:
         fail('tool ERROR steps must not be recorded as model/cascade failures')
 
+    start_fn = between(text, 'func start() async throws -> String', 'private func modeArguments(')
+    require(start_fn, ['Self.startTimeout'])
+    if '.seconds(30)' in start_fn:
+        fail('start() still uses the old 30s launch timeout')
+    if 'startTimeout: Duration = .seconds(90)' not in text:
+        fail('AntigravitySession.swift must set startTimeout to 90 seconds')
+
+    fail_start = between(text, 'private func failStartAfterTimeout', 'func send(_ input: TurnInput)')
+    require(fail_start, [f'AppText.localized("{START_TIMEOUT_KEY}")', 'process?.isRunning == false'])
+    if 'Antigravity did not answer. Is `agy` signed in?' in text:
+        fail('AntigravitySession.swift still falls back to the old signed-in timeout message')
+
+    if not CATALOG.is_file():
+        fail(f'{CATALOG.relative_to(ROOT)} is missing')
+    catalog = json.loads(CATALOG.read_text(encoding='utf-8'))
+    entry = (catalog.get('strings') or {}).get(START_TIMEOUT_KEY)
+    if not isinstance(entry, dict):
+        fail(f'{CATALOG.relative_to(ROOT)} is missing key {START_TIMEOUT_KEY!r}')
+    localizations = entry.get('localizations') or {}
+    missing_langs = sorted(EXPECTED_LANGUAGES - set(localizations.keys()))
+    if missing_langs:
+        fail(f'{CATALOG.relative_to(ROOT)} key {START_TIMEOUT_KEY!r} is missing languages: {missing_langs}')
+    zh_val = localizations.get('zh-Hans', {}).get('stringUnit', {}).get('value')
+    if zh_val != START_TIMEOUT_ZH:
+        fail(f'{CATALOG.relative_to(ROOT)} key {START_TIMEOUT_KEY!r} zh-Hans={zh_val!r}, expected {START_TIMEOUT_ZH!r}')
+
 
 def fixture(block):
     return f'''import Foundation
@@ -133,6 +168,8 @@ func outcome(
     latestCascadeErrorIndex: Int? = nil,
     cascadeErrorMessages: Set<String> = [],
     knownConversationErrors: Set<String> = [],
+    hasCompletedToolWork: Bool = false,
+    replyOnlyInResult: Bool = false,
     resultError: String? = nil
 ) -> AntigravityTurnOutcome.TurnOutcome {{
     AntigravityTurnOutcome.turnOutcome(
@@ -145,6 +182,8 @@ func outcome(
         latestCascadeErrorIndex: latestCascadeErrorIndex,
         cascadeErrorMessages: cascadeErrorMessages,
         knownConversationErrors: knownConversationErrors,
+        hasCompletedToolWork: hasCompletedToolWork,
+        replyOnlyInResult: replyOnlyInResult,
         resultError: resultError
     )
 }}
@@ -219,6 +258,48 @@ struct Checks {{
                        completedResponseIndex: nil, resultError: stale), .failed)
         expect(outcome(status: "ERROR", finishedReason: "error", hasDeniedActions: true,
                        hasReply: true, completedResponseIndex: 109, resultError: stale), .failed)
+        // (a) ERROR/error with reply only in result["response"] (completedResponseIndex nil),
+        // known sticky error, and no cascade error this turn -> completed.
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true,
+                       completedResponseIndex: nil, knownConversationErrors: [stale],
+                       replyOnlyInResult: true, resultError: stale),
+               .completed, true)
+        // A streamed interim reply, then a tool (completedResponseIndex cleared), then a
+        // known sticky result error: the turn never closed its reply, so it fails.
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true,
+                       completedResponseIndex: nil, knownConversationErrors: [stale],
+                       hasCompletedToolWork: true, resultError: stale),
+               .failed)
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true,
+                       completedResponseIndex: nil,
+                       knownConversationErrors: ["request failed: stream idle timeout (5m0s)"],
+                       replyOnlyInResult: true,
+                       resultError: "API error (attempt 1): request failed: stream idle timeout (5m0s)"),
+               .completed, true)
+        // (b) Same with knownConversationErrors empty and no reply -> failed.
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: false,
+                       completedResponseIndex: nil, knownConversationErrors: [], resultError: stale),
+               .failed)
+        // (c) Cascade error this turn and no reply after it -> failed.
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: false,
+                       completedResponseIndex: nil, latestCascadeErrorIndex: 3,
+                       cascadeErrorMessages: [eof], knownConversationErrors: [eof],
+                       hasCompletedToolWork: true, resultError: eof),
+               .failed)
+        // An unknown result error stays a failure even after completed tool work.
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: true,
+                       completedResponseIndex: nil, knownConversationErrors: [],
+                       hasCompletedToolWork: true,
+                       resultError: "API error (attempt 1): request failed: stream idle timeout (5m0s)"),
+               .failed)
+        expect(outcome(status: "ERROR", finishedReason: "error", hasReply: false,
+                       completedResponseIndex: nil, knownConversationErrors: [],
+                       hasCompletedToolWork: true, resultError: stale),
+               .failed)
+        expect(outcome(status: "ERROR", finishedReason: "error", hasDeniedActions: true,
+                       hasReply: true, completedResponseIndex: nil, knownConversationErrors: [],
+                       hasCompletedToolWork: true, resultError: stale),
+               .failed)
         // Tool failures are nonfatal and never become a known conversation error.
         expect(outcome(status: "ERROR", hasReply: true, completedResponseIndex: 8,
                        resultError: "tool execution failed"), .failed)
@@ -227,8 +308,16 @@ struct Checks {{
         expect(outcome(status: "WAITING", hasDeniedActions: true), .failed)
 
         precondition(AntigravityTurnOutcome.isTransientFailure("API error: unexpected EOF"))
+        precondition(AntigravityTurnOutcome.isTransientFailure("stream idle timeout"))
+        precondition(AntigravityTurnOutcome.isTransientFailure("dial tcp: no such host"))
         precondition(AntigravityTurnOutcome.isTransientFailure("TLS handshake timeout"))
-        precondition(AntigravityTurnOutcome.isTransientFailure("rpc error: UNAVAILABLE"))
+        precondition(AntigravityTurnOutcome.isTransientFailure("Antigravity did not finish starting in time."))
+        precondition(AntigravityTurnOutcome.isTransientFailure("Antigravity 未能及时完成启动。"))
+        precondition(AntigravityTurnOutcome.isTransientFailure("Antigravity did not start within 90 seconds. Try sending again."))
+        precondition(AntigravityTurnOutcome.isTransientFailure("Antigravity 在 90 秒内没有启动。请重新发送。"))
+        precondition(!AntigravityTurnOutcome.isTransientFailure("rpc error: UNAVAILABLE"))
+        precondition(!AntigravityTurnOutcome.isTransientFailure("API error (attempt 8): UNAVAILABLE (code 503)"))
+        precondition(!AntigravityTurnOutcome.isTransientFailure("No capacity"))
         precondition(!AntigravityTurnOutcome.isTransientFailure("429 Individual quota exhausted"))
         precondition(!AntigravityTurnOutcome.isTransientFailure("RESOURCE_EXHAUSTED: quota"))
         precondition(!AntigravityTurnOutcome.isTransientFailure("invalid model selection"))

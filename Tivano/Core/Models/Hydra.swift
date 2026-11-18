@@ -173,6 +173,7 @@ struct HydraLaunch: Hashable, Sendable {
     /// The presets those numbered lines were written from, in Settings order: the lead's
     /// "preset" numbers resolve against this copy, not against Settings edited since.
     var chimeraPresetList: [ChimeraPreset] = []
+    var chimeraAutoDispatch: Bool = false
 
     /// How many Tivano-run heads may work at once for a pair with no cap of its own. The
     /// tasks past it wait their turn (`ThreadRuntime.spawnWaitingHeads`) and go out as
@@ -1047,15 +1048,6 @@ enum HydraPrompts {
         if kept.count == prompt.split(separator: "\n", omittingEmptySubsequences: false).count { return prompt }
         return kept.joined(separator: "\n")
             + "\nMake the assigned edits and report; the lead handles all validation."
-    }
-
-    /// What the lead's chat looked like when a queued task was handed to a head, so the
-    /// head knows what is going on without the lead's context. Built from the timeline,
-    /// not from another model call, so a queued task costs nothing extra.
-    struct ChatContext {
-        var lastUserPrompt: String?
-        var lastReply: String?
-        var touchedPaths: [String] = []
     }
 
     /// One line on where a head's work went, for its section of the report. Nothing for

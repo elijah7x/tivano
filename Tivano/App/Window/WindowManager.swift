@@ -13,19 +13,12 @@ final class WindowManager {
     let model = AppModel()
 
     private var mainWindow: NSWindow?
-    private var settingsWindow: NSWindow?
     private weak var responderBeforeSettings: NSView?
     private var threadBeforeSettings: UUID?
-
-    var usesFullWindowSettings: Bool {
-        let defaults = CaptureRun.defaults ?? .standard
-        return defaults.string(forKey: "settingsPresentation") != "window"
-    }
 
     private enum Size {
         static let main = NSSize(width: 1320, height: 860)
         static let mainMinimum = NSSize(width: 860, height: 560)
-        static let settings = NSSize(width: 780, height: 580)
     }
 
     private static let mainFrameName = "TivanoMainWindow"
@@ -40,32 +33,22 @@ final class WindowManager {
 
     func showSettings(page: SettingsPage? = nil) {
         let navigation = SettingsNavigation.shared
-        if usesFullWindowSettings {
-            settingsWindow?.orderOut(nil)
-            let window = mainWindow ?? makeMainWindow()
-            mainWindow = window
-            if !navigation.isPresented {
-                // The chat stays mounted behind Settings and must not keep keyboard focus.
-                let responder = window.firstResponder
-                // A shared field editor outlives its control; restore the control instead.
-                if let editor = responder as? NSTextView, editor.isFieldEditor {
-                    responderBeforeSettings = editor.delegate as? NSView
-                } else {
-                    responderBeforeSettings = responder as? NSView
-                }
-                threadBeforeSettings = model.selectedThreadID
-                window.makeFirstResponder(nil)
+        let window = mainWindow ?? makeMainWindow()
+        mainWindow = window
+        if !navigation.isPresented {
+            // The chat stays mounted behind Settings and must not keep keyboard focus.
+            let responder = window.firstResponder
+            // A shared field editor outlives its control; restore the control instead.
+            if let editor = responder as? NSTextView, editor.isFieldEditor {
+                responderBeforeSettings = editor.delegate as? NSView
+            } else {
+                responderBeforeSettings = responder as? NSView
             }
-            model.isCommandPalettePresented = false
-            navigation.present(page: page)
-            present(window)
-            return
+            threadBeforeSettings = model.selectedThreadID
+            window.makeFirstResponder(nil)
         }
-        hideSettings()
-        if let page { navigation.requestedPage = page }
-        let window = settingsWindow ?? makeSettingsWindow()
-        settingsWindow = window
-        centerOverMainWindow(window)
+        model.isCommandPalettePresented = false
+        navigation.present(page: page)
         present(window)
     }
 
@@ -94,28 +77,11 @@ final class WindowManager {
     }
 
     func toggleSettings() {
-        if usesFullWindowSettings, SettingsNavigation.shared.isPresented, mainWindow?.isKeyWindow == true {
+        if SettingsNavigation.shared.isPresented, mainWindow?.isKeyWindow == true {
             hideSettings()
         } else {
             showSettings()
         }
-    }
-
-    /// Opens a window centered over the main window, kept on the screen the main window is on.
-    private func centerOverMainWindow(_ window: NSWindow) {
-        guard let main = mainWindow, main.isVisible, !main.isMiniaturized else {
-            window.center()
-            return
-        }
-        let parent = main.frame
-        var frame = window.frame
-        frame.origin.x = (parent.midX - frame.width / 2).rounded()
-        frame.origin.y = (parent.midY - frame.height / 2).rounded()
-        if let visible = (main.screen ?? NSScreen.main)?.visibleFrame {
-            frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - frame.width)
-            frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
-        }
-        window.setFrame(frame, display: false)
     }
 
     private func present(_ window: NSWindow, activating: Bool = true) {
@@ -144,18 +110,19 @@ final class WindowManager {
     /// The main window for the onboarding captures: the same window, at a fixed size, with
     /// no frame autosave, so the run never reads or writes where the real window sits.
     func makeCaptureWindow(size: NSSize) -> NSWindow {
-        let window = makeWindow(title: AppInfo.name, size: size, resizable: true) { RootView() }
-        #if DEBUG
-        if HeroSwitchProbe.isRequested { mainWindow = window }
-        #endif
-        return window
+        makeWindow(title: AppInfo.name, size: size, resizable: true) { RootView() }
     }
 
-    private func makeSettingsWindow() -> NSWindow {
-        let window = makeWindow(title: Chrome.localized("Settings"), size: Size.settings, resizable: false, windowClass: SecondaryWindow.self) { SettingsView() }
-        window.center()
+    #if DEBUG
+    func makeWeatherPreviewWindow<Overlay: View>(size: NSSize, @ViewBuilder overlay: () -> Overlay) -> NSWindow {
+        let window = makeWindow(title: AppInfo.name, size: size, resizable: true) {
+            RootView()
+                .overlay(alignment: .top) { overlay() }
+        }
+        mainWindow = window
         return window
     }
+    #endif
 
     private func makeWindow<Content: View>(
         title: String,
@@ -238,11 +205,12 @@ private struct HostedRoot<Content: View>: View {
     let content: Content
 
     var body: some View {
+        let scheme = model.settings.effectiveColorScheme
         content
             .modifier(HostedEnvironment(model: model, liveResize: liveResize))
-            .preferredColorScheme(model.settings.theme.spec.scheme)
-            .onChange(of: model.settings.theme, initial: true) { _, theme in
-                NSApp.appearance = switch theme.spec.scheme {
+            .preferredColorScheme(scheme)
+            .onChange(of: scheme, initial: true) { _, scheme in
+                NSApp.appearance = switch scheme {
                 case nil: nil
                 case .light: NSAppearance(named: .aqua)
                 case .dark: NSAppearance(named: .darkAqua)
@@ -267,11 +235,12 @@ struct HostedEnvironment: ViewModifier {
             .font(.ui(.body))
             .buttonBorderShape(.capsule)
             .modifier(ThemeTint(theme: model.settings.theme))
+            .environment(\.solidSurfaces, model.settings.solidSurfaces)
     }
 }
 
 /// Tints prominent glass buttons, toggles and progress views with the
-/// theme's accent. System/Light/Dark keep the system control accent.
+/// theme's accent. System Accent keeps the system control accent.
 private struct ThemeTint: ViewModifier {
     let theme: AppTheme
 

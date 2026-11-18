@@ -41,7 +41,7 @@ struct PlanLimitsView: View {
                     Button("Refresh") {
                         registry.refreshPlanLimits(.codex, force: true)
                     }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     .controlSize(.small)
                     .disabled(isLoading || registry.signingIn == .codex)
                 }
@@ -93,7 +93,7 @@ struct PlanLimitsView: View {
                                 ProgressView().controlSize(.mini)
                             }
                         }
-                        .buttonStyle(.glass)
+                        .chromeGlassButtonStyle()
                         .controlSize(.small)
                     }
                     .padding(.top, 14)
@@ -158,7 +158,7 @@ struct CreditsView: View {
                 }
                 if let topUpURL = CreditsReader.topUpURL(provider) {
                     Link("Top up", destination: topUpURL)
-                        .buttonStyle(.glass)
+                        .chromeGlassButtonStyle()
                         .controlSize(.small)
                 }
             }
@@ -387,8 +387,8 @@ private struct BankedResetRow: View {
         switch phase {
         case .confirming(let id) where id == row.id:
             HStack(spacing: 6) {
-                Button("Cancel", action: onCancel).buttonStyle(.glass).controlSize(.small)
-                Button("Reset now", action: onUse).buttonStyle(.glassProminent).controlSize(.small).tint(Chrome.accent)
+                Button("Cancel", action: onCancel).chromeGlassButtonStyle().controlSize(.small)
+                Button("Reset now", action: onUse).chromeGlassButtonStyle(prominent: true).controlSize(.small).tint(Chrome.accent)
             }
             .transition(.blurReplace)
         case .applying(let id) where id == row.id:
@@ -400,7 +400,7 @@ private struct BankedResetRow: View {
             }
             .transition(.blurReplace)
         default:
-            Button("Use reset", action: onConfirm).buttonStyle(.glass).controlSize(.small)
+            Button("Use reset", action: onConfirm).chromeGlassButtonStyle().controlSize(.small)
                 .disabled(isApplying)
                 .transition(.blurReplace)
         }

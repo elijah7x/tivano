@@ -31,12 +31,12 @@ struct WallpaperCard: View {
             HStack(spacing: 8) {
                 if store.hasWallpaper {
                     Button("Remove") { store.remove() }
-                        .buttonStyle(.glass)
+                        .chromeGlassButtonStyle()
                         .controlSize(.small)
                         .disabled(store.isInstalling)
                 }
                 Button(Chrome.localized(store.hasWallpaper ? "Change…" : "Choose…")) { choose() }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     .controlSize(.small)
                     .disabled(store.isInstalling)
             }
@@ -44,7 +44,7 @@ struct WallpaperCard: View {
     }
 
     private var softnessRow: some View {
-        ChromeRow(title: "Softness", detail: "Blurs the picture so text stays easy to read") {
+        ChromeRow(title: "Blur", detail: "Blurs the picture so text stays easy to read") {
             HStack(spacing: 8) {
                 Image(systemName: "drop")
                     .font(.ui(.subheadline))
@@ -134,7 +134,7 @@ private struct WallpaperPreview: View {
                                 let mockShape = RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 mockShape
                                     .fill(.clear)
-                                    .glassEffect(in: mockShape)
+                                    .chromeGlassEffect(in: mockShape)
                                     .overlay { mockShape.fill(Color.black.opacity(0.2)) }
                                     .overlay(alignment: .topLeading) {
                                         HStack(spacing: 4) {

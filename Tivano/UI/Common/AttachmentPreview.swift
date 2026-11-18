@@ -33,7 +33,6 @@ private struct PreviewMetadataCache<Value> {
 private enum AttachmentFileMetadata {
     private static var existence = PreviewMetadataCache<Bool>()
     private static var sizes = PreviewMetadataCache<Int64?>()
-    private static var textSizes = PreviewMetadataCache<Int?>()
 
     nonisolated static func fileExists(atPath path: String) -> Bool {
         guard Thread.isMainThread else { return FileManager.default.fileExists(atPath: path) }
@@ -47,12 +46,6 @@ private enum AttachmentFileMetadata {
     static func fileSize(_ path: String) -> Int64? {
         sizes.value(for: (path as NSString).standardizingPath, keeps: { $0 != nil }) {
             (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value
-        }
-    }
-
-    static func textFileSize(_ url: URL) -> Int? {
-        textSizes.value(for: (url.path as NSString).standardizingPath, keeps: { $0 != nil }) {
-            try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
         }
     }
 }

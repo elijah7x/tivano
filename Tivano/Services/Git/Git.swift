@@ -45,7 +45,7 @@ enum GitLane: Hashable, Sendable {
 
 private actor GitAdmission {
     static let shared = GitAdmission()
-    private var available: [GitLane: Int] = [.read: 6, .checkpoint: 2, .long: 2]
+    private var available: [GitLane: Int] = [.read: 12, .checkpoint: 3, .long: 2]
     private struct Waiter {
         let id: UUID
         let continuation: CheckedContinuation<Void, Error>
@@ -699,25 +699,45 @@ struct Git: Sendable {
         guard !paths.isEmpty else { return [] }
         // A missing ref must not make every requested path look deleted.
         let tree = try await treeHash(of: ref)
+        let objects = try await treeObjects(in: tree, at: paths)
+        var tracked = Set<String>()
+        for (path, object) in zip(paths, objects) {
+            if object != nil { tracked.insert(path) }
+        }
+        return tracked
+    }
+
+    /// Object names and types at exactly `paths` in `tree`, in request order; an absent
+    /// path is nil. `-Z` keeps names containing whitespace or newlines intact.
+    private func treeObjects(in tree: String, at paths: [String]) async throws -> [(name: String, type: String)?] {
+        guard !paths.isEmpty else { return [] }
         let input = paths.reduce(into: Data()) { data, path in
             data.append(contentsOf: "\(tree):\(path)".utf8)
             data.append(0)
         }
-        let result = try await run(["cat-file", "--batch-check=%(objecttype)", "-Z"], input: input)
+        let result = try await run(["cat-file", "--batch-check=%(objectname) %(objecttype)", "-Z"], input: input)
         try Self.check(result)
         var answers = result.output.split(separator: "\0", omittingEmptySubsequences: false)
         guard answers.last == "" else { throw ShellError(AppText.localized("Incomplete git cat-file response.")) }
         answers.removeLast()
         guard answers.count == paths.count else { throw ShellError(AppText.localized("Incomplete git cat-file response.")) }
-        var tracked = Set<String>()
+        var objects: [(name: String, type: String)?] = []
+        objects.reserveCapacity(paths.count)
         for (path, answer) in zip(paths, answers) {
-            if answer == "blob" || answer == "tree" || answer == "commit" || answer == "tag" {
-                tracked.insert(path)
-            } else if answer != "\(tree):\(path) missing" {
+            if answer == "\(tree):\(path) missing" {
+                objects.append(nil)
+                continue
+            }
+            let fields = answer.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+            guard fields.count == 2 else { throw ShellError(AppText.localized("Unexpected git cat-file response.")) }
+            let name = String(fields[0]), type = String(fields[1])
+            // Git reports a gitlink whose commit is not in this object store as "submodule".
+            guard !name.isEmpty, ["blob", "tree", "commit", "tag", "submodule"].contains(type) else {
                 throw ShellError(AppText.localized("Unexpected git cat-file response."))
             }
+            objects.append((name: name, type: type))
         }
-        return tracked
+        return objects
     }
 
     private static func nulSeparated(_ paths: [String]) -> Data {
@@ -743,28 +763,6 @@ struct Git: Sendable {
             if FileManager.default.fileExists(atPath: gitDirectory + "/" + marker) { return true }
         }
         return false
-    }
-
-    /// Moves the current branch to `commit`; index and working tree stay as they are.
-    func resetSoft(to commit: String) async throws {
-        try Self.check(await run(["reset", "--soft", "--quiet", commit]))
-    }
-
-    /// The index takes HEAD's version of `paths`; the working tree stays as it is.
-    func resetIndex(paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        try Self.check(await run(["--literal-pathspecs", "reset", "--quiet", "--pathspec-from-file=-", "--pathspec-file-nul"], input: Self.nulSeparated(paths)))
-    }
-
-    /// Index and working tree take `ref`'s version of `paths`.
-    func checkoutPaths(from ref: String, _ paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        try Self.check(await run(["--literal-pathspecs", "checkout", "--quiet", ref, "--"] + paths))
-    }
-
-    func removePaths(_ paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        try Self.check(await run(["--literal-pathspecs", "rm", "--quiet", "--"] + paths))
     }
 
     func pullFastForward() async throws {
@@ -854,8 +852,9 @@ struct Git: Sendable {
     /// branch. A tree already checkpointed since anything changed reuses its commit, so a
     /// turn starting on an untouched tree costs the `update-ref` alone.
     func captureCheckpoint(_ ref: String) async throws {
-        let tree = try await currentTree()
-        let watch = await watch()
+        let indexPath = await indexPath()
+        let watch = indexPath.flatMap { watch(indexPath: $0) }
+        let tree = try await currentTree(indexPath: indexPath, watch: watch)
         let commit: String
         if let known = watch?.commit(of: tree) {
             commit = known
@@ -871,10 +870,16 @@ struct Git: Sendable {
     /// The working tree as a tree object, from the directory's watch when it can vouch
     /// that nothing changed since the last capture, else captured now.
     func currentTree() async throws -> String {
-        guard let indexPath = await indexPath(), let watch = await watch() else { return try await captureTree() }
+        let indexPath = await indexPath()
+        let watch = indexPath.flatMap { watch(indexPath: $0) }
+        return try await currentTree(indexPath: indexPath, watch: watch)
+    }
+
+    private func currentTree(indexPath: String?, watch: WorkingTreeWatch?) async throws -> String {
+        guard let indexPath, let watch else { return try await captureTree() }
         return try await watch.currentTree(indexPath: indexPath) { scratch, paths in
             guard let scratch else { return try await captureTree() }
-            return try await captureTree(scratch: scratch, paths: paths)
+            return try await captureTree(scratch: scratch, paths: paths, indexPath: indexPath)
         }
     }
 
@@ -882,7 +887,7 @@ struct Git: Sendable {
     /// directories the watch saw change since the last capture, only they are walked and
     /// the rest of the index stands. A walk that fails, as when a path vanished with
     /// nothing of it in the index, is redone whole.
-    private func captureTree(scratch: URL, paths: [String]?) async throws -> String {
+    private func captureTree(scratch: URL, paths: [String]?, indexPath: String) async throws -> String {
         let environment = ["GIT_INDEX_FILE": scratch.path]
         if let paths, !paths.isEmpty, FileManager.default.fileExists(atPath: scratch.path),
            (try? await run(["--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], environment: environment, input: Self.nulSeparated(paths), timeout: 300, lane: .checkpoint))?.succeeded == true {
@@ -891,7 +896,7 @@ struct Git: Sendable {
             return tree.trimmedOutput
         }
         try? FileManager.default.removeItem(at: scratch)
-        if let indexPath = await indexPath(), FileManager.default.fileExists(atPath: indexPath) {
+        if FileManager.default.fileExists(atPath: indexPath) {
             try? FileManager.default.copyItem(atPath: indexPath, toPath: scratch.path)
         } else if await hasCommits() {
             try Self.check(await run(["read-tree", "HEAD"], environment: environment, lane: .checkpoint))
@@ -902,9 +907,8 @@ struct Git: Sendable {
         return tree.trimmedOutput
     }
 
-    private func watch() async -> WorkingTreeWatch? {
-        guard let indexPath = await indexPath() else { return nil }
-        return WorkingTreeWatch.shared(for: directory.path, gitDirectory: (indexPath as NSString).deletingLastPathComponent)
+    private func watch(indexPath: String) -> WorkingTreeWatch? {
+        WorkingTreeWatch.shared(for: directory.path, gitDirectory: (indexPath as NSString).deletingLastPathComponent)
     }
 
     /// The working tree as a tree object: a cheap before/after marker for a
@@ -1061,12 +1065,11 @@ struct Git: Sendable {
         }
     }
 
-    /// The blob of each of `paths` (repository-relative) in `ref`, for the ones it has.
+    /// The object ID of each of `paths` (repository-relative) in `ref`, for the ones it has.
     private func blobs(in ref: String, at paths: [String], root: URL) async throws -> [String: String] {
         guard !paths.isEmpty else { return [:] }
-        // ls-tree's path arguments are patterns, not checkout pathspecs. Enumerate the
-        // full tree with verbatim NUL names, including directories, then match exactly.
-        let listing = try await output(["ls-tree", "-r", "-t", "-z", "--full-tree", ref])
+        // Resolve the ref even when every path is absent: an invalid tree is not a deletion.
+        let tree = try await treeHash(of: ref)
         let rootPath = root.standardizedFileURL.path + "/"
         var requested: [String: [String]] = [:]
         for path in paths {
@@ -1074,15 +1077,13 @@ struct Git: Sendable {
             guard absolute.hasPrefix(rootPath) else { throw ShellError("Invalid repository-relative path: \(path)") }
             requested[String(absolute.dropFirst(rootPath.count)), default: []].append(path)
         }
+        let names = Array(requested.keys)
+        let objects = try await treeObjects(in: tree, at: names)
         var blobs: [String: String] = [:]
         blobs.reserveCapacity(paths.count)
-        for entry in listing.split(separator: "\0") {
-            // "<mode> <type> <hash>\t<path>"
-            guard let tab = entry.firstIndex(of: "\t") else { throw ShellError("Invalid git ls-tree entry.") }
-            let fields = entry[..<tab].split(separator: " ")
-            guard fields.count == 3 else { throw ShellError("Invalid git ls-tree entry.") }
-            let name = String(entry[entry.index(after: tab)...])
-            for path in requested[name] ?? [] { blobs[path] = String(fields[2]) }
+        for (name, object) in zip(names, objects) {
+            guard let object else { continue }
+            for path in requested[name] ?? [] { blobs[path] = object.name }
         }
         return blobs
     }

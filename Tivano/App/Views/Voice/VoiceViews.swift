@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-// Voice agent mode's chrome: the sidebar trigger, the full-window stage and the orb above
-// the call's composer. A call follows no chat selection, so neither surface lives inside
-// the conversation column: the user moves between threads while the orchestrator listens.
+// Voice agent mode's chrome: the composer button and orb, and the full-window stage.
+// A call follows no chat selection, so the stage lives above the conversation column:
+// the user moves between threads while the orchestrator listens.
 //
 // Ported from Zeron (https://github.com/zeronsh/zeron, MIT), `crates/ui/src/shell/voice_stage.rs`:
 // adapted to Tivano's type scale and floating glass. See THIRD_PARTY_NOTICES.md.
@@ -21,45 +21,6 @@ enum VoiceStageMetrics {
     /// Ease-out-expo in over 460 ms, a plain ease out over 220 ms.
     static let enter = Animation.timingCurve(0.16, 1, 0.3, 1, duration: 0.46)
     static let exit = Animation.timingCurve(0.25, 0.1, 0.25, 1, duration: 0.22)
-}
-
-// MARK: - Sidebar trigger
-
-/// The sidebar's microphone: starts a call, or while one is live shows its orb and
-/// raises or hides the stage. A failed start explains itself once, anchored to it.
-struct VoiceSidebarTrigger: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        let voice = model.voice!
-        if voice.isOffered {
-            let live = voice.isLive
-            let preparing = voice.phase == .checking || voice.phase == .starting
-            let failure = voice.failureText
-            SidebarRow(
-                title: preparing ? voice.statusText : live ? (voice.stageOpen ? "Hide voice" : "Voice is live") : "Start voice",
-                action: { voice.start() }
-            ) {
-                SidebarIconBadge {
-                    if live {
-                        ThinkingOrb(state: voice.orbState, size: .inline, microphone: voice.microphone, speaker: voice.speaker, reducedMotion: reduceMotion, paused: !model.sidebar.isVisible || (WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented))
-                    } else {
-                        SidebarSymbol("waveform")
-                    }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if failure != nil {
-                        Circle().fill(Chrome.warning).frame(width: 5, height: 5).offset(x: -1, y: 1)
-                    }
-                }
-            } accessory: { _ in EmptyView() }
-            .help(Chrome.localized(preparing ? voice.statusText : live ? (voice.stageOpen ? "Hide voice · Esc" : "Voice is live · open") : (failure ?? "Start voice · Codex orchestrator")))
-            .popover(isPresented: Binding(get: { failure != nil }, set: { if !$0 { voice.dismissReason() } }), arrowEdge: .top) {
-                VoiceFailureCard(text: failure ?? "") { voice.dismissReason() }
-            }
-        }
-    }
 }
 
 private struct VoiceFailureCard: View {
@@ -97,14 +58,14 @@ private struct VoiceFailureCard: View {
 struct VoiceComposerOrb: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.chatColumnIsShown) private var isColumnShown
+    @Environment(\.chatColumnVisibility) private var columnVisibility
     let threadID: UUID
 
     var body: some View {
         let voice = model.voice!
         if voice.isLive, voice.threadID == threadID {
             Button { voice.setStageOpen(true) } label: {
-                ThinkingOrb(state: voice.orbState, size: .avatar, microphone: voice.microphone, speaker: voice.speaker, reducedMotion: reduceMotion, paused: !isColumnShown)
+                ThinkingOrb(state: voice.orbState, size: .avatar, microphone: voice.microphone, speaker: voice.speaker, reducedMotion: reduceMotion, paused: !columnVisibility.isShown)
                     .padding(4)
                     .floatingGlass(Circle(), isInteractive: true)
                     .contentShape(Circle())
@@ -177,7 +138,7 @@ struct VoiceStage: View {
                     microphone: voice.microphone,
                     speaker: voice.speaker,
                     reducedMotion: reduceMotion,
-                    paused: !voice.stageOpen || (WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented)
+                    paused: !voice.stageOpen || SettingsNavigation.shared.isPresented
                 )
                 // The orb blooms out of the sidebar as the stage arrives.
                 .scaleEffect(0.82 + 0.18 * reveal)
@@ -199,7 +160,6 @@ struct VoiceStage: View {
                 .padding(.bottom, 32 - 16 * (1 - reveal))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .detailSheet()
         // The stage covers the chat's titlebar: its top band still drags the window.
         .overlay(alignment: .top) { WindowDragArea().frame(height: 52) }
         .opacity(reveal)
@@ -208,12 +168,12 @@ struct VoiceStage: View {
         .focused($focused)
         .onAppear { focused = true }
         .onKeyPress(.escape) {
-            guard voice.stageOpen, !(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented) else { return .ignored }
+            guard voice.stageOpen, !SettingsNavigation.shared.isPresented else { return .ignored }
             voice.setStageOpen(false)
             return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "mM"), phases: .down) { press in
-            guard voice.stageOpen, !(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented),
+            guard voice.stageOpen, !SettingsNavigation.shared.isPresented,
                   press.modifiers.isEmpty || press.modifiers == .shift else { return .ignored }
             voice.toggleMute()
             return .handled
@@ -257,7 +217,7 @@ private struct VoiceCallBar: View {
 
     var body: some View {
         let voice = model.voice!
-        let paused = !voice.stageOpen || (WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented)
+        let paused = !voice.stageOpen || SettingsNavigation.shared.isPresented || !FrontMonitor.shared.isVisible
         let awaiting = voice.work == .awaitingInput
         let muted = voice.muted
         let liveTone: Color = voice.phase != .active || muted ? Chrome.primaryText.opacity(0.35) : (awaiting ? Chrome.warning : Chrome.success)

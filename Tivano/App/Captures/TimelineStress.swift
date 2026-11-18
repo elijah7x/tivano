@@ -1,7 +1,22 @@
 #if DEBUG
 import AppKit
+import Darwin
 import QuartzCore
 import ScreenCaptureKit
+import SwiftUI
+
+enum ProbeKnobs {
+    static let rawValue = ProcessInfo.processInfo.environment["TIVANO_PROBE_OFF"] ?? ""
+    private static let offNames = Set(
+        rawValue.split(separator: ",").map {
+            String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    )
+
+    static func isOff(_ name: String) -> Bool {
+        offNames.contains(name)
+    }
+}
 
 /// Chat-timeline jitter stress for a `--website-captures` process.
 ///
@@ -12,7 +27,7 @@ import ScreenCaptureKit
 /// own monitor can see it. This file does not call the timeline's viewport repair.
 @MainActor
 enum TimelineStress {
-    private static let budgetSeconds: TimeInterval = 300
+    private static var budgetSeconds: TimeInterval = 300
     private static var deadline = Date.now
     private static var phases: [[String: String]] = []
     private static var missingStills: [String] = []
@@ -119,6 +134,60 @@ enum TimelineStress {
         note("done", "quitting")
         saveReport(listFiles: true)
         exit(missingStills.isEmpty ? 0 : 1)
+    }
+
+    static func runHistoryFlick(model: AppModel) async {
+        guard CaptureRun.isEnabled, let output = CaptureRun.outputDirectory else { return }
+        phases.removeAll()
+        missingStills.removeAll()
+        await model.bootstrap()
+        guard model.isLibraryLoaded, !model.threads.isEmpty else {
+            WebsiteCaptures.log("stress library failed to load")
+            exit(1)
+        }
+        deadline = Date.now.addingTimeInterval(budgetSeconds)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(budgetSeconds))
+            WebsiteCaptures.log("stress out of time, quitting")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        model.settings.hasSeenHydraIntro = true
+        model.settings.hydraEnabled = false
+        WebsiteCaptures.log("history-flick start \(output.path)")
+
+        let stage = Stage(model: model)
+        stage.show(size: NSSize(width: 1320, height: 860))
+        await stage.ensureActive()
+        guard let window = appWindow(), NSApp.isActive, window.isKeyWindow else {
+            note("blocked", "foreground desktop unavailable; unlock the host before running")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        guard let content = try? await SCShareableContent.currentProcess, !content.displays.isEmpty else {
+            note("blocked", "no capturable display for this process")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        if model.sidebar.isVisible { model.sidebar.toggle() }
+        // Keep the target thread unmounted while seeding so opening it starts on the
+        // initial tail window (12 blocks, 48 hidden) rather than the live-append path.
+        model.selectedThreadID = nil
+        try? await Task.sleep(for: .milliseconds(300))
+        let recorder = Recorder(output: output, stage: stage)
+
+        let outcome = await historyFlick(model, recorder, stage)
+        switch outcome {
+        case .blockedOrOutOfTime:
+            note("done", "quitting (blocked/out-of-time)")
+            saveReport(listFiles: true)
+            exit(2)
+        case .passed, .failed:
+            let passed = outcome == .passed && missingStills.isEmpty
+            note("done", "quitting (\(passed ? "PASS" : "FAIL"))")
+            saveReport(listFiles: true)
+            exit(passed ? 0 : 1)
+        }
     }
 
     static func runHeldDrag(model: AppModel) async {
@@ -373,6 +442,546 @@ enum TimelineStress {
             "wheelMode": wheelMode,
         ])
         saveReport(listFiles: false)
+    }
+
+    private enum HistoryFlickOutcome: Equatable {
+        case passed
+        case failed
+        case blockedOrOutOfTime
+    }
+
+    private struct HistoryFlickRect: Codable {
+        let x: Double
+        let y: Double
+        let width: Double
+        let height: Double
+    }
+
+    private struct HistoryFlickReady: Codable {
+        let pid: Int32
+        let windowNumber: Int
+        let point: HeldDragPoint
+        let windowFrame: HistoryFlickRect
+        let upSign: Int32
+        let viewport: Double
+        let flicks: Int
+        let readyAt: Double
+        let readyAtWallClock: Double
+    }
+
+    private struct HistoryFlickObservedEvent: Encodable {
+        let time: Double
+        let phase: UInt
+        let momentumPhase: UInt
+        let scrollingDeltaY: Double
+        let windowNumber: Int
+    }
+
+    private struct HistoryFlickFrameJump: Encodable {
+        let time: Double
+        let size: Double
+        let deltaP: Double
+        let observedDelta: Double
+    }
+
+    private struct HistoryFlickSample: Encodable {
+        let index: Int
+        let injected: Double
+        let observed: Double
+        let discrepancy: Double
+        let clamped: Bool
+        let docHeightStart: Double
+        let docHeightEnd: Double
+        let historyPageLoaded: Bool
+        let frameJumps: [HistoryFlickFrameJump]
+    }
+
+    private struct HistoryFlickSamplesReport: Encodable {
+        let verdict: String
+        let delivery: String
+        let upSign: Int32
+        let viewport: Double
+        let observedEventsCount: Int
+        let flicksCount: Int
+        let unclampedFlicksCount: Int
+        let pageLoads: Int
+        let maxAbsDiscrepancy: Double
+        let flicksOver24pt: Int
+        let frameJumpsCount: Int
+        let flicks: [HistoryFlickSample]
+        let observedEvents: [HistoryFlickObservedEvent]
+    }
+
+    private struct FlickScrollSnapshot {
+        let p: Double
+        let docHeight: Double
+        let clipMinY: Double
+        let topInset: Double
+
+        var isClampedAtTop: Bool {
+            clipMinY <= -topInset + 1.0
+        }
+    }
+
+    private struct TimedFlickSnapshot {
+        let monoTime: CFTimeInterval
+        let snapshot: FlickScrollSnapshot
+    }
+
+    @MainActor
+    private final class HistoryFlickObservedBuffer {
+        struct RawEvent {
+            let monoTime: CFTimeInterval
+            let phase: NSEvent.Phase
+            let momentumPhase: NSEvent.Phase
+            let scrollingDeltaY: Double
+            let windowNumber: Int
+            let preBeganSnapshot: FlickScrollSnapshot?
+        }
+
+        var initialSnapshot: FlickScrollSnapshot?
+        var initialSnapshotMonoTime: CFTimeInterval?
+        var events: [RawEvent] = []
+    }
+
+    private static let historyFlickCount = 60
+
+    private static func historyFlick(_ model: AppModel, _ recorder: Recorder, _ stage: Stage) async -> HistoryFlickOutcome {
+        guard let output = CaptureRun.outputDirectory else { return .failed }
+        let seeded = await seedHistory(
+            model,
+            threadID: shortThreadID,
+            count: 60,
+            noteName: "flick-seed",
+            minSecondsLeft: 50
+        )
+        guard seeded > 0, secondsLeft() > 40 else {
+            note("flick-open", "skipped after seeding \(seeded) turns, \(Int(secondsLeft()))s left")
+            return .blockedOrOutOfTime
+        }
+
+        guard let opened = await openAndSettleHistory(
+            model,
+            threadID: shortThreadID,
+            recorder: recorder,
+            stage: stage,
+            shotName: "flick-bottom",
+            noteName: "flick-open",
+            turnsSeeded: seeded,
+            minSecondsLeft: 38
+        ) else {
+            return secondsLeft() <= 38 ? .blockedOrOutOfTime : .failed
+        }
+        let window = opened.window
+        let scroll = opened.scroll
+
+        // External HID uses the AppKit convention (same as held-drag): positive scrollingDeltaY moves toward the top.
+        let upSign: Int32 = 1
+        var resetSteps = 0
+        while let gap = bottomGap(scroll), gap > 4, resetSteps < 8, secondsLeft() > 35 {
+            await burst(-upSign * 160, times: 3, window: window, scroll: scroll, direct: true)
+            resetSteps += 1
+        }
+        if resetSteps > 0 {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let startGap = bottomGap(scroll), startGap <= 8 else {
+            note("flick-pinned", "not at bottom before ready (gap=\(bottomGap(scroll).map(String.init) ?? "nil"))")
+            return .failed
+        }
+        note("flick-pinned", "pinned at end gap=\(startGap) delivery=hid upSign=\(upSign)")
+
+        let baselineViewport = Double(max(240, unobstructedViewportRect(in: scroll).height))
+
+        let flickStop = RecordingStop()
+        let flickMaxSeconds = max(15.0, secondsLeft() - 16)
+        let flickRecording = Task { await recordWindow("history-flick", seconds: flickMaxSeconds, stop: flickStop) }
+        let startWait = Date.now.addingTimeInterval(1.5)
+        while !flickStop.started, Date.now < startWait {
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+
+        await shoot(recorder, stage, "flick-start")
+
+        let buffer = HistoryFlickObservedBuffer()
+        var monitor: Any? = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            guard event.window === window else { return event }
+            let now = CACurrentMediaTime()
+            let liveScroll = timelineScroll(in: window) ?? scroll
+            if buffer.initialSnapshot == nil, let snap = readScrollSnapshot(liveScroll) {
+                buffer.initialSnapshot = snap
+                buffer.initialSnapshotMonoTime = now - 0.000_001
+            }
+            let preBegan = event.phase.contains(.began) ? readScrollSnapshot(liveScroll) : nil
+            let lineScroll = liveScroll.verticalLineScroll
+            let preciseDelta = Double(
+                event.hasPreciseScrollingDeltas
+                    ? event.scrollingDeltaY
+                    : event.scrollingDeltaY * lineScroll
+            )
+            buffer.events.append(HistoryFlickObservedBuffer.RawEvent(
+                monoTime: now,
+                phase: event.phase,
+                momentumPhase: event.momentumPhase,
+                scrollingDeltaY: preciseDelta,
+                windowNumber: event.window?.windowNumber ?? event.windowNumber,
+                preBeganSnapshot: preBegan
+            ))
+            return event
+        }
+        defer {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        var latestPreEventSnap = readScrollSnapshot(scroll)
+        var latestPreEventMono = CACurrentMediaTime()
+
+        let point = timelineCGPoint(window: window, scroll: scroll)
+        let winFrame = windowCGRect(window)
+        let ready = HistoryFlickReady(
+            pid: getpid(),
+            windowNumber: window.windowNumber,
+            point: HeldDragPoint(x: Double(point.x), y: Double(point.y)),
+            windowFrame: winFrame,
+            upSign: upSign,
+            viewport: baselineViewport,
+            flicks: historyFlickCount,
+            readyAt: CACurrentMediaTime(),
+            readyAtWallClock: Date().timeIntervalSince1970
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let readyData = try? encoder.encode(ready) else {
+            flickStop.stopped = true
+            await flickRecording.value
+            note("history-flick-ready", "failed to encode history-flick-ready.json")
+            return .failed
+        }
+        do {
+            try readyData.write(to: output.appendingPathComponent("history-flick-ready.json"), options: .atomic)
+        } catch {
+            flickStop.stopped = true
+            await flickRecording.value
+            note("history-flick-ready", "failed to write history-flick-ready.json: \(error.localizedDescription)")
+            return .failed
+        }
+        note(
+            "history-flick-ready",
+            String(
+                format: "pid=%d window=%d point=(%.1f,%.1f) windowFrame=(%.1f,%.1f,%.1f,%.1f) upSign=%d viewport=%.1f flicks=%d",
+                getpid(), window.windowNumber, point.x, point.y,
+                winFrame.x, winFrame.y, winFrame.width, winFrame.height,
+                upSign, baselineViewport, historyFlickCount
+            )
+        )
+
+        let waitStart = Date.now
+        let waitDeadline = waitStart.addingTimeInterval(30.0)
+        while Date.now < waitDeadline, secondsLeft() > 8 {
+            if !buffer.events.isEmpty { break }
+            if let liveWindow = appWindow(), let liveScroll = timelineScroll(in: liveWindow),
+               let snap = readScrollSnapshot(liveScroll) {
+                latestPreEventSnap = snap
+                latestPreEventMono = CACurrentMediaTime()
+            }
+            try? await Task.sleep(for: .milliseconds(8))
+        }
+
+        guard let firstEvent = buffer.events.first else {
+            if let activeMonitor = monitor {
+                NSEvent.removeMonitor(activeMonitor)
+                monitor = nil
+            }
+            flickStop.stopped = true
+            await flickRecording.value
+            await shoot(recorder, stage, "flick-end")
+            note(
+                "history-flick-hid-wait",
+                "failed: no scrollWheel event matched window=\(window.windowNumber) within 30s"
+            )
+            _ = evaluateHistoryFlick(
+                samples: [],
+                rawEvents: [],
+                upSign: upSign,
+                viewport: baselineViewport,
+                output: output
+            )
+            return .failed
+        }
+
+        note(
+            "history-flick-hid-started",
+            String(
+                format: "first event phase=%lu momentum=%lu after %.2fs",
+                firstEvent.phase.rawValue,
+                firstEvent.momentumPhase.rawValue,
+                Date.now.timeIntervalSince(waitStart)
+            )
+        )
+
+        var samples: [TimedFlickSnapshot] = []
+        if let seedSnap = buffer.initialSnapshot ?? latestPreEventSnap {
+            let seedTime = buffer.initialSnapshotMonoTime ?? min(latestPreEventMono, firstEvent.monoTime - 0.000_001)
+            samples.append(TimedFlickSnapshot(monoTime: seedTime, snapshot: seedSnap))
+        }
+
+        while secondsLeft() > 6 {
+            if let liveWindow = appWindow(), let liveScroll = timelineScroll(in: liveWindow),
+               let snap = readScrollSnapshot(liveScroll) {
+                samples.append(TimedFlickSnapshot(monoTime: CACurrentMediaTime(), snapshot: snap))
+            }
+            if let lastMono = buffer.events.last?.monoTime,
+               CACurrentMediaTime() - lastMono >= 1.5 {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(8))
+        }
+
+        if let activeMonitor = monitor {
+            NSEvent.removeMonitor(activeMonitor)
+            monitor = nil
+        }
+
+        try? await Task.sleep(for: .milliseconds(100))
+        flickStop.stopped = true
+        await flickRecording.value
+        await shoot(recorder, stage, "flick-end")
+
+        let passed = evaluateHistoryFlick(
+            samples: samples,
+            rawEvents: buffer.events,
+            upSign: upSign,
+            viewport: baselineViewport,
+            output: output
+        )
+        return passed ? .passed : .failed
+    }
+
+    private static func evaluateHistoryFlick(
+        samples: [TimedFlickSnapshot],
+        rawEvents: [HistoryFlickObservedBuffer.RawEvent],
+        upSign: Int32,
+        viewport: Double,
+        output: URL
+    ) -> Bool {
+        let sortedSamples = samples.sorted { $0.monoTime < $1.monoTime }
+        let sortedEvents = rawEvents.sorted { $0.monoTime < $1.monoTime }
+        let originMono = sortedEvents.first?.monoTime ?? sortedSamples.first?.monoTime ?? CACurrentMediaTime()
+
+        let observedEvents = sortedEvents.map { event in
+            HistoryFlickObservedEvent(
+                time: event.monoTime - originMono,
+                phase: event.phase.rawValue,
+                momentumPhase: event.momentumPhase.rawValue,
+                scrollingDeltaY: event.scrollingDeltaY,
+                windowNumber: event.windowNumber
+            )
+        }
+
+        var allJumps: [(monoTime: CFTimeInterval, jump: HistoryFlickFrameJump)] = []
+        if sortedSamples.count >= 2 {
+            var eventCursor = 0
+            while eventCursor < sortedEvents.count, sortedEvents[eventCursor].monoTime <= sortedSamples[0].monoTime {
+                eventCursor += 1
+            }
+            for idx in 1..<sortedSamples.count {
+                let prev = sortedSamples[idx - 1]
+                let curr = sortedSamples[idx]
+                var intervalObserved = 0.0
+                while eventCursor < sortedEvents.count, sortedEvents[eventCursor].monoTime <= curr.monoTime {
+                    if sortedEvents[eventCursor].monoTime > prev.monoTime {
+                        intervalObserved += sortedEvents[eventCursor].scrollingDeltaY
+                    }
+                    eventCursor += 1
+                }
+                let deltaP = curr.snapshot.p - prev.snapshot.p
+                let diff = deltaP - intervalObserved
+                let topClampedNoGrowth = (prev.snapshot.isClampedAtTop || curr.snapshot.isClampedAtTop)
+                    && abs(curr.snapshot.docHeight - prev.snapshot.docHeight) <= 1.0
+                if !topClampedNoGrowth, abs(diff) > 40.0 {
+                    allJumps.append((
+                        monoTime: curr.monoTime,
+                        jump: HistoryFlickFrameJump(
+                            time: curr.monoTime - originMono,
+                            size: diff,
+                            deltaP: deltaP,
+                            observedDelta: intervalObserved
+                        )
+                    ))
+                }
+            }
+        }
+
+        let beganIndices = sortedEvents.indices.filter { sortedEvents[$0].phase.contains(.began) }
+        var flickSamples: [HistoryFlickSample] = []
+        flickSamples.reserveCapacity(beganIndices.count)
+
+        for (pos, beganIdx) in beganIndices.enumerated() {
+            let flickIndex = pos + 1
+            let nextBeganIdx = pos + 1 < beganIndices.count ? beganIndices[pos + 1] : sortedEvents.count
+            let slice = beganIdx..<nextBeganIdx
+            let momEndIdx = slice.last {
+                sortedEvents[$0].momentumPhase.contains(.ended) || sortedEvents[$0].momentumPhase.contains(.cancelled)
+            }
+            let lastMomIdx = slice.last { !sortedEvents[$0].momentumPhase.isEmpty }
+            let fingerEndIdx = slice.last {
+                sortedEvents[$0].phase.contains(.ended) || sortedEvents[$0].phase.contains(.cancelled)
+            }
+            let endIdx = momEndIdx ?? lastMomIdx ?? fingerEndIdx ?? (nextBeganIdx - 1)
+
+            let beganEvent = sortedEvents[beganIdx]
+            let endEvent = sortedEvents[endIdx]
+            // Positive precise-adjusted scrollingDeltaY moves toward the top, which increases P.
+            let injected = sortedEvents[beganIdx...endIdx].reduce(0.0) { $0 + $1.scrollingDeltaY }
+
+            guard let startSnap = beganEvent.preBeganSnapshot ?? snapshotJustBefore(beganEvent.monoTime, in: sortedSamples) else {
+                continue
+            }
+
+            let wantEndTime = endEvent.monoTime + 0.150
+            let endSnap: FlickScrollSnapshot
+            let measureEndTime: CFTimeInterval
+            if nextBeganIdx < sortedEvents.count, sortedEvents[nextBeganIdx].monoTime <= wantEndTime {
+                let nextBegan = sortedEvents[nextBeganIdx]
+                endSnap = nextBegan.preBeganSnapshot ?? snapshotJustBefore(nextBegan.monoTime, in: sortedSamples) ?? startSnap
+                measureEndTime = nextBegan.monoTime
+            } else {
+                endSnap = snapshotAtOrAfter(wantEndTime, in: sortedSamples) ?? startSnap
+                measureEndTime = wantEndTime
+            }
+
+            let observed = endSnap.p - startSnap.p
+            let discrepancy = observed - injected
+            let clampedInWindow = sortedSamples.contains {
+                $0.monoTime >= beganEvent.monoTime && $0.monoTime <= measureEndTime && $0.snapshot.isClampedAtTop
+            }
+            let clamped = startSnap.isClampedAtTop || endSnap.isClampedAtTop || clampedInWindow
+            let pageLoaded = endSnap.docHeight - startSnap.docHeight > 1.0
+
+            let jumpLower = pos == 0 ? -Double.infinity : beganEvent.monoTime
+            let jumpUpper = nextBeganIdx < sortedEvents.count ? sortedEvents[nextBeganIdx].monoTime : Double.infinity
+            let flickJumps = allJumps
+                .filter { $0.monoTime >= jumpLower && $0.monoTime < jumpUpper }
+                .map(\.jump)
+
+            let record = HistoryFlickSample(
+                index: flickIndex,
+                injected: injected,
+                observed: observed,
+                discrepancy: discrepancy,
+                clamped: clamped,
+                docHeightStart: startSnap.docHeight,
+                docHeightEnd: endSnap.docHeight,
+                historyPageLoaded: pageLoaded,
+                frameJumps: flickJumps
+            )
+            flickSamples.append(record)
+            WebsiteCaptures.log(
+                "stress flick-\(String(format: "%02d", flickIndex)): injected=\(String(format: "%.1f", injected))pt observed=\(String(format: "%.1f", observed))pt discrepancy=\(String(format: "%.1f", discrepancy))pt clamped=\(clamped) pageLoaded=\(pageLoaded) jumps=\(flickJumps.count) docHeight=\(Int(startSnap.docHeight.rounded()))->\(Int(endSnap.docHeight.rounded()))"
+            )
+        }
+
+        let unclamped = flickSamples.filter { !$0.clamped }
+        let pageLoads = flickSamples.filter(\.historyPageLoaded).count
+        let maxAbsDiscrepancy = unclamped.map { abs($0.discrepancy) }.max() ?? 0.0
+        let flicksOver24 = unclamped.filter { abs($0.discrepancy) > 24.0 }.count
+        let frameJumpsCount = allJumps.count
+        // A short or stalled sequence proves nothing: every flick must arrive and history
+        // must actually page in under the reader, which is the case being measured.
+        let sequenceComplete = flickSamples.count == historyFlickCount
+        // The failure being guarded: a history page landing uncompensated, which moves the
+        // reader by a large part of a page between two samples. Per-flick discrepancy and the
+        // small frame jumps are reported but not judged: flicks overlap their neighbours'
+        // momentum, so their segmentation alone swings by tens of points either way.
+        let pageJumps = allJumps.filter { abs($0.jump.size) > viewport / 2 }.count
+        let passed = sequenceComplete && pageLoads >= 2 && !unclamped.isEmpty && pageJumps == 0
+        let verdict = passed ? "PASS" : "FAIL"
+
+        let samplesFile = "history-flick-samples.json"
+        let samplesReport = HistoryFlickSamplesReport(
+            verdict: verdict,
+            delivery: "hid",
+            upSign: upSign,
+            viewport: viewport,
+            observedEventsCount: observedEvents.count,
+            flicksCount: flickSamples.count,
+            unclampedFlicksCount: unclamped.count,
+            pageLoads: pageLoads,
+            maxAbsDiscrepancy: maxAbsDiscrepancy,
+            flicksOver24pt: flicksOver24,
+            frameJumpsCount: frameJumpsCount,
+            flicks: flickSamples,
+            observedEvents: observedEvents
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let encoded = try? encoder.encode(samplesReport) {
+            try? encoded.write(to: output.appendingPathComponent(samplesFile), options: .atomic)
+        }
+
+        let summaryDetail = "verdict=\(verdict) sequenceComplete=\(sequenceComplete) delivery=hid observedEvents=\(observedEvents.count) flicks=\(flickSamples.count) unclampedFlicks=\(unclamped.count) pageLoads=\(pageLoads) maxAbsDiscrepancy=\(String(format: "%.1f", maxAbsDiscrepancy))pt flicksOver24pt=\(flicksOver24) frameJumps=\(frameJumpsCount) pageJumps=\(pageJumps) viewport=\(Int(viewport.rounded()))pt"
+        WebsiteCaptures.log("stress history-flick-summary: \(summaryDetail)")
+        phases.append([
+            "name": "history-flick-summary",
+            "verdict": verdict,
+            "detail": summaryDetail,
+            "delivery": "hid",
+            "observedEvents": String(observedEvents.count),
+            "flicks": String(flickSamples.count),
+            "unclampedFlicks": String(unclamped.count),
+            "pageLoads": String(pageLoads),
+            "maxAbsDiscrepancyPt": String(format: "%.1f", maxAbsDiscrepancy),
+            "flicksOver24pt": String(flicksOver24),
+            "frameJumps": String(frameJumpsCount),
+            "viewportPt": String(Int(viewport.rounded())),
+            "samplesFile": samplesFile,
+        ])
+        saveReport(listFiles: false)
+        return passed
+    }
+
+    private static func readScrollSnapshot(_ scroll: NSScrollView) -> FlickScrollSnapshot? {
+        guard let document = scroll.documentView else { return nil }
+        let docHeight = Double(document.bounds.height)
+        let clipMinY = Double(scroll.contentView.bounds.minY)
+        let topInset = Double(scroll.contentInsets.top)
+        return FlickScrollSnapshot(
+            p: docHeight - clipMinY,
+            docHeight: docHeight,
+            clipMinY: clipMinY,
+            topInset: topInset
+        )
+    }
+
+    private static func snapshotJustBefore(
+        _ time: CFTimeInterval,
+        in samples: [TimedFlickSnapshot]
+    ) -> FlickScrollSnapshot? {
+        if let idx = samples.lastIndex(where: { $0.monoTime <= time }) {
+            return samples[idx].snapshot
+        }
+        return samples.first?.snapshot
+    }
+
+    private static func snapshotAtOrAfter(
+        _ time: CFTimeInterval,
+        in samples: [TimedFlickSnapshot]
+    ) -> FlickScrollSnapshot? {
+        if let idx = samples.firstIndex(where: { $0.monoTime >= time }) {
+            return samples[idx].snapshot
+        }
+        return samples.last?.snapshot
+    }
+
+    private static func windowCGRect(_ window: NSWindow) -> HistoryFlickRect {
+        let frame = window.frame
+        let displayHeight = CGDisplayBounds(CGMainDisplayID()).height
+        return HistoryFlickRect(
+            x: Double(frame.minX),
+            y: Double(displayHeight - frame.maxY),
+            width: Double(frame.width),
+            height: Double(frame.height)
+        )
     }
 
     private enum HeldDragRouting: String {
@@ -1821,12 +2430,21 @@ enum TimelineStress {
         window: NSWindow,
         scroll: NSScrollView,
         deltaY: Int32,
-        phase: UInt32
+        phase: UInt32,
+        momentumPhase: UInt32 = 0
     ) -> (cg: CGEvent, ns: NSEvent)? {
         guard let cg = buildWheelCGEvent(window: window, scroll: scroll, deltaY: deltaY) else { return nil }
         cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase))
-        cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+        cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(momentumPhase))
         cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        if let ns = NSEvent(cgEvent: cg),
+           ns.type == .scrollWheel,
+           ns.hasPreciseScrollingDeltas,
+           abs(ns.scrollingDeltaY - CGFloat(deltaY)) <= 0.01 {
+            return (cg, ns)
+        }
+        cg.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(deltaY))
+        cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Double(deltaY))
         guard let ns = NSEvent(cgEvent: cg), ns.type == .scrollWheel else { return nil }
         return (cg, ns)
     }
@@ -2031,6 +2649,799 @@ enum TimelineStress {
         guard listFiles else { return }
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: output.path)) ?? []).sorted()
         if let body = data(files: names) { try? body.write(to: url, options: .atomic) }
+    }
+}
+
+extension TimelineStress {
+    private struct SubagentLoopVariant: Encodable {
+        let scenario: String
+        let destination: String
+        let width: Int
+        let windowHeight: Int
+        let chunkCharacters: Int
+        let intervalMs: Int
+        let cpuPercent: Double
+        let maxGapMs: Double
+        let longGaps: Int
+        let deliveredChunks: Int
+        let expectedChunks: Int
+        let still: String
+        let hot: Bool?
+    }
+
+    @MainActor
+    private final class SubagentStreamDeliveries {
+        var count = 0
+    }
+
+    private struct SubagentLoopMeasurement {
+        let cpuPercent: Double
+        let maxGapMs: Double
+        let longGaps: Int
+    }
+
+    private struct SubagentLoopAfterCollapse: Encodable {
+        let cpuPercent: Double
+        let hot: Bool?
+    }
+
+    private struct SubagentLoopReport: Encodable {
+        let osVersion: String
+        let preferredScrollerStyle: String
+        let knobsOff: String
+        let variants: [SubagentLoopVariant]
+        let afterCollapse: SubagentLoopAfterCollapse?
+    }
+
+    static func runSubagentPanelLoop(model: AppModel) async {
+        guard CaptureRun.isEnabled, let output = CaptureRun.outputDirectory else { return }
+        phases.removeAll()
+        missingStills.removeAll()
+        await model.bootstrap()
+        guard model.isLibraryLoaded, !model.threads.isEmpty else {
+            WebsiteCaptures.log("stress library failed to load")
+            exit(1)
+        }
+        budgetSeconds = 600
+        deadline = Date.now.addingTimeInterval(budgetSeconds)
+        let timeoutTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(budgetSeconds))
+            WebsiteCaptures.log("stress out of time, quitting")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        defer { timeoutTask.cancel() }
+
+        model.settings.hasSeenHydraIntro = true
+        model.settings.hydraEnabled = false
+        WebsiteCaptures.log("subagent-panel-loop start \(output.path)")
+
+        let stage = Stage(model: model)
+        stage.show(size: NSSize(width: 1320, height: 860))
+        await stage.ensureActive()
+        guard let window = appWindow(), NSApp.isActive, window.isKeyWindow else {
+            note("blocked", "foreground desktop unavailable; unlock the host before running")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        guard let content = try? await SCShareableContent.currentProcess, !content.displays.isEmpty else {
+            note("blocked", "no capturable display for this process")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        if model.sidebar.isVisible { model.sidebar.toggle() }
+
+        guard let parent = model.thread(longThreadID)
+            ?? model.threads.first(where: { !$0.isArchived && !$0.isHydraHead && !$0.isHelper }) else {
+            note("blocked", "no parent thread in mock library")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        model.selectedThreadID = parent.id
+        try? await Task.sleep(for: .milliseconds(500))
+
+        let recorder = Recorder(output: output, stage: stage)
+        let answer = subagentStreamingAnswer()
+        let windowHeight = 860
+        var variants: [SubagentLoopVariant] = []
+        let parentRuntime = model.runtime(for: parent.id)
+        await parentRuntime.ensureLoaded()
+
+        func runQuietScenario(scenario: String, destination: String, width: Int) async {
+            guard secondsLeft() > 14 else {
+                note("subagent-loop-budget", "stopped before \(scenario), \(Int(secondsLeft()))s left")
+                saveReport(listFiles: true)
+                exit(2)
+            }
+            WebsiteCaptures.log("subagent-panel-loop scenario \(scenario) start width=\(width) height=\(windowHeight) quiet=true")
+            try? await Task.sleep(for: .seconds(1))
+            let measurement = await measureSubagentStreamingWindow(seconds: 6.0)
+            // A window recording after the measurement, for comparing the working title's
+            // breath between builds frame by frame (TIVANO_PROBE_RECORD=1).
+            if ProcessInfo.processInfo.environment["TIVANO_PROBE_RECORD"] == "1" {
+                await recordWindow("breath-\(scenario)", seconds: 7)
+            }
+            let stillBase = "subagent-\(scenario)-\(windowHeight)"
+            let stillFile = "\(stillBase).png"
+            await shoot(recorder, stage, stillBase)
+            let hot = measurement.cpuPercent >= 40
+            note(
+                stillBase,
+                String(format: "destination=%@ width=%d windowHeight=%d quiet=true cpuPercent=%.1f maxGapMs=%.1f longGaps=%d hot=%@", destination, width, windowHeight, measurement.cpuPercent, measurement.maxGapMs, measurement.longGaps, hot ? "true" : "false")
+            )
+            variants.append(SubagentLoopVariant(
+                scenario: scenario,
+                destination: destination,
+                width: width,
+                windowHeight: windowHeight,
+                chunkCharacters: 0,
+                intervalMs: 0,
+                cpuPercent: measurement.cpuPercent,
+                maxGapMs: measurement.maxGapMs,
+                longGaps: measurement.longGaps,
+                deliveredChunks: 0,
+                expectedChunks: 0,
+                still: stillFile,
+                hot: hot ? true : nil
+            ))
+        }
+
+        if let existingPanel = model.panelSubagent(of: parent.id) {
+            withAnimation(Chrome.panelSlide) {
+                model.closeSubagent(existingPanel.id)
+            }
+            try? await Task.sleep(for: .milliseconds(1500))
+        }
+        guard !parentRuntime.isRunning, model.panelSubagent(of: parent.id) == nil else {
+            note("blocked", "idle baseline could not stage an idle parent with no helper panel")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        await runQuietScenario(scenario: "idle-baseline", destination: "idle", width: 0)
+
+        var helper = ChatThread(
+            projectID: parent.projectID,
+            provider: parent.provider,
+            model: parent.model,
+            effort: parent.effort,
+            runtimeMode: parent.runtimeMode,
+            fastMode: parent.fastMode
+        )
+        helper.parentThreadID = parent.id
+        helper.isInPanel = true
+        helper.title = "Helper panel loop"
+        helper.hasCustomTitle = true
+        model.insertThread(helper)
+
+        let helperRuntime = model.runtime(for: helper.id)
+        await helperRuntime.ensureLoaded()
+
+        for turn in 1...2 {
+            await speak(
+                helperRuntime,
+                id: "subagent-short-\(turn)",
+                user: subagentLoopQuestion(turn),
+                answer: subagentLoopAnswer(turn)
+            )
+        }
+
+        let streamGate = HeldDragStreamGate()
+        let pieces = heldDragStreamPieces(count: 20)
+        var streamTask: Task<Void, Never>?
+        defer { streamTask?.cancel() }
+        var activeRuntime = helperRuntime
+        var activeStreamID: String?
+
+        func finishActiveTurn() async {
+            streamTask?.cancel()
+            streamTask = nil
+            if let activeStreamID {
+                await finish(activeRuntime, id: activeStreamID)
+            }
+            activeStreamID = nil
+        }
+
+        func startQuietRunningTurn(runtime: ThreadRuntime, streamID: String, prompt: String, initialDelta: String) async {
+            await finishActiveTurn()
+            activeRuntime = runtime
+            activeStreamID = streamID
+            streamGate.paused = false
+            runtime.rehearseTurn(prompt)
+            let countAfterPrompt = runtime.entries.count
+            streamTask = Task { @MainActor in
+                var index = 0
+                while !Task.isCancelled, secondsLeft() > 3 {
+                    if streamGate.paused {
+                        try? await Task.sleep(for: .milliseconds(50))
+                        continue
+                    }
+                    let text = index == 0 ? initialDelta : pieces[(index - 1) % pieces.count]
+                    runtime.rehearse(.messageDelta(id: streamID, text: text))
+                    index += 1
+                    if index == 1 { streamGate.paused = true }
+                    try? await Task.sleep(for: .milliseconds(180))
+                }
+            }
+            let waitLimit = Date.now.addingTimeInterval(1.5)
+            while runtime.entries.count <= countAfterPrompt, Date.now < waitLimit {
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+            try? await Task.sleep(for: .milliseconds(220))
+            streamGate.paused = true
+        }
+
+        let defaultHeight = min(520.0, max(300.0, CGFloat(windowHeight) * 0.5))
+        model.settings.panelSize = CGSize(width: 400, height: defaultHeight)
+        stage.resize(to: NSSize(width: 1320, height: CGFloat(windowHeight)))
+        await startQuietRunningTurn(
+            runtime: helperRuntime,
+            streamID: "subagent-stream-panel-400-quiet",
+            prompt: "Keep monitoring the helper panel layout.",
+            initialDelta: "Checking the helper panel width and working card layout while the turn stays running. "
+        )
+        try? await Task.sleep(for: .milliseconds(400))
+
+        let scrollCount = findAll(NSScrollView.self, in: window.contentView)
+            .filter { !$0.isHiddenOrHasHiddenAncestor && !($0.documentView is ComposerNSTextView) }
+            .count
+        guard model.subagent(of: parent.id)?.id == helper.id,
+              model.panelSubagent(of: parent.id)?.id == helper.id,
+              helperRuntime.isRunning,
+              scrollCount >= 2 else {
+            note("blocked", "helper panel did not appear (panelSubagent=\(model.panelSubagent(of: parent.id)?.id.uuidString ?? "nil") scrolls=\(scrollCount))")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        note("subagent-panel-staged", "helper=\(helper.id.uuidString) parent=\(parent.id.uuidString) running=\(helperRuntime.isRunning) scrolls=\(scrollCount)")
+        await runQuietScenario(scenario: "panel-400-quiet", destination: "helper-panel", width: 400)
+
+        await finishActiveTurn()
+        withAnimation(Chrome.panelSlide) {
+            model.closeSubagent(helper.id)
+        }
+        try? await Task.sleep(for: .seconds(1.5))
+        await startQuietRunningTurn(
+            runtime: parentRuntime,
+            streamID: "subagent-stream-main-quiet",
+            prompt: "Keep monitoring the main chat working card.",
+            initialDelta: "Checking the main chat working card layout while the turn stays running. "
+        )
+        guard parentRuntime.isRunning, model.panelSubagent(of: parent.id) == nil else {
+            note("blocked", "main quiet scenario could not stage a running parent with the helper panel closed")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        await runQuietScenario(scenario: "main-quiet", destination: "parent-main-chat", width: 400)
+        await finishActiveTurn()
+
+        if ProcessInfo.processInfo.environment["TIVANO_PROBE_QUIET_ONLY"] == "1" {
+            writeSubagentLoopReport(output: output, variants: variants, afterCollapse: nil)
+            note("done", "quitting after quiet scenarios")
+            saveReport(listFiles: true)
+            exit(0)
+        }
+
+        withAnimation(Chrome.panelSlide) {
+            model.showSubagentPanel(helper.id)
+        }
+        try? await Task.sleep(for: .milliseconds(400))
+        guard model.panelSubagent(of: parent.id)?.id == helper.id else {
+            note("blocked", "helper panel did not reopen for streaming scenarios")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+
+        func runScenario(
+            scenario: String,
+            destination: String,
+            runtime: ThreadRuntime,
+            width: Int,
+            chunkCharacters: Int,
+            intervalMs: Int,
+            streamID: String,
+            readyMarker: Bool = false
+        ) async {
+            guard secondsLeft() > 14 else {
+                note("subagent-loop-budget", "stopped before \(scenario), \(Int(secondsLeft()))s left")
+                saveReport(listFiles: true)
+                exit(2)
+            }
+            WebsiteCaptures.log("subagent-panel-loop scenario \(scenario) start width=\(width) height=\(windowHeight) chunkCharacters=\(chunkCharacters) intervalMs=\(intervalMs) streamID=\(streamID)")
+
+            streamTask?.cancel()
+            streamTask = nil
+            if let activeStreamID {
+                await finish(activeRuntime, id: activeStreamID)
+            }
+            activeStreamID = nil
+
+            let defaultHeight = min(520.0, max(300.0, CGFloat(windowHeight) * 0.5))
+            model.settings.panelSize = CGSize(width: CGFloat(width), height: defaultHeight)
+            stage.resize(to: NSSize(width: 1320, height: CGFloat(windowHeight)))
+
+            let chunks = subagentStreamChunks(answer, characters: chunkCharacters)
+            guard let firstChunk = chunks.first else {
+                note("blocked", "streaming answer produced no chunks")
+                saveReport(listFiles: true)
+                exit(2)
+            }
+            activeRuntime = runtime
+            activeStreamID = streamID
+            streamGate.paused = false
+            runtime.rehearseTurn("Produce the detailed final investigation with Markdown, code, a table, links, and long tokens.")
+            runtime.rehearse(.messageDelta(id: streamID, text: firstChunk))
+            // Paced by elapsed time: chunks that fall due during a main-thread stall are
+            // delivered on the next wake, so a slow panel receives the same text as the control.
+            let deliveries = SubagentStreamDeliveries()
+            streamTask = Task { @MainActor in
+                let start = ContinuousClock.now
+                let interval = Duration.milliseconds(intervalMs)
+                var index = 1
+                while !Task.isCancelled, secondsLeft() > 3 {
+                    if streamGate.paused {
+                        try? await Task.sleep(for: .milliseconds(50))
+                        continue
+                    }
+                    let due = Int((ContinuousClock.now - start) / interval)
+                    while index <= due {
+                        runtime.rehearse(.messageDelta(id: streamID, text: chunks[index % chunks.count]))
+                        index += 1
+                        deliveries.count += 1
+                    }
+                    try? await Task.sleep(until: start + interval * index, clock: .continuous)
+                }
+            }
+
+            try? await Task.sleep(for: .seconds(1))
+            if readyMarker {
+                do {
+                    try Data().write(to: output.appendingPathComponent("subagent-stream-ready"), options: .atomic)
+                } catch {
+                    note("blocked", "could not write subagent-stream-ready: \(error.localizedDescription)")
+                    saveReport(listFiles: true)
+                    exit(2)
+                }
+            }
+            let deliveredBefore = deliveries.count
+            let measurement = await measureSubagentStreamingWindow(seconds: 6.0)
+            let deliveredChunks = deliveries.count - deliveredBefore
+            let expectedChunks = Int((6000.0 / Double(intervalMs)).rounded())
+            let stillBase = "subagent-\(scenario)-\(windowHeight)"
+            let stillFile = "\(stillBase).png"
+            await shoot(recorder, stage, stillBase)
+            let hot = measurement.cpuPercent >= 40
+            note(
+                stillBase,
+                String(format: "destination=%@ width=%d windowHeight=%d chunkCharacters=%d intervalMs=%d cpuPercent=%.1f maxGapMs=%.1f longGaps=%d hot=%@", destination, width, windowHeight, chunkCharacters, intervalMs, measurement.cpuPercent, measurement.maxGapMs, measurement.longGaps, hot ? "true" : "false")
+            )
+            variants.append(SubagentLoopVariant(
+                scenario: scenario,
+                destination: destination,
+                width: width,
+                windowHeight: windowHeight,
+                chunkCharacters: chunkCharacters,
+                intervalMs: intervalMs,
+                cpuPercent: measurement.cpuPercent,
+                maxGapMs: measurement.maxGapMs,
+                longGaps: measurement.longGaps,
+                deliveredChunks: deliveredChunks,
+                expectedChunks: expectedChunks,
+                still: stillFile,
+                hot: hot ? true : nil
+            ))
+        }
+
+        await runScenario(
+            scenario: "panel-400-fast",
+            destination: "helper-panel",
+            runtime: helperRuntime,
+            width: 400,
+            chunkCharacters: 40,
+            intervalMs: 16,
+            streamID: "subagent-stream-panel-400-fast",
+            readyMarker: true
+        )
+        await runScenario(
+            scenario: "panel-400-large-chunks",
+            destination: "helper-panel",
+            runtime: helperRuntime,
+            width: 400,
+            chunkCharacters: 400,
+            intervalMs: 50,
+            streamID: "subagent-stream-panel-400-large-chunks"
+        )
+        await runScenario(
+            scenario: "panel-520-fast",
+            destination: "helper-panel",
+            runtime: helperRuntime,
+            width: 520,
+            chunkCharacters: 40,
+            intervalMs: 16,
+            streamID: "subagent-stream-panel-520-fast"
+        )
+
+        guard secondsLeft() > 10 else {
+            note("subagent-loop-budget", "stopped before after-collapse, \(Int(secondsLeft()))s left")
+            saveReport(listFiles: true)
+            exit(2)
+        }
+        streamTask?.cancel()
+        streamTask = nil
+        if let activeStreamID {
+            await finish(activeRuntime, id: activeStreamID)
+        }
+        activeStreamID = nil
+        withAnimation(Chrome.panelSlide) {
+            model.closeSubagent(helper.id)
+        }
+        try? await Task.sleep(for: .seconds(1.5))
+        let afterCollapseCPU = await measureProcessCPUPercent(seconds: 6.0)
+        let afterCollapseHot = afterCollapseCPU >= 40
+        note(
+            "after-collapse",
+            String(format: "cpuPercent=%.1f hot=%@ panelOpen=%@", afterCollapseCPU, afterCollapseHot ? "true" : "false", model.panelSubagent(of: parent.id) != nil ? "true" : "false")
+        )
+
+        await runScenario(
+            scenario: "parent-control-400-fast",
+            destination: "parent-main-chat",
+            runtime: parentRuntime,
+            width: 400,
+            chunkCharacters: 40,
+            intervalMs: 16,
+            streamID: "subagent-stream-parent-control-400-fast"
+        )
+        await finishActiveTurn()
+
+        writeSubagentLoopReport(
+            output: output,
+            variants: variants,
+            afterCollapse: SubagentLoopAfterCollapse(
+                cpuPercent: afterCollapseCPU,
+                hot: afterCollapseHot ? true : nil
+            )
+        )
+
+        note("done", "quitting")
+        saveReport(listFiles: true)
+        exit(missingStills.isEmpty ? 0 : 1)
+    }
+
+    private static var subagentPillDemoWindow: NSWindow?
+
+    /// `--website-captures <folder> --subagent-pill-demo`: interactive preview of the
+    /// in-stream working sub-agent pill (`HelpersWorkingRow`) with panels off. Leaves the
+    /// window open without exiting so a human can inspect and click the pill.
+    static func runSubagentPillDemo(model: AppModel) async {
+        guard CaptureRun.isEnabled else { return }
+        await model.bootstrap()
+        guard model.isLibraryLoaded, let project = model.projects.first else { return }
+
+        model.settings.hasSeenHydraIntro = true
+        model.settings.hydraAutoOpensPanels = false
+
+        let window = WindowManager.shared.makeCaptureWindow(size: NSSize(width: 1280, height: 800))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        subagentPillDemoWindow = window
+
+        var parent = ChatThread(
+            projectID: project.id,
+            provider: .claude,
+            model: "opus",
+            effort: "high",
+            runtimeMode: .supervised
+        )
+        parent.title = "Sub-agent pill demo"
+        parent.hasCustomTitle = true
+        parent.branch = "main"
+        model.insertThread(parent)
+
+        let parentRuntime = model.runtime(for: parent.id)
+        await parentRuntime.ensureLoaded()
+        let demoTurns: [(String, String)] = [
+            ("先看一下当前对话流底部的布局，子代理在后台运行但没弹窗时用户能看到什么？", "如果关闭了自动弹出面板，后台运行的子代理不会立刻占满右侧空间，而是在对话流末尾显示一条状态胶囊，方便随时点开查看。"),
+            ("那如果主对话已经很长，需要一直滚到最下面才看得到吗？", "对，它会跟在最后一个区块后面，和工作状态指示处于同一视觉层级；点击胶囊后会直接把对应的子代理面板呼出来。"),
+            ("普通子代理和 Hydra 并行团队都会走这一个入口吗？", "是的。普通子代理展示它的标题（比如“Walter is working”），多个隐藏的 Hydra 子代理则会汇总显示数量和头像标记。"),
+            ("点击打开面板之后，胶囊会自动消失吗？", "会。当该子代理进入面板显示后，`HelpersWorkingRow` 不再把它算作隐藏运行态，胶囊随即收起；再次关闭面板时会重新出现。"),
+            ("先把普通子代理派出去跑着，我看看底部胶囊的样式和点击手感。", "已经派发子代理 Walter 在后台运行，它当前未固定在面板中，你可以直接点击对话流底部的胶囊试一下。"),
+        ]
+        for (index, turn) in demoTurns.enumerated() {
+            await speak(parentRuntime, id: "pill-demo-parent-\(index)", user: turn.0, answer: turn.1)
+        }
+
+        var walter = ChatThread(
+            projectID: parent.projectID,
+            provider: parent.provider,
+            model: parent.model,
+            effort: parent.effort,
+            runtimeMode: parent.runtimeMode,
+            fastMode: parent.fastMode
+        )
+        walter.parentThreadID = parent.id
+        walter.isInPanel = false
+        walter.title = "Walter"
+        walter.hasCustomTitle = true
+        walter.branch = "main"
+        model.insertThread(walter)
+
+        let walterRuntime = model.runtime(for: walter.id)
+        await walterRuntime.ensureLoaded()
+        await speak(
+            walterRuntime,
+            id: "pill-demo-walter-seed",
+            user: "先确认 `HelpersWorkingRow` 的展示条件和点击动作。",
+            answer: "已核对：`hydraAutoOpensPanels == false` 且 `!helper.isInPanel` 时，会在主对话末尾展示 `Walter is working`。"
+        )
+        walterRuntime.rehearseTurn("继续检查子代理面板打开与关闭后的胶囊切换状态。")
+        walterRuntime.rehearse(.messageDelta(
+            id: "pill-demo-walter-running",
+            text: "正在核对隐藏子代理在对话流末尾的状态同步与面板展开动画，当前保持运行中以便交互测试。"
+        ))
+
+        var headsLead = ChatThread(
+            projectID: project.id,
+            provider: .claude,
+            model: "opus",
+            effort: "high",
+            runtimeMode: .supervised
+        )
+        headsLead.title = "Sub-agent pill demo (heads)"
+        headsLead.hasCustomTitle = true
+        headsLead.branch = "main"
+        headsLead.hydraSpawnCount = 2
+        model.insertThread(headsLead)
+
+        let headsLeadRuntime = model.runtime(for: headsLead.id)
+        await headsLeadRuntime.ensureLoaded()
+        headsLeadRuntime.isHydraPanelHidden = true
+        await speak(
+            headsLeadRuntime,
+            id: "pill-demo-heads-seed",
+            user: "同时派两个 Hydra 子代理检查面板收起时的汇总胶囊。",
+            answer: "两个子代理已开始运行，当前 Hydra 面板处于隐藏状态，底部会显示汇总数量和头像。"
+        )
+        let headSpecs = [
+            ("核对汇总胶囊文案", "正在检查多子代理同时运行时底部胶囊的计数与图标排列。"),
+            ("验证面板切换状态", "正在验证点击胶囊后调用 `HydraButton.togglePanel` 恢复团队面板。"),
+        ]
+        for (index, spec) in headSpecs.enumerated() {
+            var head = ChatThread(
+                projectID: headsLead.projectID,
+                provider: headsLead.provider,
+                model: headsLead.model,
+                effort: headsLead.effort,
+                runtimeMode: headsLead.runtimeMode,
+                fastMode: headsLead.fastMode
+            )
+            head.parentThreadID = headsLead.id
+            head.isInPanel = true
+            head.title = "\(HydraRoster.persona(at: index).name) · \(spec.0)"
+            head.hasCustomTitle = true
+            head.branch = "main"
+            var info = HydraHeadInfo(index: index, task: spec.0, kind: .tivano, origin: .delegated)
+            info.status = .running
+            info.activity = spec.0
+            head.hydra = info
+            model.insertThread(head)
+
+            let headRuntime = model.runtime(for: head.id)
+            await headRuntime.ensureLoaded()
+            headRuntime.rehearseTurn(spec.0)
+            headRuntime.rehearse(.messageDelta(id: "pill-demo-head-\(index)", text: spec.1))
+        }
+
+        model.selectedThreadID = parent.id
+        try? await Task.sleep(for: .milliseconds(150))
+    }
+
+    private static func writeSubagentLoopReport(
+        output: URL,
+        variants: [SubagentLoopVariant],
+        afterCollapse: SubagentLoopAfterCollapse?
+    ) {
+        let scrollerStyle: String = switch NSScroller.preferredScrollerStyle {
+        case .legacy: "legacy"
+        case .overlay: "overlay"
+        @unknown default: "unknown"
+        }
+        let report = SubagentLoopReport(
+            osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            preferredScrollerStyle: scrollerStyle,
+            knobsOff: ProbeKnobs.rawValue,
+            variants: variants,
+            afterCollapse: afterCollapse
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(report) {
+            try? data.write(to: output.appendingPathComponent("subagent-loop.json"), options: .atomic)
+        }
+    }
+
+    private static func measureSubagentStreamingWindow(seconds: TimeInterval) async -> SubagentLoopMeasurement {
+        let monitor = SubagentLoopStallMonitor()
+        monitor.start()
+        let cpuPercent = await measureProcessCPUPercent(seconds: seconds)
+        let stalls = monitor.stop()
+        return SubagentLoopMeasurement(
+            cpuPercent: cpuPercent,
+            maxGapMs: stalls.maxGapMs,
+            longGaps: stalls.longGaps
+        )
+    }
+
+    private static func subagentStreamChunks(_ text: String, characters: Int) -> [String] {
+        guard characters > 0 else { return [] }
+        var chunks: [String] = []
+        var start = text.startIndex
+        while start < text.endIndex {
+            let end = text.index(start, offsetBy: characters, limitedBy: text.endIndex) ?? text.endIndex
+            chunks.append(String(text[start..<end]))
+            start = end
+        }
+        return chunks
+    }
+
+    private static func subagentStreamingAnswer() -> String {
+        var answer = """
+        ## Final investigation
+
+        The helper reproduced the narrow-panel slowdown while a long final answer was arriving at full provider speed. The result combines ordinary prose with [inline investigation notes](https://example.com/issues/56/investigation) so the rehearsal exercises the same Markdown parsing, layout, selection, and scrolling work as a real response.
+
+        The first pass compared the visible helper transcript with the [main-column control](https://example.com/issues/56/control). It kept the parent thread selected, preserved the panel's floating presentation, and recorded evidence only after the stream had been running long enough to reach steady rendering rather than a single initial layout.
+
+        The principal observations are:
+
+        """
+        let bullets = (1...8).map { index in
+            "- Observation \(index): incoming deltas invalidate the visible Markdown blocks, the timeline remeasures their widths, and the viewport decides whether the reader should remain pinned to the latest output."
+        }.joined(separator: "\n")
+        answer += bullets
+
+        let swiftCode = (1...36).map { line in
+            "let renderedBlock\(line) = renderer.measure(chunks[\(line)], panelWidth: panelWidth, cursor: textOffsets[\(line)], following: isFollowing)"
+        }.joined(separator: "\n")
+        answer += """
+
+
+        The following Swift excerpt is deliberately long enough to produce many wrapped lines and persistent syntax-highlighting work in the narrow panel:
+
+        ```swift
+        \(swiftCode)
+        ```
+
+        A second parser trace adds another fenced language and more long lines. The [renderer comparison](https://example.com/issues/56/renderer-comparison) links this trace to the visible result rather than treating code blocks as inert filler.
+
+        """
+        let pythonCode = (1...36).map { line in
+            "delta_\(line) = parser.consume(chunks[\(line)], panel_width=panel_width, link_state=links[\(line)], invalidate=True)"
+        }.joined(separator: "\n")
+        answer += """
+        ```python
+        \(pythonCode)
+        ```
+
+        | Pass | Visible region | Parser work | Viewport result |
+        | --- | --- | --- | --- |
+        """
+        let tableRows = (1...10).map { index in
+            "| \(index) | Paragraph and code block \(index) | Inline links plus delimiters | Follow offset retained |"
+        }.joined(separator: "\n")
+        answer += "\n\(tableRows)"
+
+        let longURL = "https://example.com/" + String(repeating: "stream-segment-", count: 12) + "final-result"
+        let longPath = "/tmp/tivano-rehearsal/" + String(repeating: "directory-", count: 16) + "timeline-result.md"
+        answer += """
+
+
+        Long unbroken tokens make wrapping failures visible without depending on a particular font: \(longURL)
+
+        The local diagnostic artifact uses another intentionally unbroken token: `\(longPath)`
+
+        """
+        var batch = 1
+        while answer.count < 15_000 {
+            answer += """
+
+            ### Confirmation batch \(batch)
+
+            This confirmation extends the realistic final answer while the helper remains live. It refers back to [evidence batch \(batch)](https://example.com/issues/56/evidence/\(batch)) and explains that parsing, text measurement, scrolling, and panel compositing all happen while another delta is already due.
+
+            - Timeline pass \(batch): append the next fragment, preserve the reader's position, and remeasure every visible block affected by the growing response.
+            - Markdown pass \(batch): retain unfinished inline delimiters, update link ranges, and keep fenced code highlighting stable as chunk boundaries move.
+            - Layout pass \(batch): compare the narrow panel with the parent column using identical text and cadence rather than a paused transcript.
+
+            Additional prose keeps the payload representative of a model summarizing a completed investigation. It includes enough words between structural elements to force ordinary paragraph wrapping as well as table and code rendering, and the next confirmation begins only after this complete section has entered the stream.
+
+            """
+            batch += 1
+        }
+        return answer
+    }
+
+    private static func processCPUTime() -> Double? {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return nil }
+        let user = Double(usage.ru_utime.tv_sec) + Double(usage.ru_utime.tv_usec) / 1_000_000.0
+        let sys = Double(usage.ru_stime.tv_sec) + Double(usage.ru_stime.tv_usec) / 1_000_000.0
+        return user + sys
+    }
+
+    private static func measureProcessCPUPercent(seconds: TimeInterval) async -> Double {
+        let startWall = ContinuousClock.now
+        let startCPU = processCPUTime()
+        try? await Task.sleep(for: .seconds(seconds))
+        let endCPU = processCPUTime()
+        let parts = (ContinuousClock.now - startWall).components
+        let wall = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+        guard let startCPU, let endCPU, wall > 0 else { return -1 }
+        let raw = max(0, ((endCPU - startCPU) / wall) * 100.0)
+        return (raw * 10.0).rounded() / 10.0
+    }
+
+    private static func subagentLoopQuestion(_ turn: Int) -> String {
+        switch turn {
+        case 1: "Check the helper panel width against the working indicator card."
+        case 2: "Verify the scroll viewport when the transcript sits near the panel height."
+        default: "Check layout pass \(turn) across the helper timeline and composer inset."
+        }
+    }
+
+    private static func subagentLoopAnswer(_ turn: Int) -> String {
+        """
+        Pass \(turn) keeps the helper timeline inside the floating panel with 20pt horizontal padding on each side while the working card fixes its width at 380pt.
+
+        This short seeded exchange keeps earlier timeline content above the live final answer used by the streaming scenarios.
+        """
+    }
+}
+
+private final class SubagentLoopStallMonitor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+    private var previousTick: ContinuousClock.Instant?
+    private var maximumGapMs = 0.0
+    private var longGapCount = 0
+
+    func start() {
+        lock.lock()
+        previousTick = ContinuousClock.now
+        lock.unlock()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        self.timer = timer
+        timer.schedule(deadline: .now() + .milliseconds(10), repeating: .milliseconds(10))
+        timer.setEventHandler { [weak self] in
+            self?.tick()
+        }
+        timer.resume()
+    }
+
+    func stop() -> (maxGapMs: Double, longGaps: Int) {
+        timer?.cancel()
+        timer = nil
+        // The interval since the last tick counts too: a stall still running at the end
+        // of the window would otherwise go unrecorded.
+        tick()
+        lock.lock()
+        defer { lock.unlock() }
+        return ((maximumGapMs * 10).rounded() / 10, longGapCount)
+    }
+
+    private func tick() {
+        let now = ContinuousClock.now
+        lock.lock()
+        defer { lock.unlock() }
+        if let previousTick {
+            let parts = (now - previousTick).components
+            let gapMs = Double(parts.seconds) * 1000 + Double(parts.attoseconds) / 1e15
+            maximumGapMs = max(maximumGapMs, gapMs)
+            if gapMs > 250 {
+                longGapCount += 1
+            }
+        }
+        previousTick = now
     }
 }
 #endif

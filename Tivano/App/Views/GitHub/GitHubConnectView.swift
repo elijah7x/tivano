@@ -19,15 +19,15 @@ struct GitHubConnectView: View {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(code.userCode, forType: .string)
                     }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     Button("Open GitHub") { NSWorkspace.shared.open(code.verificationURI) }
-                        .buttonStyle(.glass)
+                        .chromeGlassButtonStyle()
                 }
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Waiting for GitHub…").foregroundStyle(Chrome.secondaryText)
                     Spacer()
-                    Button("Cancel") { connection.cancelSignIn() }.buttonStyle(.glass)
+                    Button("Cancel") { connection.cancelSignIn() }.chromeGlassButtonStyle()
                 }
             case .connecting:
                 HStack(spacing: 8) {
@@ -37,15 +37,15 @@ struct GitHubConnectView: View {
             default:
                 if connection.canSignInWithBrowser {
                     Button("Sign in with GitHub") { connection.signInWithBrowser() }
-                        .buttonStyle(.glassProminent)
+                        .chromeGlassButtonStyle(prominent: true)
                 }
                 if connection.cliIsSignedIn {
                     Button("Use GitHub CLI login") {
                         Task { await connection.useGitHubCLI() }
                     }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                 }
-                Button("Use a token…") { showsToken.toggle() }.buttonStyle(.glass)
+                Button("Use a token…") { showsToken.toggle() }.chromeGlassButtonStyle()
                 if showsToken {
                     HStack(spacing: 8) {
                         SecureField("Personal access token", text: $token)
@@ -60,7 +60,7 @@ struct GitHubConnectView: View {
                                 token = ""
                             }
                         }
-                        .buttonStyle(.glass)
+                        .chromeGlassButtonStyle()
                         .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     Button("Create a token on GitHub") {
