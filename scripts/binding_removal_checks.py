@@ -17,8 +17,7 @@ FOR_EACH = re.compile(r'ForEach\s*\(\s*\$')
 BY_ID = re.compile(r'first\(where:\s*\{\s*\$0\.id\s*==\s*id\s*\}\)')
 BY_ID_INDEX = re.compile(r'firstIndex\(where:\s*\{\s*\$0\.id\s*==\s*id\s*\}\)')
 CONVERTED = ('Tivano/App/Views/Settings/ChimeraPresetsSection.swift',
-             'Tivano/App/Views/Settings/MCPSettingsPage.swift',
-             'Tivano/App/Views/Chat/ChatView.swift')
+             'Tivano/App/Views/Settings/MCPSettingsPage.swift')
 
 
 def main():

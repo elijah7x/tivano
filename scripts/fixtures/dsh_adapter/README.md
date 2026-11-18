@@ -64,27 +64,6 @@ credential records, patch invalidation and simulated non-DSH ACP turns/cancellat
 The repaired suite passes 33/33; the original baseline was 4/17. See
 `docs/dsh-validation.md` for source-linked evidence and remaining limitations.
 
-## Native marketplace composition
+## Archived live and profile runners
 
-`python3 scripts/dsh_profile_stress.py --dsh /absolute/path/to/dsh --mode standard --summary /tmp/dsh-profile.json` compiles `ProfileHarness.swift`, calls production `DshCLI.prepareLaunch` and runs its returned executable/arguments/environment with an isolated profile and loopback model. Repeat with `ptc`, `minimal` and `creator`. All modes retain selected/dependency, user-override, deselected and broken-bundle assertions, including source immutability. PTC uses the actual `run_code` surface. This is not the App or arbitrary-package acceptance.
-
-## Actual Swift adapter with the existing account
-
-```sh
-python3 scripts/dsh_adapter_live.py --real-account \
-  --dsh /absolute/path/to/dsh --dsh-home /absolute/path/to/existing/.dsh
-```
-
-This separately authorized runner compiles production ACP/DSH/framing/process code
-and the verbatim Shell/collector portion. It runs all four modes, with at most eight
-account Flash low/off prompts and two concurrent sessions. Each remembers a synthetic
-marker, stops, resumes through a report-only process and recalls it without tools.
-It never opens a login window, copies credentials or installs plugins. Login-shell
-discovery, App contexts and MCP configuration remain shimmed; it does not test the
-Hydra coordinator or GUI. Existing profile plugins may execute their normal startup
-behavior. Results, source hashes and limits live under `build.noindex/dsh-live/`.
-Production request deadlines and a 60-second per-turn completion wait apply. A
-five-minute Swift watchdog cancels the structured work and lets the real adapter
-clean up; cleanup may extend beyond that window. It does not abruptly kill
-Foundation's subprocess tree. `--compile-only` checks the harness without starting DSH.
-Task-created session IDs are reported for the lead's narrowly scoped cleanup.
+`dsh_profile_stress.py`, `dsh_adapter_live.py` and the other manual DSH acceptance runners were moved out of the repository on 2026-11-15 to `private-artifacts/retired-probes-20261115/` under the artifact root. The fixtures here stay for `dsh_adapter_stress.py`.

@@ -92,7 +92,7 @@ struct TerminalPanel: View {
                     Button("New shell") {
                         openTerminal()
                     }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     .controlSize(.small)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

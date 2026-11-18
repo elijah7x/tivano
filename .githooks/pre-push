@@ -1,5 +1,5 @@
 #!/bin/sh
-# Tivano publishes main and reviewed tags; dev and preview remain local.
+# Tivano publishes main, preview and reviewed tags; dev remains local.
 set -eu
 fail() { echo "$1" >&2; exit 1; }
 remote_url=${2:-}
@@ -23,7 +23,6 @@ git cat-file -e "$main_sha^{commit}" 2>/dev/null \
   || fail "Remote main is not available locally. Fetch the canonical origin and retry."
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_ref" != refs/heads/dev ] || fail "Refusing to push local dev; releases must go through reviewed main."
-  [ "$local_ref" != refs/heads/preview ] || fail "Refusing to push local preview; publish only its reviewed preview tag."
   if [ "$local_sha" = 0000000000000000000000000000000000000000 ]; then
     [ "$remote_ref" = "${TIVANO_CLEANUP_REF:-}" ] &&
     [ "$remote_sha" = "${TIVANO_CLEANUP_SHA:-}" ] &&
@@ -37,6 +36,23 @@ while read -r local_ref local_sha remote_ref remote_sha; do
       [ "$remote_sha" = "$main_sha" ] || fail "Remote main changed during push; fetch and review it again."
       git merge-base --is-ancestor "$main_sha" "$local_sha" \
         || fail "Refusing main history rewrite; only a fast-forward is permitted."
+      ;;
+    refs/heads/preview)
+      [ "$local_ref" = refs/heads/preview ] || fail "Push preview from the local preview branch only."
+      preview_ls=$(git ls-remote "$remote_url" refs/heads/preview) \
+        || fail "Cannot inspect remote preview."
+      preview_sha=$(printf '%s\n' "$preview_ls" | awk '
+        $2 == "refs/heads/preview" { n++; sha = $1 } END { if (n == 1) print sha }')
+      if [ -z "$preview_sha" ]; then
+        [ "$remote_sha" = 0000000000000000000000000000000000000000 ] \
+          || fail "Remote preview changed during push; fetch and review it again."
+      else
+        [ "$remote_sha" = "$preview_sha" ] || fail "Remote preview changed during push; fetch and review it again."
+        git cat-file -e "$preview_sha^{commit}" 2>/dev/null \
+          || fail "Remote preview is not available locally. Fetch the canonical origin and retry."
+        git merge-base --is-ancestor "$preview_sha" "$local_sha" \
+          || fail "Refusing preview history rewrite; only a fast-forward is permitted."
+      fi
       ;;
     refs/tags/v1.0.1) expected=73219c3ed8d0b5434d446a98242dc853d7b04ada ;;
     refs/tags/v1.0.0) expected=b559cfcba99014e92929f566d52e8e6cbd3eb272 ;;
@@ -59,7 +75,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         || fail "Refusing invalid version tag $remote_ref."
       expected=$main_sha
       ;;
-    *) fail "Refusing to push $remote_ref. Only main and reviewed version tags are published." ;;
+    *) fail "Refusing to push $remote_ref. Only main, preview and reviewed version tags are published." ;;
   esac
   case "$remote_ref" in
     refs/tags/*)

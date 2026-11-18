@@ -97,6 +97,9 @@ def check_sources():
     if seed_end < 0:
         fail(f'{REGISTRY.relative_to(ROOT)}: antigravitySeed closing bracket not found')
     seed_block = registry[seed:seed_end]
+    for required_id in ('gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-4-argon'):
+        if f'id: "{required_id}"' not in seed_block:
+            fail(f'antigravitySeed is missing {required_id!r}')
     for removed_id in ('gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.1-pro'):
         if removed_id in seed_block:
             fail(f'antigravitySeed still contains removed model {removed_id!r}')
@@ -117,73 +120,81 @@ enum AntigravityNormalization {{
 
 func expect(_ result: (model: String?, effort: String?), _ model: String?, _ effort: String?) {{
     precondition(result.model == model && result.effort == effort,
-                 "expected (model: \(String(describing: model)), effort: \(String(describing: effort))), got \(result)")
+                 "expected (model: \\(String(describing: model)), effort: \\(String(describing: effort))), got \\(result)")
 }}
 
 @main struct Checks {{
     static func main() {{
+        let carbon = ModelOption(id: "gemini-4-carbon", name: "Gemini 4 Carbon",
+                                 efforts: ["low", "medium", "high"], defaultEffort: "high")
         let row = ModelOption(id: "gemini-3.8-flash", name: "Gemini 3.8 Flash",
                               efforts: ["low", "medium", "high"], defaultEffort: "high")
         let argon = ModelOption(id: "gemini-4-argon", name: "Gemini 4 Argon",
                                 efforts: ["low", "medium", "high"], defaultEffort: "medium")
+        let orchestrator = ModelOption(id: "gemini-pro-orchestrator", name: "Orchestrator (Carbon)", efforts: [])
+        let orchestratorArgon = ModelOption(id: "gemini-pro-orchestrator-argon", name: "Orchestrator (Argon)", efforts: [])
         let fixed = ModelOption(id: "gemini-fixed", name: "Gemini Fixed", efforts: [])
         let pro = ModelOption(id: "gemini-3.1-pro", name: "Gemini 3.1 Pro",
                               efforts: ["low", "high"], defaultEffort: "high")
         let claude = ModelOption(id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", efforts: [])
-        let catalog = [argon, fixed, row, pro, claude]
-
-        // A model that declares no effort gets no --effort, whatever was requested.
-        expect(AntigravityNormalization.normalize(model: "gemini-4-argon", effort: "high", catalog: catalog),
-               "gemini-4-argon", "high")
-        expect(AntigravityNormalization.normalize(model: "gemini-4-argon", effort: "xhigh", catalog: catalog),
-               "gemini-4-argon", "medium")
-        expect(AntigravityNormalization.normalize(model: "gemini-fixed", effort: "high", catalog: catalog),
-               "gemini-fixed", nil)
-        // A declared effort is kept; a declared default replaces an undeclared request.
-        expect(AntigravityNormalization.normalize(model: "gemini-3.8-flash", effort: "low", catalog: catalog),
-               "gemini-3.8-flash", "low")
-        expect(AntigravityNormalization.normalize(model: "gemini-3.8-flash", effort: nil, catalog: catalog),
-               "gemini-3.8-flash", "high")
-        expect(AntigravityNormalization.normalize(model: "gemini-3.8-flash", effort: "xhigh", catalog: catalog),
-               "gemini-3.8-flash", "high")
-        // Legacy effort suffixes still collapse onto the base slug.
-        expect(AntigravityNormalization.normalize(model: "gemini-3.8-flash-high", effort: nil, catalog: catalog),
-               "gemini-3.8-flash", "high")
         let hydrogen = ModelOption(id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen",
                                    efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high")
+        let catalog = [carbon, argon, row, orchestrator, orchestratorArgon, fixed, pro, claude]
+
+        // Effort-suffixed models resolve to `--model <base>-<effort>` with no `--effort`,
+        // while non-suffixed models keep `--effort` (or none when they declare no efforts).
+        let table: [(String?, String?, [ModelOption], String?, String?)] = [
+            // Carbon: exact effort-suffixed ids collapse into `--model`, no `--effort`.
+            ("gemini-4-carbon", "high", catalog, "gemini-4-carbon-high", nil),
+            ("gemini-4-carbon", "medium", catalog, "gemini-4-carbon-medium", nil),
+            ("gemini-4-carbon", "low", catalog, "gemini-4-carbon-low", nil),
+            ("gemini-4-carbon", nil, catalog, "gemini-4-carbon-high", nil),
+            ("gemini-4-carbon-high", nil, catalog, "gemini-4-carbon-high", nil),
+            // Argon: exact effort-suffixed ids; undeclared effort falls back to defaultEffort.
+            ("gemini-4-argon", "high", catalog, "gemini-4-argon-high", nil),
+            ("gemini-4-argon", "xhigh", catalog, "gemini-4-argon-medium", nil),
+            // Hydrogen: low/medium/high/xhigh collapse; undeclared `max` keeps `--effort`.
+            ("gemini-4-hydrogen", "low", [hydrogen], "gemini-4-hydrogen-low", nil),
+            ("gemini-4-hydrogen", "medium", [hydrogen], "gemini-4-hydrogen-medium", nil),
+            ("gemini-4-hydrogen", "high", [hydrogen], "gemini-4-hydrogen-high", nil),
+            ("gemini-4-hydrogen-xhigh", nil, [hydrogen], "gemini-4-hydrogen-xhigh", nil),
+            ("gemini-4-hydrogen-max", nil, [hydrogen], "gemini-4-hydrogen", "max"),
+            // Flash & GPT-OSS: exact suffixed ids in `agy models`.
+            ("gemini-3.8-flash", "low", catalog, "gemini-3.8-flash-low", nil),
+            ("gemini-3.8-flash", nil, catalog, "gemini-3.8-flash-high", nil),
+            ("gemini-3.8-flash", "xhigh", catalog, "gemini-3.8-flash-high", nil),
+            ("gemini-3.8-flash-high", nil, catalog, "gemini-3.8-flash-high", nil),
+            ("gpt-oss-120b", "high", [], "gpt-oss-120b-medium", nil),
+            // Non-suffixed models keep today's behaviour.
+            ("gemini-pro-orchestrator", "high", catalog, "gemini-pro-orchestrator", nil),
+            ("gemini-pro-orchestrator-argon", "high", catalog, "gemini-pro-orchestrator-argon", nil),
+            ("gemini-fixed", "high", catalog, "gemini-fixed", nil),
+            ("gemini-3.1-pro", "medium", catalog, "gemini-3.1-pro", "high"),
+            ("gemini-3.1-pro", "low", catalog, "gemini-3.1-pro", "low"),
+            ("gemini-3.1-pro", nil, [], "gemini-3.1-pro", "high"),
+            ("claude-sonnet-4-6", "high", catalog, "claude-sonnet-4-6", nil),
+            ("gemini-9-unknown", nil, catalog, "gemini-9-unknown", nil),
+            ("gemini-9-unknown", "low", catalog, "gemini-9-unknown", "low"),
+            (nil, "high", catalog, nil, nil),
+        ]
+        for (model, effort, cat, expectedModel, expectedEffort) in table {{
+            expect(AntigravityNormalization.normalize(model: model, effort: effort, catalog: cat),
+                   expectedModel, expectedEffort)
+        }}
+
         let parsedXHigh = AntigravityNormalization.parseModelRow(slug: "gemini-4-hydrogen-xhigh", name: "Gemini 4 Hydrogen (XHigh)")
         precondition(parsedXHigh.baseSlug == "gemini-4-hydrogen" && parsedXHigh.baseName == "Gemini 4 Hydrogen" && parsedXHigh.effort == "xhigh",
-                     "xhigh suffix must collapse before high, got \(parsedXHigh)")
+                     "xhigh suffix must collapse before high, got \\(parsedXHigh)")
         let parsedMax = AntigravityNormalization.parseModelRow(slug: "gemini-4-hydrogen-max", name: "Gemini 4 Hydrogen (Max)")
         precondition(parsedMax.baseSlug == "gemini-4-hydrogen" && parsedMax.baseName == "Gemini 4 Hydrogen" && parsedMax.effort == "max",
-                     "max suffix must collapse, got \(parsedMax)")
-        expect(AntigravityNormalization.normalize(model: "gemini-4-hydrogen-xhigh", effort: nil, catalog: [hydrogen]),
-               "gemini-4-hydrogen", "xhigh")
-        expect(AntigravityNormalization.normalize(model: "gemini-4-hydrogen-max", effort: nil, catalog: [hydrogen]),
-               "gemini-4-hydrogen", "max")
-        // The two known adjustments hold inside the row's efforts.
-        expect(AntigravityNormalization.normalize(model: "gemini-3.1-pro", effort: "medium", catalog: catalog),
-               "gemini-3.1-pro", "high")
-        // Claude takes no effort.
-        expect(AntigravityNormalization.normalize(model: "claude-sonnet-4-6", effort: "high", catalog: catalog),
-               "claude-sonnet-4-6", nil)
-        // An unknown model gets only what was requested.
-        expect(AntigravityNormalization.normalize(model: "gemini-9-unknown", effort: nil, catalog: catalog),
-               "gemini-9-unknown", nil)
-        expect(AntigravityNormalization.normalize(model: "gemini-9-unknown", effort: "low", catalog: catalog),
-               "gemini-9-unknown", "low")
-        // Without a catalog the two known slugs keep their historical default.
-        expect(AntigravityNormalization.normalize(model: "gemini-3.1-pro", effort: nil, catalog: []),
-               "gemini-3.1-pro", "high")
-        expect(AntigravityNormalization.normalize(model: "gpt-oss-120b", effort: "high", catalog: []),
-               "gpt-oss-120b", "medium")
-        expect(AntigravityNormalization.normalize(model: nil, effort: "high", catalog: catalog), nil, nil)
+                     "max suffix must collapse, got \\(parsedMax)")
+
         let cached = AntigravityNormalization.addingSeedRows([row, pro], seed: [argon, row])
-        precondition(cached.map(\.id) == ["gemini-3.8-flash", "gemini-3.1-pro", "gemini-4-argon"],
-                     "seed rows must fill a cached catalog without duplicating it, got \(cached.map(\.id))")
+        precondition(cached.map(\\.id) == ["gemini-3.8-flash", "gemini-3.1-pro", "gemini-4-argon"],
+                     "seed rows must fill a cached catalog without duplicating it, got \\(cached.map(\\.id))")
         expect(AntigravityNormalization.normalize(model: "gemini-4-argon", effort: "low", catalog: cached),
-               "gemini-4-argon", "low")
-        print("PASS: --effort follows the model's declared efforts; effort-free and unknown models send none unasked.")
+               "gemini-4-argon-low", nil)
+        print("PASS: effort-suffixed models resolve to --model <base>-<effort>; non-suffixed models keep --effort.")
     }}
 }}
 '''

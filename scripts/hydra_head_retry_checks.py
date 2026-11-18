@@ -55,14 +55,25 @@ def main():
             'independent retry counter': 'HydraWatchdog.transientRetries',
             'retry limit': 'AutoContinue.transientRetryLimit',
             'abandoned-head exclusion': '!HydraWatchdog.abandonedHeadIDs.contains(head.id)',
-            'same-turn continuation': 'sendContinuation(after: turnID, text: AutoContinue.failedTurnContinueMessage)',
+            'same-turn continuation': 'sendContinuation(after: turnID, text: AutoContinue.failedTurnContinueMessage, preservesHeadTiming: true)',
         }, 'hydraHeadTurnFinished()', failures)
         transient = body.find('AntigravitySession.isTransientFailure(error)')
         launch = body.find('Self.isLaunchFailure(error ?? "")')
+        stall = body.find('HydraWatchdog.resumedHeadIDs.insert(head.id)')
         if launch < 0:
             failures.append('hydraHeadTurnFinished() is missing the launch-failure marker')
         elif transient >= 0 and transient > launch:
             failures.append('the transient Antigravity retry must precede launch-failure handling')
+        if stall < 0:
+            failures.append('hydraHeadTurnFinished() is missing the one-time stall-resume marker')
+        elif launch >= 0:
+            if stall < launch:
+                failures.append('launch-failure retry must precede one-time stall resume')
+            else:
+                if 'headRuntime.send(preservesHeadTiming: true)' not in body[launch:stall]:
+                    failures.append('hydraHeadTurnFinished() launch-failure retry must preserve head timing')
+                if 'headRuntime.send(preservesHeadTiming: true)' not in body[stall:]:
+                    failures.append('hydraHeadTurnFinished() stall resume must preserve head timing')
 
     body = function_body(hydra2, 'func continueFailedHydraHead(_ id: UUID)')
     if body is None:
@@ -80,9 +91,31 @@ def main():
         failures.append('could not extract HydraPanel.panelMenu(); update the extraction marker')
     else:
         require_markers(body, {
-            'Continue head item': 'Chrome.localized("Continue head")',
+            'Continue sub-agent item': 'Chrome.localized("Continue sub-agent")',
             'manual continuation action': 'model.continueFailedHydraHead(head.id)',
         }, 'HydraPanel.panelMenu()', failures)
+
+    send_fn = function_body(runtime, 'func send(preservesHeadTiming: Bool = false)')
+    if send_fn is None:
+        failures.append('could not extract send(preservesHeadTiming:); update the extraction marker')
+    else:
+        require_markers(send_fn, {
+            'head-timing forwarding': 'preservesHeadTiming: preservesHeadTiming',
+        }, 'send()', failures)
+
+    send_cont = function_body(runtime, 'func sendContinuation(after turnID: UUID, text: String, preservesHeadTiming: Bool = false) -> Bool')
+    if send_cont is None:
+        failures.append('could not extract sendContinuation(..., preservesHeadTiming:); update the extraction marker')
+    else:
+        require_markers(send_cont, {
+            'head-timing forwarding': 'preservesHeadTiming: preservesHeadTiming',
+        }, 'sendContinuation()', failures)
+
+    send_brief = function_body(runtime, 'func sendHydraBrief(_ text: String, attachments: [Attachment])')
+    if send_brief is None:
+        failures.append('could not extract sendHydraBrief(); update the extraction marker')
+    elif 'preservesHeadTiming: true' in send_brief:
+        failures.append('sendHydraBrief() must restart head timing rather than preserving it')
 
     start_turn = function_body(runtime, 'private func startTurn(')
     if start_turn is None:
@@ -91,7 +124,8 @@ def main():
         require_markers(start_turn, {
             'headBudget non-user interrupt': 'self.interrupt(byUser: false)',
             'headBudget stop flag': 'self.headBudgetStop = true',
-            'final-report start preservation': 'if turns.count > 1, !isFinalReport',
+            'preservesHeadTiming parameter': 'preservesHeadTiming: Bool = false',
+            'final-report and retry start preservation': 'if turns.count > 1, !isFinalReport, !preservesHeadTiming',
         }, 'startTurn()', failures)
 
     stop_reason = function_body(models, 'enum StopReason:')
@@ -110,7 +144,16 @@ def main():
         require_markers(finish_head, {
             'budget stop consumption': 'consumeHeadBudgetStop()',
             'budget StopReason assignment': '$0.stopReason = stalled ? .stalled : (budget ? .budget : nil)',
+            'non-completed thinking label guard': 'if status != .completed',
+            'watchdog label removal': 'HydraWatchdog.labelled.remove(id)',
+            'runtime activity clear': 'live?.hydraActivity = nil',
+            'runtime thinking label clear': 'live?.hydraThinkingLabel = nil',
+            'persisted head activity clear': 'if status != .completed { $0.activity = nil }',
         }, 'finishHydraHead()', failures)
+        clear_pos = finish_head.find('if status != .completed { $0.activity = nil }')
+        persist_pos = finish_head.find('if let activity = live.hydraActivity { $0.activity = activity }')
+        if clear_pos < 0 or persist_pos < 0 or clear_pos > persist_pos:
+            failures.append('finishHydraHead() must clear $0.activity for non-completed outcomes before reading live.hydraActivity')
 
     stop_head = function_body(hydra, 'func stopHydraHead(')
     if stop_head is None:

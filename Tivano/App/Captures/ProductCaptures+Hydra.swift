@@ -99,11 +99,11 @@ extension ProductCaptures {
         turn.completedAt = now.addingTimeInterval(-120)
         turn.status = .completed
         let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
-            text: "Add a settings overview: a settings overview with a page for Hydra, one for the effort slider, and a Help menu item to open it again.")))
+            text: "Add a settings overview: a settings overview with a page for sub-agents, one for the effort slider, and a Help menu item to open it again.")))
         turn.userItemID = user.id
         let bq = "\u{60}\u{60}\u{60}"
         let fenceOpen = bq + "hydra"
-        let assistantText = "Three heads are out: one builds the settings overview, one writes the pages and wires the settings navigation, one photographs every page. I keep the design and the integration.\n\n"
+        let assistantText = "Three sub-agents are out: one builds the settings overview, one writes the pages and wires the settings navigation, one photographs every page. I keep the design and the integration.\n\n"
             + fenceOpen + "\n"
             + "[{\"task\": \"" + tasks[0] + "\", \"prompt\": \"Build the settings overview and its layout.\"}, "
             + "{\"task\": \"" + tasks[1] + "\", \"prompt\": \"Write the settings sections and wire the settings navigation.\"}, "
@@ -216,11 +216,9 @@ extension ProductCaptures {
     }
 
     /// `--website-captures <folder> --hydra-panels-preview`: the team panel and a popped-out
-    /// head over the lead's chat, left open for judging by hand; add `--performance-mode`
-    /// to see them as performance mode draws them. Runs on the capture's isolated storage
-    /// and defaults.
+    /// head over the lead's chat, left open for judging by hand. Runs on the capture's
+    /// isolated storage and defaults.
     static func panelsPreview(model: AppModel) async {
-        CaptureRun.defaults?.set(CommandLine.arguments.contains("--performance-mode"), forKey: "performanceMode")
         await model.bootstrap()
         model.settings.hasSeenHydraIntro = true
         model.settings.theme = .system
@@ -296,7 +294,7 @@ extension ProductCaptures {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         settingsPreviewWindow = window
-        SettingsNavigation.shared.present(page: name.flatMap(SettingsPage.init(rawValue:)) ?? .general)
+        SettingsNavigation.shared.present(page: name.flatMap(SettingsPage.init(rawValue:)) ?? .appearance)
     }
 
     private static var settingsPreviewWindow: NSWindow?

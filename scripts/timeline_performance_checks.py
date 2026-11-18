@@ -113,6 +113,28 @@ require_source(
     "removeDocumentObserver()" in scroll_view_probe,
     "ScrollViewProbe.dismantleNSView must remove the document frame observer",
 )
+# A trackpad flick keeps moving the clip between geometry callbacks: history anchoring
+# must read the live clip, measure wheel movement over the same interval as the clip
+# baseline, and keep counting a gesture whose pointer drifts off the timeline.
+for marker in ("let liveOffset = tracking.liveOffset", "viewportFrame(block.id, offset: liveOffset)"):
+    require_source(marker in load_earlier, f"loadEarlier must anchor on the live clip offset ({marker!r})")
+for marker in ("let liveOffset = tracking.liveOffset", "viewportFrame(anchorID, offset: liveOffset)"):
+    require_source(marker in settle_measurements, f"history restore must measure against the live clip ({marker!r})")
+require_source(
+    "viewportFrame(block.id, offset: tracking.offset" not in load_earlier
+    and "viewportFrame(anchorID, offset: tracking.offset" not in settle_measurements,
+    "history anchoring must not measure against the last reported geometry offset",
+)
+probe_baseline = declaration("        func syncDocumentBaseline() {")
+require_source(
+    "wheelSinceObservation = 0" in probe_baseline,
+    "syncDocumentBaseline must reset wheel movement with the clip baseline",
+)
+require_source(
+    "gestureRoutesToTimeline = Self.routesVerticalWheel" in probe_view
+    and "routesToTimeline = gestureRoutesToTimeline" in probe_view,
+    "a phased trackpad gesture must keep the routing it began with",
+)
 for marker in (
     "HistoryAnchorMath.readerDelta(",
     "isSyncShiftingHistory",

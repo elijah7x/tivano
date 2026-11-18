@@ -8,7 +8,7 @@ extension AppModel {
             .heads.first { $0.headID == id }?.files ?? []
     }
 
-    /// The folders Tivano keeps for itself: the running edition's library, both editions'
+    /// The folders Tivano keeps for itself: the running edition's library, all editions'
     /// data folders, and the CLI's own. A head never works in one of them, in anything
     /// inside one, or in a folder that contains one. The editions are listed apart from
     /// `StoragePaths.root` because a capture run points that elsewhere.
@@ -18,10 +18,12 @@ extension AppModel {
         if let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             roots.append(support.appendingPathComponent("Tivano", isDirectory: true).path)
             roots.append(support.appendingPathComponent("Tivano Dev", isDirectory: true).path)
+            roots.append(support.appendingPathComponent("Tivano Preview", isDirectory: true).path)
         }
         let home = manager.homeDirectoryForCurrentUser
         roots.append(home.appendingPathComponent(".tivano").path)
         roots.append(home.appendingPathComponent(".tivano-dev").path)
+        roots.append(home.appendingPathComponent(".tivano-preview").path)
         return roots.map { HydraPaths.canonical($0) }
     }
 

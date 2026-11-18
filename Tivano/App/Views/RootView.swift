@@ -9,101 +9,32 @@ struct RootView: View {
 
     var body: some View {
         let sidebar = model.sidebar
-        let settingsShown = WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented
+        let settingsShown = SettingsNavigation.shared.isPresented
         let settingsSidebarWidth = max(sidebar.width, 212)
-        HStack(spacing: 0) {
-            ZStack(alignment: .leading) {
-                // Keep the chat sidebar mounted so its search and scroll survive Settings.
-                // The rows are laid out at the sidebar's width once, and the slide moves the clip
-                // alone, so no row re-wraps per frame.
-                SidebarView()
-                    .environment(\.heroWeatherContentVisible, sidebar.renderedWidth > 0 && !settingsShown)
-                    .frame(width: sidebar.width)
-                    .frame(width: sidebar.renderedWidth, alignment: .trailing)
-                    .clipped()
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { sidebar.noteLaidOutWidth($0) }
-                    .overlay(alignment: .trailing) {
-                        SidebarResizeHandle(
-                            isActive: sidebar.isVisible && !settingsShown,
-                            onBegin: { sidebar.beginDrag() },
-                            onChange: { sidebar.drag(by: $0) },
-                            onEnd: { sidebar.endDrag() }
-                        )
-                        .frame(width: SidebarResizeHandle.hitWidth)
-                        .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
-                    }
-                    .opacity(settingsShown ? 0 : 1)
-                    .disabled(settingsShown)
-                    .allowsHitTesting(!settingsShown)
-                    .accessibilityHidden(settingsShown)
-                if settingsShown {
-                    SettingsSidebar()
-                        .frame(width: settingsSidebarWidth)
-                        .transition(.offset(x: -16).combined(with: .opacity))
-                }
-            }
-            .frame(width: settingsShown ? settingsSidebarWidth : nil, alignment: .leading)
-
-            ZStack {
-                // The chat stays built underneath, including the streaming runtime and draft.
-                DetailView()
-                    .frame(minWidth: 0, maxWidth: .infinity)
-                    .opacity(1 - voiceReveal)
-                    .allowsHitTesting(!model.voice.stageOpen)
-                    .accessibilityHidden(model.voice.stageOpen)
-                    // The sheet keeps to its own bounds. A conversation gliding sideways to make
-                    // room for a panel (`ReserveSlide` carries it on an offset), a panel settling
-                    // into a corner of a pane that just changed size, and rows re-wrapping in a
-                    // live resize all reach past the sheet for a few frames, and drew over the
-                    // sidebar or off the window's edge until they landed.
-                    .clipped()
-                    .opacity(settingsShown ? 0 : 1)
-                    .allowsHitTesting(!settingsShown)
-                    .accessibilityHidden(settingsShown)
-                if voiceStageShown {
-                    VoiceStage(reveal: voiceReveal)
-                        .disabled(settingsShown || !model.voice.stageOpen)
-                        .allowsHitTesting(model.voice.stageOpen && !settingsShown)
-                        .opacity(settingsShown ? 0 : 1)
-                        .accessibilityHidden(settingsShown || !model.voice.stageOpen)
-                }
-                if settingsShown {
-                    SettingsDetail(page: SettingsNavigation.shared.page)
-                        .transition(.offset(x: 24).combined(with: .opacity))
-                }
-            }
-            .padding(.leading, settingsShown || sidebar.isVisible ? 0 : Chrome.sheetInset)
-            .padding(.trailing, Chrome.sheetInset)
-            .padding(.vertical, Chrome.sheetInset)
-        }
-        // While the sidebar is hidden, dragging the window's leading edge pulls it back out.
-        .overlay(alignment: .leading) {
-            SidebarResizeHandle(
-                isActive: !sidebar.isVisible && !settingsShown,
-                onBegin: { sidebar.beginDrag() },
-                onChange: { sidebar.drag(by: $0) },
-                onEnd: { sidebar.endDrag() }
-            )
-            .frame(width: SidebarResizeHandle.hitWidth)
-            .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
-        }
-        .overlay(alignment: .topLeading) {
-            // Waiting out the slide like the chat chrome's copy does, so it never
-            // doubles the header's own toggle still riding the edge.
-            if !settingsShown, !sidebar.holdsTrafficLights, !sidebar.isSliding,
-               model.selectedThreadID.flatMap({ model.thread($0) }) == nil {
-                SidebarToggleButton(inSidebar: false)
-                    .padding(.leading, Chrome.trafficLightsWidth + Chrome.trafficLightClearance + Chrome.chromeHorizontalPadding)
-                    .padding(.top, Chrome.chromeTopPadding)
-            }
+        ZStack {
+            GlobalWeatherLayer()
+            standardLayout(settingsShown: settingsShown, settingsSidebarWidth: settingsSidebarWidth)
         }
         // Initial library restoration must not dismiss an About deep link after relaunch.
         .onChange(of: model.selectedThreadID) { old, _ in
             if old != nil { WindowManager.shared.hideSettings() }
+            if model.appSpace != .session { model.appSpace = .session }
             model.voice.setStageOpen(false)
         }
-        .background { WindowBackdrop(opacity: model.settings.backdropOpacity, wallpaper: WallpaperStore.shared.image) }
-        .background { WindowChromeConfigurator(sidebarVisible: settingsShown || sidebar.holdsTrafficLights, sidebarDragging: sidebar.isDragging && !settingsShown, performanceMode: model.settings.performanceMode) }
+        .onChange(of: SettingsNavigation.shared.isPresented) { _, presented in
+            if presented, model.appSpace != .session { model.appSpace = .session }
+        }
+        .background {
+            let _ = model.settings.themeStyle
+            WindowBackdrop(opacity: model.settings.backdropOpacity, wallpaper: WallpaperStore.shared.image)
+        }
+        .background {
+            WindowChromeConfigurator(
+                sidebarVisible: settingsShown || sidebar.holdsTrafficLights,
+                sidebarDragging: sidebar.isDragging && !settingsShown,
+                placement: .standard
+            )
+        }
         .ignoresSafeArea()
         .coordinateSpace(.named(GenieAnimator.coordinateSpace))
         .overlay { GenieLayer() }
@@ -159,6 +90,125 @@ struct RootView: View {
         }
     }
 
+    private func standardLayout(settingsShown: Bool, settingsSidebarWidth: CGFloat) -> some View {
+        let sidebar = model.sidebar
+        let trayShown = settingsShown || (sidebar.isVisible && sidebar.renderedWidth > 0)
+        return HStack(spacing: 0) {
+            ZStack(alignment: .leading) {
+                // Keep the chat sidebar mounted so its search and scroll survive Settings.
+                // The rows are laid out at the sidebar's width once, and the slide moves the clip
+                // alone, so no row re-wraps per frame.
+                SidebarView()
+                    .frame(width: sidebar.width)
+                    .frame(width: sidebar.renderedWidth, alignment: .trailing)
+                    .clipped()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { sidebar.noteLaidOutWidth($0) }
+                    .opacity(settingsShown ? 0 : 1)
+                    .disabled(settingsShown)
+                    .allowsHitTesting(!settingsShown)
+                    .accessibilityHidden(settingsShown)
+                if settingsShown {
+                    SettingsSidebar()
+                        .frame(width: settingsSidebarWidth)
+                        .transition(.opacity)
+                }
+            }
+            .frame(width: settingsShown ? settingsSidebarWidth : nil, alignment: .leading)
+            .sidebarTray()
+            .overlay(alignment: .trailing) {
+                SidebarResizeHandle(
+                    isActive: sidebar.isVisible && !settingsShown,
+                    onBegin: { sidebar.beginDrag() },
+                    onChange: { sidebar.drag(by: $0) },
+                    onEnd: { sidebar.endDrag() }
+                )
+                .frame(width: SidebarResizeHandle.hitWidth)
+                .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
+            }
+            .padding([.top, .bottom], Chrome.sidebarTrayInset)
+            .padding(.leading, trayShown ? Chrome.sidebarTrayInset : 0)
+            .opacity(trayShown ? 1 : 0)
+            .allowsHitTesting(trayShown)
+            .accessibilityHidden(!trayShown)
+
+        ZStack {
+                // The chat stays built underneath, including the streaming runtime and draft.
+                DetailView()
+                    .frame(minWidth: 0, maxWidth: .infinity)
+                    .opacity(1 - voiceReveal)
+                    .allowsHitTesting(!model.voice.stageOpen)
+                    .accessibilityHidden(model.voice.stageOpen)
+                    // The sheet keeps to its own bounds. A conversation gliding sideways to make
+                    // room for a panel (`ReserveSlide` carries it on an offset), a panel settling
+                    // into a corner of a pane that just changed size, and rows re-wrapping in a
+                    // live resize all reach past the sheet for a few frames, and drew over the
+                    // sidebar or off the window's edge until they landed.
+                    .clipped()
+                    .opacity(settingsShown || model.appSpace == .tokens ? 0 : 1)
+                    .allowsHitTesting(!settingsShown && !(model.appSpace == .tokens))
+                        .accessibilityHidden(settingsShown || model.appSpace == .tokens)
+                if model.appSpace == .tokens {
+                    TokenUsagePage(model: model.tokenUsage, isActive: true)
+                        .padding(.top, 52)
+                        .padding([.horizontal, .bottom], Chrome.contentHorizontalPadding)
+                        .overlay(alignment: .topLeading) {
+                            HStack(spacing: 8) {
+                                if !sidebar.holdsTrafficLights, !sidebar.isSliding {
+                                    SidebarToggleButton(inSidebar: false)
+                                        .transition(.softAppear)
+                                }
+                                ChromeTextButton(symbol: "chevron.left", title: "Back", help: "Back") {
+                                    model.appSpace = .session
+                                }
+                            }
+                            .padding(.leading, sidebar.holdsTrafficLights ? Chrome.chromeHorizontalPadding : WindowChrome.collapsedTrafficLightClearance)
+                            .padding(.top, Chrome.chromeTopPadding)
+                        }
+                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(1 - voiceReveal)
+                        .allowsHitTesting(!model.voice.stageOpen)
+                        .accessibilityHidden(model.voice.stageOpen)
+                        .opacity(settingsShown ? 0 : 1)
+                        .allowsHitTesting(!settingsShown)
+                        .accessibilityHidden(settingsShown)
+                }
+                if voiceStageShown {
+                    VoiceStage(reveal: voiceReveal)
+                        .disabled(settingsShown || !model.voice.stageOpen)
+                        .allowsHitTesting(model.voice.stageOpen && !settingsShown)
+                        .opacity(settingsShown ? 0 : 1)
+                        .accessibilityHidden(settingsShown || !model.voice.stageOpen)
+                }
+                if settingsShown {
+                    SettingsDetail(page: SettingsNavigation.shared.page)
+                        .transition(.opacity)
+                }
+            }
+        }
+        // While the sidebar is hidden, dragging the window's leading edge pulls it back out.
+        .overlay(alignment: .leading) {
+            SidebarResizeHandle(
+                isActive: !sidebar.isVisible && !settingsShown,
+                onBegin: { sidebar.beginDrag() },
+                onChange: { sidebar.drag(by: $0) },
+                onEnd: { sidebar.endDrag() }
+            )
+            .frame(width: SidebarResizeHandle.hitWidth)
+            .padding(.top, WindowChrome.collapsedTrafficLightTop + Chrome.trafficLightDiameter)
+        }
+        .overlay(alignment: .topLeading) {
+            // Waiting out the slide like the chat chrome's copy does, so it never
+            // doubles the header's own toggle still riding the edge.
+            if !settingsShown, !sidebar.holdsTrafficLights, !sidebar.isSliding,
+               model.appSpace == .session,
+               model.selectedThreadID.flatMap({ model.thread($0) }) == nil {
+                SidebarToggleButton(inSidebar: false)
+                    .padding(.leading, WindowChrome.collapsedTrafficLightClearance)
+                    .padding(.top, Chrome.chromeTopPadding)
+            }
+        }
+    }
+
     @discardableResult
     private func handleDrop(_ urls: [URL]) -> Bool {
         var folders: [URL] = []
@@ -178,13 +228,6 @@ struct RootView: View {
     }
 }
 
-/// Whether the chat column a view sits in is the one on screen. The columns of the threads
-/// visited last stay built behind the selected one (see `ThreadColumns`), so a view that
-/// would react to appearing or disappearing reacts to this instead.
-extension EnvironmentValues {
-    @Entry var chatColumnIsShown = true
-}
-
 struct DetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
@@ -194,20 +237,26 @@ struct DetailView: View {
     /// `kCGAnyInputEventType`, which Quartz leaves out of the Swift enum.
     private static let anyInput = CGEventType(rawValue: ~0)!
 
+    private struct PrebuildTaskID: Equatable {
+        let threadID: UUID
+        let isCovered: Bool
+    }
+
     private var isCovered: Bool {
-        (WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented) || model.voice.stageOpen
+        SettingsNavigation.shared.isPresented || model.voice.stageOpen
     }
 
     var body: some View {
         if let threadID = model.selectedThreadID, model.thread(threadID) != nil {
-            let running = Set(model.threads.compactMap { model.existingRuntime(for: $0.id)?.isRunning == true ? $0.id : nil })
-            ThreadColumns(threadID: threadID, prebuilt: prebuilt, running: running, isCovered: isCovered, model: model, liveResize: liveResize)
+            ThreadColumns(threadID: threadID, prebuilt: prebuilt, isCovered: isCovered, model: model, liveResize: liveResize)
                 .onChange(of: threadID) { _, _ in prebuilt = [] }
-                .task(id: threadID) {
+                .task(id: PrebuildTaskID(threadID: threadID, isCovered: isCovered)) {
+                    guard !isCovered else { return }
                     // The neighbours, and at launch the sidebar's top rows, one at a time, once
                     // the reader has settled on the thread and nothing streams in it: each is a
                     // frame's worth of building.
                     try? await Task.sleep(for: .milliseconds(1500))
+                    guard !Task.isCancelled else { return }
                     var candidates = model.neighbors(of: threadID)
                     if !hasPrebuiltTopRows {
                         hasPrebuiltTopRows = true
@@ -216,12 +265,21 @@ struct DetailView: View {
                     for id in candidates where !Task.isCancelled {
                         // Never under the reader's hands: a build holds the main thread for a
                         // frame or a few, which a keystroke would wait on.
-                        // Wait while Settings or the voice stage covers the chat to keep input responsive.
-                        while !Task.isCancelled, isCovered || CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: Self.anyInput) < 1 {
+                        while !Task.isCancelled, CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: Self.anyInput) < 1 {
                             try? await Task.sleep(for: .milliseconds(300))
                         }
                         guard !Task.isCancelled, !isCovered, !(model.existingRuntime(for: threadID)?.isRunning ?? false) else { return }
-                        if id != threadID, !prebuilt.contains(id) { prebuilt.append(id) }
+                        // Built once its history is in: rows that arrive after a hidden
+                        // column's build leave its measurements stale, and showing it then
+                        // rebuilds and remeasures the whole stack on the switch's frame.
+                        if id != threadID, !prebuilt.contains(id) {
+                            let candidate = model.runtime(for: id)
+                            while !Task.isCancelled, candidate.isLoadingHistory {
+                                try? await Task.sleep(for: .milliseconds(50))
+                            }
+                            guard !Task.isCancelled, !isCovered else { return }
+                            prebuilt.append(id)
+                        }
                         try? await Task.sleep(for: .milliseconds(400))
                     }
                 }
@@ -238,9 +296,26 @@ struct DetailView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Without a thread there is no chat top bar, so Settings keeps its corner here.
+            .overlay(alignment: .topTrailing) {
+                if model.isLibraryLoaded {
+                    ChromeCapsule {
+                        ChromeIconButton(symbol: "gearshape", help: "Settings") {
+                            WindowManager.shared.showSettings()
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            if UpdateChecker.shared.updateAvailable {
+                                UpdateAvailableDot()
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, Chrome.chromeHorizontalPadding)
+                    .padding(.top, Chrome.chromeTopPadding)
+                }
+            }
             // Covered by Settings: the thread columns block their own input, this does it here.
-            .disabled(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented)
-            .detailSheet()
+            .disabled(SettingsNavigation.shared.isPresented)
         }
     }
 }
@@ -259,11 +334,6 @@ private struct ThreadColumns: NSViewRepresentable {
 
     let threadID: UUID
     let prebuilt: [UUID]
-    /// Threads with a turn under way. Their hidden columns stay: with no timeline shown, a
-    /// runtime flushes its streamed text once a second, so the rows cost little unseen and
-    /// switching back finds the column built. Only a prebuild skips them: building a column
-    /// ahead of a click is a frame's worth of work, not spent on a thread that streams.
-    let running: Set<UUID>
     let isCovered: Bool
     let model: AppModel
     let liveResize: WindowLiveResize
@@ -275,10 +345,17 @@ private struct ThreadColumns: NSViewRepresentable {
     func updateNSView(_ pane: NSView, context: Context) {
         let columns = context.coordinator
         columns.cover(pane, isCovered, model: model, liveResize: liveResize)
-        columns.show(threadID, in: pane, model: model, liveResize: liveResize, rebuildsIfResized: running.contains(threadID))
-        // A running thread's hidden column is kept (see `running`); a deleted thread's goes.
+        let selectedRunning = model.existingRuntime(for: threadID)?.isRunning == true
+        // Before showing: a hidden column whose runtime was released (idle or under memory
+        // pressure) still holds the old one, so it is built afresh rather than reused.
+        // An archived thread's column is not coming back soon; its slot goes to a neighbour.
+        columns.dropHidden(where: { model.thread($0)?.isArchived != false || model.existingRuntime(for: $0) == nil })
+        columns.show(threadID, in: pane, model: model, liveResize: liveResize, rebuildsIfResized: selectedRunning)
+        // A running thread's hidden column is kept; a deleted or unloaded thread's goes.
         columns.dropHidden(where: { model.thread($0) == nil || model.existingRuntime(for: $0) == nil })
-        columns.prebuild(prebuilt.filter { model.thread($0) != nil && !running.contains($0) }, in: pane, model: model, liveResize: liveResize)
+        // Prebuild skips running threads: building ahead of a click is not spent on a thread that streams.
+        let candidates = prebuilt.isEmpty ? [] : prebuilt.filter { model.thread($0) != nil && model.existingRuntime(for: $0)?.isRunning != true }
+        columns.prebuild(candidates, in: pane, model: model, liveResize: liveResize)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -290,9 +367,55 @@ private struct ThreadColumns: NSViewRepresentable {
     }
 
     @MainActor final class Coordinator {
+        nonisolated(unsafe) private var memoryPressureObserver: (any NSObjectProtocol)?
+        nonisolated(unsafe) private var themeObserver: (any NSObjectProtocol)?
+        /// Hidden columns taken out of the window by a theme style switch. In the window,
+        /// every hidden column re-laid out its text on the switch's frame (Creation swaps
+        /// fonts and surfaces); out of it, each catches up only when it is next shown.
+        private var detached: Set<UUID> = []
+        private var lastThemeStyle = ThemeManager.style
+
+        init() {
+            // No queue: the post comes from the settings setter on the main thread, and the
+            // columns must leave the window before that change's first update.
+            themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.themeDidChange()
+                }
+            }
+            memoryPressureObserver = NotificationCenter.default.addObserver(forName: .memoryPressure, object: nil, queue: .main) { [weak self] notification in
+                let critical = (notification.userInfo?["critical"] as? Bool) == true
+                MainActor.assumeIsolated {
+                    self?.handleMemoryPressure(critical: critical)
+                }
+            }
+        }
+
+        deinit {
+            if let memoryPressureObserver {
+                NotificationCenter.default.removeObserver(memoryPressureObserver)
+            }
+            if let themeObserver {
+                NotificationCenter.default.removeObserver(themeObserver)
+            }
+        }
+
         func stopRendering() {
             covering?.cancel()
+            covering = nil
             retirement?.cancel()
+            retirement = nil
+            initialExpansionTask?.cancel()
+            initialExpansionTask = nil
+            pendingInitialExpansionID = nil
+            if let memoryPressureObserver {
+                NotificationCenter.default.removeObserver(memoryPressureObserver)
+                self.memoryPressureObserver = nil
+            }
+            if let themeObserver {
+                NotificationCenter.default.removeObserver(themeObserver)
+                self.themeObserver = nil
+            }
             if let shown { resizeState?.releasePane(shown) }
             for scope in scopes.values { scope.setVisible(false) }
         }
@@ -305,6 +428,7 @@ private struct ThreadColumns: NSViewRepresentable {
         /// when shown: resizing every hidden column per frame during a sidebar slide or
         /// live resize is what made them lag.
         private var columns: [UUID: FrameHostingView] = [:]
+        private var states: [UUID: ColumnHostState] = [:]
         /// Each column's veil render scope: the column's own fade clock and its pane
         /// visibility, so a column that is not drawn stops veiling. Created with the
         /// column, paused and resumed as the column hides and shows, dropped with it.
@@ -314,6 +438,8 @@ private struct ThreadColumns: NSViewRepresentable {
         /// make room for the columns the reader has been to.
         private var order: [UUID] = []
         private var shown: UUID?
+        private var pendingInitialExpansionID: UUID?
+        private var initialExpansionTask: Task<Void, Never>?
         /// What was asked for ahead of a click, so a column dropped since is not built over
         /// and over on every update.
         private var requested: Set<UUID> = []
@@ -327,7 +453,8 @@ private struct ThreadColumns: NSViewRepresentable {
 
         // Block input now; delayed hiding only finishes the visible transition.
         func cover(_ pane: NSView, _ isCovered: Bool, model: AppModel, liveResize: WindowLiveResize) {
-            if self.isCovered != isCovered {
+            let wasCovered = self.isCovered
+            if wasCovered != isCovered {
                 self.isCovered = isCovered
                 liveResize.setPaneOwner(isCovered ? nil : shown, resizing: paneIsResizing(shown, model: model))
                 if let id = shown, let column = columns[id] {
@@ -335,28 +462,44 @@ private struct ThreadColumns: NSViewRepresentable {
                     column.acceptsInteraction = isInteractive
                     if isInteractive { column.frame = pane.bounds }
                     column.autoresizingMask = isInteractive ? [.width, .height] : []
-                    column.rootView = Self.root(id, isShown: isInteractive, model: model, liveResize: liveResize, scope: scopes[id])
+                    if isCovered {
+                        scopes[id]?.setVisible(false)
+                    }
                 }
             }
             guard isCovered else {
+                let wasCovering = covering != nil
                 covering?.cancel()
                 covering = nil
-                // The column's veils resume — repainting at the real time — before the
-                // pane can show a stale frame.
-                if let shown, pane.isHidden {
+                if wasCovered || wasCovering || pane.isHidden, let shown {
+                    states[shown]?.paneSize = pane.bounds.size
+                    states[shown]?.isShown = true
+                    // The column's veils resume — repainting at the real time — before the
+                    // pane can show a stale frame.
                     scopes[shown]?.setVisible(true)
                     columns[shown]?.layoutSubtreeIfNeeded()
                 }
                 pane.isHidden = false
                 return
             }
-            guard !pane.isHidden, covering == nil else { return }
+            if pane.isHidden {
+                if let shown {
+                    scopes[shown]?.setVisible(false)
+                    states[shown]?.isShown = false
+                }
+                return
+            }
+            guard covering == nil else { return }
             covering = Task { [weak pane, weak self] in
-                try? await Task.sleep(for: .milliseconds(450))
-                guard !Task.isCancelled else { return }
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled, let self else { return }
+                self.covering = nil
                 pane?.isHidden = true
                 // The pane is truly hidden now: the column it shows stops veiling.
-                if let self, let shown = self.shown { self.scopes[shown]?.setVisible(false) }
+                if let shown = self.shown {
+                    self.scopes[shown]?.setVisible(false)
+                    self.states[shown]?.isShown = false
+                }
             }
         }
 
@@ -365,9 +508,13 @@ private struct ThreadColumns: NSViewRepresentable {
         /// panels for it in the first frames shown; a new column measures before it shows them.
         func show(_ id: UUID, in pane: NSView, model: AppModel, liveResize: WindowLiveResize, rebuildsIfResized: Bool = false) {
             guard id != shown else { return }
+            initialExpansionTask?.cancel()
+            initialExpansionTask = nil
+            pendingInitialExpansionID = nil
+            let outgoingID = shown
             resizeState = liveResize
             liveResize.setPaneOwner(isCovered ? nil : id, resizing: paneIsResizing(id, model: model))
-            if let shown, let previous = columns[shown] {
+            if let oldID = shown, let previous = columns[oldID] {
                 previous.acceptsInteraction = false
                 // Hiding a view holding the first responder makes AppKit search the whole
                 // window for the next key view, querying every kept column; the shown
@@ -378,30 +525,114 @@ private struct ThreadColumns: NSViewRepresentable {
                     window.makeFirstResponder(nil)
                 }
                 previous.isHidden = true
-                scopes[shown]?.setVisible(false)
+                scopes[oldID]?.setVisible(false)
                 previous.autoresizingMask = []
-                previous.rootView = Self.root(shown, isShown: false, model: model, liveResize: liveResize, scope: scopes[shown])
+                states[oldID]?.isShown = false
             }
             if rebuildsIfResized, let kept = columns[id], kept.frame.size != pane.bounds.size {
                 drop(id)
             }
+            var columnBranch = ""
+            var columnElapsed: Duration?
             if let kept = columns[id] {
+                let started: ContinuousClock.Instant? = SwitchLatency.isActive ? .now : nil
+                reattachIfNeeded(id, in: pane)
                 kept.acceptsInteraction = !isCovered
                 kept.frame = pane.bounds
                 kept.autoresizingMask = isCovered ? [] : [.width, .height]
-                kept.rootView = Self.root(id, isShown: !isCovered, model: model, liveResize: liveResize, scope: scopes[id])
+                if let state = states[id] {
+                    state.paneSize = pane.bounds.size
+                    state.initialFrame = false
+                    state.isShown = !isCovered
+                }
                 // In view before the column shows, so its first frame carries the real
                 // alpha; under a cover that has hidden the pane it stays paused.
-                scopes[id]?.setVisible(!pane.isHidden)
+                scopes[id]?.setVisible(!isCovered && !pane.isHidden)
                 kept.layoutSubtreeIfNeeded()
                 kept.isHidden = false
+                if let started {
+                    columnBranch = "cached"
+                    columnElapsed = started.duration(to: .now)
+                }
+            } else if order.count >= Self.keptLimit + 1,
+                      let victimID = order.first,
+                      victimID != id,
+                      victimID != shown,
+                      victimID != outgoingID,
+                      let victimColumn = columns[victimID],
+                      !(rebuildsIfResized && victimColumn.frame.size != pane.bounds.size) {
+                let started: ContinuousClock.Instant? = SwitchLatency.isActive ? .now : nil
+                let column = recycle(from: victimID, to: id, in: pane, model: model, liveResize: liveResize)
+                if let started {
+                    columnBranch = "recycled"
+                    columnElapsed = started.duration(to: .now)
+                }
+                scheduleInitialExpansion(for: id, column: column)
             } else {
-                make(id, isShown: true, in: pane, model: model, liveResize: liveResize)
+                let started: ContinuousClock.Instant? = SwitchLatency.isActive ? .now : nil
+                let column = make(id, isShown: true, initialFrame: true, in: pane, model: model, liveResize: liveResize)
+                if let started {
+                    columnBranch = "made"
+                    columnElapsed = started.duration(to: .now)
+                }
+                scheduleInitialExpansion(for: id, column: column)
+            }
+            if SwitchLatency.isActive, let columnElapsed {
+                let title = model.thread(id)?.title.prefix(24) ?? "?"
+                SwitchLatency.note("column \(title): \(columnBranch) in \(SwitchLatency.ms(columnElapsed)) ms")
             }
             shown = id
             order.removeAll { $0 == id }
             order.append(id)
             while order.count > Self.keptLimit + 1 { drop(order[0]) }
+        }
+
+        private func scheduleInitialExpansion(for id: UUID, column: FrameHostingView) {
+            pendingInitialExpansionID = id
+            initialExpansionTask?.cancel()
+            initialExpansionTask = Task { @MainActor [weak self, weak column] in
+                try? await Task.sleep(for: .milliseconds(90))
+                guard !Task.isCancelled, let self, self.pendingInitialExpansionID == id else { return }
+                self.pendingInitialExpansionID = nil
+                self.initialExpansionTask = nil
+                guard self.shown == id, let column, self.columns[id] === column else { return }
+                self.states[id]?.initialFrame = false
+            }
+        }
+
+        private func themeDidChange() {
+            guard ThemeManager.style != lastThemeStyle else { return }
+            lastThemeStyle = ThemeManager.style
+            for (id, column) in columns where id != shown && !detached.contains(id) {
+                if let window = column.window,
+                   let responder = window.firstResponder as? NSView,
+                   responder.isDescendant(of: column) {
+                    window.makeFirstResponder(nil)
+                }
+                column.removeFromSuperview()
+                detached.insert(id)
+            }
+        }
+
+        private func reattachIfNeeded(_ id: UUID, in pane: NSView) {
+            guard detached.remove(id) != nil, let column = columns[id] else { return }
+            pane.addSubview(column)
+        }
+
+        private func handleMemoryPressure(critical: Bool) {
+            let hiddenLimit = critical ? 0 : 2
+            let hidden = order.filter { $0 != shown }
+            if hidden.count > hiddenLimit {
+                for id in hidden.prefix(hidden.count - hiddenLimit) {
+                    drop(id)
+                }
+            }
+            if !retired.isEmpty {
+                retirement?.cancel()
+                retirement = nil
+                for column in retired { column.removeFromSuperview() }
+                retired.removeAll()
+            }
         }
 
         /// Drops the hidden columns the test names; each is built afresh when its thread is
@@ -415,11 +646,16 @@ private struct ThreadColumns: NSViewRepresentable {
         /// dropped to make room for the columns visited since stays dropped.
         func prebuild(_ ids: [UUID], in pane: NSView, model: AppModel, liveResize: WindowLiveResize) {
             guard !isCovered,
-                  !(WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented),
+                  !SettingsNavigation.shared.isPresented,
                   !model.voice.stageOpen else { return }
             for id in ids where !requested.contains(id) && columns[id] == nil {
+                // Room first, from the oldest visited column: trimming the front after the
+                // insert would drop the column just built once all kept slots are full.
+                if order.count >= Self.keptLimit + 1, let victim = order.first(where: { $0 != shown && !ids.contains($0) }) {
+                    drop(victim)
+                }
                 let started = ContinuousClock.now
-                make(id, isShown: false, in: pane, model: model, liveResize: liveResize).layoutSubtreeIfNeeded()
+                make(id, isShown: false, initialFrame: false, in: pane, model: model, liveResize: liveResize).layoutSubtreeIfNeeded()
                 SwitchLatency.note("prebuilt \(model.thread(id)?.title.prefix(24) ?? "?") in \(started.duration(to: .now))")
                 order.insert(id, at: 0)
                 while order.count > Self.keptLimit + 1 { drop(order[0]) }
@@ -428,13 +664,52 @@ private struct ThreadColumns: NSViewRepresentable {
         }
 
         @discardableResult
-        private func make(_ id: UUID, isShown: Bool, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) -> FrameHostingView {
+        private func recycle(from victimID: UUID, to id: UUID, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) -> FrameHostingView {
+            order.removeAll { $0 == victimID }
+            reattachIfNeeded(victimID, in: pane)
+            guard let column = columns.removeValue(forKey: victimID),
+                  let state = states.removeValue(forKey: victimID),
+                  let scope = scopes.removeValue(forKey: victimID) else {
+                return make(id, isShown: true, initialFrame: true, in: pane, model: model, liveResize: liveResize)
+            }
+            scope.setVisible(!isCovered && !pane.isHidden)
+            state.runtime = model.runtime(for: id)
+            state.paneSize = pane.bounds.size
+            state.initialFrame = true
+            state.isShown = !isCovered
+            states[id] = state
+            scopes[id] = scope
+            columns[id] = column
+            column.acceptsInteraction = !isCovered
+            column.frame = pane.bounds
+            column.autoresizingMask = isCovered ? [] : [.width, .height]
+            column.layoutSubtreeIfNeeded()
+            column.isHidden = false
+            return column
+        }
+
+        @discardableResult
+        private func make(_ id: UUID, isShown: Bool, initialFrame: Bool = false, in pane: NSView, model: AppModel, liveResize: WindowLiveResize) -> FrameHostingView {
             let scope = VeilRenderScope()
             scopes[id] = scope
             // A column built hidden (a prebuild, or a switch under a hidden pane) never
             // runs its fade clock; one the pane is showing starts live.
-            scope.setVisible(isShown && !pane.isHidden)
-            let column = FrameHostingView(rootView: Self.root(id, isShown: isShown && !isCovered, model: model, liveResize: liveResize, scope: scope))
+            scope.setVisible(isShown && !isCovered && !pane.isHidden)
+            let state = ColumnHostState(
+                runtime: model.runtime(for: id),
+                isShown: isShown && !isCovered,
+                initialFrame: initialFrame,
+                paneSize: pane.bounds.size
+            )
+            states[id] = state
+            let column = FrameHostingView(rootView: AnyView(
+                HostedChatColumn(
+                    state: state,
+                    model: model,
+                    liveResize: liveResize,
+                    scope: scope
+                )
+            ))
             column.acceptsInteraction = isShown && !isCovered
             column.frame = pane.bounds
             column.isHidden = !isShown
@@ -442,17 +717,6 @@ private struct ThreadColumns: NSViewRepresentable {
             pane.addSubview(column)
             columns[id] = column
             return column
-        }
-
-        private static func root(_ id: UUID, isShown: Bool, model: AppModel, liveResize: WindowLiveResize, scope: VeilRenderScope?) -> AnyView {
-            AnyView(
-                ChatView(runtime: model.runtime(for: id))
-                    .environment(\.chatColumnIsShown, isShown)
-                    .environment(\.veilRenderScope, scope)
-                    .disabled(!isShown)
-                    .allowsHitTesting(isShown)
-                    .modifier(HostedEnvironment(model: model, liveResize: liveResize, isLayoutActive: isShown))
-            )
         }
 
         private func paneIsResizing(_ id: UUID?, model: AppModel) -> Bool {
@@ -463,19 +727,74 @@ private struct ThreadColumns: NSViewRepresentable {
 
         private func drop(_ id: UUID) {
             order.removeAll { $0 == id }
+            detached.remove(id)
+            states.removeValue(forKey: id)
             // The scope goes with the column: its clock stops, its veils are told, and
             // the retiring tree's environment is the last reference to it.
             if let scope = scopes.removeValue(forKey: id) { scope.setVisible(false) }
             guard let column = columns.removeValue(forKey: id) else { return }
+            column.acceptsInteraction = false
+            column.isHidden = true
             retired.append(column)
-            retirement?.cancel()
+            guard retirement == nil else { return }
             retirement = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(500))
-                guard !Task.isCancelled, let self else { return }
-                for column in retired { column.removeFromSuperview() }
-                retired.removeAll()
+                while let self, !Task.isCancelled, !self.retired.isEmpty {
+                    while !Task.isCancelled, ScrollActivity.shared.isScrolling {
+                        try? await Task.sleep(for: .milliseconds(60))
+                    }
+                    guard !Task.isCancelled, !self.retired.isEmpty else { break }
+                    self.retired.removeFirst().removeFromSuperview()
+                    if !self.retired.isEmpty {
+                        try? await Task.sleep(for: .milliseconds(60))
+                    }
+                }
+                if !Task.isCancelled { self?.retirement = nil }
             }
         }
+    }
+}
+
+@MainActor
+@Observable
+private final class ColumnHostState {
+    var runtime: ThreadRuntime
+    /// The column's views read this object, which stays the same for the column's life;
+    /// `isShown` writes through to it only when it changes.
+    let visibility: ChatColumnVisibility
+    var isShown: Bool {
+        get { visibility.isShown }
+        set { if visibility.isShown != newValue { visibility.isShown = newValue } }
+    }
+    var initialFrame: Bool
+    var paneSize: CGSize
+    var paneHeight: CGFloat { paneSize.height }
+
+    init(runtime: ThreadRuntime, isShown: Bool, initialFrame: Bool, paneSize: CGSize) {
+        self.runtime = runtime
+        self.visibility = ChatColumnVisibility(isShown: isShown)
+        self.initialFrame = initialFrame
+        self.paneSize = paneSize
+    }
+}
+
+private struct HostedChatColumn: View {
+    let state: ColumnHostState
+    let model: AppModel
+    let liveResize: WindowLiveResize
+    let scope: VeilRenderScope
+
+    var body: some View {
+        ChatView(runtime: state.runtime)
+            .environment(\.chatColumnVisibility, state.visibility)
+            .environment(\.chatColumnInitialFrame, state.initialFrame)
+            .environment(\.chatColumnInitialPaneSize, state.paneSize)
+            .environment(\.chatColumnInitialPaneHeight, state.paneHeight)
+            .environment(\.veilRenderScope, scope)
+            // No `.disabled` for a hidden column: flipping it re-walked the column's focus
+            // modifiers on every reveal. `FrameHostingView` already refuses a hidden column
+            // hit testing, first responder and key equivalents.
+            .modifier(HostedEnvironment(model: model, liveResize: liveResize, isLayoutActive: state.isShown))
     }
 }
 
@@ -486,11 +805,11 @@ struct WelcomeView: View {
         ScrollView {
             VStack(spacing: 30) {
                 VStack(spacing: 14) {
-                    Image(nsImage: NSApp.applicationIconImage)
+                    Image(nsImage: AppIconManager.shared.image)
                         .resizable()
                         .frame(width: 104, height: 104)
                     Text("Tivano")
-                        .font(.system(size: 34, weight: .semibold))
+                        .font(TypeScale.shared.serif ? Font(ThemeTypeface.nsFont(size: 34, weight: .semibold) as CTFont) : .system(size: 34, weight: .semibold))
                     Text("A calm, native home for your coding agents.")
                         .font(.ui(.title3))
                         .foregroundStyle(Chrome.secondaryText)
@@ -502,7 +821,7 @@ struct WelcomeView: View {
                         Label("Work without a project", systemImage: "bubble.left")
                             .padding(.horizontal, 6)
                     }
-                    .buttonStyle(.glassProminent)
+                    .themedGlassButton(prominent: true)
                     .controlSize(.extraLarge)
                     HStack(spacing: 10) {
                         Button {
@@ -511,7 +830,7 @@ struct WelcomeView: View {
                             Label("Add a project", systemImage: "folder.badge.plus")
                                 .padding(.horizontal, 6)
                         }
-                        .buttonStyle(.glassProminent)
+                        .themedGlassButton(prominent: true)
                         .controlSize(.extraLarge)
                     }
                     Text("Or drop a folder anywhere in this window.")
@@ -574,7 +893,7 @@ private struct ProviderStatusRow: View {
                     OpenProvidersSettingsButton()
                 } else {
                     Link("Install", destination: provider.installURL)
-                        .buttonStyle(.glass)
+                        .themedGlassButton()
                 }
             } else if status.auth == .signedOut {
                 // ZCode signs in with the Z.ai key typed in Settings; it has no login command.
@@ -582,7 +901,7 @@ private struct ProviderStatusRow: View {
                     OpenProvidersSettingsButton()
                 } else {
                     Button("Login") { Workspace.openTerminal(running: provider.loginCommand) }
-                        .buttonStyle(.glass)
+                        .themedGlassButton()
                 }
             } else {
                 Image(systemName: "checkmark.circle.fill")
@@ -600,7 +919,7 @@ private struct OpenProvidersSettingsButton: View {
         Button("Add key") {
             WindowManager.shared.showSettings(page: .providers)
         }
-        .buttonStyle(.glass)
+        .themedGlassButton()
         .help(Text(verbatim: Chrome.localized("Open Settings › Providers")))
     }
 }
@@ -620,7 +939,7 @@ struct NoThreadView: View {
             } label: {
                 Label("New thread", systemImage: "plus.bubble")
             }
-            .buttonStyle(.glassProminent)
+            .themedGlassButton(prominent: true)
             .controlSize(.large)
             // The chord as the store has it now, so a remap never leaves a stale key here.
             if let chord = ShortcutStore.label(for: .newThread) {
@@ -632,3 +951,14 @@ struct NoThreadView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+extension EnvironmentValues {
+    /// True on the first frame of a cold-switched column, so the timeline mounts only
+    /// a screenful slice and expands to its resting window on the next runloop turn.
+    @Entry var chatColumnInitialFrame = false
+    /// The hosting pane's size when a column is created or shown, before SwiftUI geometry settles.
+    @Entry var chatColumnInitialPaneSize: CGSize = .zero
+    /// The hosting pane's height when a column is created, before SwiftUI geometry settles.
+    @Entry var chatColumnInitialPaneHeight: CGFloat = 0
+}
+

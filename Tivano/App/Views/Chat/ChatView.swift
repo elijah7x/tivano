@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 struct ChatView: View {
-    @Environment(\.chatColumnIsShown) private var columnIsShown
+    @Environment(\.chatColumnVisibility) private var columnVisibility
+    @Environment(\.chatColumnInitialPaneSize) private var initialPaneSize
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
     @Bindable var runtime: ThreadRuntime
@@ -52,19 +53,8 @@ struct ChatView: View {
     /// its arrival, and a panel that flashed on and straight off again read as a glitch:
     /// once shown it stays at least `hydraMinimumPresence`, then goes with the same slide
     /// a finished head's panel goes with.
-    /// Whether the panels and the room the chat makes for them follow the pointer with
-    /// no spring: a panel grip, the sidebar's edge or the terminal's divider is held. A
-    /// sidebar drag or a terminal-divider drag moves the pane every frame the way a live
-    /// resize does; a spring restarted per frame lagged the panels behind and swam. The
-    /// sidebar's open or close slide is held the same way for its run.
-    private var panelsHeld: Bool {
-        guard columnIsShown else { return true }
-        return panelResize.isActive || model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
-    }
-    private var paneIsResizing: Bool? {
-        guard columnIsShown else { return nil }
-        return model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
-    }
+    private var effectivePaneSize: CGSize { paneSize == .zero ? initialPaneSize : paneSize }
+    private var effectiveColumnHeight: CGFloat { columnHeight == 0 ? initialPaneSize.height : columnHeight }
     @State private var hydraShownSince: Date?
     @State private var hydraLingers = false
     @State private var hydraLingerTask: Task<Void, Never>?
@@ -72,13 +62,10 @@ struct ChatView: View {
     /// switch: panels and reserves snap to the new thread's layout rather than glide from
     /// the old one's, and the Hydra panel's linger is dropped rather than carried across.
     @State private var sceneThreadID: UUID?
-    /// Whether this column has been on screen long enough to have settled. Each thread keeps
-    /// its own column, so a switch is a hidden column being shown: one built just now still
-    /// measures its pane, one kept hidden has a stale pane and heads that came and went
-    /// meanwhile. Until it settles every pass snaps, so arriving never plays as a panel or
-    /// the conversation moving; changes after that slide as before.
-    @State private var hasSettled = false
-    @State private var settleTask: Task<Void, Never>?
+    /// Tracks whether this column has been on screen long enough to have settled, kept in
+    /// an observable box so a visibility flip only re-evaluates the small modifiers that
+    /// gate snapping and animations rather than `ChatView.body`.
+    @State private var reveal = ColumnRevealState()
     /// How long a shown column keeps snapping: a few frames, enough for the measurements
     /// that follow it, and short of anything that reads as the thread's own change.
     private static let showSettle: Duration = .milliseconds(180)
@@ -99,12 +86,14 @@ struct ChatView: View {
         // Split, so a resize frame recomputes docks and reserves only, never the
         // thread lists.
         let members = PanelMembers(runtime: runtime, model: model)
-        let switching = sceneThreadID != runtime.threadID || (columnIsShown && !hasSettled)
-        let scene = PanelScene(members: members, runtime: runtime, model: model, paneSize: paneSize, composerAreaHeight: composerAreaHeight, holdsHydra: hydraLingers, preferredSize: livePreferredSize)
+        let threadSwitching = sceneThreadID != runtime.threadID
+        let currentPaneSize = effectivePaneSize
+        let currentColumnHeight = effectiveColumnHeight
+        let scene = PanelScene(members: members, runtime: runtime, model: model, paneSize: currentPaneSize, composerAreaHeight: composerAreaHeight, holdsHydra: hydraLingers, preferredSize: livePreferredSize)
         // The team's panel as the model has it, before the linger below: what decides
         // whether the panel is held on a beat after its heads leave.
         let hydraPresent = !members.heads.isEmpty && scene.isMeasured
-        let holds = panelsHeld
+        let canSlideBase = scene.isMeasured && !liveResize.isActive && !threadSwitching
         VStack(spacing: 0) {
             ThreadTimeline(
                 runtime: runtime,
@@ -113,12 +102,12 @@ struct ChatView: View {
                 projectName: project?.name ?? (thread?.affiliation == .standalone ? Chrome.localized("Task") : nil),
                 workingDirectory: workingDirectory,
                 supportsRewind: thread?.provider.supportsRewind ?? false,
-                columnHeight: columnHeight,
+                columnHeight: currentColumnHeight,
                 // A panel docked on the left takes the rail's edge; the rail goes with it. So
                 // does a pane too narrow for both: the column reads at up to 820 points and the
                 // rail floats over its gutter, so under about 900 the two would overlap.
                 showsMinimap: !scene.dockedSides.contains(.leading)
-                    && (paneSize == .zero || paneSize.width - scene.reserve.leading - scene.reserve.trailing >= 900),
+                    && (currentPaneSize == .zero || currentPaneSize.width - scene.reserve.leading - scene.reserve.trailing >= 900),
                 usesTimelineTopFade: true
             )
             .equatable()
@@ -133,7 +122,7 @@ struct ChatView: View {
             // The room the docked panels take from either side; the conversation and the
             // box centre in the rest, so they stay lined up with each other (see
             // `ReserveSlide` for how they get there without laying out on every frame).
-            .modifier(ReserveSlide(reserve: scene.reserve, slides: scene.isMeasured && !liveResize.isActive && !holds && !switching))
+            .modifier(ReserveSlide(reserve: scene.reserve, canSlideBase: canSlideBase, visibility: columnVisibility, reveal: reveal, panelResize: panelResize, runtime: runtime))
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 ComposerArea(runtime: runtime, workingDirectory: workingDirectory)
                     .overlay(alignment: .top) {
@@ -153,7 +142,7 @@ struct ChatView: View {
                         guard newValue > oldValue + 0.5, !liveResize.isActive, oldValue > 0 else { return }
                         scrollState.noteComposerAreaGrowth()
                     }
-                    .modifier(ReserveSlide(reserve: scene.reserve, slides: scene.isMeasured && !liveResize.isActive && !holds && !switching, animatesWidth: true))
+                    .modifier(ReserveSlide(reserve: scene.reserve, canSlideBase: canSlideBase, visibility: columnVisibility, reveal: reveal, panelResize: panelResize, runtime: runtime, animatesWidth: true))
             }
             .overlay(alignment: .top) {
                 ChatChromeRow(
@@ -163,7 +152,7 @@ struct ChatView: View {
                     project: project,
                     directory: directory,
                     git: git,
-                    titleLeading: scene.reserve.leading + max(20, (paneSize.width - scene.reserve.leading - scene.reserve.trailing - 820) / 2)
+                    titleLeading: scene.reserve.leading + max(20, (currentPaneSize.width - scene.reserve.leading - scene.reserve.trailing - 820) / 2)
                 )
             }
             .overlay(alignment: .topLeading) {
@@ -173,7 +162,7 @@ struct ChatView: View {
                         subagentPanel(subagent, scene: scene, project: project)
                     }
                 }
-                .animation(switching ? nil : Chrome.panelSlide, value: scene.subagent?.id)
+                .modifier(SettledAnimation(visibility: columnVisibility, reveal: reveal, threadSwitching: threadSwitching, animation: Chrome.panelSlide, value: scene.subagent?.id))
             }
             .overlay(alignment: .topLeading) {
                 let showsHydraPanel = scene.showsHydra
@@ -190,7 +179,7 @@ struct ChatView: View {
                 // that shows it, so it can never leave in a frame under some other
                 // transaction. The room the chat makes for it is animated by
                 // `ReserveSlide` on its own, so nothing here reaches the column.
-                .animation(switching ? nil : Chrome.panelSlide, value: showsHydraPanel)
+                .modifier(SettledAnimation(visibility: columnVisibility, reveal: reveal, threadSwitching: threadSwitching, animation: Chrome.panelSlide, value: showsHydraPanel))
                 .onChange(of: HydraPresence(threadID: runtime.threadID, present: hydraPresent)) { old, new in
                     hydraLingerTask?.cancel()
                     // A switch: whatever the last thread's panel was doing stays with it.
@@ -234,7 +223,7 @@ struct ChatView: View {
                         poppedPanel(popped, scene: scene, workingDirectory: workingDirectory, project: project)
                     }
                 }
-                .animation(switching ? nil : Chrome.panelSlide, value: scene.popped?.id)
+                .modifier(SettledAnimation(visibility: columnVisibility, reveal: reveal, threadSwitching: threadSwitching, animation: Chrome.panelSlide, value: scene.popped?.id))
             }
             .overlay(alignment: .topLeading) {
                 ZStack(alignment: .topLeading) {
@@ -242,7 +231,7 @@ struct ChatView: View {
                         autoPoppedPanel(auto, scene: scene, workingDirectory: workingDirectory, project: project)
                     }
                 }
-                .animation(switching ? nil : Chrome.panelSlide, value: scene.autoPopped.map(\.id))
+                .modifier(SettledAnimation(visibility: columnVisibility, reveal: reveal, threadSwitching: threadSwitching, animation: Chrome.panelSlide, value: scene.autoPopped.map(\.id)))
             }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { paneSize = $0 }
             // Free-floating panels are kept inside the pane while it shrinks, with no
@@ -259,10 +248,7 @@ struct ChatView: View {
             // A sidebar or terminal-divider drag reshapes the pane per frame the way a
             // live resize does; the sidebar's toggle slide reshapes the pane per frame too;
             // the timeline and composer read one signal for both.
-            .onChange(of: paneIsResizing, initial: true) { _, dragging in
-                guard columnIsShown, let dragging else { return }
-                liveResize.updatePaneResizing(dragging, owner: runtime.threadID)
-            }
+            .modifier(PaneResizingReaction(visibility: columnVisibility, runtime: runtime))
             // The pane's final size: docked panels land on their new docked spot, and
             // a free spot left outside is pulled back inside.
             .onChange(of: liveResize.isActive) { _, resizing in
@@ -292,16 +278,15 @@ struct ChatView: View {
             }
         }
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-        .detailSheet()
         // The column stays mounted across a thread switch; only the timeline is swapped
         // (see its `.id(runtime.threadID)`). That swap must replace in place, never
         // slide or fade. Any transition here displaces every row, the composer and
         // the chrome row mid-flight, clips leading text, unseats the traffic lights
         // the chrome keeps room for, and doubles the title against itself.
         .transition(.identity)
-        .environment(\.panelsSnap, switching)
+        .modifier(ColumnPanelsSnapModifier(visibility: columnVisibility, reveal: reveal, threadSwitching: threadSwitching))
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { columnHeight = $0 }
-        .animation(switching ? nil : Chrome.panelSlide, value: runtime.isTerminalVisible)
+        .modifier(SettledAnimation(visibility: columnVisibility, reveal: reveal, threadSwitching: threadSwitching, animation: Chrome.panelSlide, value: runtime.isTerminalVisible))
         // A merge or pull request link in this chat can hand its request to a helper, which
         // opens in the panel and lands it on the same provider and model as this thread.
         .environment(\.mergeRequestTarget, MergeRequestTarget(chatID: runtime.threadID) { link in
@@ -322,29 +307,18 @@ struct ChatView: View {
         .onChange(of: runtime.threadID) {
             sceneThreadID = runtime.threadID
             hydraLingerTask?.cancel()
-            hydraLingers = false
-            scrollChrome = ChromeScrollModel()
-            scrollState = TimelineScrollState()
-            subagentDrag = PanelDragState()
-            hydraDrag = PanelDragState()
-            poppedDrag = PanelDragState()
-            autoDrag = PanelDragState()
-            autoDrags = [:]
-            panelResize = PanelResizeState()
+            if hydraLingers { hydraLingers = false }
+            scrollChrome.update(travel: 0)
+            scrollState.reset()
+            subagentDrag.reset()
+            hydraDrag.reset()
+            poppedDrag.reset()
+            autoDrag.reset()
+            if !autoDrags.isEmpty { autoDrags = [:] }
+            panelResize.reset()
         }
         .onAppear { sceneThreadID = runtime.threadID }
-        .onChange(of: columnIsShown, initial: true) { _, shown in
-            settleTask?.cancel()
-            guard shown else {
-                hasSettled = false
-                return
-            }
-            settleTask = Task { @MainActor in
-                try? await Task.sleep(for: Self.showSettle)
-                guard !Task.isCancelled else { return }
-                hasSettled = true
-            }
-        }
+        .modifier(ColumnSettleReaction(visibility: columnVisibility, reveal: reveal))
     }
 
     // MARK: - Floating panels
@@ -353,32 +327,34 @@ struct ChatView: View {
     private func subagentPanel(_ subagent: ChatThread, scene: PanelScene, project: Project?) -> some View {
         let slot = scene.slots[.subagent] ?? PanelScene.PanelSlot(corner: runtime.subagentPanelDock, below: 0)
         let rest = Self.rest(for: slot, scene: scene)
-        return PlacedPanel(drag: subagentDrag, rest: rest, size: scene.layout.panelSize, content: SubagentPanel(
-            thread: subagent,
-            size: scene.layout.panelSize,
-            workingDirectory: (try? model.executionDirectory(for: subagent)).flatMap { $0.isEmpty ? nil : $0 },
-            projectName: model.project(subagent.projectID)?.name ?? (subagent.affiliation == .standalone ? Chrome.localized("Task") : nil),
-            onDrag: { translation in
-                let position = subagentDrag.move(by: translation, from: rest, in: scene.layout)
-                dock(.subagent, \.subagentPanelDock, nearest: position, scene: scene)
-                reorder(.subagent, at: position, corner: runtime.subagentPanelDock, scene: scene)
-            },
-            onDragEnd: {
-                if let heading = subagentDrag.release() {
-                    dock(.subagent, \.subagentPanelDock, nearest: heading, scene: scene)
-                    reorder(.subagent, at: heading, corner: runtime.subagentPanelDock, scene: scene)
+        return ChatPlacedPanel(visibility: columnVisibility, panelResize: panelResize, runtime: runtime, drag: subagentDrag, rest: rest, size: scene.layout.panelSize, resize: resizer(for: runtime.subagentPanelDock, scene: scene)) {
+            SubagentPanel(
+                thread: subagent,
+                size: scene.layout.panelSize,
+                workingDirectory: (try? model.executionDirectory(for: subagent)).flatMap { $0.isEmpty ? nil : $0 },
+                projectName: model.project(subagent.projectID)?.name ?? (subagent.affiliation == .standalone ? Chrome.localized("Task") : nil),
+                onDrag: { translation in
+                    let position = subagentDrag.move(by: translation, from: rest, in: scene.layout)
+                    dock(.subagent, \.subagentPanelDock, nearest: position, scene: scene)
+                    reorder(.subagent, at: position, corner: runtime.subagentPanelDock, scene: scene)
+                },
+                onDragEnd: {
+                    if let heading = subagentDrag.release() {
+                        dock(.subagent, \.subagentPanelDock, nearest: heading, scene: scene)
+                        reorder(.subagent, at: heading, corner: runtime.subagentPanelDock, scene: scene)
+                    }
+                },
+                close: {
+                    // The helper moves to the sidebar under this thread; its row opens with the
+                    // same slide as the panel leaving.
+                    withAnimation(Chrome.panelSlide) {
+                        model.closeSubagent(subagent.id)
+                    }
                 }
-            },
-            close: {
-                // The helper moves to the sidebar under this thread; its row opens with the
-                // same slide as the panel leaving.
-                withAnimation(Chrome.panelSlide) {
-                    model.closeSubagent(subagent.id)
-                }
-            }
-        )
-        // Inside the offset, so the panel grows in and fades out in place.
-        .transition(Self.panelTransition), resize: resizer(for: runtime.subagentPanelDock, scene: scene), isResizing: panelsHeld)
+            )
+            // Inside the offset, so the panel grows in and fades out in place.
+            .transition(Self.panelTransition)
+        }
     }
 
     /// The team's panel: next to the helper panel when that one is in the same corner.
@@ -386,41 +362,43 @@ struct ChatView: View {
         let slot = scene.slots[.hydra] ?? PanelScene.PanelSlot(corner: runtime.hydraPanelDock, below: 0)
         let corner = slot.corner
         let rest = Self.rest(for: slot, scene: scene)
-        return PlacedPanel(drag: hydraDrag, rest: rest, size: scene.layout.panelSize, content: HydraPanel(
-            runtime: runtime,
-            heads: scene.heads,
-            size: scene.layout.panelSize,
-            workingDirectory: workingDirectory,
-            projectName: project?.name,
-            onDrag: { translation in
-                let position = hydraDrag.move(by: translation, from: rest, in: scene.layout)
-                dock(.hydra, \.hydraPanelDock, nearest: position, scene: scene)
-                reorder(.hydra, at: position, corner: runtime.hydraPanelDock, scene: scene)
-            },
-            onDragEnd: {
-                if let heading = hydraDrag.release() {
-                    dock(.hydra, \.hydraPanelDock, nearest: heading, scene: scene)
-                    reorder(.hydra, at: heading, corner: runtime.hydraPanelDock, scene: scene)
+        return ChatPlacedPanel(visibility: columnVisibility, panelResize: panelResize, runtime: runtime, drag: hydraDrag, rest: rest, size: scene.layout.panelSize, resize: resizer(for: corner, scene: scene)) {
+            HydraPanel(
+                runtime: runtime,
+                heads: scene.heads,
+                size: scene.layout.panelSize,
+                workingDirectory: workingDirectory,
+                projectName: project?.name,
+                onDrag: { translation in
+                    let position = hydraDrag.move(by: translation, from: rest, in: scene.layout)
+                    dock(.hydra, \.hydraPanelDock, nearest: position, scene: scene)
+                    reorder(.hydra, at: position, corner: runtime.hydraPanelDock, scene: scene)
+                },
+                onDragEnd: {
+                    if let heading = hydraDrag.release() {
+                        dock(.hydra, \.hydraPanelDock, nearest: heading, scene: scene)
+                        reorder(.hydra, at: heading, corner: runtime.hydraPanelDock, scene: scene)
+                    }
+                },
+                popOut: { id in
+                    model.markRead(id, revision: model.thread(id)?.unreadRevision)
+                    // The head's own panel opens docked across the column from the team
+                    // panel, so the two sit apart.
+                    withAnimation(Chrome.panelSlide) {
+                        runtime.hydraPoppedHeadID = id
+                        runtime.hydraPoppedPanelDock = runtime.hydraPanelDock.acrossTheColumn
+                        if runtime.hydraSelectedHeadID == id { runtime.hydraSelectedHeadID = nil }
+                    }
+                },
+                dismiss: {
+                    withAnimation(Chrome.panelSlide) {
+                        model.dismissHydraHeads(of: runtime.threadID)
+                    }
                 }
-            },
-            popOut: { id in
-                model.markRead(id, revision: model.thread(id)?.unreadRevision)
-                // The head's own panel opens docked across the column from the team
-                // panel, so the two sit apart.
-                withAnimation(Chrome.panelSlide) {
-                    runtime.hydraPoppedHeadID = id
-                    runtime.hydraPoppedPanelDock = runtime.hydraPanelDock.acrossTheColumn
-                    if runtime.hydraSelectedHeadID == id { runtime.hydraSelectedHeadID = nil }
-                }
-            },
-            dismiss: {
-                withAnimation(Chrome.panelSlide) {
-                    model.dismissHydraHeads(of: runtime.threadID)
-                }
-            }
-        )
-        .modifier(HydraCaptureFrame(threadID: runtime.threadID, liveResize: liveResize))
-        .transition(Self.panelTransition), resize: resizer(for: corner, scene: scene), isResizing: panelsHeld)
+            )
+            .modifier(HydraCaptureFrame(threadID: runtime.threadID, liveResize: liveResize))
+            .transition(Self.panelTransition)
+        }
     }
 
     /// Where the team's panel sits, for the tour's captures only: the Hydra page zooms on
@@ -452,34 +430,36 @@ struct ChatView: View {
         let slot = scene.slots[.popped] ?? PanelScene.PanelSlot(corner: runtime.hydraPoppedPanelDock, below: 0)
         let corner = slot.corner
         let rest = Self.rest(for: slot, scene: scene)
-        return PlacedPanel(drag: poppedDrag, rest: rest, size: scene.layout.panelSize, content: HydraPanel(
-            runtime: runtime,
-            heads: [popped],
-            size: scene.layout.panelSize,
-            workingDirectory: workingDirectory,
-            projectName: project?.name,
-            isPoppedOut: true,
-            onDrag: { translation in
-                let position = poppedDrag.move(by: translation, from: rest, in: scene.layout)
-                dock(.popped, \.hydraPoppedPanelDock, nearest: position, scene: scene)
-                reorder(.popped, at: position, corner: runtime.hydraPoppedPanelDock, scene: scene)
-            },
-            onDragEnd: {
-                if let heading = poppedDrag.release() {
-                    dock(.popped, \.hydraPoppedPanelDock, nearest: heading, scene: scene)
-                    reorder(.popped, at: heading, corner: runtime.hydraPoppedPanelDock, scene: scene)
+        return ChatPlacedPanel(visibility: columnVisibility, panelResize: panelResize, runtime: runtime, drag: poppedDrag, rest: rest, size: scene.layout.panelSize, resize: resizer(for: corner, scene: scene)) {
+            HydraPanel(
+                runtime: runtime,
+                heads: [popped],
+                size: scene.layout.panelSize,
+                workingDirectory: workingDirectory,
+                projectName: project?.name,
+                isPoppedOut: true,
+                onDrag: { translation in
+                    let position = poppedDrag.move(by: translation, from: rest, in: scene.layout)
+                    dock(.popped, \.hydraPoppedPanelDock, nearest: position, scene: scene)
+                    reorder(.popped, at: position, corner: runtime.hydraPoppedPanelDock, scene: scene)
+                },
+                onDragEnd: {
+                    if let heading = poppedDrag.release() {
+                        dock(.popped, \.hydraPoppedPanelDock, nearest: heading, scene: scene)
+                        reorder(.popped, at: heading, corner: runtime.hydraPoppedPanelDock, scene: scene)
+                    }
+                },
+                dismiss: {
+                    // Back into the team panel, and onto its stage.
+                    model.markRead(popped.id, revision: popped.unreadRevision)
+                    withAnimation(Chrome.panelSlide) {
+                        runtime.hydraSelectedHeadID = popped.id
+                        runtime.hydraPoppedHeadID = nil
+                    }
                 }
-            },
-            dismiss: {
-                // Back into the team panel, and onto its stage.
-                model.markRead(popped.id, revision: popped.unreadRevision)
-                withAnimation(Chrome.panelSlide) {
-                    runtime.hydraSelectedHeadID = popped.id
-                    runtime.hydraPoppedHeadID = nil
-                }
-            }
-        )
-        .transition(Self.panelTransition), resize: resizer(for: corner, scene: scene), isResizing: panelsHeld)
+            )
+            .transition(Self.panelTransition)
+        }
         .id(popped.id)
     }
 
@@ -489,32 +469,34 @@ struct ChatView: View {
         let slot = scene.slots[.auto(head.id)] ?? PanelScene.PanelSlot(corner: runtime.hydraPanelDock.acrossTheColumn, below: 0)
         let rest = Self.rest(for: slot, scene: scene)
         let drag = autoDrags[head.id] ?? autoDrag
-        return PlacedPanel(drag: drag, rest: rest, size: scene.layout.panelSize, content: HydraPanel(
-            runtime: runtime,
-            heads: [head],
-            size: scene.layout.panelSize,
-            workingDirectory: workingDirectory,
-            projectName: project?.name,
-            isPoppedOut: true,
-            onDrag: { translation in
-                let position = drag.move(by: translation, from: rest, in: scene.layout)
-                dockAuto(head.id, nearest: position, scene: scene)
-                reorder(.auto(head.id), at: position, corner: runtime.hydraAutoPanelDocks[head.id] ?? slot.corner, scene: scene)
-            },
-            onDragEnd: {
-                if let heading = drag.release() {
-                    dockAuto(head.id, nearest: heading, scene: scene)
-                    reorder(.auto(head.id), at: heading, corner: runtime.hydraAutoPanelDocks[head.id] ?? slot.corner, scene: scene)
+        return ChatPlacedPanel(visibility: columnVisibility, panelResize: panelResize, runtime: runtime, drag: drag, rest: rest, size: scene.layout.panelSize, resize: resizer(for: slot.corner, scene: scene)) {
+            HydraPanel(
+                runtime: runtime,
+                heads: [head],
+                size: scene.layout.panelSize,
+                workingDirectory: workingDirectory,
+                projectName: project?.name,
+                isPoppedOut: true,
+                onDrag: { translation in
+                    let position = drag.move(by: translation, from: rest, in: scene.layout)
+                    dockAuto(head.id, nearest: position, scene: scene)
+                    reorder(.auto(head.id), at: position, corner: runtime.hydraAutoPanelDocks[head.id] ?? slot.corner, scene: scene)
+                },
+                onDragEnd: {
+                    if let heading = drag.release() {
+                        dockAuto(head.id, nearest: heading, scene: scene)
+                        reorder(.auto(head.id), at: heading, corner: runtime.hydraAutoPanelDocks[head.id] ?? slot.corner, scene: scene)
+                    }
+                },
+                dismiss: {
+                    withAnimation(Chrome.panelSlide) {
+                        runtime.hydraAutoPopHeld.insert(head.id)
+                        runtime.hydraSelectedHeadID = head.id
+                    }
                 }
-            },
-            dismiss: {
-                withAnimation(Chrome.panelSlide) {
-                    runtime.hydraAutoPopHeld.insert(head.id)
-                    runtime.hydraSelectedHeadID = head.id
-                }
-            }
-        )
-        .transition(Self.panelTransition), resize: resizer(for: slot.corner, scene: scene), isResizing: panelsHeld)
+            )
+            .transition(Self.panelTransition)
+        }
         .id(head.id)
     }
 
@@ -704,9 +686,21 @@ extension EnvironmentValues {
     @Entry var panelsSnap = false
 }
 
+@MainActor
+@Observable
+private final class ColumnRevealState {
+    var hasSettled = false
+    @ObservationIgnored var settleTask: Task<Void, Never>?
+}
+
 private struct ReserveSlide: ViewModifier {
+    @Environment(AppModel.self) private var model
     let reserve: PanelReserve
-    let slides: Bool
+    let canSlideBase: Bool
+    let visibility: ChatColumnVisibility
+    let reveal: ColumnRevealState
+    let panelResize: PanelResizeState
+    let runtime: ThreadRuntime
     /// Whether the padding itself glides. The box is one pill and cheap to lay out, so
     /// its width follows the room; the conversation's rows are not, so its padding
     /// snaps and the offset below carries it.
@@ -715,6 +709,8 @@ private struct ReserveSlide: ViewModifier {
     @State private var offset: CGFloat = 0
 
     func body(content: Content) -> some View {
+        let holds = !visibility.isShown || panelResize.isActive || model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
+        let slides = canSlideBase && !holds && reveal.hasSettled
         content
             .environment(\.reserveSlideLeading, reserve.leading)
             .environment(\.reserveSlideOffset, offset)
@@ -737,6 +733,114 @@ private struct ReserveSlide: ViewModifier {
                 withTransaction(snap) { offset -= shift }
                 withAnimation(Chrome.panelSlide) { offset = 0 }
             }
+    }
+}
+
+extension ChatView {
+    private struct ColumnSettleReaction: ViewModifier {
+        let visibility: ChatColumnVisibility
+        let reveal: ColumnRevealState
+
+        func body(content: Content) -> some View {
+            content.onChange(of: visibility.isShown, initial: true) { _, shown in
+                reveal.settleTask?.cancel()
+                guard shown else {
+                    reveal.hasSettled = false
+                    return
+                }
+                reveal.settleTask = Task { @MainActor in
+                    try? await Task.sleep(for: ChatView.showSettle)
+                    guard !Task.isCancelled else { return }
+                    reveal.hasSettled = true
+                }
+            }
+        }
+    }
+
+    private struct SettledAnimation<Value: Equatable>: ViewModifier {
+        let visibility: ChatColumnVisibility
+        let reveal: ColumnRevealState
+        let threadSwitching: Bool
+        let animation: Animation
+        let value: Value
+
+        func body(content: Content) -> some View {
+            let switching = threadSwitching || (visibility.isShown && !reveal.hasSettled)
+            content.animation(switching ? nil : animation, value: value)
+        }
+    }
+
+    private struct ColumnPanelsSnapModifier: ViewModifier {
+        let visibility: ChatColumnVisibility
+        let reveal: ColumnRevealState
+        let threadSwitching: Bool
+
+        func body(content: Content) -> some View {
+            content.environment(\.panelsSnap, threadSwitching || (visibility.isShown && !reveal.hasSettled))
+        }
+    }
+
+    private struct PaneResizingReaction: ViewModifier {
+        @Environment(AppModel.self) private var model
+        @Environment(WindowLiveResize.self) private var liveResize
+        let visibility: ChatColumnVisibility
+        let runtime: ThreadRuntime
+
+        private var paneIsResizing: Bool? {
+            guard visibility.isShown else { return nil }
+            return model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
+        }
+
+        func body(content: Content) -> some View {
+            content.onChange(of: paneIsResizing, initial: true) { _, dragging in
+                guard visibility.isShown, let dragging else { return }
+                liveResize.updatePaneResizing(dragging, owner: runtime.threadID)
+            }
+        }
+    }
+
+    /// Whether the panels follow the pointer with no spring: a panel grip, the sidebar's
+    /// edge, or the terminal's divider is held, or the column is hidden. Kept out of
+    /// `ChatView.body` so visibility flips only re-evaluate this wrapper.
+    private struct ChatPlacedPanel<Content: View>: View {
+        @Environment(AppModel.self) private var model
+        let visibility: ChatColumnVisibility
+        let panelResize: PanelResizeState
+        let runtime: ThreadRuntime
+        let drag: PanelDragState
+        let rest: CGPoint
+        let size: CGSize
+        let resize: PanelResize?
+        let content: Content
+
+        init(
+            visibility: ChatColumnVisibility,
+            panelResize: PanelResizeState,
+            runtime: ThreadRuntime,
+            drag: PanelDragState,
+            rest: CGPoint,
+            size: CGSize,
+            resize: PanelResize?,
+            @ViewBuilder content: () -> Content
+        ) {
+            self.visibility = visibility
+            self.panelResize = panelResize
+            self.runtime = runtime
+            self.drag = drag
+            self.rest = rest
+            self.size = size
+            self.resize = resize
+            self.content = content()
+        }
+
+        private var isHeld: Bool {
+            guard visibility.isShown else { return true }
+            return panelResize.isActive || model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
+        }
+
+        var body: some View {
+            PlacedPanel(drag: drag, rest: rest, size: size, content: content, resize: resize, isResizing: isHeld)
+        }
     }
 }
 
@@ -876,7 +980,7 @@ private struct PanelScene {
         // gave one slot a side, and a second panel could only ever take the other corner.
         let smallest = compact ? SubagentPanelLayout.compactHeight : SubagentPanelLayout.minHeight
         let natural = min(3, max(1, Int((single.verticalRoom + gap) / (smallest + gap))))
-        if model.settings.hydraAutoPopsHeads, showsHydra, members.heads.count > 1 {
+        if model.settings.hydraAutoOpensPanels && model.settings.hydraAutoPopsHeads, showsHydra, members.heads.count > 1 {
             var candidates = Array(members.heads.dropFirst()).filter { !runtime.hydraAutoPopHeld.contains($0.id) }
             for candidate in candidates where runtime.hydraAutoPanelDocks[candidate.id] != nil {
                 let corner = runtime.hydraAutoPanelDocks[candidate.id]!
@@ -1035,7 +1139,6 @@ struct JumpToLatestButton: View {
 /// The sticky glass controls across the top of the conversation.
 private struct ChatChromeRow: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     let runtime: ThreadRuntime
     let scrollChrome: ChromeScrollModel
     let title: String
@@ -1043,10 +1146,6 @@ private struct ChatChromeRow: View {
     let directory: String?
     let git: GitStatusModel
     let titleLeading: CGFloat
-    @State private var isTopControlsHovered = false
-    @State private var isTopControlPresented = false
-    @State private var chromeRowWidth: CGFloat = 0
-    @State private var topControlsWidth: CGFloat = 0
 
     var body: some View {
         // Follows the buttons, not the sidebar's state: they leave for the sidebar only once it
@@ -1058,11 +1157,14 @@ private struct ChatChromeRow: View {
         let showsSidebarControls = !sidebarVisible && !model.sidebar.isSliding
         chromeRowContent(sidebarVisible: sidebarVisible, showsSidebarControls: showsSidebarControls)
         // With the sidebar hidden the native window buttons sit over this row, so it steps clear of them.
-        .padding(.leading, sidebarVisible ? 0 : Chrome.trafficLightsWidth + Chrome.trafficLightClearance)
+        .padding(.leading, sidebarVisible ? 0 : WindowChrome.collapsedTrafficLightClearance - Chrome.chromeHorizontalPadding)
         .padding(.horizontal, Chrome.chromeHorizontalPadding)
         .padding(.top, Chrome.chromeTopPadding)
         .animation(Chrome.panelSlide, value: sidebarVisible)
         .animation(.softAppear, value: showsSidebarControls)
+        .onChange(of: model.settings.collapseTopControls) {
+            model.isTopControlsExpanded = false
+        }
     }
 
     @ViewBuilder
@@ -1081,92 +1183,163 @@ private struct ChatChromeRow: View {
                 // mid-flight. Scroll progress still drives it per frame.
                 .animation(nil, value: title)
                 .padding(.leading, titleInset(sidebarVisible: sidebarVisible))
-            Group {
-                if performanceMode {
-                    topControls
-                } else {
-                    GlassEffectContainer(spacing: 2) {
-                        topControls
-                    }
-                }
+            // Keep one unconditional path so Creation switches preserve top-controls identity.
+            ChromeGlassEffectContainer(spacing: 2) {
+                topControls
             }
-            // Keep the reveal area and title layout stable while the controls are hidden.
-            .opacity(showsTopControls ? 1 : 0)
-            .allowsHitTesting(showsTopControls)
-            .accessibilityHidden(!showsTopControls)
-            .background(Color.clear)
-            .contentShape(.rect)
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { topControlsWidth = $0 }
-            .onPreferenceChange(ChromePresentationPreference.self) { isTopControlPresented = $0 }
-            .animation(performanceMode ? nil : .softAppear, value: showsTopControls)
-        }
-        .contentShape(.rect)
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { chromeRowWidth = $0 }
-        // The reveal region stays wide even when repository controls are absent.
-        // onContinuousHover reports positions in the row's local coordinate space:
-        // https://developer.apple.com/documentation/swiftui/view/oncontinuoushover(coordinatespace:perform:)
-        .onContinuousHover { phase in
-            let isHovered: Bool
-            switch phase {
-            case .active(let location):
-                let revealWidth = max(topControlsWidth, Chrome.capsuleHeight * 15)
-                isHovered = location.x >= max(0, chromeRowWidth - revealWidth)
-            case .ended:
-                isHovered = false
-            }
-            if isTopControlsHovered != isHovered { isTopControlsHovered = isHovered }
         }
     }
 
     private var topControls: some View {
-        HStack(spacing: 8) {
-            if let thread = model.thread(runtime.threadID), model.settings.hydraEnabled, !thread.isHelper {
-                HydraButton(thread: thread, runtime: runtime)
-                    .transition(.softAppear)
+        let collapses = model.settings.collapseTopControls
+        return HStack(spacing: 8) {
+            if !collapses || model.isTopControlsExpanded {
+                expandedTopControls
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
-            if let thread = model.thread(runtime.threadID) {
-                ChimeraButton(thread: thread, runtime: runtime)
-                    .transition(.softAppear)
-            }
-            if let directory, git.directory == directory, git.isRepository {
-                BranchMenu(runtime: runtime, directory: directory, git: git)
-            }
-            ChromeCapsule {
-                OpenInMenu(threadID: runtime.threadID, directory: directory)
-                if let project {
-                    ChromeDivider()
-                    ScriptsMenu(project: project, runtime: runtime)
-                }
-                if let directory, git.directory == directory, git.isRepository {
-                    ChromeDivider()
-                    GitActionsMenu(runtime: runtime, directory: directory, git: git)
+            if collapses {
+                ChromeCapsule {
+                    ChromeIconButton(symbol: "ellipsis", isActive: model.isTopControlsExpanded, help: "More controls") {
+                        withAnimation(.snappy(duration: 0.2)) {
+                            model.isTopControlsExpanded.toggle()
+                        }
+                    }
                 }
             }
             ChromeCapsule {
-                ChromeIconButton(symbol: "terminal", isActive: runtime.isTerminalVisible, help: Chrome.localized("Terminal") + ShortcutStore.hint(for: .toggleTerminal)) {
-                    runtime.isTerminalVisible.toggle()
+                ChromeIconButton(symbol: "gearshape", help: "Settings") {
+                    WindowManager.shared.showSettings()
                 }
-                if let directory, git.directory == directory, git.isRepository {
-                    ChromeDivider()
-                    ChromeIconButton(symbol: "plusminus", isActive: runtime.isDiffVisible, help: Chrome.localized("Changes") + ShortcutStore.hint(for: .toggleChanges)) {
-                        runtime.toggleDiff()
+                .overlay(alignment: .topTrailing) {
+                    if UpdateChecker.shared.updateAvailable {
+                        UpdateAvailableDot()
+                            .allowsHitTesting(false)
                     }
                 }
             }
         }
     }
 
-    private var showsTopControls: Bool {
-        !model.settings.autoHideTopControls || isTopControlsHovered || isTopControlPresented
+    private var expandedTopControls: some View {
+        HStack(spacing: 8) {
+            agentControls
+            if let directory, git.directory == directory, git.isRepository {
+                BranchMenu(runtime: runtime, directory: directory, git: git)
+            }
+            utilityControls
+            changesCapsule
+        }
+    }
+
+    @ViewBuilder
+    private var agentControls: some View {
+        // Sub-agent modes are chosen in the model card; these controls only open their panels.
+        if let thread = model.thread(runtime.threadID), !thread.isHelper, !model.panelHeads(of: thread.id).isEmpty {
+            HydraButton(thread: thread, runtime: runtime)
+                .transition(.softAppear)
+        }
+        if !model.settings.hydraAutoOpensPanels, runtime.hasWorkingHelpers,
+           let helper = model.runningHelperOutsidePanel(of: runtime.threadID) {
+            ChromeCapsule {
+                Button {
+                    model.showSubagentPanel(helper.id)
+                } label: {
+                    HStack(spacing: 5) {
+                        ChromeIconLabel(symbol: "person.2")
+                        MiniSpinner()
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help(Text(verbatim: Chrome.localized("Show the sub-agent panel")))
+                .accessibilityLabel(Text(verbatim: Chrome.localized("Show the sub-agent panel")))
+                .accessibilityValue(Text(verbatim: Chrome.localized("Sub-agent working")))
+            }
+            .transition(.softAppear)
+        }
+    }
+
+    @ViewBuilder
+    private var utilityControls: some View {
+        ChromeCapsule {
+            if let directory, git.directory == directory, git.isRepository {
+                GitActionsMenu(runtime: runtime, directory: directory, git: git)
+                ChromeDivider()
+            }
+            ChromeIconButton(symbol: "terminal", isActive: runtime.isTerminalVisible, help: Chrome.localized("Terminal") + ShortcutStore.hint(for: .toggleTerminal)) {
+                runtime.isTerminalVisible.toggle()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var changesCapsule: some View {
+        if directory != nil, git.directory != directory || git.isRepository, let stats = runtime.changeStats {
+            ThreadChangesCapsule(runtime: runtime, stats: stats, isActive: runtime.isDiffVisible) {
+                if !runtime.isDiffVisible, runtime.diffSelection != nil {
+                    runtime.diffSelection = nil
+                }
+                runtime.toggleDiff()
+            }
+            .transition(.softAppear)
+        }
     }
 
     private func titleInset(sidebarVisible: Bool) -> CGFloat {
         var leading = Chrome.chromeHorizontalPadding
         if !sidebarVisible {
-            leading += Chrome.trafficLightsWidth + Chrome.trafficLightClearance
+            leading = WindowChrome.collapsedTrafficLightClearance
             leading += 2 * (Chrome.capsuleHeight + 10)
         }
         return max(0, titleLeading - leading)
+    }
+}
+
+private struct ThreadChangesCapsule: View {
+    let runtime: ThreadRuntime
+    let stats: FileChangeSummary
+    let isActive: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        ChromeCapsule {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    Text(verbatim: "+\(stats.additions)")
+                        .foregroundStyle(Chrome.success)
+                    Text(verbatim: "\u{2212}\(stats.deletions)")
+                        .foregroundStyle(Chrome.danger)
+                }
+                .font(.ui(.callout, weight: .medium).monospacedDigit())
+                .lineLimit(1)
+                .opacity(isHovering || isActive ? 1 : 0.92)
+                .padding(.horizontal, Chrome.capsuleHorizontalPadding - Chrome.iconCapsuleInnerPadding)
+                .frame(height: Chrome.capsuleContentHeight)
+                .background {
+                    if isActive || isHovering {
+                        Capsule(style: .continuous)
+                            .fill(Chrome.overlay(isActive ? 0.12 : 0.06))
+                            .padding(1)
+                    }
+                }
+                .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .fixedSize()
+            // The changes popover hangs below the numbers it opens from.
+            .background {
+                AttachmentAnchorCapture { [weak runtime] in runtime?.changesCapsuleAnchor = WeakView($0) }
+            }
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                withAnimation(Chrome.hover) { isHovering = hovering }
+            }
+            .help(Text(verbatim: String(format: Chrome.localized("Show this thread's changes%@"), ShortcutStore.hint(for: .toggleChanges))))
+            .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("%d files changed, %d lines added, %d lines removed"), stats.files.count, stats.additions, stats.deletions)))
+        }
     }
 }
 
@@ -1337,34 +1510,7 @@ private struct BranchMenu: View {
             title: git.activity ?? git.status?.branch ?? "Detached",
             help: "Branch"
         ) {
-            PopoverSectionHeader("Switch branch")
-            ForEach(git.branches.prefix(25)) { branch in
-                PopoverItem(
-                    branch.name,
-                    isChecked: branch.isCurrent,
-                    isEnabled: !branch.isCurrent && !runtime.isRunning
-                ) {
-                    switchBranch(branch.name)
-                }
-            }
-            PopoverDivider()
-            PopoverItem("New branch…", symbol: "plus") {
-                branchName = ""
-                isNamingBranch = true
-            }
-            if let thread = runtime.thread, thread.worktreePath != nil, let branch = thread.branch {
-                PopoverItem("Rename branch…", symbol: "pencil", isEnabled: !runtime.isHydraMerging) {
-                    branchName = branch
-                    isRenamingBranch = true
-                }
-            }
-            if model.project(runtime.thread?.projectID) != nil, runtime.thread?.worktreePath == nil, runtime.turns.isEmpty {
-                PopoverItem("Use a new worktree for this thread", symbol: "square.stack.3d.up") {
-                    branchName = AppModel.suggestedBranchName(title: runtime.thread?.title ?? ChatThread.untitled,
-                                                            threadID: runtime.threadID)
-                    isNamingWorktree = true
-                }
-            }
+            menuContent
         }
         .alert("New branch", isPresented: $isNamingBranch) {
             TextField("Branch name", text: $branchName)
@@ -1398,6 +1544,38 @@ private struct BranchMenu: View {
         }
         .transformPreference(ChromePresentationPreference.self) {
             $0 = $0 || isNamingBranch || isNamingWorktree || isRenamingBranch || pushedRename != nil
+        }
+    }
+
+    @ViewBuilder
+    private var menuContent: some View {
+        PopoverSectionHeader("Switch branch")
+        ForEach(git.branches.prefix(25)) { branch in
+            PopoverItem(
+                branch.name,
+                isChecked: branch.isCurrent,
+                isEnabled: !branch.isCurrent && !runtime.isRunning
+            ) {
+                switchBranch(branch.name)
+            }
+        }
+        PopoverDivider()
+        PopoverItem("New branch…", symbol: "plus") {
+            branchName = ""
+            isNamingBranch = true
+        }
+        if let thread = runtime.thread, thread.worktreePath != nil, let branch = thread.branch {
+            PopoverItem("Rename branch…", symbol: "pencil", isEnabled: !runtime.isHydraMerging) {
+                branchName = branch
+                isRenamingBranch = true
+            }
+        }
+        if model.project(runtime.thread?.projectID) != nil, runtime.thread?.worktreePath == nil, runtime.turns.isEmpty {
+            PopoverItem("Use a new worktree for this thread", symbol: "square.stack.3d.up") {
+                branchName = AppModel.suggestedBranchName(title: runtime.thread?.title ?? ChatThread.untitled,
+                                                        threadID: runtime.threadID)
+                isNamingWorktree = true
+            }
         }
     }
 
@@ -1459,79 +1637,6 @@ private struct BranchMenu: View {
             }
             await git.refresh(directory)
         }
-    }
-}
-
-private struct OpenInMenu: View {
-    @Environment(AppModel.self) private var model
-    let threadID: UUID
-    let directory: String?
-
-    var body: some View {
-        ChromeMenuButton(symbol: "arrow.up.forward.app", help: "Open in another app") {
-            PopoverSectionHeader("Open in")
-            PopoverItem("Finder", image: Workspace.finderIcon) {
-                withDirectory { NSWorkspace.shared.open(URL(fileURLWithPath: $0)) }
-            }
-            ForEach(Workspace.installedEditors) { editor in
-                PopoverItem(editor.name, symbol: "chevron.left.forwardslash.chevron.right", image: Workspace.icon(for: editor)) {
-                    withDirectory { Workspace.open($0, with: editor) }
-                }
-            }
-            PopoverDivider()
-            PopoverItem("Copy path", symbol: "doc.on.doc", isEnabled: directory != nil) {
-                guard let directory else { return }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(directory, forType: .string)
-            }
-        }
-    }
-
-    private func withDirectory(_ action: (String) -> Void) {
-        guard let thread = model.thread(threadID) else { return }
-        do {
-            let directory = try model.ensureExecutionDirectory(for: thread)
-            var isDirectory: ObjCBool = false
-            guard !directory.isEmpty,
-                  FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue else {
-                throw ProviderError.failed(Chrome.localized("The working directory is unavailable."))
-            }
-            action(directory)
-        } catch {
-            model.alert = AppAlert(title: "Could not open task workspace", message: error.localizedDescription)
-        }
-    }
-}
-
-private struct ScriptsMenu: View {
-    @Environment(AppModel.self) private var model
-    let project: Project
-    let runtime: ThreadRuntime
-
-    @State private var isEditing = false
-
-    var body: some View {
-        ChromeMenuButton(symbol: "play", help: "Run a project script") {
-            if !project.scripts.isEmpty {
-                PopoverSectionHeader("Scripts")
-                ForEach(project.scripts) { script in
-                    PopoverItem(script.name, symbol: script.symbol) {
-                        model.runScript(script, threadID: runtime.threadID)
-                    }
-                }
-                PopoverDivider()
-            }
-            PopoverItem(project.scripts.isEmpty ? "Add a script…" : "Edit scripts…", symbol: project.scripts.isEmpty ? "plus" : "pencil") {
-                isEditing = true
-            }
-        }
-        .sheet(isPresented: $isEditing) {
-            ScriptsEditor(projectID: project.id)
-                .presentedChrome()
-                // The system sheet owns its corners; its backdrop follows that container.
-                .presentationBackground { WindowBackdrop(opacity: model.settings.backdropOpacity) }
-        }
-        .transformPreference(ChromePresentationPreference.self) { $0 = $0 || isEditing }
     }
 }
 
@@ -1658,17 +1763,17 @@ private struct CommitSheet: View {
                         }
                     }
                 }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 .disabled(isGenerating || !canGenerate)
-                .help(Text(verbatim: canGenerate ? Chrome.localized("Write a commit message from these changes") : Chrome.localized("Turn on text generation in Settings › Source control")))
+                .help(Text(verbatim: canGenerate ? Chrome.localized("Write a commit message from these changes") : Chrome.localized("Turn on text generation in Settings › Model selection")))
                 Toggle("Push after committing", isOn: $pushesAfterCommit)
                     .toggleStyle(.checkbox)
                     .disabled(git.status?.branch == nil)
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                 Button("Commit") { Task { await commit() } }
-                    .buttonStyle(.glassProminent)
+                    .chromeGlassButtonStyle(prominent: true)
                     .disabled(message.trimmed.isEmpty || isCommitting)
             }
         }
@@ -1694,7 +1799,7 @@ private struct CommitSheet: View {
         if let text = await TextGeneration.commitMessage(
             summary: resolved.summary,
             patch: resolved.patch,
-            instructions: model.settings.commitInstructions,
+            instructions: "",
             engine: engine,
             directory: URL(fileURLWithPath: directory)
         ) {
@@ -1718,98 +1823,5 @@ private struct CommitSheet: View {
         } else {
             dismiss()
         }
-    }
-}
-
-private struct ScriptsEditor: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let projectID: UUID
-
-    @State private var scripts: [ProjectScript] = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Project scripts")
-                .font(.ui(.title2, weight: .semibold))
-            Text("Scripts run in a terminal at the project root. Tivano also picks up scripts from tivano.json.")
-                .font(.ui(.callout))
-                .foregroundStyle(Chrome.secondaryText)
-            ScrollView {
-                VStack(spacing: 10) {
-                    ForEach(scripts) { script in
-                        let binding = scriptBinding(for: script)
-                        ChromeCard {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    TextField("Name", text: binding.name)
-                                        .textFieldStyle(.roundedBorder)
-                                    Button(role: .destructive) {
-                                        let id = script.id
-                                        scripts.removeAll { $0.id == id }
-                                    } label: {
-                                        Image(systemName: "trash")
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                                TextField("Command", text: binding.command)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.ui(.callout, design: .monospaced))
-                                    // A script with no command used to be dropped on save
-                                    // without a word; the row says what it is missing.
-                                    .overlay {
-                                        if Self.isIncomplete(script) {
-                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                                .strokeBorder(Chrome.danger.opacity(0.65), lineWidth: 1)
-                                        }
-                                    }
-                                Toggle("Run when a worktree is created", isOn: binding.runOnWorktreeCreate)
-                                    .toggleStyle(.checkbox)
-                            }
-                            .padding(14)
-                        }
-                    }
-                }
-            }
-            .frame(minHeight: 220)
-            HStack {
-                Button {
-                    scripts.append(ProjectScript(name: "New script", command: ""))
-                } label: {
-                    Label("Add script", systemImage: "plus")
-                }
-                .buttonStyle(.glass)
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .buttonStyle(.glass)
-                let incomplete = scripts.contains(where: Self.isIncomplete)
-                Button("Save") {
-                    model.updateProject(projectID) { $0.scripts = scripts }
-                    dismiss()
-                }
-                .buttonStyle(.glassProminent)
-                .disabled(incomplete)
-                .help(Text(verbatim: incomplete ? Chrome.localized("Every script needs a command.") : Chrome.localized("Save these scripts")))
-            }
-        }
-        .padding(20)
-        .frame(width: 580, height: 460)
-        .onAppear { scripts = model.project(projectID)?.scripts ?? [] }
-    }
-
-    private func scriptBinding(for script: ProjectScript) -> Binding<ProjectScript> {
-        let id = script.id
-        return Binding(
-            get: { scripts.first(where: { $0.id == id }) ?? script },
-            set: { newScript in
-                guard let index = scripts.firstIndex(where: { $0.id == id }) else { return }
-                scripts[index] = newScript
-            }
-        )
-    }
-
-    /// A script with nothing to run. Saving is held until every row has a command.
-    private static func isIncomplete(_ script: ProjectScript) -> Bool {
-        script.command.trimmingCharacters(in: .whitespaces).isEmpty
     }
 }

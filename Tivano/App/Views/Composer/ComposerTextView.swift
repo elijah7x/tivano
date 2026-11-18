@@ -131,7 +131,7 @@ final class ComposerNSTextView: NSTextView {
     var placeholderHint = "" { didSet { needsDisplay = true } }
     var onAttach: (([AttachmentSource]) -> Void)?
     var onWidthChange: (() -> Void)?
-    var onResign: (() -> Void)?
+    var onResign: (@MainActor () -> Void)?
 
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = abs(newSize.width - frame.width) > 0.5
@@ -211,7 +211,7 @@ final class ComposerNSTextView: NSTextView {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byWordWrapping
         return [
-            .font: font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14)),
+            .font: font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14)),
             .foregroundColor: NSColor.placeholderTextColor,
             .paragraphStyle: paragraphStyle,
         ]
@@ -220,8 +220,8 @@ final class ComposerNSTextView: NSTextView {
     private var attributedPlaceholder: NSAttributedString {
         let attributes = placeholderAttributes
         guard !placeholderHint.isEmpty else { return NSAttributedString(string: placeholder, attributes: attributes) }
-        let placeholderFont = font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14))
-        let hintFont = NSFont.systemFont(ofSize: placeholderFont.pointSize * 0.85)
+        let placeholderFont = font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
+        let hintFont = ThemeTypeface.nsFont(size: placeholderFont.pointSize * 0.85)
         let hint = placeholderHint as NSString
         let hintSize = hint.size(withAttributes: [.font: hintFont])
         let pillSize = NSSize(width: ceil(hintSize.width) + 14, height: ceil(hintSize.height) + 4)
@@ -264,7 +264,7 @@ final class ComposerNSTextView: NSTextView {
     }
 
     private var placeholderRect: NSRect {
-        let placeholderFont = font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14))
+        let placeholderFont = font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
         let padding = textContainer?.lineFragmentPadding ?? 0
         let width = min(textContainer?.size.width ?? bounds.width, bounds.width - textContainerInset.width * 2)
         return NSRect(
@@ -313,6 +313,7 @@ struct ComposerTextView: NSViewRepresentable {
     /// types in the chat leaves the caret where it is.
     var takesFocusOnAppear = true
     var pointSize: CGFloat = TypeScale.shared.content(14)
+    var serif: Bool = TypeScale.shared.serif
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -332,7 +333,7 @@ struct ComposerTextView: NSViewRepresentable {
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: TypeScale.shared.content(14))
+        textView.font = ThemeTypeface.nsFont(size: pointSize)
         textView.textColor = .labelColor
         textView.insertionPointColor = Chrome.accentNSColor
         textView.textContainerInset = NSSize(width: 0, height: 2)
@@ -368,6 +369,7 @@ struct ComposerTextView: NSViewRepresentable {
             Task { @MainActor in coordinator?.updateHeight() }
         }
         textView.onResign = { [weak coordinator] in
+            coordinator?.cancelPendingCursorChange()
             Task { @MainActor in coordinator?.parent.onBlur() }
         }
         Task { @MainActor in
@@ -390,9 +392,10 @@ struct ComposerTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
         textView.onAttach = onAttach
-        if textView.font?.pointSize != pointSize {
+        let font = ThemeTypeface.nsFont(size: pointSize)
+        if textView.font?.fontName != font.fontName || textView.font?.pointSize != pointSize {
             let selection = textView.selectedRanges
-            textView.font = .systemFont(ofSize: pointSize)
+            textView.font = font
             textView.setSelectedRanges(selection, affinity: textView.selectionAffinity, stillSelecting: false)
             textView.needsDisplay = true
             Task { @MainActor in context.coordinator.updateHeight() }
@@ -416,21 +419,38 @@ struct ComposerTextView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ComposerTextView
         weak var textView: ComposerNSTextView?
+        private var cursorNotifyPending = false
 
         init(parent: ComposerTextView) {
             self.parent = parent
+        }
+
+        func cancelPendingCursorChange() {
+            cursorNotifyPending = false
+        }
+
+        private func scheduleCursorChange() {
+            guard !cursorNotifyPending else { return }
+            cursorNotifyPending = true
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.cursorNotifyPending, let textView = self.textView else { return }
+                    self.cursorNotifyPending = false
+                    self.parent.onCursorChange(textView.selectedRange().location)
+                }
+            }
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             parent.text = textView.string
             updateHeight()
-            parent.onCursorChange(textView.selectedRange().location)
+            scheduleCursorChange()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView else { return }
-            parent.onCursorChange(textView.selectedRange().location)
+            guard textView != nil else { return }
+            scheduleCursorChange()
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {

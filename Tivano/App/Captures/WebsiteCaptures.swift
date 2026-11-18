@@ -64,26 +64,6 @@ enum WebsiteCaptures {
     /// Writes the library, the thread histories and the project folders the run opens, and
     /// resets the run's defaults. Called before anything reads settings or the library.
     static func prepare() {
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--standalone-task-probe") {
-            StandaloneTaskProbe.prepare()
-            return
-        }
-        if DshNativeIntegrationProbe.isRequested {
-            DshNativeIntegrationProbe.prepare()
-            return
-        }
-        if DshCaptureReplay.isEnabled {
-            DshCaptureReplay.prepare()
-            return
-        }
-        if DshIntegrationConfiguration.isOfflineHydra {
-            DshHydraIntegrationProbe.prepare()
-            return
-        }
-        if DshIntegrationConfiguration.isEnabled {
-            DshIntegrationProbe.prepare()
-            return
-        }
         guard let output = CaptureRun.outputDirectory, let root = CaptureRun.storageRoot, let defaults = CaptureRun.defaults else { return }
         let files = FileManager.default
         try? files.removeItem(at: root)
@@ -91,8 +71,8 @@ enum WebsiteCaptures {
         try? files.createDirectory(at: output, withIntermediateDirectories: true)
 
         defaults.removePersistentDomain(forName: CaptureRun.suiteName)
-        defaults.set("dark", forKey: "appTheme")
-        defaults.set(false, forKey: "notifyWhenFinished")
+        defaults.set("system", forKey: "appTheme")
+        defaults.set("dark", forKey: "appearanceMode")
         defaults.set(false, forKey: "chimeWhenFinished")
         defaults.set(true, forKey: "showReasoning")
         defaults.set(true, forKey: "sidebarActivityView")
@@ -139,41 +119,14 @@ enum WebsiteCaptures {
             thread(ID.liveActivity, ID.ios, "Live Activity for Pomodoro", .claude, "opus", "high", age: 3 * day, status: .completed, now),
             thread(ID.widgets, ID.ios, "Widget snapshots", .antigravity, "gemini-3.8-flash", "high", age: 6 * day, status: .completed, now),
         ]
-        if HeroSwitchProbe.isColdRequested {
-            for (index, id) in HeroSwitchProbe.longThreadIDs.enumerated() {
-                let number = index + 1
-                library.threads.append(thread(id, ID.tivanoApp, "Long history \(number)", .claude, "opus", "high", age: Double(19 + number) * day, status: .completed, now))
-            }
-        }
         if CaptureRun.isEnabled {
             ProductCaptures.addHydraMocks(to: &library, storageRoot: root, repos: repos, now: now)
         }
-        if QuotePreview.isRequested {
-            library.threads = [thread(ID.composer, ID.tivanoApp, "Quote preview", .claude, "opus", "high", age: 0, status: .completed, now)]
-        }
-        if PredictionPreview.isRequested {
-            library.threads = PredictionPreview.cases.enumerated().map { index, previewCase in
-                thread(previewCase.id, ID.tivanoApp, previewCase.title, .claude, "opus", "high",
-                       age: Double(index) * 10, status: .completed, now)
-            }
-        }
         write(library, to: root.appendingPathComponent("library.json"))
 
-        if PredictionPreview.isRequested {
-            for previewCase in PredictionPreview.cases {
-                write(PredictionPreview.history(for: previewCase, now: now),
-                      to: root.appendingPathComponent("threads/\(previewCase.id.uuidString).json"))
-            }
-        } else {
-            write(QuotePreview.isRequested ? QuotePreview.history(now) : composerHistory(now), to: root.appendingPathComponent("threads/\(ID.composer.uuidString).json"))
-        }
+        write(composerHistory(now), to: root.appendingPathComponent("threads/\(ID.composer.uuidString).json"))
         write(finalAnswerHistory(now), to: root.appendingPathComponent("threads/\(ID.finalAnswer.uuidString).json"))
         write(pricingHistory(now), to: root.appendingPathComponent("threads/\(ID.pricing.uuidString).json"))
-        if HeroSwitchProbe.isColdRequested {
-            for (index, id) in HeroSwitchProbe.longThreadIDs.enumerated() {
-                write(longHistory(id, seed: index + 1, now), to: root.appendingPathComponent("threads/\(id.uuidString).json"))
-            }
-        }
     }
 
     private static func write<Value: Encodable>(_ value: Value, to url: URL) {
@@ -220,64 +173,6 @@ enum WebsiteCaptures {
         return thread
     }
 
-    private static func longHistory(_ id: UUID, seed: Int, _ now: Date) -> ThreadDocument {
-        var document = ThreadDocument(threadID: id)
-        for index in 0..<120 {
-            let completedAt = now.addingTimeInterval(-20 * 86_400 - Double(119 - index) * 60)
-            var turn = TurnRecord(index: index)
-            turn.startedAt = completedAt.addingTimeInterval(-50)
-            turn.completedAt = completedAt
-            turn.status = .completed
-            let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
-                text: "Review pass \(index + 1) of long history \(seed) for cold-switch rendering costs. Keep the existing timeline structure and report what this exchange shows.")))
-            turn.userItemID = user.id
-            let reasoning = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(2), content: .reasoning(ReasoningBlock(
-                text: "Pass \(index + 1) begins with the cached row state for fixture \(seed). The source read shows which values can be reused. The command output checks that the same path still builds. I will keep the conclusion limited to this pass.")))
-            let source = (1...40).map { line in
-                "let cachedRow\(line) = HistoryRow(pass: \(index + 1), fixture: \(seed), offset: \(line))"
-            }.joined(separator: "\n")
-            var read = ToolCall(kind: .read, title: "Read", detail: "Tivano/App/Views/RootView.swift")
-            read.status = .completed
-            read.output = source
-            read.startedAt = turn.startedAt.addingTimeInterval(4)
-            read.finishedAt = turn.startedAt.addingTimeInterval(10)
-            let readItem = TimelineItem(turnID: turn.id, date: read.startedAt, content: .tool(read))
-            let buildLog = (1...15).map { line in
-                "Pass \(index + 1), fixture \(seed), step \(line)/15: Compiling HistoryRow\(line).swift"
-            }.joined(separator: "\n")
-            var command = ToolCall(kind: .command, title: "xcodebuild -scheme Tivano build", detail: "Long history \(seed), pass \(index + 1)")
-            command.status = .completed
-            command.output = buildLog
-            command.startedAt = turn.startedAt.addingTimeInterval(12)
-            command.finishedAt = turn.startedAt.addingTimeInterval(20)
-            let commandItem = TimelineItem(turnID: turn.id, date: command.startedAt, content: .tool(command))
-            let code = (1...12).map { line in
-                "let value\(line) = cache.value(pass: \(index + 1), fixture: \(seed), offset: \(line))"
-            }.joined(separator: "\n")
-            let markdown = """
-            Pass \(index + 1) for long history \(seed) keeps the existing timeline behavior and reuses its cached row data. The values below are specific to this exchange.
-
-            The read and build results support a narrow change rather than a new layout. The fixture remains deterministic while every response stays distinct.
-
-            ```swift
-            \(code)
-            ```
-
-            - Preserve the existing row components.
-            - Reuse the cached values for pass \(index + 1).
-            - Keep the current loading and error states.
-            - Record the result for fixture \(seed).
-            """
-            let answer = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(30), content: .assistant(AssistantMessage(text: markdown)))
-            let end = TimelineItem(turnID: turn.id, date: turn.completedAt!, content: .turnEnd(TurnSummary(
-                turnID: turn.id, status: .completed, duration: 50, filesChanged: 0, additions: 0, deletions: 0)))
-            document.turns.append(turn)
-            document.items.append(contentsOf: [user, reasoning, readItem, commandItem, answer, end])
-        }
-        document.usage = ContextUsage(usedTokens: 180_000, windowTokens: 200_000)
-        return document
-    }
-
     /// The composer thread's earlier turn: a question about the strip, answered.
     private static func composerHistory(_ now: Date) -> ThreadDocument {
         var document = ThreadDocument(threadID: ID.composer)
@@ -316,12 +211,8 @@ enum WebsiteCaptures {
         let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
             text: "The last reply of a turn gets lost between the tool calls. What would you change?")))
         turn.userItemID = user.id
-        let reply = CaptureRun.isEnabled && (CommandLine.arguments.contains("--render-cost-probe")
-            || CommandLine.arguments.contains("--heavy-load-probe"))
-            ? RenderCostProbe.fixtureAnswer
-            : "Three things, and I would keep them small: tag the final text so the timeline knows which block is the answer, give that block the glass card the plan cards already use, and leave streaming text plain so nothing flickers while it arrives."
         let answer = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(6), content: .assistant(AssistantMessage(
-            text: reply)))
+            text: "Three things, and I would keep them small: tag the final text so the timeline knows which block is the answer, give that block the glass card the plan cards already use, and leave streaming text plain so nothing flickers while it arrives.")))
         let end = TimelineItem(turnID: turn.id, date: turn.completedAt!, content: .turnEnd(TurnSummary(
             turnID: turn.id, status: .completed, duration: 41, filesChanged: 0, additions: 0, deletions: 0)))
         document.turns = [turn]
@@ -388,32 +279,12 @@ enum WebsiteCaptures {
     // MARK: - Run
 
     static func run(model: AppModel) async {
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--standalone-task-probe") {
-            await StandaloneTaskProbe.run(model: model)
+        if WeatherPreview.isPreviewRequested {
+            await WeatherPreview.runPreview(model: model)
             return
         }
-        if HeroSwitchProbe.isRequested {
-            await HeroSwitchProbe.run(model: model)
-            return
-        }
-        if KeepsakePreview.isRequested {
-            await KeepsakePreview.run(model: model)
-            return
-        }
-        if UsageLimitPreview.isRequested {
-            await UsageLimitPreview.run(model: model)
-            return
-        }
-        if ChimeraCastingPreview.isRequested {
-            await ChimeraCastingPreview.run(model: model)
-            return
-        }
-        if PredictionPreview.isRequested {
-            await PredictionPreview.run(model: model)
-            return
-        }
-        if QuotePreview.isRequested {
-            await QuotePreview.run(model: model)
+        if WeatherPreview.isCapturesRequested {
+            await WeatherPreview.runCaptures(model: model)
             return
         }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--hydra-panels-preview") {
@@ -428,54 +299,28 @@ enum WebsiteCaptures {
             await ProductCaptures.settingsPagePreview(model: model)
             return
         }
-        if HeroPreview.isRequested {
-            await HeroPreview.run(model: model)
-            return
-        }
-        if DshNativeIntegrationProbe.isRequested {
-            await DshNativeIntegrationProbe.run(model: model)
-            return
-        }
-        if DshCaptureReplay.isEnabled {
-            await DshCaptureReplay.run(model: model)
-            return
-        }
-        if DshIntegrationConfiguration.isOfflineHydra {
-            await DshHydraIntegrationProbe.run(model: model)
-            return
-        }
-        if DshIntegrationConfiguration.isEnabled {
-            await DshIntegrationProbe.run(model: model)
-            return
-        }
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--text-parity-probe") {
-            await TextParityProbe.run(model: model)
-            return
-        }
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--website-captures"),
-           CommandLine.arguments.contains("--settings-interaction-probe") {
-            await SettingsInteractionProbe.run(model: model)
-            return
-        }
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--website-captures"),
-           CommandLine.arguments.contains("--heavy-load-probe") {
-            await HeavyLoadProbe.run(model: model)
-            return
-        }
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--render-cost-probe") {
-            await RenderCostProbe.run(model: model)
-            return
-        }
-        if CommandLine.arguments.contains("--unread-regression") {
-            await UnreadRegression.run(model: model)
-            return
-        }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--history-scroll") {
             await TimelineStress.runHistory(model: model)
             return
         }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--history-flick") {
+            await TimelineStress.runHistoryFlick(model: model)
+            return
+        }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--held-drag") {
             await TimelineStress.runHeldDrag(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--subagent-panel-loop") {
+            await TimelineStress.runSubagentPanelLoop(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--subagent-pill-demo") {
+            await TimelineStress.runSubagentPillDemo(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--split-reply-demo") {
+            await TimelineStress.runSplitReplyDemo(model: model)
             return
         }
         // `--timeline-stress` is the chat-timeline jitter run. Without it, the product
@@ -869,114 +714,6 @@ final class Recorder {
         configuration.scalesToFit = false
         configuration.showsCursor = false
         return configuration
-    }
-}
-/// Holds a disposable library open for native interaction checks after real-model checks.
-@MainActor
-private enum StandaloneTaskProbe {
-    static func prepare() {
-        guard let root = CaptureRun.storageRoot, let defaults = CaptureRun.defaults else { return }
-        do {
-            try FileManager.default.createDirectory(at: root.appendingPathComponent("threads"), withIntermediateDirectories: true)
-            defaults.removePersistentDomain(forName: CaptureRun.suiteName)
-            defaults.set(false, forKey: "notifyWhenFinished")
-            defaults.set(false, forKey: "chimeWhenFinished")
-            try JSONEncoder.storage.encode(Library()).write(to: root.appendingPathComponent("library.json"), options: .atomic)
-        } catch {
-            WebsiteCaptures.log("standalone fixture failed: \(error)")
-            exit(1)
-        }
-    }
-
-    static func run(model: AppModel) async {
-        guard let output = CaptureRun.outputDirectory else { return }
-        await model.bootstrap()
-        guard model.isLibraryLoaded else { exit(1) }
-        model.settings.hydraEnabled = false
-        model.settings.hasSeenHydraIntro = true
-        model.settings.defaultWorkspaceMode = .local
-        model.settings.defaultProvider = .deepseek
-        model.settings.theme = .breeze
-        for provider in ProviderKind.allCases {
-            model.settings.setBinaryPath("/usr/bin/true", for: provider)
-        }
-        model.selectedThreadID = nil
-        var checks: [String: Bool] = [:]
-        checks["zero-project-create"] = model.projects.isEmpty && model.newThread(affiliation: .standalone) != nil
-        let folder = output.appendingPathComponent("repos/tivano")
-        let otherFolder = output.appendingPathComponent("repos/second-project")
-        do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
-        } catch { exit(1) }
-        let project = model.addProject(at: folder)
-        let second = model.addProject(at: otherFolder)
-        model.updateProject(second.id) { $0.name = "用于检查窄窗口的长项目名称 · Long Project Name" }
-        model.updateProject(project.id) { $0.icon = .emoji("🛠️") }
-        guard let draft = model.newThread(affiliation: .project(project.id)) else { exit(1) }
-        model.rename(draft.id, to: "项目会话 · 图标与归属测试")
-        checks["project-default"] = model.newThread()?.projectID == project.id
-        guard let task = model.newThread(affiliation: .standalone) else { exit(1) }
-        model.rename(task.id, to: "独立任务 · 工作目录测试")
-        checks["task-default"] = model.newThread()?.projectID == nil
-        let runtime = model.runtime(for: task.id)
-        await runtime.ensureLoaded()
-        runtime.draft.text = "草稿应在切换归属后保留"
-        checks["task-to-project"] = model.moveThread(task.id, to: .project(project.id))
-        checks["project-to-task"] = model.moveThread(task.id, to: .standalone)
-        checks["draft-preserved"] = runtime.draft.text == "草稿应在切换归属后保留"
-        runtime.draft.text = ""
-        do {
-            let directory = try model.ensureExecutionDirectory(for: model.thread(task.id)!)
-            let payload = URL(fileURLWithPath: directory).appendingPathComponent("task-result.txt")
-            try Data("isolated task file\n".utf8).write(to: payload)
-            checks["task-directory"] = directory == StoragePaths.taskWorkspace(task.id).path
-            model.archive(task.id)
-            checks["archive-keeps-files"] = FileManager.default.fileExists(atPath: payload.path)
-            model.updateThread(task.id) { $0.isArchived = false }
-            checks["task-restored"] = model.standaloneTasks.contains { $0.id == task.id }
-        } catch {
-            checks["task-directory"] = false
-            WebsiteCaptures.log("standalone task directory: \(error)")
-        }
-        model.selectedThreadID = task.id
-        checks["flush"] = model.flushForQuit()
-        if case .success(let library) = Storage.loadLibrary() {
-            checks["persist-task"] = library.threads.contains { $0.id == task.id && $0.projectID == nil }
-            checks["persist-icon"] = library.projects.first { $0.id == project.id }?.icon == .emoji("🛠️")
-        }
-        write(checks, name: "model-checks.json", output: output)
-        guard checks.values.allSatisfy({ $0 }) else { exit(1) }
-        model.selectedThreadID = draft.id
-        if !model.sidebar.isVisible { model.sidebar.toggle() }
-        WindowManager.shared.showMain()
-        NSApp.activate(ignoringOtherApps: true)
-        WebsiteCaptures.log("standalone task probe ready pid=\(ProcessInfo.processInfo.processIdentifier)")
-        let deadline = Date.now.addingTimeInterval(1200)
-        while Date.now < deadline, !FileManager.default.fileExists(atPath: output.appendingPathComponent("finish").path) {
-            let state: [String: Any] = [
-                "pid": ProcessInfo.processInfo.processIdentifier,
-                "selectedThread": model.selectedThreadID?.uuidString ?? "",
-                "projects": model.projects.map { ["id": $0.id.uuidString, "name": $0.name, "icon": $0.icon?.storage ?? ""] },
-                "threads": model.threads.map { thread in
-                    ["id": thread.id.uuidString, "projectID": thread.projectID?.uuidString ?? "", "title": thread.title,
-                     "directory": (try? model.executionDirectory(for: thread)) ?? "",
-                     "terminals": model.terminals.sessions(for: thread.id).map(\.directory)] as [String: Any]
-                }
-            ]
-            write(state, name: "inspection-state.json", output: output)
-            try? await Task.sleep(for: .seconds(1))
-        }
-        model.terminals.terminateAll()
-        for thread in model.threads { model.existingRuntime(for: thread.id)?.stopSession() }
-        _ = model.flushForQuit()
-        WebsiteCaptures.log("standalone task probe finished")
-        exit(0)
-    }
-
-    private static func write(_ value: Any, name: String, output: URL) {
-        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]) else { return }
-        try? data.write(to: output.appendingPathComponent(name), options: .atomic)
     }
 }
 #endif

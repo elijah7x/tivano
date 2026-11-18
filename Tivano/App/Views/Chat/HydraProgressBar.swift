@@ -34,11 +34,10 @@ struct HydraProgressBar: View {
     @State private var cache = StaveCache()
     @State private var sweepRegistration = UUID()
     @State private var isMounted = false
-    @Environment(\.chatColumnIsShown) private var chatColumnIsShown
+    @Environment(\.chatColumnVisibility) private var columnVisibility
     @Environment(\.isOnGlassPanel) private var isOnGlassPanel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
 
     fileprivate static let height: CGFloat = 28
     fileprivate static let staveWidth: CGFloat = 3
@@ -123,8 +122,9 @@ struct HydraProgressBar: View {
     }
 
     var body: some View {
+        let isShown = columnVisibility.isShown
         let capacity = max(1, Int(((width + Self.gap) / Self.pitch).rounded(.down)))
-        let resolved = chatColumnIsShown
+        let resolved = isShown
             ? cache.resolve(entries: entries ?? runtime.entries, capacity: capacity)
             : cache.snapshot
         let staves = resolved.staves
@@ -133,9 +133,9 @@ struct HydraProgressBar: View {
         let waiting = hydraWaitingStatus(status, runtime: runtime)
         let isRunning = status == .running && waiting == nil
         let elapsed = RelativeTime.duration((isRunning ? Date.now : finishedAt ?? .now).timeIntervalSince(startedAt))
-        let sweepRuntime = chatColumnIsShown && isRunning ? ObjectIdentifier(runtime) : nil
-        let sweeps = chatColumnIsShown && isRunning && !reduceMotion && !performanceMode && SweepBudget.shared.sweeps(ObjectIdentifier(runtime))
-        let isScrolling = chatColumnIsShown && ScrollActivity.shared.isScrolling
+        let sweepRuntime = isShown && isRunning ? ObjectIdentifier(runtime) : nil
+        let sweeps = isShown && isRunning && !reduceMotion && SweepBudget.shared.sweeps(ObjectIdentifier(runtime))
+        let isScrolling = isShown && ScrollActivity.shared.isScrolling
         let colors = HydraStaveColors(tint: waiting.map { Chrome.threadStatusColor($0, isDark: colorScheme == .dark) } ?? tint, colorScheme: colorScheme)
         VStack(alignment: .leading, spacing: 6) {
             HydraStaves(
@@ -143,18 +143,18 @@ struct HydraProgressBar: View {
                 capacity: capacity,
                 colors: colors,
                 status: status,
-                hoveredIndex: chatColumnIsShown ? hoveredIndex : nil,
+                hoveredIndex: isShown ? hoveredIndex : nil,
                 isSweeping: sweeps,
-                reduceMotion: reduceMotion || performanceMode || waiting != nil,
+                reduceMotion: reduceMotion || waiting != nil,
                 isScrolling: isScrolling,
-                isColumnShown: chatColumnIsShown
+                isColumnShown: isShown
             )
             .frame(height: Self.height)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             // The pointer picks the stave whose slot it is over; the slots past the
             // filled ones name nothing.
             .onContinuousHover(coordinateSpace: .local) { phase in
-                guard chatColumnIsShown else { return }
+                guard columnVisibility.isShown else { return }
                 let index: Int? = switch phase {
                 case .active(let point):
                     point.x >= 0 && point.y >= 0 && point.y <= Self.height
@@ -165,16 +165,12 @@ struct HydraProgressBar: View {
                 if picked != hoveredIndex {
                     hoveredIndex = picked
                     if picked != nil {
-                        switch model.settings.timelineHapticStyle {
-                        case .soft: Haptics.perform(.generic)
-                        case .strong: Haptics.perform(.alignment)
-                        case .none: break
-                        }
+                        Haptics.perform(.alignment)
                     }
                 }
             }
             .overlay(alignment: .topLeading) {
-                if chatColumnIsShown, let hoveredIndex, hoveredIndex < staves.count {
+                if isShown, let hoveredIndex, hoveredIndex < staves.count {
                     stepsCard(for: staves[hoveredIndex], at: hoveredIndex)
                 }
             }
@@ -203,7 +199,7 @@ struct HydraProgressBar: View {
             guard isMounted else { return }
             updateSweepRegistration(runtimeID)
         }
-        .onChange(of: chatColumnIsShown) { _, shown in
+        .onChange(of: columnVisibility.isShown) { _, shown in
             if !shown { hoveredIndex = nil }
         }
         .onDisappear {
@@ -505,9 +501,21 @@ private final class HydraStavesLayerView: NSView {
         layer?.addSublayer(sweepClip)
 
         let center = NotificationCenter.default
-        center.addObserver(self, selector: #selector(appHiddenDidChange), name: NSApplication.didHideNotification, object: nil)
-        center.addObserver(self, selector: #selector(appHiddenDidChange), name: NSApplication.didUnhideNotification, object: nil)
-        center.addObserver(self, selector: #selector(windowDidChangeOcclusionState(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        for name in [
+            NSApplication.didBecomeActiveNotification,
+            NSApplication.didResignActiveNotification,
+            NSApplication.didHideNotification,
+            NSApplication.didUnhideNotification,
+        ] {
+            center.addObserver(self, selector: #selector(visibilityChanged), name: name, object: nil)
+        }
+        for name in [
+            NSWindow.didChangeOcclusionStateNotification,
+            NSWindow.didMiniaturizeNotification,
+            NSWindow.didDeminiaturizeNotification,
+        ] {
+            center.addObserver(self, selector: #selector(windowVisibilityDidChange(_:)), name: name, object: nil)
+        }
     }
 
     @available(*, unavailable)
@@ -532,6 +540,11 @@ private final class HydraStavesLayerView: NSView {
         isScrolling: Bool,
         isColumnShown: Bool
     ) {
+#if DEBUG
+        let staveAnimationsOff = ProbeKnobs.isOff("stave")
+        let isSweeping = isSweeping && !staveAnimationsOff
+        let reduceMotion = reduceMotion || staveAnimationsOff
+#endif
         guard isColumnShown else {
             suspendColumn()
             return
@@ -607,13 +620,22 @@ private final class HydraStavesLayerView: NSView {
         refreshAnimations()
     }
 
-    @objc private func appHiddenDidChange() {
+    override func viewDidHide() {
+        super.viewDidHide()
         refreshAnimations()
     }
 
-    @objc private func windowDidChangeOcclusionState(_ note: Notification) {
-        // Every window ordered in posts this, popovers and tooltips included: only this
-        // view's own window coming back into view concerns it.
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        refreshAnimations()
+    }
+
+    @objc private func visibilityChanged() {
+        refreshAnimations()
+    }
+
+    @objc private func windowVisibilityDidChange(_ note: Notification) {
+        // Window visibility notifications are global: only this view's own window concerns it.
         guard let window, (note.object as? NSWindow) === window else { return }
         refreshAnimations()
     }
@@ -845,8 +867,8 @@ private final class HydraStavesLayerView: NSView {
     }
 
     private var isVisibleInWindow: Bool {
-        guard !NSApp.isHidden, let window, window.isVisible, !window.isMiniaturized,
-              window.occlusionState.contains(.visible) else { return false }
+        guard !NSApp.isHidden, NSApp.isActive, let window, window.isVisible, !window.isMiniaturized,
+              !isHiddenOrHasHiddenAncestor, window.occlusionState.contains(.visible) else { return false }
         return true
     }
 
@@ -917,25 +939,143 @@ struct HydraWorkingTitle: View {
     let text: String
     let isRunning: Bool
     var alignment: TextAlignment = .center
-    @Environment(\.chatColumnIsShown) private var chatColumnIsShown
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.chatColumnVisibility) private var columnVisibility
 
     /// One breath, in and out.
     private static let breath: TimeInterval = 3.2
 
     var body: some View {
-        let animates = chatColumnIsShown && isRunning && FrontMonitor.shared.isVisible && !performanceMode && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let animates = columnVisibility.isShown && isRunning && FrontMonitor.shared.isVisible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let title = Text(verbatim: text)
             .font(.ui(.body, weight: .medium))
             .foregroundStyle(Chrome.primaryText)
-        TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !animates || ScrollActivity.shared.isScrolling)) { context in
-            let now = context.date.timeIntervalSinceReferenceDate
-            let breath = animates ? 0.5 + 0.5 * sin(now / Self.breath * 2 * .pi) : 1.0
+#if DEBUG
+        if ProbeKnobs.isOff("title") {
             title
-                .opacity(0.72 + 0.28 * breath)
+                .opacity(1.0)
+                .lineLimit(2)
+                .multilineTextAlignment(alignment)
+        } else {
+            title.lineLimit(2).multilineTextAlignment(alignment)
+                // Layout stays the plain Text's; the host only draws inside that frame.
+                .hidden()
+                .overlay {
+                    BreathingTitle(
+                        title: title.lineLimit(2).multilineTextAlignment(alignment)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment == .center ? .center : (alignment == .leading ? .leading : .trailing)),
+                        breathes: animates,
+                        period: Self.breath
+                    )
+                }
         }
-        .lineLimit(2)
-        .multilineTextAlignment(alignment)
+#else
+        title.lineLimit(2).multilineTextAlignment(alignment)
+                // Layout stays the plain Text's; the host only draws inside that frame.
+                .hidden()
+                .overlay {
+                    BreathingTitle(
+                        title: title.lineLimit(2).multilineTextAlignment(alignment)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment == .center ? .center : (alignment == .leading ? .leading : .trailing)),
+                        breathes: animates,
+                        period: Self.breath
+                    )
+                }
+#endif
+    }
+}
+
+/// The working title, breathing on its own layer. A SwiftUI clock here re-ran the whole
+/// window's layout and render on every tick: about 30% of a core for a running chat,
+/// measured on an optimized build. The original `Text` stays in place, hidden, and still
+/// decides the layout; a nested host draws the same `Text` inside that frame, and only the
+/// host layer's opacity moves, in the render server, with the same curve (0.72 to 1.0,
+/// sine) and wall-clock phase as before.
+private struct BreathingTitle<Title: View>: NSViewRepresentable {
+    let title: Title
+    let breathes: Bool
+    let period: TimeInterval
+
+    func makeNSView(context: Context) -> BreathingTitleView<Title> {
+        let view = BreathingTitleView(rootView: title)
+        view.setBreathing(breathes, period: period)
+        return view
+    }
+
+    func updateNSView(_ view: BreathingTitleView<Title>, context: Context) {
+        view.host.rootView = title
+        view.setBreathing(breathes, period: period)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: BreathingTitleView<Title>, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
+}
+
+private final class BreathingTitleView<Title: View>: NSView {
+    let host: NSHostingView<Title>
+    private var breathes = false
+    private var period: TimeInterval = 3.2
+    private static var key: String { "breath" }
+
+    init(rootView: Title) {
+        host = NSHostingView(rootView: rootView)
+        host.sizingOptions = []
+        host.safeAreaRegions = []
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.actions = ["opacity": NSNull()]
+        host.translatesAutoresizingMaskIntoConstraints = true
+        host.autoresizingMask = [.width, .height]
+        host.frame = bounds
+        addSubview(host)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func layout() {
+        super.layout()
+        host.frame = bounds
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        apply()
+    }
+
+    func setBreathing(_ breathes: Bool, period: TimeInterval) {
+        guard breathes != self.breathes || period != self.period || (breathes && layer?.animation(forKey: Self.key) == nil) else { return }
+        self.breathes = breathes
+        self.period = period
+        apply()
+    }
+
+    private func apply() {
+        guard let layer else { return }
+        guard breathes, window != nil else {
+            layer.removeAnimation(forKey: Self.key)
+            layer.opacity = 1
+            return
+        }
+        guard layer.animation(forKey: Self.key) == nil else { return }
+        // 0.72 + 0.28 * (0.5 + 0.5 * sin(2πt / period)), sampled finely enough that the
+        // linear steps between samples are invisible.
+        let samples = 128
+        let breath = CAKeyframeAnimation(keyPath: "opacity")
+        breath.values = (0...samples).map { step in
+            0.86 + 0.14 * sin(Double(step) / Double(samples) * 2 * .pi)
+        }
+        breath.calculationMode = .linear
+        breath.duration = period
+        breath.repeatCount = .infinity
+        breath.isRemovedOnCompletion = false
+        // The same phase the clock gave: wall-clock seconds modulo one breath.
+        let phase = Date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+        breath.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) - phase
+        layer.opacity = 1
+        layer.add(breath, forKey: Self.key)
     }
 }
 
@@ -945,17 +1085,29 @@ struct HydraElapsedTime: View {
     let startedAt: Date
     let finishedAt: Date?
     let isRunning: Bool
-    @Environment(\.chatColumnIsShown) private var chatColumnIsShown
+    @Environment(\.chatColumnVisibility) private var columnVisibility
 
     var body: some View {
         Group {
-            if isRunning && chatColumnIsShown && FrontMonitor.shared.isVisible {
+#if DEBUG
+            if ProbeKnobs.isOff("elapsed") {
+                Text(verbatim: RelativeTime.duration((finishedAt ?? .now).timeIntervalSince(startedAt)))
+            } else if isRunning && columnVisibility.isShown && FrontMonitor.shared.isVisible {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     Text(verbatim: RelativeTime.duration(context.date.timeIntervalSince(startedAt)))
                 }
             } else {
                 Text(verbatim: RelativeTime.duration((finishedAt ?? .now).timeIntervalSince(startedAt)))
             }
+#else
+            if isRunning && columnVisibility.isShown && FrontMonitor.shared.isVisible {
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Text(verbatim: RelativeTime.duration(context.date.timeIntervalSince(startedAt)))
+                }
+            } else {
+                Text(verbatim: RelativeTime.duration((finishedAt ?? .now).timeIntervalSince(startedAt)))
+            }
+#endif
         }
         .font(.ui(.subheadline))
         .monospacedDigit()
@@ -969,29 +1121,32 @@ struct HydraElapsedTime: View {
 private struct ProgressCardSurface: ViewModifier {
     let isOnGlassPanel: Bool
     let isDark: Bool
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: Chrome.cardCornerRadius, style: .continuous)
-        if isOnGlassPanel {
-            content.background(shape.fill(Chrome.panelControlFill(isDark: isDark)))
-        } else if performanceMode {
-            content
-                .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
-                .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(Chrome.overlay(isDark ? 0.14 : 0.08), lineWidth: 1)
-                }
-        } else {
-            content
-                .glassEffect(.regular, in: shape)
-                .background {
+        let useGlass = !isOnGlassPanel && solid == nil
+        // Keep content on one unconditional path so Creation switches preserve card identity.
+        content
+            .chromeGlassEffect(useGlass ? .regular : .identity, in: shape)
+            .background {
+                if isOnGlassPanel {
+                    shape.fill(Chrome.panelControlFill(isDark: isDark))
+                } else if let solid {
+                    shape.fill(solid.elevated)
+                        .shadow(color: SolidSurfaces.shadow, radius: 12, y: 3)
+                } else {
                     shape
                         .fill(Color(nsColor: .controlBackgroundColor).opacity(0.92))
                         .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
                 }
-                .clipShape(shape)
-        }
+            }
+            .clipShape(SwitchableClip(shape: shape, isOn: !isOnGlassPanel))
+            .overlay {
+                if !isOnGlassPanel, let solid {
+                    shape.strokeBorder(solid.hairline, lineWidth: 1)
+                }
+            }
     }
 }
 

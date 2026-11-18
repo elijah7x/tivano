@@ -2,7 +2,9 @@ import AppKit
 import SwiftUI
 
 struct ThreadTimeline: View, Equatable {
-    @Environment(\.chatColumnIsShown) private var columnIsShown
+    @Environment(\.chatColumnVisibility) private var columnVisibility
+    @Environment(\.chatColumnInitialFrame) private var initialFrame
+    @Environment(\.chatColumnInitialPaneHeight) private var initialPaneHeight
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
     @Environment(\.reserveSlideLeading) private var reserveSlideLeading
@@ -21,8 +23,7 @@ struct ThreadTimeline: View, Equatable {
     let columnHeight: CGFloat
     /// Whether the rail is shown at all; a panel docked on the left takes its edge.
     var showsMinimap = true
-    /// The main chat masks its own scroll view. Panels leave this false and keep
-    /// `.chromeEdgeFade`.
+    /// Whether the timeline masks its own scroll view with `TimelineTopFade`.
     var usesTimelineTopFade = false
 
     /// The chat re-renders whenever its thread changes (a title, the effort, a mode); the
@@ -54,20 +55,26 @@ struct ThreadTimeline: View, Equatable {
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var viewportHeight: CGFloat = 0
     /// The scroll view's width, for the stepped layout width during a live resize.
-    private struct PaneGeometry: Equatable {
+    fileprivate struct PaneGeometry: Equatable {
         var width: CGFloat = 0
         var isShown = false
     }
-    @State private var paneGeometry = PaneGeometry()
-    private var paneWidth: CGFloat { paneGeometry.width }
     /// Like the measurement cache, this records a resolved layout without scheduling
-    /// a second body pass between a slide's start width and its target width.
-    private final class WidthLayout {
-        var committedWidth: CGFloat?
-        var slideGeneration: Int?
-        var slideTargetWidth: CGFloat = 0
-        var fontSizes: [Int] = []
-        var needsRemeasure = false
+    /// a second body pass between a slide's start width and its target width. Only
+    /// `paneGeometry` is observed so `ThreadTimeline.body` stays clear of layout-width
+    /// and visibility changes, and only the small layout modifiers re-evaluate.
+    @MainActor
+    @Observable
+    fileprivate final class WidthLayout {
+        var paneGeometry = PaneGeometry()
+        @ObservationIgnored var committedWidth: CGFloat?
+        @ObservationIgnored var slideGeneration: Int?
+        @ObservationIgnored var slideTargetWidth: CGFloat = 0
+        @ObservationIgnored var fontSizes: [Int] = []
+        @ObservationIgnored var needsRemeasure = false
+        /// Whether this thread's rows have been on screen. A column built ahead of a click
+        /// settles its first layout while hidden; only a change after it was seen is stale.
+        @ObservationIgnored var hasBeenShown = false
     }
     @State private var widthLayout = WidthLayout()
     private struct MeasurementLayout: Equatable {
@@ -75,20 +82,42 @@ struct ThreadTimeline: View, Equatable {
         let fontSizes: [Int]
         let isShown: Bool
     }
-    private var isReshaping: Bool {
-        guard columnIsShown else { return false }
+    private struct OpenTaskID: Equatable {
+        let threadID: UUID
+        let scrollState: ObjectIdentifier
+        let initialFrame: Bool
+    }
+    private static func isReshaping(
+        visibility: ChatColumnVisibility,
+        liveResize: WindowLiveResize,
+        sidebar: SidebarLayout,
+        runtime: ThreadRuntime
+    ) -> Bool {
+        guard visibility.isShown else { return false }
         // Use the resize sources here: the shared pane flag is updated by ChatView's
         // callback, which can otherwise leave one stepped-width frame after a slide.
-        return liveResize.isActive || model.sidebar.isDragging || model.sidebar.isSliding || runtime.isTerminalResizing
+        return liveResize.isActive || sidebar.isDragging || sidebar.isSliding || runtime.isTerminalResizing
+    }
+    /// Event/transaction-only helper; never call from `ThreadTimeline.body`.
+    private var isReshaping: Bool {
+        Self.isReshaping(visibility: columnVisibility, liveResize: liveResize, sidebar: model.sidebar, runtime: runtime)
     }
     /// While the window is being dragged the content wraps to a width that moves in
     /// steps this wide, so rows re-measure a few times over a drag instead of every
     /// frame; the exact width lands when the drag ends.
     private static let resizeStep: CGFloat = 12
-    private var layoutWidth: CGFloat? {
+    private static func layoutWidth(
+        visibility: ChatColumnVisibility,
+        paneGeometry: PaneGeometry,
+        isReshaping: Bool,
+        liveResizeActive: Bool,
+        sidebar: SidebarLayout,
+        widthLayout: WidthLayout
+    ) -> CGFloat? {
+        let paneWidth = paneGeometry.width
         // Branch before reading either shared observable. A restored column waits for
         // its own geometry callback, rather than committing its old host's width first.
-        guard columnIsShown, paneGeometry.isShown else {
+        guard visibility.isShown, paneGeometry.isShown else {
             widthLayout.slideGeneration = nil
             if widthLayout.committedWidth == nil, paneWidth > 0 {
                 widthLayout.committedWidth = min(860, paneWidth)
@@ -97,10 +126,10 @@ struct ThreadTimeline: View, Equatable {
         }
         guard paneWidth > 0 else { return widthLayout.committedWidth }
         let width: CGFloat
-        if model.sidebar.isSliding, !liveResize.isActive {
-            if widthLayout.slideGeneration != model.sidebar.slideGeneration {
-                widthLayout.slideGeneration = model.sidebar.slideGeneration
-                widthLayout.slideTargetWidth = min(860, max(Self.resizeStep, paneWidth + model.sidebar.remainingSlideDelta))
+        if sidebar.isSliding, !liveResizeActive {
+            if widthLayout.slideGeneration != sidebar.slideGeneration {
+                widthLayout.slideGeneration = sidebar.slideGeneration
+                widthLayout.slideTargetWidth = min(860, max(Self.resizeStep, paneWidth + sidebar.remainingSlideDelta))
             }
             width = widthLayout.slideTargetWidth
         } else {
@@ -142,6 +171,10 @@ struct ThreadTimeline: View, Equatable {
     /// The blocks the stack builds, by identity; the rest of the window stands in as exact
     /// spacers of measured or estimated heights. Nil builds the initial loaded window.
     @State private var mountedWindow: MountedWindow?
+    /// The first block a cold switch's first frame mounted. Not observed: it carries that
+    /// window across the expansion frame, whose body runs before `.onChange(of: initialFrame)`
+    /// has seeded `windowStartID`, so no block on screen is unmounted in between.
+    @State private var coldStart = ColdStartBox()
     @State private var measurements = TimelineMeasurements()
     /// The runtime's unattended-turn token as this view last saw it (see
     /// `ThreadRuntime.autoStartedTurnToken`). Seeded on appear so an auto-started turn
@@ -186,18 +219,20 @@ struct ThreadTimeline: View, Equatable {
             showReasoning: model.settings.showReasoning, isRunning: runtime.isRunning,
             hydraMergeID: runtime.isHydraMerging ? (runtime.hydraMergeNoteID ?? "hydra-merging") : nil,
             pills: pills
-        ) + waiting
+        ) + waiting + (HelpersWorkingRow.shows(runtime: runtime, model: model) ? [.helpersWorking] : [])
         // Every head the chat ever sent out, not only those still in the panel: a head that
         // finished and left for the sidebar is still named in the prose above, and keeps its
         // glyph and colour there rather than falling back to plain text as it clears. With
         // Hydra on, the whole roster besides: the lead names its heads in the prose before
         // the block that sends them out, so a name is drawn as its head from the first
         // frame rather than as plain text until the spawn lands.
+        let thread = model.thread(runtime.threadID)
         let headThreads = model.children(of: runtime.threadID).filter(\.isHydraHead)
         let hydraMentionPersonas = blockCache.mentionPersonas(
             for: headThreads,
-            roster: model.thread(runtime.threadID).map(model.hydraIsOn) ?? false
+            roster: thread.map(model.hydraIsOn) ?? false
         )
+        let turnsWithMultipleEntries = blockCache.turnsWithMultipleEntries
         // A head's name in the prose leads to its own chat. A reused name points at the
         // newest head, so the oldest heads lose: iterate oldest first and let each write
         // over the last.
@@ -223,19 +258,11 @@ struct ThreadTimeline: View, Equatable {
                     if scrollState.showsJumpButton { scrollState.showsJumpButton = false }
                 }
             } else {
-                timeline(blocks, hydraMentionPersonas: hydraMentionPersonas, hydraMentionTargets: hydraMentionTargets)
+                timeline(blocks, thread: thread, turnsWithMultipleEntries: turnsWithMultipleEntries, hydraMentionPersonas: hydraMentionPersonas, hydraMentionTargets: hydraMentionTargets)
             }
         }
         .background {
-            let thread = model.thread(runtime.threadID)
-            GeometryReader { viewport in
-                ThreadResultReadProbe(
-                    model: model, threadID: runtime.threadID,
-                    revision: thread?.unreadRevision, hasUnread: thread?.hasUnread == true
-                )
-                .frame(width: viewport.size.width, height: viewport.size.height)
-            }
-            .allowsHitTesting(false)
+            ThreadResultReadObserver(model: model, threadID: runtime.threadID)
         }
     }
 
@@ -257,7 +284,7 @@ struct ThreadTimeline: View, Equatable {
             ContinuationSourceLabel(sourceTitle: continuation.sourceTitle)
                 .font(.chat(size: 15, weight: .semibold))
                 .foregroundStyle(Chrome.primaryText)
-            Text("Choose a model or Hydra pair below, then send a message to continue.")
+            Text("Choose a model or combo below, then send a message to continue.")
                 .font(.chat(size: 13))
                 .foregroundStyle(Chrome.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -285,19 +312,22 @@ struct ThreadTimeline: View, Equatable {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func timeline(_ blocks: [DisplayBlock], hydraMentionPersonas: [HydraPersona], hydraMentionTargets: [String: HydraMentionTarget]) -> some View {
+    private func timeline(_ blocks: [DisplayBlock], thread: ChatThread?, turnsWithMultipleEntries: Set<UUID>, hydraMentionPersonas: [HydraPersona], hydraMentionTargets: [String: HydraMentionTarget]) -> some View {
         // The window is anchored on identity rather than a fixed suffix, so a block
         // appended at the end never pushes one out the front in the same pass. Older
         // history still loads on demand; only this start moves.
-        let startIndex = windowStartIndex(in: blocks)
+        let cold = initialColdWindow(in: blocks)
+        let startIndex = cold?.startIndex ?? windowStartIndex(in: blocks)
         let hidden = startIndex
-        let range = mountedWindow?.range(in: blocks, start: startIndex) ?? startIndex..<blocks.count
+        let range = cold?.range ?? mountedWindow?.range(in: blocks, start: startIndex) ?? startIndex..<blocks.count
         let visible = Array(blocks[range])
         let sums = measurements.prefix(blocks)
-        let topSpace = sums[range.lowerBound] - sums[startIndex]
-        let bottomSpace = sums[blocks.count] - sums[range.upperBound]
+        let topSpace = cold?.unpinnedAnchorOffset.map { max(0, $0) } ?? (sums[range.lowerBound] - sums[startIndex])
+        let bottomSpace = cold?.unpinnedAnchorOffset != nil ? 0 : (sums[blocks.count] - sums[range.upperBound])
+        let initialAnchor: UnitPoint = cold?.unpinnedAnchorOffset != nil ? .top : .bottom
         let outline = blocks.map { (id: $0.id, hasUserMessage: $0.hasUserMessage) }
-        measurements.noteArrivals(outline.map(\.id), questions: runtime.questions.map(\.id))
+        let outlineIDs = outline.map(\.id)
+        measurements.noteArrivals(outlineIDs, questions: runtime.questions.map(\.id))
         // The turns a row may offer to revert. Read here, once, so a turn record changing
         // (checkpoints, diffs, anchors) re-runs this body alone; rows get a plain flag that
         // only changes when their own answer does.
@@ -307,11 +337,31 @@ struct ThreadTimeline: View, Equatable {
         } else {
             rewindable = []
         }
+        let hydraJobs = thread?.hydraJobs ?? []
+        let hydraWaitingTurns: Set<UUID>
+        if hydraJobs.isEmpty {
+            hydraWaitingTurns = []
+        } else {
+            var waiting = Set(hydraJobs.compactMap(\.turnID))
+            var remaining = Set(visible.compactMap(\.turnID)).subtracting(waiting)
+            if !remaining.isEmpty {
+                for entry in runtime.entries {
+                    guard let turnID = entry.turnID, remaining.remove(turnID) != nil else { continue }
+                    let date = entry.item.date
+                    if hydraJobs.contains(where: { $0.startedAt <= date && ($0.finishedAt.map { date <= $0 } ?? true) }) {
+                        waiting.insert(turnID)
+                    }
+                    if remaining.isEmpty { break }
+                }
+            }
+            hydraWaitingTurns = waiting
+        }
+        let continuableTurn = continuableTurnID(thread: thread)
         // The rail floats over the timeline's leading gutter instead of taking layout
         // space, so the conversation stays centered exactly like the composer.
         // Ticks centre in the full column height, so the queue tab opening never moves them.
         return ZStack(alignment: .leading) {
-            timelineScroll(blocks: blocks, outline: outline, visible: visible, hidden: hidden, topSpace: topSpace, bottomSpace: bottomSpace, rewindable: rewindable)
+            timelineScroll(blocks: blocks, outline: outline, outlineIDs: outlineIDs, visible: visible, hidden: hidden, topSpace: topSpace, bottomSpace: bottomSpace, initialAnchor: initialAnchor, rewindable: rewindable, hydraWaitingTurns: hydraWaitingTurns, continuableTurn: continuableTurn, turnsWithMultipleEntries: turnsWithMultipleEntries)
             // The rail fades with the slide of the panel that takes its edge.
             ZStack {
                 if showsMinimap, outline.lazy.filter(\.hasUserMessage).prefix(2).count > 1 {
@@ -334,7 +384,7 @@ struct ThreadTimeline: View, Equatable {
             }
             // The rail fades with the slide of the panel that takes its edge. Held mid-resize:
             // a fresh slide every frame lagged the whole chat behind the window.
-            .animation(isReshaping ? nil : Chrome.panelSlide, value: showsMinimap)
+            .modifier(MinimapSlideAnimation(visibility: columnVisibility, liveResize: liveResize, runtime: runtime, showsMinimap: showsMinimap))
             // The rail belongs to the column's leading edge, not to the conversation that
             // re-centres beside a docked panel: the padding the slide adds is cancelled
             // without animation, the way the slide itself adds it, and the glide that
@@ -434,11 +484,15 @@ struct ThreadTimeline: View, Equatable {
         let target = count.map { max(0, blocks.count - $0) } ?? max(0, start - TimelineWindow.page)
         guard target < start else { return }
         let current = mountedWindow?.range(in: blocks, start: start) ?? start..<blocks.count
+        // The clip's own origin, not the last geometry callback: wheel input AppKit has
+        // already applied but SwiftUI has not reported would otherwise be lost from the
+        // anchor and later undone by the restore. Same coordinates as `tracking.offset`.
+        let liveOffset = tracking.liveOffset
         let anchorBlock = blocks[current].first { block in
-            measurements.viewportFrame(block.id, offset: tracking.offset).map { $0.maxY > 0 && $0.minY < viewportHeight } ?? false
+            measurements.viewportFrame(block.id, offset: liveOffset).map { $0.maxY > 0 && $0.minY < viewportHeight } ?? false
         } ?? blocks[current].first { measurements.frames[$0.id] != nil }
         let anchor = anchorBlock.flatMap { block in
-            measurements.viewportFrame(block.id, offset: tracking.offset).map { (id: block.id, offset: $0.minY) }
+            measurements.viewportFrame(block.id, offset: liveOffset).map { (id: block.id, offset: $0.minY) }
         }
         historyGeneration += 1
         historyRequest = HistoryRequest(threadID: runtime.threadID, navigation: tracking.navigationGeneration,
@@ -543,7 +597,11 @@ struct ThreadTimeline: View, Equatable {
                         #endif
                         return
                     }
-                    var restoredOffset = tracking.offset + tracking.pendingSyncShift
+                    // Measure the anchor against the clip it is about to move: wheel or momentum
+                    // events between the last geometry callback and this pass have moved the clip
+                    // and are already in `historyReaderDelta`, so a stale offset counts them twice.
+                    let liveOffset = tracking.liveOffset
+                    var restoredOffset = liveOffset
                     #if DEBUG
                     let traceEnabled = TimelineTrace.isEnabled
                     let traceReaderDelta = traceEnabled ? tracking.historyReaderDelta : 0
@@ -564,7 +622,7 @@ struct ThreadTimeline: View, Equatable {
                     }
                     #endif
                     if tracking.placementToken == nil, !tracking.isPinnedToBottom,
-                       let frame = measurements.viewportFrame(anchorID, offset: tracking.offset + tracking.pendingSyncShift) {
+                       let frame = measurements.viewportFrame(anchorID, offset: liveOffset) {
                         let restoreDelta = HistoryAnchorMath.restoreDelta(
                             anchorMinY: frame.minY,
                             anchorOffset: request.anchorOffset,
@@ -581,7 +639,6 @@ struct ThreadTimeline: View, Equatable {
                             let clip = scroll.contentView
                             let beforeY = clip.bounds.minY
                             let beforeTrackingOffset = tracking.offset
-                            let beforeOffset = beforeTrackingOffset + tracking.pendingSyncShift
                             let target = NSRect(origin: NSPoint(x: clip.bounds.minX, y: beforeY + restoreDelta), size: clip.bounds.size)
                             clip.scroll(to: clip.constrainBoundsRect(target).origin)
                             scroll.reflectScrolledClipView(clip)
@@ -595,7 +652,7 @@ struct ThreadTimeline: View, Equatable {
                                 traceReason = nil
                             }
                             #endif
-                            restoredOffset = tracking.offset == beforeTrackingOffset ? beforeOffset + movedY : tracking.offset
+                            restoredOffset = clip.bounds.minY
                             tracking.resetDrift()
                             if abs(movedY) <= 0.5 || tracking.offset != beforeTrackingOffset {
                                 tracking.isRestoringHistory = false
@@ -626,6 +683,7 @@ struct ThreadTimeline: View, Equatable {
                     if tracking.isPinnedToBottom { scheduleBottomSnap() }
                     updateMountedWindow(in: blocks, offset: restoredOffset, height: viewportHeight)
                     updateJumpButton()
+                    warmPreviousPage(in: blocks)
                 }
                 return
             }
@@ -658,6 +716,7 @@ struct ThreadTimeline: View, Equatable {
             tracking.historySyncShift = 0
             anchorsBottomOnGrowth = tracking.isPinnedToBottom
             if tracking.isPinnedToBottom { scheduleBottomSnap() }
+            warmPreviousPage(in: blocks)
         }
         guard tracking.placementToken == nil else { return }
         let remeasured = remeasurePending
@@ -673,7 +732,7 @@ struct ThreadTimeline: View, Equatable {
     private func invalidateMeasurements(in blocks: [DisplayBlock], width: CGFloat) {
         guard width > 0, !blocks.isEmpty else { return }
         let fontSizes = [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code]
-        guard columnIsShown, paneGeometry.isShown else {
+        guard columnVisibility.isShown, widthLayout.paneGeometry.isShown else {
             // A prebuilt column can retain its first measurements. Later font/content
             // changes are reconciled on reveal, without replacing a hidden stack.
             if measurements.width == 0 {
@@ -685,6 +744,15 @@ struct ThreadTimeline: View, Equatable {
             return
         }
         guard measurements.width != width || widthLayout.fontSizes != fontSizes || widthLayout.needsRemeasure else { return }
+        if measurements.width == 0, !widthLayout.needsRemeasure, !isReshaping {
+            let expectedRowWidth = max(0, min(820, width - 40))
+            if measurements.frames.isEmpty
+                || measurements.frames.values.allSatisfy({ abs($0.width - expectedRowWidth) <= 1.5 }) {
+                measurements.width = width
+                widthLayout.fontSizes = fontSizes
+                return
+            }
+        }
         widthLayout.fontSizes = fontSizes
         widthLayout.needsRemeasure = false
         cancelHistoryRequest()
@@ -733,7 +801,112 @@ struct ThreadTimeline: View, Equatable {
         if let windowStartID, let index = blocks.firstIndex(where: { $0.id == windowStartID }) {
             return index
         }
+        if let held = coldStart.id, let index = blocks.firstIndex(where: { $0.id == held }) {
+            return index
+        }
         return max(0, blocks.count - TimelineWindow.firstPaint)
+    }
+
+    /// First-frame slice on a cold column switch: mounts only enough blocks to cover one
+    /// screenful (at the end or starting at a saved unpinned anchor), before the next
+    /// runloop turn expands to the resting window.
+    private func initialColdWindow(in blocks: [DisplayBlock]) -> (startIndex: Int, range: Range<Int>, unpinnedAnchorOffset: CGFloat?)? {
+        guard initialFrame, windowStartID == nil, mountedWindow == nil, !blocks.isEmpty else { return nil }
+        let targetHeight = max(600, columnHeight > 0 ? columnHeight : initialPaneHeight)
+        let saved = TimelinePresentationStore.existingEntry(for: runtime.threadID)
+        let savedFrames = Self.usableFrames(saved, width: measurements.width)
+        func estimatedHeight(_ block: DisplayBlock) -> CGFloat {
+            if let known = measurements.frames[block.id]?.height ?? savedFrames?[block.id]?.height {
+                return known
+            }
+            return Self.coldRowEstimate(block)
+        }
+        // An unpinned restore keeps the regular path: its anchor offset is applied by
+        // `restorePresentation`, and a first frame placed at the anchor's top jumps twice.
+        if let saved, !saved.pinned, saved.anchorID != nil { return nil }
+        let lower = coldTailStartIndex(in: blocks, targetHeight: targetHeight, savedFrames: savedFrames)
+        coldStart.id = blocks[lower].id
+        return (lower, lower..<blocks.count, nil)
+    }
+
+    private func coldTailStartIndex(in blocks: [DisplayBlock], targetHeight: CGFloat? = nil, savedFrames: [String: CGRect]? = nil) -> Int {
+        guard !blocks.isEmpty else { return 0 }
+        let height = targetHeight ?? max(600, columnHeight > 0 ? columnHeight : initialPaneHeight)
+        let frames: [String: CGRect]?
+        if let savedFrames {
+            frames = savedFrames
+        } else {
+            let saved = TimelinePresentationStore.existingEntry(for: runtime.threadID)
+            frames = Self.usableFrames(saved, width: measurements.width)
+        }
+        var lower = blocks.count
+        var covered: CGFloat = 0
+        let minLower = max(0, blocks.count - TimelineWindow.initial)
+        while lower > minLower {
+            lower -= 1
+            let rowHeight = measurements.frames[blocks[lower].id]?.height
+                ?? frames?[blocks[lower].id]?.height
+                ?? Self.coldRowEstimate(blocks[lower])
+            covered += rowHeight + TimelineMetrics.rowSpacing
+            if blocks.count - lower >= TimelineWindow.firstPaint, covered >= height { break }
+        }
+        return lower
+    }
+
+    /// The expansion after a cold switch's first frame: restore the saved presentation,
+    /// or grow the first-frame slice to the resting window at the end.
+    private func expandAfterColdFrame(in blocks: [DisplayBlock], held: String?) {
+        cancelHistoryRequest()
+        if !restorePresentation(in: blocks) {
+            if windowStartID == nil {
+                let seeded = held.flatMap { id in blocks.firstIndex(where: { $0.id == id }) } ?? coldTailStartIndex(in: blocks)
+                windowStartID = blocks[seeded].id
+            }
+            tracking.holdEnd(for: 1.0)
+            loadEarlier(in: blocks, to: TimelineWindow.initial, source: "open")
+            tracking.armBlankWatch("open")
+        }
+        warmPreviousPage(in: blocks)
+    }
+
+    private func warmPreviousPage(in blocks: [DisplayBlock]) {
+        let nextStart = windowStartIndex(in: blocks)
+        guard nextStart > 0 else { return }
+        warmMarkdown(for: blocks[max(0, nextStart - TimelineWindow.page)..<nextStart])
+    }
+
+    /// Saved row heights hold only at the width and type sizes they were measured at; a
+    /// column at another width (or not yet measured) estimates instead.
+    private static func usableFrames(_ saved: TimelinePresentation?, width: CGFloat) -> [String: CGRect]? {
+        guard let saved, width > 0, saved.width == width,
+              saved.fontSizes == [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code] else { return nil }
+        return saved.frames
+    }
+
+    private static func coldRowEstimate(_ block: DisplayBlock) -> CGFloat {
+        switch block {
+        case .turn(_, _, let entries, _, _):
+            var replyBytes = 0
+            var promptBytes = 0
+            for entry in entries.reversed() {
+                if replyBytes == 0, case .assistant(let message) = entry.item.content {
+                    replyBytes = message.text.utf8.count
+                } else if promptBytes == 0, case .user(let message) = entry.item.content {
+                    promptBytes = min(600, message.text.utf8.count)
+                }
+                if replyBytes > 0 && promptBytes > 0 { break }
+            }
+            let lines = CGFloat((replyBytes + promptBytes) / 72)
+            return min(1400, 96 + max(44, lines * 20))
+        case .group(let group, _, _):
+            if case .single(let entry) = group, case .assistant(let message) = entry.item.content {
+                let lines = CGFloat(message.text.utf8.count / 72)
+                return min(1400, 48 + max(32, lines * 20))
+            }
+            return 112
+        case .working, .merging, .headsWorking, .backgroundTasks, .helpersWorking:
+            return 72
+        }
     }
 
     /// A scroll that lands at once, for following growth the reader is already looking at.
@@ -743,18 +916,36 @@ struct ThreadTimeline: View, Equatable {
         return transaction
     }
 
+    private func currentMentionsAndTargets() -> (mentions: [HydraPersona], targets: [String: HydraMentionTarget]) {
+        let thread = model.thread(runtime.threadID)
+        let headThreads = model.children(of: runtime.threadID).filter(\.isHydraHead)
+        let mentions = blockCache.mentionPersonas(
+            for: headThreads,
+            roster: thread.map(model.hydraIsOn) ?? false
+        )
+        return (mentions, Self.mentionTargets(for: headThreads))
+    }
+
     /// Parses every finished reply's markdown off the main thread, so rows scrolling into
     /// view for the first time never parse on the frame. Cached texts are skipped.
     private func warmMarkdown() async {
-        var texts: [String] = []
+        var allTexts: [String] = []
+        var unparsed: [String] = []
         for entry in runtime.entries.reversed() {
-            guard case .assistant(let message) = entry.item.content, !message.isStreaming,
-                  !MarkdownView.isCached(message.text) else { continue }
-            texts.append(message.text)
-            if texts.count == MarkdownView.warmCandidateLimit { break }
+            guard case .assistant(let message) = entry.item.content, !message.isStreaming else { continue }
+            allTexts.append(message.text)
+            if !MarkdownView.isCached(message.text) {
+                unparsed.append(message.text)
+            }
+            if allTexts.count == MarkdownView.warmCandidateLimit { break }
         }
-        guard !texts.isEmpty else { return }
-        try? await MarkdownView.warm(texts)
+        guard !allTexts.isEmpty else { return }
+        if !unparsed.isEmpty {
+            try? await MarkdownView.warm(unparsed)
+            guard !Task.isCancelled else { return }
+        }
+        let context = currentMentionsAndTargets()
+        await MarkdownView.warmProseRuns(allTexts, mentions: context.mentions, targets: context.targets)
     }
 
     /// Starts the next history page's parse before its blocks enter the window. The page
@@ -766,7 +957,8 @@ struct ThreadTimeline: View, Equatable {
             tracking.warmedMarkdownPages.removeAll()
         }
         guard tracking.warmedMarkdownPages.insert(first.id).inserted else { return }
-        var texts: [String] = []
+        var pageTexts: [String] = []
+        var unparsed: [String] = []
         for block in page {
             let entries: [TimelineEntry]
             switch block {
@@ -780,13 +972,22 @@ struct ThreadTimeline: View, Equatable {
                 entries = []
             }
             for entry in entries {
-                guard case .assistant(let message) = entry.item.content, !message.isStreaming,
-                      !MarkdownView.isCached(message.text) else { continue }
-                texts.append(message.text)
+                guard case .assistant(let message) = entry.item.content, !message.isStreaming else { continue }
+                pageTexts.append(message.text)
+                if !MarkdownView.isCached(message.text) {
+                    unparsed.append(message.text)
+                }
             }
         }
-        guard !texts.isEmpty else { return }
-        Task { try? await MarkdownView.warm(texts) }
+        guard !pageTexts.isEmpty else { return }
+        let context = currentMentionsAndTargets()
+        Task { @MainActor in
+            if !unparsed.isEmpty {
+                try? await MarkdownView.warm(unparsed)
+                guard !Task.isCancelled else { return }
+            }
+            await MarkdownView.warmProseRuns(pageTexts, mentions: context.mentions, targets: context.targets)
+        }
     }
 
     /// How a block arrives and leaves. It arrives softly, like everything in the app, and
@@ -803,14 +1004,6 @@ struct ThreadTimeline: View, Equatable {
         return rowTransition
     }
 
-    private func waitsForHydraBlockEnd(_ block: DisplayBlock) -> Bool {
-        guard let turnID = block.turnID else { return false }
-        let jobs = model.thread(runtime.threadID)?.hydraJobs ?? []
-        if jobs.contains(where: { $0.turnID == turnID }) { return true }
-        guard let date = runtime.entries.first(where: { $0.turnID == turnID })?.item.date else { return false }
-        return jobs.contains(where: { $0.startedAt <= date && ($0.finishedAt.map { date <= $0 } ?? true) })
-    }
-
     /// The most rows a work group may hold and still arrive with the soft appear.
     private static let softAppearLimit = 8
 
@@ -821,34 +1014,38 @@ struct ThreadTimeline: View, Equatable {
         removal: .identity
     )
 
-    private func continuableTurnID(for block: DisplayBlock) -> UUID? {
-        guard let turnID = block.turnID, let thread = model.thread(runtime.threadID),
+    private func continuableTurnID(thread: ChatThread?) -> UUID? {
+        guard let thread,
               !thread.isHydraHead, !thread.isArchived,
               [.antigravity, .codex, .claude].contains(thread.provider),
               thread.providerSessionID?.isEmpty == false,
-              let turn = runtime.turns.last, turn.id == turnID,
+              let turn = runtime.turns.last,
               turn.status == .failed || turn.status == .interrupted else { return nil }
-        return turnID
+        return turn.id
     }
 
     /// One block row, built outside the stack because the view builder timed the
     /// compiler out on the row's modifier chain.
-    private func row(_ block: DisplayBlock, rewindable: Set<UUID>) -> some View {
+    private func row(_ block: DisplayBlock, rewindable: Set<UUID>, hydraWaitingTurns: Set<UUID>, continuableTurn: UUID?, turnsWithMultipleEntries: Set<UUID>) -> some View {
         let canRewind = block.turnID.map { rewindable.contains($0) } ?? false
+        let waitsForBlockEnd = block.turnID.map { hydraWaitingTurns.contains($0) } ?? false
+        let continuableTurnID = block.turnID.flatMap { $0 == continuableTurn ? $0 : nil }
+        let turnHasOutput = block.turnID.map { turnsWithMultipleEntries.contains($0) } ?? false
         let measurementGeneration = measurements.generation
         let context = RowContext(
             workingDirectory: workingDirectory,
             canRewind: canRewind,
             chronological: false,
-            continuableTurnID: continuableTurnID(for: block),
-            continuationDisabled: runtime.isRunning || runtime.isReverting
+            continuableTurnID: continuableTurnID,
+            continuationDisabled: runtime.isRunning || runtime.isReverting,
+            turnHasOutput: turnHasOutput
         )
         // Captured for this mount. A later rebuild uses the next `stackGeneration`, and the
         // row this one leaves behind must not clear that mount's visibility.
         let visibilityOwner = stackGeneration
         return DisplayBlockView(block: block, runtime: runtime, context: context)
             .equatable()
-            .environment(\.hydraWaitsForBlockEnd, waitsForHydraBlockEnd(block))
+            .environment(\.hydraWaitsForBlockEnd, waitsForBlockEnd)
             .environment(\.timelineBlockID, block.id)
             .environment(\.timelineLiveAppearance, measurements.liveIDs.contains(block.id) && !measurements.materializedIDs.contains(block.id))
             .id(block.id)
@@ -859,7 +1056,10 @@ struct ThreadTimeline: View, Equatable {
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("timelineContent")) }) { frame in
                 let hadFrame = measurements.frames[block.id] != nil
                 if measurements.record(block.id, frame: frame, generation: measurementGeneration) {
-                    if !columnIsShown, hadFrame { widthLayout.needsRemeasure = true }
+                    // A row moving while hidden after the reader saw it is stale for the reveal; a
+                    // prebuilt column's rows settling their first layout are not, and remeasuring
+                    // them rebuilt the whole stack on the switch's frame.
+                    if !columnVisibility.isShown, hadFrame, widthLayout.hasBeenShown { widthLayout.needsRemeasure = true }
                     tracking.requestMeasurementPass()
                 }
             }
@@ -867,15 +1067,14 @@ struct ThreadTimeline: View, Equatable {
             .onAppear { measurements.materializedIDs.insert(block.id) }
     }
 
-    private func timelineScroll(blocks: [DisplayBlock], outline: [(id: String, hasUserMessage: Bool)], visible: [DisplayBlock], hidden: Int, topSpace: CGFloat, bottomSpace: CGFloat, rewindable: Set<UUID>) -> some View {
+    private func timelineScroll(blocks: [DisplayBlock], outline: [(id: String, hasUserMessage: Bool)], outlineIDs: [String], visible: [DisplayBlock], hidden: Int, topSpace: CGFloat, bottomSpace: CGFloat, initialAnchor: UnitPoint, rewindable: Set<UUID>, hydraWaitingTurns: Set<UUID>, continuableTurn: UUID?, turnsWithMultipleEntries: Set<UUID>) -> some View {
         // What the stack renders last: the newest question badge, or the newest block.
         // Its change is something arriving at the end of the conversation.
         let lastEntryID = runtime.questions.last.map { "question-" + $0.id } ?? visible.last?.id
         // The outline the rail resolves against, kept in step with what is laid out. Rows
         // coming and going is when the stack can lose its place; a look a beat from now
         // costs nothing and catches it whether or not any row says so.
-        if tracking.setOutline(outline) {
-            if !columnIsShown, measurements.width > 0 { widthLayout.needsRemeasure = true }
+        if tracking.setOutline(outline, ids: outlineIDs) {
             tracking.armBlankWatch("outline")
             // A new block at the end under a reader held there: the stack is told where
             // the viewport is, since the block may have landed below rows it built for
@@ -929,7 +1128,7 @@ struct ThreadTimeline: View, Equatable {
                 VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
                     if topSpace > 0 { Color.clear.frame(height: max(0, topSpace - TimelineMetrics.rowSpacing)) }
                     ForEach(visible) { block in
-                        row(block, rewindable: rewindable)
+                        row(block, rewindable: rewindable, hydraWaitingTurns: hydraWaitingTurns, continuableTurn: continuableTurn, turnsWithMultipleEntries: turnsWithMultipleEntries)
                     }
                     if bottomSpace > 0 { Color.clear.frame(height: max(0, bottomSpace - TimelineMetrics.rowSpacing)) }
                     if let reviewer = runtime.hydraReviewRunning {
@@ -960,7 +1159,7 @@ struct ThreadTimeline: View, Equatable {
             .padding(.horizontal, 20)
             // Release the fixed width at rest so a smaller proposal can reach the
             // geometry reader; retaining it would keep the old width feeding itself.
-            .frame(width: isReshaping || !columnIsShown || !paneGeometry.isShown ? layoutWidth : nil, alignment: .leading)
+            .modifier(TimelineWidthFrameModifier(visibility: columnVisibility, liveResize: liveResize, runtime: runtime, widthLayout: widthLayout))
             .padding(.top, Chrome.contentTopInset)
             .padding(.bottom, 18)
             // A short conversation still fills the pane, with its messages resting at the bottom.
@@ -973,14 +1172,6 @@ struct ThreadTimeline: View, Equatable {
                     tracking: tracking,
                     onResolve: { view in
                         tracking.probe = view
-                        #if DEBUG
-                        CaptureTimelineScrolling.bind(view, geometry: {
-                            (tracking.offset, max(0, tracking.offset + tracking.distanceFromBottom))
-                        }) { y in
-                            tracking.noteWheelInput(offsetDelta: y - tracking.offset)
-                            position.scrollTo(y: y)
-                        }
-                        #endif
                     },
                     onWheel: { tracking.noteWheelInput(offsetDelta: $0) }
                 )
@@ -1003,13 +1194,14 @@ struct ThreadTimeline: View, Equatable {
             tracking.setColumnShown(false, on: runtime)
             tracking.endActivity()
         }
-        .onChange(of: columnIsShown, initial: true) { _, shown in
+        .modifier(ColumnShownReaction(visibility: columnVisibility, initial: true) { shown in
+            if shown { widthLayout.hasBeenShown = true }
             tracking.setColumnShown(shown, on: runtime)
             if shown { tracking.armViewportRefresh("columnShown") }
-        }
+        })
         // The thread opens at its end and stays there while its rows measure in.
         .onAppear {
-            tracking.setColumnShown(columnIsShown, on: runtime)
+            tracking.setColumnShown(columnVisibility.isShown, on: runtime)
             tracking.holdEnd(for: 1.5)
             if seenAutoStartedTurnToken == nil {
                 seenAutoStartedTurnToken = runtime.autoStartedTurnToken
@@ -1018,7 +1210,7 @@ struct ThreadTimeline: View, Equatable {
         .coordinateSpace(name: "timelineViewport")
         .scrollIndicators(.never)
         .scrollPosition($position)
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(initialAnchor, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .alignment)
         .defaultScrollAnchor(anchorsBottomOnGrowth ? .bottom : .top, for: .sizeChanges)
         // One value per frame, and only when it moved: `onGeometryChange` fires solely
@@ -1030,28 +1222,22 @@ struct ThreadTimeline: View, Equatable {
             let stepped = (height / Self.resizeStep).rounded(.down) * Self.resizeStep
             if stepped != viewportHeight { viewportHeight = stepped }
         }
-        .onGeometryChange(for: PaneGeometry.self, of: { [columnIsShown] geometry in
-            PaneGeometry(width: geometry.size.width, isShown: columnIsShown)
-        }) {
-            paneGeometry = $0
+        .onChange(of: outlineIDs) {
+            if !columnVisibility.isShown, measurements.width > 0 { widthLayout.needsRemeasure = true }
         }
-        .onChange(of: MeasurementLayout(
-            width: layoutWidth ?? min(860, paneWidth),
-            fontSizes: [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code],
-            isShown: columnIsShown && paneGeometry.isShown
-        ), initial: true) { old, layout in
+        .modifier(PaneGeometryModifier(visibility: columnVisibility, widthLayout: widthLayout))
+        .modifier(MeasurementLayoutModifier(visibility: columnVisibility, liveResize: liveResize, runtime: runtime, widthLayout: widthLayout) { old, layout in
             invalidateMeasurements(in: blocks, width: layout.width)
             if layout.isShown, old.fontSizes != layout.fontSizes {
                 tracking.armViewportRefresh("typeScale")
             }
-        }
+        })
         // No animation inside the timeline while the window is being dragged; a spring
         // restarted every frame is what made rows lag behind the window and land somewhere else.
         .transaction { transaction in if isReshaping { transaction.animation = nil } }
-        .onChange(of: isReshaping) { _, active in
-            guard columnIsShown, !active else { return }
+        .modifier(ReshapeSettleReaction(visibility: columnVisibility, liveResize: liveResize, runtime: runtime) {
             settleAfterResize()
-        }
+        })
         .onScrollPhaseChange { _, phase in
             // Inertia and animated navigation still move rows under the pointer. The
             // movement watch restores hit-testing 150ms after the last moving frame.
@@ -1118,8 +1304,8 @@ struct ThreadTimeline: View, Equatable {
                     && new.containerHeight == old.containerHeight && !tracking.isCoasting))
             guard tracking.placementToken == nil else { return }
             if hidden > 0, new.containerHeight > 0 {
-                if new.travel < new.containerHeight * 2 {
-                    let target = max(0, hidden - TimelineWindow.page)
+                if new.travel < new.containerHeight * 4 {
+                    let target = max(0, hidden - TimelineWindow.page * 2)
                     warmMarkdown(for: blocks[target..<hidden])
                 }
                 if new.travel < new.containerHeight, !historyLoadPending,
@@ -1195,27 +1381,49 @@ struct ThreadTimeline: View, Equatable {
                 scheduleBottomSnap()
             }
         }
-        .task(id: ObjectIdentifier(scrollState)) {
-            // Restart after ChatView replaces its scroll state on a thread switch.
-            // Yield past that reset before restoring this timeline.
+        .onChange(of: initialFrame) { old, new in
+            guard old, !new else { return }
+            let held = coldStart.id
+            coldStart.id = nil
+            guard !blocks.isEmpty else { return }
+            // Switched away before expanding: keep the first-frame slice and expand when the
+            // column shows again, not while the next conversation opens.
+            guard columnVisibility.isShown else {
+                if windowStartID == nil, let held, blocks.contains(where: { $0.id == held }) { windowStartID = held }
+                coldStart.expansionDeferred = true
+                return
+            }
+            expandAfterColdFrame(in: blocks, held: held)
+        }
+        .modifier(ColumnShownReaction(visibility: columnVisibility, initial: false) { shown in
+            guard shown, coldStart.expansionDeferred, !blocks.isEmpty else { return }
+            coldStart.expansionDeferred = false
+            expandAfterColdFrame(in: blocks, held: nil)
+        })
+        .task(id: OpenTaskID(threadID: runtime.threadID, scrollState: ObjectIdentifier(scrollState), initialFrame: initialFrame)) {
+            // Stay inert during the first-frame slice so rapid thread/head switches never spin up warmups or history loads.
+            guard !initialFrame else { return }
             await Task.yield()
             guard !Task.isCancelled else { return }
-            cancelHistoryRequest()
-            if restorePresentation(in: blocks) {
+            if tracking.placementToken != nil {
                 await warmMarkdown()
                 return
             }
-            // The first frame shows only the newest few blocks, so a thread opens at once;
-            // the rest of the initial window lands a beat later, above the viewport, while
-            // the reader is already looking at the end.
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
-            // The window lands above the viewport over the next frames: still arriving.
-            tracking.holdEnd(for: 1.0)
-            loadEarlier(in: blocks, to: TimelineWindow.initial, source: "open")
-            // A thread that opened on nothing (its first rows never laid out where the
-            // bottom anchor put the viewport) is caught a beat from now.
-            tracking.armBlankWatch("open")
+            if !historyLoadPending {
+                cancelHistoryRequest()
+                if restorePresentation(in: blocks) {
+                    await warmMarkdown()
+                    return
+                }
+                if blocks.isEmpty || windowStartIndex(in: blocks) > max(0, blocks.count - TimelineWindow.initial) {
+                    // Prebuilt columns and histories still loading expand a beat after first paint.
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard !Task.isCancelled else { return }
+                    tracking.holdEnd(for: 1.0)
+                    loadEarlier(in: blocks, to: TimelineWindow.initial, source: "open")
+                    tracking.armBlankWatch("open")
+                }
+            }
             await warmMarkdown()
             // The window opened whole, so every block could measure. Once the thread has
             // settled the stack narrows to the blocks around the viewport, rather than on
@@ -1617,7 +1825,7 @@ struct ThreadTimeline: View, Equatable {
     /// stays pinned there. Rows coming back on screen end the sequence wherever it is, and
     /// a fourth blank in a row is left alone.
     private func repairLayout() {
-        guard columnIsShown else { return }
+        guard columnVisibility.isShown else { return }
         guard tracking.placementToken == nil else {
             tracking.trace("repair", "placement")
             return
@@ -1710,7 +1918,7 @@ struct ThreadTimeline: View, Equatable {
     /// end, otherwise the top anchor already held the top-most row each frame. Unanimated,
     /// so no glide restarts per frame mid-drag; the stack is told where the viewport is.
     private func settleAfterResize() {
-        guard columnIsShown else { return }
+        guard columnVisibility.isShown else { return }
         guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling else {
             tracking.armViewportRefresh("resizeScrolling")
             return
@@ -1726,7 +1934,7 @@ struct ThreadTimeline: View, Equatable {
     /// Eager rows do not need a scroll to discover the viewport. Recreate missing rows
     /// without moving content that is already visible under the reader.
     private func refreshViewport() {
-        guard columnIsShown else { return }
+        guard columnVisibility.isShown else { return }
         #if DEBUG
         // Keep the old workaround available only in an isolated stress comparison.
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--timeline-stress"),
@@ -1812,6 +2020,123 @@ struct ThreadTimeline: View, Equatable {
     }
 }
 
+extension ThreadTimeline {
+    private struct MinimapSlideAnimation: ViewModifier {
+        @Environment(AppModel.self) private var model
+        let visibility: ChatColumnVisibility
+        let liveResize: WindowLiveResize
+        let runtime: ThreadRuntime
+        let showsMinimap: Bool
+
+        private var isReshaping: Bool {
+            ThreadTimeline.isReshaping(visibility: visibility, liveResize: liveResize, sidebar: model.sidebar, runtime: runtime)
+        }
+
+        func body(content: Content) -> some View {
+            content.animation(isReshaping ? nil : Chrome.panelSlide, value: showsMinimap)
+        }
+    }
+
+    private struct TimelineWidthFrameModifier: ViewModifier {
+        @Environment(AppModel.self) private var model
+        let visibility: ChatColumnVisibility
+        let liveResize: WindowLiveResize
+        let runtime: ThreadRuntime
+        let widthLayout: WidthLayout
+
+        func body(content: Content) -> some View {
+            let isReshaping = ThreadTimeline.isReshaping(visibility: visibility, liveResize: liveResize, sidebar: model.sidebar, runtime: runtime)
+            let paneGeometry = widthLayout.paneGeometry
+            let width = isReshaping || !visibility.isShown || !paneGeometry.isShown
+                ? ThreadTimeline.layoutWidth(
+                    visibility: visibility,
+                    paneGeometry: paneGeometry,
+                    isReshaping: isReshaping,
+                    liveResizeActive: liveResize.isActive,
+                    sidebar: model.sidebar,
+                    widthLayout: widthLayout
+                )
+                : nil
+            content.frame(width: width, alignment: .leading)
+        }
+    }
+
+    private struct ColumnShownReaction: ViewModifier {
+        let visibility: ChatColumnVisibility
+        let initial: Bool
+        let action: (Bool) -> Void
+
+        func body(content: Content) -> some View {
+            content.onChange(of: visibility.isShown, initial: initial) { _, shown in
+                action(shown)
+            }
+        }
+    }
+
+    private struct PaneGeometryModifier: ViewModifier {
+        let visibility: ChatColumnVisibility
+        let widthLayout: WidthLayout
+
+        func body(content: Content) -> some View {
+            let _ = visibility.isShown
+            content.onGeometryChange(for: PaneGeometry.self, of: { geometry in
+                PaneGeometry(width: geometry.size.width, isShown: visibility.isShown)
+            }) {
+                widthLayout.paneGeometry = $0
+            }
+        }
+    }
+
+    private struct MeasurementLayoutModifier: ViewModifier {
+        @Environment(AppModel.self) private var model
+        let visibility: ChatColumnVisibility
+        let liveResize: WindowLiveResize
+        let runtime: ThreadRuntime
+        let widthLayout: WidthLayout
+        let onChange: (MeasurementLayout, MeasurementLayout) -> Void
+
+        func body(content: Content) -> some View {
+            let isReshaping = ThreadTimeline.isReshaping(visibility: visibility, liveResize: liveResize, sidebar: model.sidebar, runtime: runtime)
+            let paneGeometry = widthLayout.paneGeometry
+            let width = ThreadTimeline.layoutWidth(
+                visibility: visibility,
+                paneGeometry: paneGeometry,
+                isReshaping: isReshaping,
+                liveResizeActive: liveResize.isActive,
+                sidebar: model.sidebar,
+                widthLayout: widthLayout
+            ) ?? min(860, paneGeometry.width)
+            let layout = MeasurementLayout(
+                width: width,
+                fontSizes: [TypeScale.shared.ui, TypeScale.shared.content, TypeScale.shared.code],
+                isShown: visibility.isShown && paneGeometry.isShown
+            )
+            content.onChange(of: layout, initial: true) { old, new in
+                onChange(old, new)
+            }
+        }
+    }
+
+    private struct ReshapeSettleReaction: ViewModifier {
+        @Environment(AppModel.self) private var model
+        let visibility: ChatColumnVisibility
+        let liveResize: WindowLiveResize
+        let runtime: ThreadRuntime
+        let onSettle: () -> Void
+
+        private var isReshaping: Bool {
+            ThreadTimeline.isReshaping(visibility: visibility, liveResize: liveResize, sidebar: model.sidebar, runtime: runtime)
+        }
+
+        func body(content: Content) -> some View {
+            content.onChange(of: isReshaping) { _, active in
+                guard visibility.isShown, !active else { return }
+                onSettle()
+            }
+        }
+    }
+}
+
 /// Which stack mount last said a block was on screen. A disappear from an older mount
 /// does not remove the mount that has since registered the same block.
 private struct VisibleMounts {
@@ -1876,6 +2201,10 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     @ObservationIgnored var historyReaderDelta: CGFloat = 0
     @ObservationIgnored var historySyncShift: CGFloat = 0
     @ObservationIgnored var pendingSyncShift: CGFloat = 0
+    /// The clip's current origin, ahead of the geometry callback that reports it.
+    var liveOffset: CGFloat {
+        probe?.enclosingScrollView?.contentView.bounds.minY ?? offset + pendingSyncShift
+    }
     @ObservationIgnored var isSyncShiftingHistory = false
     @ObservationIgnored var isRestoringHistory = false
 
@@ -1963,10 +2292,12 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// in the middle of what is on screen. Written only when it changes, so the rail
     /// re-renders when the lit tick moves and never else.
     private(set) var activeBlockID: String?
-    /// The blocks as laid out, in order, and which of them are sent messages.
+    /// The blocks as laid out, in order, with their positions and sent-message positions.
     @ObservationIgnored private var outlineIDs: [String] = []
     @ObservationIgnored private var outlineSet: Set<String> = []
-    @ObservationIgnored private var userBlockIDs: Set<String> = []
+    @ObservationIgnored private var outlineIndexByID: [String: Int] = [:]
+    @ObservationIgnored private var duplicateOutlineIndices: [String: [Int]] = [:]
+    @ObservationIgnored private var userBlockIndices: [Int] = []
     /// The blocks currently intersecting the viewport, from their own visibility callbacks.
     /// Each id remembers which stack mount registered it, so a disappearing older mount
     /// cannot remove the mount that replaced it.
@@ -2034,12 +2365,24 @@ final class TimelineScrollTracking: ScrollActivityReporter {
 
     /// Returns whether the outline changed.
     @discardableResult
-    func setOutline(_ blocks: [(id: String, hasUserMessage: Bool)]) -> Bool {
-        let ids = blocks.map(\.id)
+    func setOutline(_ blocks: [(id: String, hasUserMessage: Bool)], ids: [String]) -> Bool {
         guard ids != outlineIDs else { return false }
         outlineIDs = ids
         outlineSet = Set(ids)
-        userBlockIDs = Set(blocks.filter(\.hasUserMessage).map(\.id))
+        var indexByID: [String: Int] = [:]
+        var duplicateIndices: [String: [Int]] = [:]
+        indexByID.reserveCapacity(ids.count)
+        for (index, id) in ids.enumerated() {
+            if indexByID[id] == nil {
+                indexByID[id] = index
+            } else {
+                duplicateIndices[id, default: []].append(index)
+            }
+        }
+        outlineIndexByID = indexByID
+        duplicateOutlineIndices = duplicateIndices
+        let userBlockIDs = Set(blocks.lazy.filter(\.hasUserMessage).map(\.id))
+        userBlockIndices = ids.enumerated().compactMap { userBlockIDs.contains($0.element) ? $0.offset : nil }
         resolveActive()
         return true
     }
@@ -2423,10 +2766,29 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// Takes the block in the middle of the on-screen run — a reply filling the viewport is
     /// that block on its own — and lights the sent message at or above it.
     private func resolveActive() {
-        let onScreen = outlineIDs.enumerated().filter { visibleRows.ids.contains($0.element) }
+        var onScreen: [Int] = []
+        onScreen.reserveCapacity(visibleRows.ids.count)
+        for id in visibleRows.ids {
+            guard let index = outlineIndexByID[id] else { continue }
+            onScreen.append(index)
+            if let duplicates = duplicateOutlineIndices[id] {
+                onScreen.append(contentsOf: duplicates)
+            }
+        }
+        onScreen.sort()
         guard !onScreen.isEmpty else { return }
-        let middle = onScreen[onScreen.count / 2].offset
-        let resolved = outlineIDs[...middle].last { userBlockIDs.contains($0) }
+        let middle = onScreen[onScreen.count / 2]
+        var lower = 0
+        var upper = userBlockIndices.count
+        while lower < upper {
+            let candidate = (lower + upper) / 2
+            if userBlockIndices[candidate] <= middle {
+                lower = candidate + 1
+            } else {
+                upper = candidate
+            }
+        }
+        let resolved = lower > 0 ? outlineIDs[userBlockIndices[lower - 1]] : nil
         if resolved != activeBlockID { activeBlockID = resolved }
     }
 }
@@ -3080,8 +3442,8 @@ private struct ContinuationSourceLabel: View {
 }
 
 /// A view of no size inside the scroll view's content, through which the scroll view is
-/// found (`TimelineScrollTracking.beginNudge`). The main chat also resolves its top fade
-/// from here. Panels leave `usesTimelineTopFade` false.
+/// found (`TimelineScrollTracking.beginNudge`). The top fade also resolves from here
+/// when `usesTimelineTopFade` is enabled.
 private struct ScrollViewProbe: NSViewRepresentable {
     var usesTimelineTopFade = false
     var tracking: TimelineScrollTracking
@@ -3148,11 +3510,10 @@ private struct ScrollViewProbe: NSViewRepresentable {
         private var lastClipMinY: CGFloat = 0
         /// Wheel movement since the last document-frame observation, in offset points.
         private var wheelSinceObservation: CGFloat = 0
+        /// AppKit keeps a trackpad gesture and its momentum on the scroll view it began in,
+        /// wherever the pointer drifts; count its movement the same way.
+        private var gestureRoutesToTimeline = false
         private var isSyncShifting = false
-        #if DEBUG
-        var captureScroll: ((CGFloat) -> Void)?
-        var captureGeometry: (() -> (offset: CGFloat, range: CGFloat))?
-        #endif
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
@@ -3206,6 +3567,9 @@ private struct ScrollViewProbe: NSViewRepresentable {
             if observedDocumentView !== documentView { syncDocumentObserver() }
             lastDocumentHeight = documentView.frame.height
             lastClipMinY = scrollView.contentView.bounds.minY
+            // Wheel movement must cover the same interval as `lastClipMinY`, or a long swipe's
+            // earlier movement makes `syncShift` think the anchor already absorbed a page.
+            wheelSinceObservation = 0
         }
 
         private func documentFrameDidChange() {
@@ -3335,12 +3699,20 @@ private struct ScrollViewProbe: NSViewRepresentable {
                 guard let self, !isHiddenOrHasHiddenAncestor, let scrollView = enclosingScrollView,
                       event.window === window,
                       let content = window?.contentView, let parent = content.superview else { return event }
-                let point = parent.convert(event.locationInWindow, from: nil)
-                let hit = content.hitTest(point)
-                let routesToTimeline = Self.routesVerticalWheel(from: hit, to: scrollView)
+                let phase = event.phase
+                let momentumPhase = event.momentumPhase
+                let routesToTimeline: Bool
+                if phase.isEmpty, momentumPhase.isEmpty {
+                    let point = parent.convert(event.locationInWindow, from: nil)
+                    routesToTimeline = Self.routesVerticalWheel(from: content.hitTest(point), to: scrollView)
+                } else {
+                    if phase.contains(.mayBegin) || phase.contains(.began) {
+                        let point = parent.convert(event.locationInWindow, from: nil)
+                        gestureRoutesToTimeline = Self.routesVerticalWheel(from: content.hitTest(point), to: scrollView)
+                    }
+                    routesToTimeline = gestureRoutesToTimeline
+                }
                 if let tracking, routesToTimeline || tracking.isTrackpadHeld {
-                    let phase = event.phase
-                    let momentumPhase = event.momentumPhase
                     tracking.lastWheelEventAt = CACurrentMediaTime()
                     if momentumPhase.isEmpty {
                         if phase.contains(.mayBegin) || phase.contains(.began) || phase.contains(.changed) {
@@ -3353,9 +3725,6 @@ private struct ScrollViewProbe: NSViewRepresentable {
                     }
                 }
                 guard routesToTimeline, event.scrollingDeltaY != 0 else { return event }
-                #if DEBUG
-                MainActor.assumeIsolated { CaptureTimelineScrolling.noteWheel() }
-                #endif
                 // Positive deltas move content down, toward the top. Line-based wheels
                 // scroll by the scroll view's line height per unit.
                 let points = event.hasPreciseScrollingDeltas
@@ -3378,103 +3747,6 @@ private struct ScrollViewProbe: NSViewRepresentable {
             }
             return false
         }
-    }
-}
-
-#if DEBUG
-@MainActor
-// Direct clip writes leave SwiftUI's pending bottom position intact and get undone.
-// These isolated probes use the same position binding as the timeline instead.
-enum CaptureTimelineScrolling {
-    private(set) static var acceptedWheelEvents = 0
-
-    static func noteWheel() {
-        guard isEnabled else { return }
-        acceptedWheelEvents += 1
-    }
-
-    struct Driver {
-        let move: (CGFloat) -> Bool
-        let geometry: () -> (offset: CGFloat, range: CGFloat)?
-    }
-
-    private static var isEnabled: Bool {
-        CaptureRun.isEnabled && (CommandLine.arguments.contains("--render-cost-probe")
-            || CommandLine.arguments.contains("--heavy-load-probe"))
-    }
-
-    static func bind(_ view: NSView, geometry: @escaping () -> (offset: CGFloat, range: CGFloat), action: @escaping (CGFloat) -> Void) {
-        guard isEnabled, let probe = view as? ScrollViewProbe.ProbeView else { return }
-        probe.captureScroll = action
-        probe.captureGeometry = geometry
-    }
-
-    static func driver(in scroll: NSScrollView) -> Driver? {
-        guard isEnabled, let document = scroll.documentView else { return nil }
-        func find(_ view: NSView) -> ScrollViewProbe.ProbeView? {
-            if let probe = view as? ScrollViewProbe.ProbeView,
-               probe.enclosingScrollView === scroll, probe.captureScroll != nil { return probe }
-            for child in view.subviews {
-                if let found = find(child) { return found }
-            }
-            return nil
-        }
-        guard let probe = find(document) else { return nil }
-        return Driver(move: { [weak probe, weak scroll] y in
-            guard let probe, let scroll, probe.window != nil,
-                  !probe.isHiddenOrHasHiddenAncestor,
-                  probe.enclosingScrollView === scroll, let action = probe.captureScroll else { return false }
-            action(y)
-            return true
-        }, geometry: { [weak probe] in probe?.captureGeometry?() })
-    }
-}
-#endif
-
-/// Hidden switch. Only the string `b` selects the upstream band; anything else, including a
-/// missing value, keeps the local 72pt band. Read when the mask is laid out, not observed.
-private enum TimelineFadeStyle {
-    static let defaultsKey = "timelineTopFadeStyle"
-    case a, b
-
-    static var current: TimelineFadeStyle {
-        (CaptureRun.defaults ?? .standard).string(forKey: defaultsKey) == "b" ? .b : .a
-    }
-
-    /// A matches `Chrome.veilHeight` and `Chrome.contentTopInset` (12 + 32 + 28). The
-    /// timeline's top padding fills that band, so a resting top puts the first message on
-    /// the solid side of the mask. B ends 6pt below the capsule, inside that padding.
-    var bandHeight: CGFloat {
-        switch self {
-        case .a: Chrome.veilHeight
-        case .b: Chrome.chromeTopPadding + Chrome.capsuleHeight + 6
-        }
-    }
-
-    var colors: [CGColor] {
-        switch self {
-        case .a: [Self.clear, Self.clear, Self.partial, Self.opaque]
-        case .b: [Self.clear, Self.clear, Self.opaque]
-        }
-    }
-
-    var locations: [NSNumber] {
-        let midline = Chrome.chromeTopPadding + Chrome.capsuleHeight / 2
-        switch self {
-        case .a:
-            return Self.stops(0, midline / Chrome.veilHeight, 0.74, 1)
-        case .b:
-            let height = bandHeight
-            return Self.stops(0, height > 0 ? midline / height : 0, 1)
-        }
-    }
-
-    private static let clear = CGColor(gray: 0, alpha: 0)
-    private static let partial = CGColor(gray: 0, alpha: 0.45)
-    private static let opaque = CGColor(gray: 0, alpha: 1)
-
-    private static func stops(_ values: CGFloat...) -> [NSNumber] {
-        values.map { NSNumber(value: Double($0)) }
     }
 }
 
@@ -3594,7 +3866,6 @@ private final class TimelineTopFadeMask: CALayer {
     @MainActor
     func layout(in scrollView: NSScrollView) {
         let hostBounds = scrollView.layer?.bounds ?? scrollView.bounds
-        let style = TimelineFadeStyle.current
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -3603,7 +3874,7 @@ private final class TimelineTopFadeMask: CALayer {
         let local = bounds
         let width = local.width
         let height = local.height
-        let bandHeight = style.bandHeight
+        let bandHeight = Chrome.veilHeight
         guard width > 0, height > 0, bandHeight > 0 else {
             band.frame = .zero
             body.frame = .zero
@@ -3630,8 +3901,17 @@ private final class TimelineTopFadeMask: CALayer {
             band.startPoint = CGPoint(x: 0.5, y: 1)
             band.endPoint = CGPoint(x: 0.5, y: 0)
         }
-        band.colors = style.colors
-        band.locations = style.locations
+        band.colors = Self.bandColors
+        band.locations = Self.bandLocations
+    }
+
+    private static let clear = CGColor(gray: 0, alpha: 0)
+    private static let partial = CGColor(gray: 0, alpha: 0.45)
+    private static let opaque = CGColor(gray: 0, alpha: 1)
+    private static let bandColors: [CGColor] = [clear, clear, partial, opaque]
+    private static var bandLocations: [NSNumber] {
+        let midline = Chrome.chromeTopPadding + Chrome.capsuleHeight / 2
+        return [0, midline / Chrome.veilHeight, 0.74, 1].map { NSNumber(value: Double($0)) }
     }
 }
 
@@ -3922,6 +4202,10 @@ enum DisplayBlock: Identifiable, Equatable {
     /// it while any head works and drops it when the last one reports back.
     case headsWorking(heads: [Int], trailing: Bool)
     case backgroundTasks([String])
+    /// Sub-agents at work with no floating panel showing them (panels Off, or the heads
+    /// panel hidden). Never built from the entries: the timeline appends it last, so it
+    /// stays at the bottom of the stream, and drops it when they stop.
+    case helpersWorking
 
     var id: String {
         switch self {
@@ -3931,6 +4215,7 @@ enum DisplayBlock: Identifiable, Equatable {
         case .merging(let id): id
         case .headsWorking(_, let trailing): trailing ? "hydra-heads-working-tail" : "hydra-heads-working"
         case .backgroundTasks: "background-tasks"
+        case .helpersWorking: "helpers-working"
         }
     }
 
@@ -3939,7 +4224,7 @@ enum DisplayBlock: Identifiable, Equatable {
         switch self {
         case .turn(_, let turnID, _, _, _): turnID
         case .group(.single(let entry), _, _): entry.turnID
-        case .group(.work, _, _), .group(.heads, _, _), .working, .merging, .headsWorking, .backgroundTasks: nil
+        case .group(.work, _, _), .group(.heads, _, _), .working, .merging, .headsWorking, .backgroundTasks, .helpersWorking: nil
         }
     }
 
@@ -3949,7 +4234,7 @@ enum DisplayBlock: Identifiable, Equatable {
         switch self {
         case .turn(_, _, let entries, _, _): entries.contains { $0.kind == .user }
         case .group(.single(let entry), _, _): entry.kind == .user
-        case .group(.work, _, _), .group(.heads, _, _), .working, .merging, .headsWorking, .backgroundTasks: false
+        case .group(.work, _, _), .group(.heads, _, _), .working, .merging, .headsWorking, .backgroundTasks, .helpersWorking: false
         }
     }
 
@@ -4139,6 +4424,7 @@ final class TimelineBlockCache {
     private var key: Key?
     private var built = DisplayBlock.Built(blocks: [], stableCount: 0, lastRunStart: 0)
     private var meta = TimelineMeta()
+    var turnsWithMultipleEntries: Set<UUID> { meta.turnsWithMultipleEntries }
     /// The mention list, once per roster of heads: heads come and go far more rarely
     /// than this body runs.
     private var personaHeads: [Int?] = []
@@ -4301,6 +4587,8 @@ struct TimelineMeta {
     var lastAssistantIDByTurn: [UUID: String] = [:]
     var summaryByTurn: [UUID: TurnSummary] = [:]
     var turnsWithReply: Set<UUID> = []
+    var firstEntryIDByTurn: [UUID: String] = [:]
+    var turnsWithMultipleEntries: Set<UUID> = []
 
     @MainActor
     static func build(_ entries: [TimelineEntry]) -> TimelineMeta {
@@ -4313,6 +4601,13 @@ struct TimelineMeta {
     /// that never changes once written.
     @MainActor
     mutating func add(_ entry: TimelineEntry) {
+        if let turnID = entry.turnID {
+            if let first = firstEntryIDByTurn[turnID] {
+                if first != entry.id { turnsWithMultipleEntries.insert(turnID) }
+            } else {
+                firstEntryIDByTurn[turnID] = entry.id
+            }
+        }
         switch entry.kind {
         case .assistant:
             if let turnID = entry.turnID {
@@ -4357,6 +4652,7 @@ struct RowContext: Equatable {
     var chronological: Bool
     var continuableTurnID: UUID? = nil
     var continuationDisabled = true
+    var turnHasOutput = false
 }
 
 private struct DisplayBlockView: View, Equatable {
@@ -4406,7 +4702,8 @@ private struct DisplayBlockView: View, Equatable {
                         continueAction: context.continuableTurnID == turnID ? {
                             _ = runtime.sendContinuation(after: turnID, text: AutoContinue.failedTurnContinueMessage)
                         } : nil,
-                        continueDisabled: context.continuationDisabled
+                        continueDisabled: context.continuationDisabled,
+                        turnHasOutput: context.turnHasOutput
                     )
                     .transition(.identity)
                 } else {
@@ -4422,6 +4719,8 @@ private struct DisplayBlockView: View, Equatable {
                 HydraHeadsWorkingRow(heads: heads, runtime: runtime)
             case .backgroundTasks(let descriptions):
                 BackgroundTasksWorkingRow(descriptions: descriptions)
+            case .helpersWorking:
+                HelpersWorkingRow(runtime: runtime)
             }
         }
     }
@@ -4550,7 +4849,7 @@ struct TimelineGroupView: View {
         switch group {
         case .single(let entry):
             switch entry.kind {
-            case .user: UserMessageRow(entry: entry, runtime: runtime, canRevert: context.canRewind)
+            case .user: UserMessageRow(entry: entry, runtime: runtime, canRevert: context.canRewind, turnHasOutput: context.turnHasOutput)
             case .assistant: AssistantMessageRow(entry: entry, summary: summary, runtime: runtime)
             case .reasoning: EmptyView()
             case .tool: WorkGroup(entries: [entry], runtime: runtime, workingDirectory: context.workingDirectory)
@@ -4581,7 +4880,6 @@ struct TimelineGroupView: View {
 /// breathing, the stave bar filling with the turn's steps, the time in its pill and the
 /// chevron opening the thinking and the run's steps beneath it.
 private struct WorkingIndicator: View {
-    @Environment(\.chatColumnIsShown) private var columnIsShown
     @Environment(\.timelineLiveAppearance) private var liveAppearance
     let runtime: ThreadRuntime
     let startedAt: Date
@@ -4597,7 +4895,6 @@ private struct WorkingIndicator: View {
     var chronological = false
     var workingDirectory: String?
     @Environment(\.revealTimelineEnd) private var revealBox
-    @State private var now = Date.now
     @Environment(\.timelineBlockID) private var blockID
     @State private var fallbackExpanded = false
     private var isExpanded: Bool {
@@ -4623,33 +4920,34 @@ private struct WorkingIndicator: View {
     private static let cardWidth: CGFloat = 380
 
     var body: some View {
-        let elapsed = now.timeIntervalSince(startedAt)
-        let word = WorkingWords.word(seed: seed, elapsedSeconds: Int64(max(0, elapsed)))
         let isRunning = finishedAt == nil
         let hasTools = liveWork.contains { $0.kind == .tool }
         let quiet = isRunning ? runtime.quietMinutes.map { String(format: Chrome.localized("No response for %d min…"), $0) } : nil
-        let label = quiet ?? (hasTools ? WorkGroupSummary.text(for: liveWork) : (isRunning ? "\(word)…" : Chrome.localized("Earlier steps")))
+        let fixedLabel: String? = quiet ?? (hasTools ? WorkGroupSummary.text(for: liveWork) : (isRunning ? nil : Chrome.localized("Earlier steps")))
         let canExpand = !thinkingSteps.isEmpty || !liveWork.isEmpty
         VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
             Button {
                 guard canExpand else { return }
-                // Both directions run the one animation: the card closes with the glide it opens with.
-                if isExpanded {
-                    withAnimation(.snappy(duration: 0.24)) {
-                        revealBox?.disclosure(blockID, false)
-                        isExpanded = false
-                    }
-                } else {
-                    withAnimation(.snappy(duration: 0.24)) {
-                        revealBox?.disclosure(blockID, finishedAt == nil)
-                        isExpanded = true
-                    }
+                revealBox?.disclosure(blockID, isExpanded ? false : finishedAt == nil)
+                // Animating this height while pinned to the bottom leaves the scroll offset past
+                // the content for a few frames (blank flash, rows under the composer), so it snaps
+                // like the finished card.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    isExpanded.toggle()
                 }
             } label: {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        HydraWorkingTitle(text: label, isRunning: isRunning, alignment: .leading)
-                            .frame(maxWidth: showsCard ? .infinity : nil, alignment: .leading)
+                        WorkingTitleLabel(
+                            fixedLabel: fixedLabel,
+                            startedAt: startedAt,
+                            seed: seed,
+                            isRunning: isRunning,
+                            changeAnimation: Self.change
+                        )
+                        .frame(maxWidth: showsCard ? .infinity : nil, alignment: .leading)
                         HydraElapsedTime(startedAt: startedAt, finishedAt: finishedAt, isRunning: isRunning)
                         // The chevron only once there is something to open: an empty slot
                         // held for it left the time short of the card's edge, as if misaligned.
@@ -4672,7 +4970,7 @@ private struct WorkingIndicator: View {
                 .padding(.leading, showsCard ? 14 : TimelineMetrics.pillLeading)
                 .padding(.trailing, showsCard ? 14 : TimelineMetrics.pillTrailing)
                 .padding(.vertical, showsCard ? 11 : TimelineMetrics.pillVertical)
-                .frame(width: showsCard ? Self.cardWidth : nil)
+                .frame(maxWidth: showsCard ? Self.cardWidth : nil)
                 // The surface is the label's alone: the steps open as plain rows beneath
                 // it, so the card never grows around them.
                 .background {
@@ -4722,21 +5020,57 @@ private struct WorkingIndicator: View {
             }
         }
         .onChange(of: turnEntries.first?.turnID, initial: true) { _, id in stepLimit = id.flatMap { revealBox?.stepLimits[$0] } ?? 60 }
-        .animation(Self.change, value: label)
+        .animation(Self.change, value: fixedLabel)
         .animation(Self.change, value: canExpand)
         .font(.chat(.callout))
         .onChange(of: chronological) { _, chronological in
             showsAllSteps = chronological
         }
-        .task(id: columnIsShown && FrontMonitor.shared.isVisible && isRunning) {
-            // The elapsed-time label ticks only while someone can see it.
-            guard columnIsShown, FrontMonitor.shared.isVisible, isRunning else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { return }
-                now = .now
+    }
+}
+
+/// Keeps the rotating working-word clock isolated to the title leaf so ticks never
+/// re-evaluate `WorkingIndicator`, `WorkGroupSummary`, or `HydraProgressBar`.
+private struct WorkingTitleLabel: View {
+    @Environment(\.chatColumnVisibility) private var columnVisibility
+    let fixedLabel: String?
+    let startedAt: Date
+    let seed: UInt64
+    let isRunning: Bool
+    let changeAnimation: Animation
+
+    var body: some View {
+#if DEBUG
+        if ProbeKnobs.isOff("words"), fixedLabel == nil {
+            HydraWorkingTitle(text: "\(WorkingWords.word(seed: seed, elapsedSeconds: 0))…", isRunning: isRunning, alignment: .leading)
+        } else if let fixedLabel {
+            HydraWorkingTitle(text: fixedLabel, isRunning: isRunning, alignment: .leading)
+        } else if columnVisibility.isShown && FrontMonitor.shared.isVisible {
+            TimelineView(.periodic(from: startedAt, by: TimeInterval(WorkingWords.rotateSeconds))) { context in
+                let elapsed = Int64(max(0, context.date.timeIntervalSince(startedAt) + 0.1))
+                let word = "\(WorkingWords.word(seed: seed, elapsedSeconds: elapsed))…"
+                HydraWorkingTitle(text: word, isRunning: isRunning, alignment: .leading)
+                    .animation(changeAnimation, value: word)
             }
+        } else {
+            let elapsed = Int64(max(0, Date.now.timeIntervalSince(startedAt)))
+            HydraWorkingTitle(text: "\(WorkingWords.word(seed: seed, elapsedSeconds: elapsed))…", isRunning: isRunning, alignment: .leading)
         }
+#else
+        if let fixedLabel {
+            HydraWorkingTitle(text: fixedLabel, isRunning: isRunning, alignment: .leading)
+        } else if columnVisibility.isShown && FrontMonitor.shared.isVisible {
+            TimelineView(.periodic(from: startedAt, by: TimeInterval(WorkingWords.rotateSeconds))) { context in
+                let elapsed = Int64(max(0, context.date.timeIntervalSince(startedAt) + 0.1))
+                let word = "\(WorkingWords.word(seed: seed, elapsedSeconds: elapsed))…"
+                HydraWorkingTitle(text: word, isRunning: isRunning, alignment: .leading)
+                    .animation(changeAnimation, value: word)
+            }
+        } else {
+            let elapsed = Int64(max(0, Date.now.timeIntervalSince(startedAt)))
+            HydraWorkingTitle(text: "\(WorkingWords.word(seed: seed, elapsedSeconds: elapsed))…", isRunning: isRunning, alignment: .leading)
+        }
+#endif
     }
 }
 
@@ -4762,6 +5096,12 @@ final class TimelineScrollState {
 
     func jumpToLatest() {
         jumpRequest += 1
+    }
+
+    func reset() {
+        if showsJumpButton { showsJumpButton = false }
+        growthPending = false
+        jumpButtonPending = false
     }
 
     /// Out of the scroll handler, once per run-loop turn: `resolve` is read when the write
@@ -4842,12 +5182,34 @@ private struct WorkingBlockView: View {
     var earlierEntries: [TimelineEntry]?
 
     var body: some View {
-        let turnEntries = earlierEntries ?? Self.turnEntries(of: runtime)
+        let includeThinking = earlierEntries == nil && model.settings.showReasoning
+        let current = earlierEntries == nil
+            ? Self.currentTurnData(of: runtime, includeThinking: includeThinking)
+            : nil
+        let turnEntries = earlierEntries ?? current!.entries
+#if DEBUG
+        if ProbeKnobs.isOff("card") {
+            EmptyView()
+        } else {
+            WorkingIndicator(
+                runtime: runtime,
+                startedAt: earlierEntries?.first?.item.date ?? runtime.turnStartedAt ?? .now,
+                seed: WorkingWords.seed(runtime.threadID.uuidString),
+                thinkingSteps: current?.thinking ?? [],
+                liveWork: liveWork,
+                turnEntries: turnEntries,
+                showsCard: model.settings.showsWorkingCard,
+                finishedAt: earlierEntries?.last?.item.date,
+                chronological: chronological,
+                workingDirectory: workingDirectory
+            )
+        }
+#else
         WorkingIndicator(
             runtime: runtime,
             startedAt: earlierEntries?.first?.item.date ?? runtime.turnStartedAt ?? .now,
             seed: WorkingWords.seed(runtime.threadID.uuidString),
-            thinkingSteps: earlierEntries == nil && model.settings.showReasoning ? thinking : [],
+            thinkingSteps: current?.thinking ?? [],
             liveWork: liveWork,
             turnEntries: turnEntries,
             showsCard: model.settings.showsWorkingCard,
@@ -4855,34 +5217,25 @@ private struct WorkingBlockView: View {
             chronological: chronological,
             workingDirectory: workingDirectory
         )
+#endif
     }
 
-    /// The running turn's rows, in order: the tool calls and replies since the turn's
-    /// prompt, for the card's bar. Walks back from the end and stops at the previous turn.
-    private static func turnEntries(of runtime: ThreadRuntime) -> [TimelineEntry] {
-        guard let turnID = runtime.entries.last.flatMap(\.turnID) else { return [] }
+    /// The running turn's rows and thinking in one backward pass from the end, stopping at the previous turn.
+    private static func currentTurnData(of runtime: ThreadRuntime, includeThinking: Bool) -> (entries: [TimelineEntry], thinking: [ThinkingStep]) {
+        guard let turnID = runtime.entries.last.flatMap(\.turnID) else { return ([], []) }
         var rows: [TimelineEntry] = []
-        for entry in runtime.entries.reversed() {
-            guard let entryTurn = entry.turnID else { continue }
-            guard entryTurn == turnID else { break }
-            rows.append(entry)
-        }
-        return rows.reversed()
-    }
-
-    /// The running turn's thinking. Kind and turn are fixed at creation, so they are checked before
-    /// any content is read.
-    private var thinking: [ThinkingStep] {
-        guard let turnID = runtime.entries.last.flatMap(\.turnID) else { return [] }
-        // Walks back from the end and stops at the previous turn, so streamed thinking never rescans the thread.
         var steps: [ThinkingStep] = []
         for entry in runtime.entries.reversed() {
             guard let entryTurn = entry.turnID else { continue }
             guard entryTurn == turnID else { break }
-            guard entry.kind == .reasoning, case .reasoning(let block) = entry.item.content, !block.text.isEmpty else { continue }
-            steps.append(ThinkingStep(text: block.text, isStreaming: block.isStreaming))
+            rows.append(entry)
+            if includeThinking, entry.kind == .reasoning, case .reasoning(let block) = entry.item.content, !block.text.isEmpty {
+                steps.append(ThinkingStep(text: block.text, isStreaming: block.isStreaming))
+            }
         }
-        return steps.reversed()
+        rows.reverse()
+        steps.reverse()
+        return (rows, steps)
     }
 }
 
@@ -4960,9 +5313,8 @@ private final class TimelineMeasurements {
     private var heightTotal: CGFloat = 0
     private var heightCount = 0
     private var revision = 0
-    // The cache key is the ordered block ids and this height revision.
-    private var cachedIDs: [String] = []
-    private var cachedRevision = -1
+    // Cache key avoids O(blocks.count) ID scans between timeline() and updateMountedWindow() on the same revision.
+    private var cachedPrefixKey: (revision: Int, count: Int, firstID: String?, lastID: String?)?
     private var cachedPrefix: [CGFloat] = []
 
     func invalidate(width: CGFloat) {
@@ -5017,22 +5369,19 @@ private final class TimelineMeasurements {
     }
 
     func prefix(_ blocks: [DisplayBlock]) -> [CGFloat] {
-        if cachedRevision == revision, cachedIDs.count == blocks.count {
-            var matches = true
-            for index in blocks.indices {
-                if blocks[index].id != cachedIDs[index] {
-                    matches = false
-                    break
-                }
-            }
-            if matches { return cachedPrefix }
+        let key = (revision: revision, count: blocks.count, firstID: blocks.first?.id, lastID: blocks.last?.id)
+        if let cachedPrefixKey,
+           cachedPrefixKey.revision == key.revision,
+           cachedPrefixKey.count == key.count,
+           cachedPrefixKey.firstID == key.firstID,
+           cachedPrefixKey.lastID == key.lastID {
+            return cachedPrefix
         }
         var sums = [CGFloat](repeating: 0, count: blocks.count + 1)
         for index in blocks.indices {
             sums[index + 1] = sums[index] + rowHeight(blocks[index].id) + TimelineMetrics.rowSpacing
         }
-        cachedIDs = blocks.map(\.id)
-        cachedRevision = revision
+        cachedPrefixKey = key
         cachedPrefix = sums
         return sums
     }
@@ -5102,6 +5451,10 @@ private enum TimelinePresentationStore {
     private static var entries: [UUID: TimelinePresentation] = [:]
     private static var order: [UUID] = []
 
+    static func existingEntry(for id: UUID) -> TimelinePresentation? {
+        entries[id]
+    }
+
     static func entry(for id: UUID) -> TimelinePresentation {
         order.removeAll { $0 == id }
         order.append(id)
@@ -5124,6 +5477,24 @@ extension EnvironmentValues {
     }
 }
 
+
+/// Isolates `ChatThread` unread-state observation from `ThreadTimeline.body`.
+private struct ThreadResultReadObserver: View {
+    let model: AppModel
+    let threadID: UUID
+
+    var body: some View {
+        let thread = model.thread(threadID)
+        ThreadResultReadProbe(
+            model: model,
+            threadID: threadID,
+            revision: thread?.unreadRevision,
+            hasUnread: thread?.hasUnread == true
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
+    }
+}
 
 /// Marks a result read once its conversation is on screen. A dot only exists for a finished
 /// result, so opening the thread is reading it: nothing about the runtime (history still
@@ -5296,4 +5667,11 @@ struct ThreadResultReadProbe: NSViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
     }
+}
+
+/// Holds the first block a cold switch mounted, outside SwiftUI's observation.
+private final class ColdStartBox {
+    var id: String?
+    /// The column was hidden before its first-frame slice expanded; it expands when shown.
+    var expansionDeferred = false
 }

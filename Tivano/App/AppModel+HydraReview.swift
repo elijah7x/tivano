@@ -126,14 +126,20 @@ extension AppModel {
         }
         let prompt = HydraPrompts.v2ReviewPrompt(request: job.request, notes: noteLines.joined(separator: "\n"), patch: patch)
         let findings: String
-        switch await TextGeneration.review(prompt, engine: selected.engine, directory: checkout) {
+        let readableDirectories = paths.keys.sorted().map { URL(fileURLWithPath: $0, isDirectory: true) }
+        switch await TextGeneration.review(
+            prompt,
+            engine: selected.engine,
+            directory: checkout,
+            readableDirectories: readableDirectories
+        ) {
         case .success(let text): findings = text
         case .failure(let failure):
             return skip("review failed (\(selected.reviewer)): \(failure.description)")
         }
         guard openHydraJob(of: leadID)?.id == jobID, openHydraJob(of: leadID)?.ending == nil else { return .skipped }
-        let findingCount = findings.contains("NO FINDINGS") ? 0 : findings.components(separatedBy: .newlines).count {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Finding ")
+        let findingCount = findings.components(separatedBy: .newlines).count {
+            $0.range(of: #"^[\s\-*>#_]*Finding\s*\d"#, options: [.regularExpression, .caseInsensitive]) != nil
         }
         updateHydraJob(jobID, of: leadID) {
             $0.reviewEngine = selected.reviewer
