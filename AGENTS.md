@@ -16,6 +16,10 @@
   `git worktree remove <path>`, then prune stale registrations as needed.
   Do not force removal to bypass unfinished work.
 - Never delete the long-lived source checkout or another agent's worktree.
+- On macOS, external `<worktrees-dir>` folders should end with `.noindex`
+  (e.g., `worktrees.noindex/<task>`) or carry `.metadata_never_index` so
+  Spotlight does not index temporary checkouts during creation, merge, or
+  removal.
 
 ## Workspace hygiene
 
@@ -85,9 +89,24 @@
 ## Checks
 
 - Before merging into dev, run `python3 scripts/verify.py` in the integration
-  worktree. Any FAIL, TIMEOUT or missing prerequisite blocks the merge. Use
-  `--all` for all offline checks. Never weaken assertions, timeouts or thresholds
+  worktree. It runs the fast checks the change touches and builds only when app
+  inputs changed; slow and GUI checks run on the build host (`--slow` or `--all`
+  locally when the change is aimed at them). Any FAIL, TIMEOUT or missing
+  prerequisite blocks the merge. Never weaken assertions, timeouts or thresholds
   to make checks pass.
+- `scripts/verify.py` auto-selects `preview` as `--base` when `HEAD` carries
+  unmerged preview commits (otherwise `dev`), reuses a lock-guarded shared
+  `<artifact-root>/private-artifacts/verify-derived.noindex` across local
+  worktrees (falling back to worktree-local `build.noindex/verify-derived` when
+  busy or on `tivano.ci.owned=true`), and runs local non-GUI builds/checks under
+  mild utility QoS + `nice 10` reserving 2 CPU cores (`--full-speed`,
+  `TIVANO_VERIFY_FULL_SPEED=1`, or `git config tivano.verify.fullSpeed true`
+  runs unthrottled).
+- Run long checks so the result survives the session (background with an
+  output file) and wait with `python3 scripts/ci_gate.py check --wait`, not
+  sleep loops. A flaky build-host check is rerun alone with
+  `python3 scripts/ci_gate.py rerun <rev> --only <check>`; the record keeps the
+  rerun history so recurring flakes get fixed, not retried forever.
 - When fixing a bug an offline check can catch, add or extend that check in the
   same commit and register its covered files in the `verify.py` registry.
 - Check scripts must fail explicitly when extraction markers or replacement
@@ -95,10 +114,25 @@
   user data.
 - The build host re-runs `scripts/verify.py --all` on every new dev commit
   (see docs/operations/build-host-ci.md); after fast-forwarding dev,
-  `python3 scripts/ci_gate.py kick` starts it immediately.
+  `python3 scripts/ci_gate.py kick` starts it immediately. A commit that differs
+  from a passing ancestor only in CHANGELOG.md and version keys, on an unchanged
+  build-host toolchain, reuses that pass (`reused_from`).
 - `scripts/ship.sh` refuses to release a dev commit without a passing build-host
   record; `TIVANO_SKIP_CI_GATE=1` overrides only on an explicit owner instruction
   for that release.
+
+## Performance work
+
+- Before a performance pass, an audit of past regressions or a new
+  optimization direction, read `docs/performance/README.md`: hot-area map,
+  techniques that worked, rejected or reverted attempts, patch-on-patch
+  areas, a routine checklist, open debt and the measurement toolbox.
+- It narrows where to look; it is not a recipe. Measure the current symptom
+  first, treat historical numbers as observations rather than thresholds,
+  and never trade appearance, interaction semantics or data safety for speed.
+- After a performance round, add its row to the README's case index and
+  update the sections it changed; keep the detailed report as its own file in
+  `docs/performance/`.
 
 ## Hydra heads (the chat team)
 
@@ -110,6 +144,7 @@
 - On the owner host, NEVER run `scripts/quick_run.sh` or otherwise relaunch Tivano unless the owner explicitly asks for it in that moment. Remote work on Thor follows the standing quit/launch/relaunch authorization above. Quitting for an explicit Dev package request is preauthorized below.
 - Agent-initiated build-only verification inside the worktree is fine and does not install. An explicit owner request to build/package an app also authorizes updating the requested edition(s) in `/Applications` via `scripts/package_local.sh`, unless the owner explicitly asks for build-only.
 - An explicit request to package Tivano Dev authorizes the agent to quit the running Dev app before packaging, even if it has active work; do not ask again. Verify it has exited before replacing its bundle. This does not authorize launching it afterward.
+- An explicit request to package Tivano Preview (or to show a change in it) authorizes the agent to quit the running Preview app before packaging, even when the agent's own session runs inside it; do not ask again. Do the quit-wait-package(-reopen when showing was asked) in one detached job so it survives the session ending, and verify the old process exited before replacing the bundle.
 - For Release, packaging alone does not authorize quitting or launching. If it is running, request an explicit quit; do not overwrite its running bundle.
 - On the owner host, "finish", "merge", "done" or "test it" do not imply relaunch — only an explicit request to run/relaunch the app does. Thor's standing authorization also covers isolated capture instances used for validation.
 
@@ -119,6 +154,8 @@
 - Local Dev packaging does not require a separate source directory.
 - Release owns production data: `~/Library/Application Support/Tivano`, `~/.tivano` and Keychain service `Tivano`. Dev owns test data: `~/Library/Application Support/Tivano Dev`, `~/.tivano-dev` and Keychain service `Tivano Dev`. Never import production data/preferences/credentials into Dev automatically or share either edition’s store with Droppy Code.
 - Separate old shared installations offline with `scripts/separate_data.py --apply`, after all Tivano/Droppy apps exit. Keep backups; never retain compatibility aliases into a live library. Preserve Git worktree registrations via repair and rewrite stored attachment/state paths. Compatible isolated editions may run together; keep edition leases, the cross-edition repository lock for Hydra merges and isolated capture storage. Each edition is its library's only writer, so stores are written directly, without cross-process merges or polling. Provider CLI credentials and user-owned project folders remain external, not edition-owned.
+- Previews exist only for major versions. The local `preview` branch carries the next major's development apart from `dev`; when it is mature it ships public `X.0.0-preview.N` prereleases (below), and after feedback the final `X.0.0` lands in dev as one squashed commit and ships normally. Between majors the branch is idle.
+- Tivano Preview is the local edition built from the `preview` branch, separate from the public prereleases (which use the Release identity so testers update in-app): bundle id `dev.tivano.Tivano.preview`, `~/Library/Application Support/Tivano Preview`, `~/.tivano-preview`, Keychain service `Tivano Preview`, a blue PRE icon (`swift scripts/generate_dev_icon.swift preview`), no in-app updates. It uses `config/preview.xcconfig` with version `X.Y.Z-preview.N` and is packaged with `scripts/package_local.sh --preview`. Every commit the owner asks to land in pre advances N in the same commit (`scripts/set_version.py preview next`); packaging never changes it.
 - Release uses `config/release.xcconfig`; Dev uses `config/dev.xcconfig`. Versions are set in their respective xcconfig files; Dev displays a `dev-` prefix. Keep Apple's bundle version numeric; Dev's prefix is presentation metadata.
 - Versions follow dev's code. Every merge into dev advances Dev's patch version in the same commit (`scripts/set_version.py dev x.y.z`), so one Dev version is one dev revision and Dev always leads or equals Release. Packaging never changes a version.
 - Release never chooses its own version: a release takes Dev's (`scripts/ship.sh` runs `set_version.py release catch-up-dev`). If Dev is not newer than the last release, the fix is a missed Dev bump, never a Release-only bump.
@@ -135,14 +172,21 @@
   from a local merge request.
 - `dev` stays local. Squash task changes in an integration worktree based on
   `dev`, then fast-forward the local `dev` checkout to that single commit.
+- Reuse a clean per-target integration worktree under `.noindex` (such as
+  `<worktrees-dir>.noindex/integrate-dev` reset cleanly to `dev`, or
+  `<worktrees-dir>.noindex/integrate-preview` reset cleanly to `preview`) so a
+  stable Xcode `SRCROOT` lets shared `verify-derived.noindex` reuse incremental
+  Swift object files across merges; pass `--base preview` (or rely on
+  auto-detection) when integrating into `preview`.
 - A merge into dev ("合入 dev") is one commit holding the change, its
   `## [Unreleased]` CHANGELOG entry for anything user-facing, and Dev's version
   bump. It does not package. Afterwards ask the owner whether to discard the
   task worktree.
-- Keep the local pre-push guard; do not bypass it. It allows main and `v*`
-  tags pointing at `origin/main`. Do not promote to `main` unless explicitly
-  requested. When GitHub integration is separately authorized, use `gh` and
-  squash; never push straight to `main`.
+- Keep the local pre-push guard; do not bypass it. It allows `main`, fast-forward
+  `preview`, and reviewed `v*` tags (`vX.Y.Z` on `origin/main` or preview tags).
+  Do not promote to `main` or push `preview` unless explicitly requested. When
+  GitHub integration is separately authorized, use `gh` and squash; never push
+  straight to `main`.
 - Do not rewrite existing history or force-push unless the owner explicitly
   authorizes a specific history migration. Squash applies to ordinary task
   integrations. The public-history migration was explicitly authorized on
@@ -168,7 +212,7 @@
   remove only worktrees created by this run that are safe to remove; on failure,
   preserve remaining worktrees and artifacts. Never auto-clean reused worktrees.
 - Preview versions match `^[0-9]+\.[0-9]+\.[0-9]+-preview\.[1-9][0-9]*$`: tag `v<full-version>`, title `Tivano <full-version>`, DMG `Tivano-<full-version>.dmg`; GitHub prerelease, never latest.
-- The long-lived LOCAL `preview` branch runs parallel to local `dev`; never push either. Bring dev into preview with an ordinary merge commit when wanted; land preview features in dev as one squashed commit when they ship stable. On preview, set `config/release.xcconfig` with `scripts/set_version.py release X.Y.Z-preview.N` (`MARKETING_VERSION` stays numeric; `TivanoReleaseVersion` carries the full identity) and write a `## [X.Y.Z-preview.N] - YYYY-MM-DD` CHANGELOG section.
+- The long-lived `preview` branch runs parallel to local `dev`; `dev` is never pushed, while `preview` may be fast-forward pushed to `origin/preview` when the owner explicitly requests it. Bring dev into preview with an ordinary merge commit when wanted; land preview features in dev as one squashed commit when they ship stable. On preview, set `config/release.xcconfig` with `scripts/set_version.py release X.Y.Z-preview.N` (`MARKETING_VERSION` stays numeric; `TivanoReleaseVersion` carries the full identity) and write a `## [X.Y.Z-preview.N] - YYYY-MM-DD` CHANGELOG section.
 - An explicit owner request ("发 preview") authorizes `scripts/ship_preview.sh`: publish a GitHub-only prerelease through a fresh `git commit-tree <preview tree> -p <live remote main sha>` commit, push only its tag, never touch main/dev/feeds/mirror, and do not install. Refresh the installed `.git/hooks/pre-push` copy from `.githooks/pre-push`.
 - Stable builds never offer previews; preview builds update in-app to any strictly newer SemVer preview or stable. No in-app rollback: users reinstall a stable DMG manually.
 - Public GitHub Releases contain exactly one uploaded app installer: the notarized `Tivano-<version>.dmg`. Never upload an App ZIP as a second download, including from one-off completion scripts. Local package ZIPs and notarization submission ZIPs stay local. GitHub's automatic Source code archives are platform-generated; do not delete release tags to remove them.

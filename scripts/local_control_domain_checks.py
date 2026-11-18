@@ -33,6 +33,60 @@ def declaration(path, marker):
     return text[start:end]
 
 
+def replace_once(text, target, replacement, label):
+    count = text.count(target)
+    if count != 1:
+        raise SystemExit(f'{label}: replacement target {target!r} found {count} times, expected 1')
+    return text.replace(target, replacement, 1)
+
+
+WEATHER_DOMAIN_CHECKS = """        try check(app.settings.weatherWindowEnabled && app.settings.showsWeatherNow, "weatherWindow setter restores visibility")
+        try check(app.settings.weatherWindowMode == .full && app.settings.defaults.values["weatherWindow"] == nil && app.settings.defaults.values["weatherWindowMode"] as? String == "full" && app.settings.defaults.values["lastWeatherWindowMode"] as? String == "full", "weatherWindow computed setter persists weatherWindowMode and lastWeatherWindowMode without writing legacy weatherWindow")
+        for (index, legacyCase) in [(nil as Bool?, nil as Bool?, nil as String?, WeatherWindowMode.porthole), (true, nil, nil, .full), (false, nil, nil, .off), (nil, true, nil, .full), (nil, false, nil, .off), (false, nil, "porthole", .porthole)].enumerated() {
+            let domain = root.appendingPathComponent("weather-defaults-\\(index)").path
+            let suite = UserDefaults(suiteName: domain)!
+            suite.removePersistentDomain(forName: domain)
+            defer { suite.removePersistentDomain(forName: domain) }
+            if let legacy = legacyCase.0 { suite.set(legacy, forKey: "weatherWindow") }
+            if let skylight = legacyCase.1 { suite.set(skylight, forKey: "showsSkylight") }
+            if let rawMode = legacyCase.2 { suite.set(rawMode, forKey: "weatherWindowMode") }
+            try check(Settings.resolveWeatherWindowMode(suite) == legacyCase.3, "resolveWeatherWindowMode case \\(index)")
+        }
+        app.settings.weatherWindowMode = .porthole
+        try check(app.settings.weatherWindowEnabled && !app.settings.showsWeatherNow && app.settings.showsPortholeNow, "porthole mode activates showsPortholeNow and not showsWeatherNow in Liquid Glass")
+        let portholeGlass = app.localControl.settings(app).first { $0.key == .weatherWindow }!
+        try check(portholeGlass.preference == .bool(true) && portholeGlass.effective == .bool(true), "local control reports porthole effective in Liquid Glass")
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion = true
+        let portholeReduced = app.localControl.settings(app).first { $0.key == .weatherWindow }!
+        try check(app.settings.showsPortholeNow && portholeReduced.effective == .bool(true), "Reduce Motion does not hide porthole")
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion = false
+        app.settings.themeStyle = .texture
+        let portholeTexture = app.localControl.settings(app).first { $0.key == .weatherWindow }!
+        try check(!app.settings.showsWeatherNow && app.settings.showsPortholeNow && portholeTexture.preference == .bool(true) && portholeTexture.effective == .bool(true), "porthole is effective in Texture while full window is not")
+        app.settings.themeStyle = .create
+        let portholeCreate = app.localControl.settings(app).first { $0.key == .weatherWindow }!
+        try check(!app.settings.showsWeatherNow && !app.settings.showsPortholeNow && portholeCreate.preference == .bool(true) && portholeCreate.effective == .bool(false), "Creation suppresses porthole while preserving preference")
+        app.settings.themeStyle = .liquidGlass
+        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .bool(true)), app)
+        try check(app.settings.weatherWindowMode == .porthole, "setting weatherWindow=true preserves active porthole mode")
+        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .bool(false)), app)
+        let portholeOff = app.localControl.settings(app).first { $0.key == .weatherWindow }!
+        try check(app.settings.weatherWindowMode == .off && !app.settings.weatherWindowEnabled && portholeOff.preference == .bool(false) && portholeOff.effective == .bool(false) && app.settings.defaults.values["lastWeatherWindowMode"] as? String == "porthole", "setting weatherWindow=false turns porthole off and remembers porthole")
+        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .bool(true)), app)
+        try check(app.settings.weatherWindowMode == .porthole && app.settings.showsPortholeNow && !app.settings.showsWeatherNow, "setting weatherWindow=true from off restores remembered porthole")
+        app.settings.weatherWindowMode = .off
+        app.settings.defaults.values.removeValue(forKey: "lastWeatherWindowMode")
+        app.settings.themeStyle = .liquidGlass
+        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .bool(true)), app)
+        try check(app.settings.weatherWindowMode == .full && app.settings.showsWeatherNow, "setting weatherWindow=true from off with no memory defaults to full on Liquid Glass")
+        app.settings.weatherWindowMode = .off
+        app.settings.defaults.values.removeValue(forKey: "lastWeatherWindowMode")
+        app.settings.themeStyle = .texture
+        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .bool(true)), app)
+        try check(app.settings.weatherWindowMode == .porthole && app.settings.showsPortholeNow && !app.settings.showsWeatherNow, "setting weatherWindow=true from off with no memory defaults to porthole on Texture")
+        app.settings.themeStyle = .liquidGlass"""
+
+
 def main():
     if sys.flags.optimize:
         raise SystemExit("run without -O or PYTHONOPTIMIZE; fixture assertions must remain enabled")
@@ -49,15 +103,43 @@ def main():
     settings = "Tivano/App/AppSettings.swift"
     hydra = "Tivano/App/AppModel+Hydra.swift"
     source = (ROOT / "scripts/fixtures/local_control/DomainHarness.swift").read_text()
+    source = replace_once(
+        source,
+        "    func set(_ value: Any?, forKey key: String) { values[key] = value }",
+        "    func set(_ value: Any?, forKey key: String) { values[key] = value }\n    func string(forKey key: String) -> String? { values[key] as? String }",
+        "scripts/fixtures/local_control/DomainHarness.swift",
+    )
+    source = replace_once(
+        source,
+        'weatherWindow = "weatherWindow", textGeneration = "textGeneration"',
+        'weatherWindow = "weatherWindow", weatherWindowMode = "weatherWindowMode", lastWeatherWindowMode = "lastWeatherWindowMode", textGeneration = "textGeneration"',
+        "scripts/fixtures/local_control/DomainHarness.swift",
+    )
+    source = replace_once(
+        source,
+        "weatherWindowEnabled = true; textGeneration = .automatic",
+        "weatherWindowMode = .full; textGeneration = .automatic",
+        "scripts/fixtures/local_control/DomainHarness.swift",
+    )
+    source = replace_once(
+        source,
+        '        try check(app.settings.weatherWindowEnabled && app.settings.showsWeatherNow, "weatherWindow setter restores visibility")',
+        WEATHER_DOMAIN_CHECKS,
+        "scripts/fixtures/local_control/DomainHarness.swift",
+    )
     replacements = {
-        "TEXT_GENERATION_PRODUCTION": declaration(settings, "enum TextGenerationChoice:"),
+        "TEXT_GENERATION_PRODUCTION": "\n".join([
+            declaration(settings, "enum TextGenerationChoice:"),
+            declaration(settings, "enum WeatherWindowMode:"),
+        ]),
         "TURN_UPDATE_PRODUCTION": declaration(service, "struct ControlTurnUpdate {"),
         "THREAD_CACHE_PRODUCTION": next(line.strip().replace("@ObservationIgnored ", "") for line in (ROOT / service).read_text().splitlines() if "private var cachedThreadIDs:" in line),
         "SETTINGS_PRODUCTION": "\n".join(declaration(settings, marker) for marker in [
             "    var alphaEnabled:", "    var externalControlEnabled:", "    var isExternalControlEnabled:",
             "    var alphaChimeraEnabled:", "    var isChimeraEnabled:", "    var hydraEnabled:", "    func hydraPair(for",
-            "    var cliInstallationTarget:", "    var performanceMode:", "    var clearerBackdrop:",
-            "    var showsSkylight:", "    var showsSkylightNow:", "    var antiSlopEnabled:", "    var textGeneration:"]),
+            "    var cliInstallationTarget:", "    var themeStyle:", "    var weatherWindowMode:",
+            "    var weatherWindowEnabled:", "    var showsWeatherNow:", "    var showsPortholeNow:",
+            "    static func resolveWeatherWindowMode(", "    var textGeneration:"]),
         "APPMODEL_PRODUCTION": "\n".join(declaration(model, marker) for marker in [
             "    func controlWorkspace(", "    func requireExternalPersistence(", "    func commitExternalLibrary(",
             "    func createExternalThread(", "    static func requireControlDirectory(", "    func prepareExternalWorktree(",
@@ -86,12 +168,12 @@ def main():
     text = "Tivano/Core/Support/Text.swift"
     source += "\n".join([
         declaration(text, "enum AppText {"),
-        "extension String {\n" + declaration(text, "    var trimmed:") + "\n}",
+        "extension String {\n" + declaration(text, "    var trimmed:") + "\n" + declaration(text, "    var nilIfEmpty:") + "\n}",
         "extension HydraHeadInfo {\n" + declaration("Tivano/Core/Models/Hydra.swift", "    enum Status:") + "\n}",
         declaration("Tivano/Services/Providers/ClaudeAccountCredentials.swift", "enum ClaudeCredentialError:"),
         declaration("Tivano/Services/Providers/PlanLimits.swift", "enum ResetCreditError:"),
         "extension ProviderKind { var displayName: String { rawValue } }",
-        "struct HydraLaunch { var isChimera = false; var chimeraPresets: [String] = [] }",
+        "struct HydraLaunch { var isChimera = false; var chimeraPresets: [String] = []; var chimeraAutoDispatch = false }",
         'enum HydraPrompts { @MainActor static var acceptsChimeraFence = false; static func v2Policy(_ launch: HydraLaunch) -> String { fatalError("Hydra prompts are outside domain checks") } }',
     ]) + "\n"
     generated.write_text(source)
@@ -127,7 +209,7 @@ def main():
     (output / "structural-results.json").write_text(json.dumps({"scope": "source-structure assertions only; behavioral cases are in domain-results.json", "checked": ["external delivery reuses startTurn", "no external session-start fallback", "no UI ensureModel await for external submission", "beginThreadTurn and thread persistence precede session.send", "reservation and submission recheck share runtime admission guards", "runtime failures delegate to production ControlFailureClassifier", "shutdown suspension precedes flush and restores on failure", "updater uses flush before installer and restores on failure"]}, indent=2) + "\n")
     swift = subprocess.check_output(["xcrun", "--find", "swiftc"], text=True).strip()
     sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
-    paths = ["Tivano/Core/Models/LocalControl.swift", "Tivano/Core/Support/Coding.swift", "Tivano/Core/Models/ProviderAccount.swift", "Tivano/Core/Models/Chimera.swift", "Tivano/Core/Models/Hydra2.swift", "Tivano/Core/Models/Library.swift", "Tivano/Core/Support/StoragePaths.swift", "Tivano/Services/Control/ControlLedger.swift", "Tivano/App/Runtime/ControlFailureClassifier.swift"]
+    paths = ["Tivano/Core/Models/LocalControl.swift", "Tivano/UI/Theme/ThemeStyle.swift", "Tivano/Core/Support/Coding.swift", "Tivano/Core/Models/ProviderAccount.swift", "Tivano/Core/Models/Chimera.swift", "Tivano/Core/Models/Hydra2.swift", "Tivano/Core/Models/Library.swift", "Tivano/Core/Support/StoragePaths.swift", "Tivano/Services/Control/ControlLedger.swift", "Tivano/App/Runtime/ControlFailureClassifier.swift"]
     command = [swift, "-parse-as-library", "-swift-version", "6", "-target", "arm64-apple-macosx26.0", "-sdk", sdk,
                "-j", "4", "-module-cache-path", str(output / "ModuleCache"),
                *[str(ROOT / path) for path in paths], str(generated), "-o", str(output / "domain-checks")]

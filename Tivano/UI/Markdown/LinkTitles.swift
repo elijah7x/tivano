@@ -37,6 +37,10 @@ enum LinkTitles {
         return Store.shared.title(id)
     }
 
+    static func needsFetch(videoID id: String) -> Bool {
+        Store.shared.needsFetch(id)
+    }
+
     /// The title for a video, fetched at most once: nil while the fetch is in flight, and nil
     /// for good when there is none to have (private, deleted, offline), so the host-and-path
     /// form stands and the row never asks again.
@@ -85,12 +89,17 @@ enum LinkTitles {
         private struct State {
             var titles: [String: String] = [:]
             var claimed = Set<String>()
+            var finished = Set<String>()
         }
 
         private let state = Mutex(State())
 
         func title(_ id: String) -> String? {
             state.withLock { $0.titles[id] }
+        }
+
+        func needsFetch(_ id: String) -> Bool {
+            state.withLock { !$0.finished.contains(id) }
         }
 
         /// Whether this caller is the one that should do the fetch.
@@ -106,6 +115,7 @@ enum LinkTitles {
                     state.titles[id] = title
                 }
                 state.claimed.insert(id)
+                state.finished.insert(id)
             }
         }
     }

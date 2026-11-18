@@ -63,6 +63,7 @@ def main():
 struct HydraLaunch {
     var isChimera = false
     var chimeraPresets: [String] = []
+    var chimeraAutoDispatch = false
 }
 enum HydraPrompts {
     static func v2Policy(_ launch: HydraLaunch) -> String {
@@ -76,7 +77,7 @@ enum HydraPrompts {
             # Extract real support declarations without Text.swift's AppInfo and
             # FileEdit dependencies or Hydra.swift's SwiftUI dependency.
             declaration(text, "enum AppText {"),
-            "extension String {\n" + declaration(text, "    var trimmed:") + "\n}",
+            "extension String {\n" + declaration(text, "    var trimmed:") + "\n" + declaration(text, "    var nilIfEmpty:") + "\n}",
             "extension HydraHeadInfo {\n" + declaration(hydra, "    enum Status:") + "\n}",
             *((ROOT / path).read_text() for path in (coding, accounts, chimera, hydra2, library)),
             *(declaration(control, marker) for marker in (
@@ -86,8 +87,7 @@ enum HydraPrompts {
         ]),
         "STORAGE_PRODUCTION": "\n".join(declaration(store, marker) for marker in (
             "    nonisolated static func loadLibraryRecovering(",
-            "    private nonisolated static func recoverLibraryElements(",
-            "    nonisolated static func prepareLibraryWrite(")),
+            "    private nonisolated static func recoverLibraryElements(")),
         "EXECUTION_PRODUCTION": declaration(model, "    func executionDirectory(for"),
         "TASK_PATH_PRODUCTION": declaration(paths, "    nonisolated static func taskWorkspace("),
     }

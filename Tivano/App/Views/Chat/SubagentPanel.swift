@@ -248,7 +248,7 @@ struct SubagentPanel: View {
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
     let thread: ChatThread
     let size: CGSize
     let workingDirectory: String?
@@ -285,7 +285,8 @@ struct SubagentPanel: View {
                     columnHeight: size.height,
                     // A panel's transcript needs no rail, and the rail's hover tracking
                     // and geometry reader are per-frame work under the pointer.
-                    showsMinimap: false
+                    showsMinimap: false,
+                    usesTimelineTopFade: true
                 )
                 .equatable()
             }
@@ -296,7 +297,6 @@ struct SubagentPanel: View {
                     JumpToLatestButton(scrollState: scrollState)
                 }
         }
-        .chromeEdgeFade(scrollChrome)
         .overlay(alignment: .top) {
             HStack(alignment: .top, spacing: 8) {
                 // The handle. Invisible, like a window's title bar with no title; the
@@ -333,21 +333,35 @@ struct SubagentPanel: View {
             // The window's own recipe, on the panel: one glass surface, a scrim for the
             // text over whatever the panel floats above, and the theme's tint.
             let isDark = colorScheme == .dark
-            if !performanceMode {
+#if DEBUG
+            if ProbeKnobs.isOff("glass") {
+                shape.fill(Color(nsColor: .windowBackgroundColor))
+            } else if let solid {
+                shape
+                    .fill(solid.elevated)
+                    .overlay { shape.strokeBorder(solid.hairline, lineWidth: 1) }
+            } else {
                 shape
                     .fill(.clear)
-                    .glassEffect(.regular, in: shape)
+                    .chromeGlassEffect(.regular, in: shape)
                     .overlay {
                         shape.fill(Chrome.glassTint.opacity(isDark ? 0.22 : 0.16))
                     }
-            } else {
-                // Without glass the panel has neither its edge nor its shadow, and the
-                // window's solid backdrop is the same colour: the floating surfaces' flat
-                // recipe (control fill and rim) keeps it apart from the chat under it.
-                shape
-                    .fill(Color(nsColor: .controlBackgroundColor))
-                    .overlay { shape.strokeBorder(Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1) }
             }
+#else
+            if let solid {
+                shape
+                    .fill(solid.elevated)
+                    .overlay { shape.strokeBorder(solid.hairline, lineWidth: 1) }
+            } else {
+                shape
+                    .fill(.clear)
+                    .chromeGlassEffect(.regular, in: shape)
+                    .overlay {
+                        shape.fill(Chrome.glassTint.opacity(isDark ? 0.22 : 0.16))
+                    }
+            }
+#endif
         }
         // Glass supplies the edge (as in `WindowBackdrop`): a hairline on top of it
         // read as a second ring around the panel whenever its window was key.
@@ -359,7 +373,12 @@ struct SubagentPanel: View {
             let isDark = colorScheme == .dark
             shape
                 .fill((isDark ? Color.black : Color.white).opacity(isDark ? 0.3 : 0.34))
-                .shadow(color: performanceMode ? .clear : .black.opacity(isDark ? 1 : 0.65), radius: performanceMode ? 0 : 28, y: performanceMode ? 0 : 10)
+                // A solid theme lifts the panel with a soft shadow rather than the glass's deep one.
+                .shadow(
+                    color: solid != nil ? .black.opacity(0.1) : .black.opacity(isDark ? 1 : 0.65),
+                    radius: solid != nil ? 18 : 28,
+                    y: solid != nil ? 6 : 10
+                )
         }
     }
 }
@@ -489,6 +508,13 @@ final class PanelDragState {
         if next != position { self.position = next }
     }
 
+    /// Clears any active pointer offset or velocity when switching a recycled column.
+    func reset() {
+        if position != nil { position = nil }
+        grab = nil
+        velocity = .zero
+    }
+
     /// Lets the panel go, and says where it was heading: where it is, carried on a little
     /// by the flick it was released with. Nil when it was never moved.
     func release() -> CGPoint? {
@@ -592,6 +618,11 @@ final class PanelResizeState {
     }
 
     func end() { start = nil }
+
+    func reset() {
+        if start != nil { start = nil }
+        if liveSize != nil { liveSize = nil }
+    }
 }
 
 /// The grips: a thin strip along each free edge for one dimension, and a square at the

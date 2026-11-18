@@ -37,7 +37,11 @@ notarize() {
   local file="$1" result status id attempt receipt
   receipt="$BUILD/$(basename "$file").notary-submit.json"
   # submit and info are separate operations (notarytool --help and Apple's TN3147).
-  result=$(xcrun notarytool submit "$file" --keychain-profile "$NOTARY_PROFILE" --output-format json)
+  # S3 Transfer Acceleration (notarytool's default) crashes notarytool 1.1.2 on large
+  # uploads behind a local proxy; TIVANO_NOTARY_S3_ACCELERATION=1 opts back in.
+  local acceleration=--no-s3-acceleration
+  [ "${TIVANO_NOTARY_S3_ACCELERATION:-0}" = 1 ] && acceleration=--s3-acceleration
+  result=$(xcrun notarytool submit "$file" "$acceleration" --keychain-profile "$NOTARY_PROFILE" --output-format json)
   printf '%s\n' "$result" > "$receipt"
   id=$(printf '%s' "$result" | plutil -extract id raw - 2>/dev/null || true)
   [ -n "$id" ] || { echo "No submission ID returned; inspect $receipt before retrying." >&2; exit 1; }
@@ -96,8 +100,9 @@ if [ "$PREFLIGHT_ONLY" = 1 ]; then
 fi
 
 step "Generating the Xcode project"
-xcodegen generate --quiet
-# XcodeGen orders the two top-level "Tivano" groups (the app's synced folder and the CLI's
+python3 scripts/xcodegen_generate.py
+# xcodegen_generate.py restores options.knownRegions from project.yml; XcodeGen still
+# orders the two top-level "Tivano" groups (the app's synced folder and the CLI's
 # shared sources) at random. When that order is the only difference, keep the committed
 # project so the release builds dev's exact tree and leaves the worktree clean for ship.sh.
 PROJECT_FILE=Tivano.xcodeproj/project.pbxproj

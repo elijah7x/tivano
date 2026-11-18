@@ -240,9 +240,9 @@ extension AppModel {
         guard let provider = pair.workerProvider, provider != pair.provider, hydraHeadsProvider(of: pair) == pair.provider else { return nil }
         // Two whole sentences, so a translation is never a verb stitched onto a fragment.
         guard providers.status(provider).isInstalled else {
-            return String(format: Chrome.localized("The pair's heads run on %@ for now: %@ is not installed on this Mac."), pair.provider.displayName, provider.displayName)
+            return String(format: Chrome.localized("The combo's sub-agents run on %@ for now: %@ is not installed on this Mac."), pair.provider.displayName, provider.displayName)
         }
-        return String(format: Chrome.localized("The pair's heads run on %@ for now: %@ is switched off in Settings."), pair.provider.displayName, provider.displayName)
+        return String(format: Chrome.localized("The combo's sub-agents run on %@ for now: %@ is switched off in Settings."), pair.provider.displayName, provider.displayName)
     }
 
     /// The effort heads inherit from a lead when the pair leaves it open: a working
@@ -308,13 +308,11 @@ extension AppModel {
             headsMatchLead: headsMatchLead,
             tilt: settings.hydraTilt,
             isChimera: chimeraIsOn(thread),
-            chimeraPresets: chimeraIsOn(thread) ? settings.chimeraPresets.enumerated().compactMap { index, preset in
-                // One line per preset: a specialty's line breaks cannot forge entries.
-                let specialty = preset.specialty.split(whereSeparator: \.isNewline).joined(separator: " ").trimmed
-                guard !specialty.isEmpty else { return nil }
-                return "\(index + 1). \(preset.pick.briefLabel): \(specialty)"
+            chimeraPresets: chimeraIsOn(thread) ? settings.chimeraPresets.enumerated().compactMap {
+                ChimeraPrompts.identityLine(number: $0.offset + 1, preset: $0.element)
             } : [],
-            chimeraPresetList: chimeraIsOn(thread) ? settings.chimeraPresets : []
+            chimeraPresetList: chimeraIsOn(thread) ? settings.chimeraPresets : [],
+            chimeraAutoDispatch: chimeraIsOn(thread) && settings.chimeraAutoDispatch
         )
     }
 
@@ -536,10 +534,10 @@ extension AppModel {
     /// files narrow its workplace to their deepest common existing directory.
     private func routeHydraHead(_ id: UUID, reference: String) async -> Bool {
         guard hydraHeadCanStart(id), let head = thread(id), let parentID = head.parentThreadID, let lead = thread(parentID) else { return false }
-        let name = head.hydra?.persona.name ?? Chrome.localized("The head")
+        let name = head.hydra?.persona.name ?? Chrome.localized("The sub-agent")
         let expanded = (reference as NSString).expandingTildeInPath
         guard expanded.hasPrefix("/") else {
-            return failHydraRoute(id, String(format: Chrome.localized("Hydra: no project named %@ is in the sidebar, so %@ did not start."), reference, name))
+            return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: no project named %@ is in the sidebar, so %@ did not start."), reference, name))
         }
         var canonical = HydraPaths.canonical(expanded)
         let taskWorkspaces = HydraPaths.canonical(StoragePaths.root.appendingPathComponent("task-workspaces", isDirectory: true).path)
@@ -554,19 +552,19 @@ extension AppModel {
         if canonical == "/"
             || systemRoots.contains(where: { contains(HydraPaths.canonical($0)) })
             || (canonical != home && Self.hydraPathTouchesProtectedRoot(canonical, roots: protectedRoots, taskWorkspaces: taskWorkspaces)) {
-            return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is a system folder, so %@ did not start."), reference, name))
+            return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is a system folder, so %@ did not start."), reference, name))
         }
         if canonical == home {
             let files = hydraOwnedFiles(id)
             for file in files where !Self.hydraOwnedPathIsSafe(file, base: home) {
-                return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ lists files outside %@, so %@ did not start."), file, home, name))
+                return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ lists files outside %@, so %@ did not start."), file, home, name))
             }
             // Each owned path is checked on its own: two files can share home as their
             // folder while one sits in, or contains, a protected folder.
             for file in files {
                 let path = HydraPaths.canonical(URL(fileURLWithPath: home).appendingPathComponent(file).path)
                 if path == home || Self.hydraPathTouchesProtectedRoot(path, roots: protectedRoots, taskWorkspaces: taskWorkspaces) {
-                    return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is a system folder, so %@ did not start."), file, name))
+                    return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is a system folder, so %@ did not start."), file, name))
                 }
             }
             if let narrowed = Self.hydraOwnedDirectory(files, base: home), narrowed != home {
@@ -576,7 +574,7 @@ extension AppModel {
         }
         if canonical == "/" || systemRoots.contains(where: { contains(HydraPaths.canonical($0)) })
             || (canonical != home && Self.hydraPathTouchesProtectedRoot(canonical, roots: protectedRoots, taskWorkspaces: taskWorkspaces)) {
-            return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is a system folder, so %@ did not start."), canonical, name))
+            return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is a system folder, so %@ did not start."), canonical, name))
         }
         let manager = FileManager.default
         var isDir: ObjCBool = false
@@ -584,17 +582,17 @@ extension AppModel {
             let parent = URL(fileURLWithPath: canonical).deletingLastPathComponent().path
             var parentIsDir: ObjCBool = false
             guard manager.fileExists(atPath: parent, isDirectory: &parentIsDir), parentIsDir.boolValue else {
-                return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
+                return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
             }
             do {
                 try manager.createDirectory(atPath: canonical, withIntermediateDirectories: false)
                 isDir = true
             } catch {
-                return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
+                return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
             }
         }
         guard isDir.boolValue else {
-            return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
+            return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is not a folder on this Mac, so %@ did not start."), reference, name))
         }
         guard let identity = await HydraGitIdentityReader.read(at: canonical) else {
             guard hydraHeadCanStart(id) else { return false }
@@ -602,7 +600,7 @@ extension AppModel {
             var ancestor = URL(fileURLWithPath: canonical, isDirectory: true)
             while true {
                 if FileManager.default.fileExists(atPath: ancestor.appendingPathComponent(".git").path) {
-                    return failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ is not a Git checkout Tivano can read, so %@ did not start."), reference, name))
+                    return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is not a Git checkout Tivano can read, so %@ did not start."), reference, name))
                 }
                 let parent = ancestor.deletingLastPathComponent()
                 if parent.path == ancestor.path { break }
@@ -647,6 +645,7 @@ extension AppModel {
         brief: @escaping @Sendable (HydraPersona, HydraPrompts.Workplace) -> String
     ) -> ChatThread? {
         guard let head = insertHydraHead(from: parentID, task: task, origin: origin, batchID: batchID, preferredIndex: preferredIndex, project: project, profile: profile, castProfile: castProfile, job: job) else { return nil }
+        startHydraWatchdog()
         let route = hydraRouteReference(project)
         Task { await startTivanoHead(head.id, route: route, attachments: attachments, brief: brief) }
         return head
@@ -693,7 +692,7 @@ extension AppModel {
         var fallback = sequential
         while taken.contains(fallback) { fallback += 1 }
         let index = pinned ?? fallback
-        updateThread(parentID) { $0.hydraSpawnCount = max((pinned == nil ? index : sequential) + 1, parent.hydraSpawnCount + 1) }
+        let nextSpawnCount = max((pinned == nil ? index : sequential) + 1, parent.hydraSpawnCount + 1)
         let launch = hydraLaunch(for: parent)
         // A delegation routed to one of the pair's head profiles runs on that profile's
         // model, effort and provider instead of the pair's shared worker fields; an
@@ -757,9 +756,11 @@ extension AppModel {
         }
         head.hydra = info
         insertThread(head)
-        if let jobID = info.jobID {
-            updateHydraJob(jobID, of: parentID) { job in
-                job.heads.append(HydraJobHeadRecord(
+        updateThread(parentID) { parent in
+            parent.hydraSpawnCount = nextSpawnCount
+            if let jobID = info.jobID,
+               let jobIndex = parent.hydraJobs.firstIndex(where: { $0.id == jobID }) {
+                parent.hydraJobs[jobIndex].heads.append(HydraJobHeadRecord(
                     headID: head.id,
                     name: info.persona.name,
                     provider: head.provider.rawValue,
@@ -770,9 +771,11 @@ extension AppModel {
         }
         runtime(for: head.id).hydraStartupPending = true
 
-        // A new head brings the panel back and takes the stage.
+        // A new head takes the stage and, unless panels are off, brings the panel back.
         let leadRuntime = runtime(for: parentID)
-        leadRuntime.isHydraPanelHidden = false
+        if settings.hydraAutoOpensPanels {
+            leadRuntime.isHydraPanelHidden = false
+        }
         leadRuntime.hydraSelectedHeadID = head.id
         return head
     }
@@ -791,7 +794,7 @@ extension AppModel {
         guard let head = thread(id), let info = head.hydra, info.status == .running,
               let parentID = head.parentThreadID, let lead = thread(parentID) else { return }
         guard let checkout = hydraCheckout(of: head, lead: lead) else {
-            failHydraRoute(id, String(format: Chrome.localized("Hydra: %@ did not start because its checkout could not be read."), info.persona.name))
+            failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ did not start because its checkout could not be read."), info.persona.name))
             return
         }
         do {
@@ -891,12 +894,15 @@ extension AppModel {
     }
 
     func updateHydraHead(_ id: UUID, _ change: (inout HydraHeadInfo) -> Void) {
+        var startedRunning = false
         updateThread(id) { thread in
             guard var info = thread.hydra else { return }
             change(&info)
             if info.status == .running { info.stopReason = nil }
             thread.hydra = info
+            if info.kind == .tivano && info.status == .running { startedRunning = true }
         }
+        if startedRunning { startHydraWatchdog() }
     }
 
     // MARK: - Reporting back
@@ -907,7 +913,7 @@ extension AppModel {
               let leadRuntime = existingRuntime(for: parentID) else { return }
         let name = info.persona.name
         leadRuntime.appendHydraNote(String(
-            format: AppText.localized("%@ is waiting for your answer. Open it from the Hydra panel to reply."),
+            format: AppText.localized("%@ is waiting for your answer. Open it from the sub-agents panel to reply."),
             name
         ))
     }
@@ -1081,7 +1087,7 @@ extension AppModel {
                 $0.finishedAt = nil
             }
             headRuntime.appendNotice(.info, String(
-                format: Chrome.localized("Antigravity head %@ lost its connection; continuing the same conversation in %lld s (attempt %lld of %lld)…"),
+                format: Chrome.localized("Antigravity sub-agent %@ lost its connection; continuing the same conversation in %lld s (attempt %lld of %lld)…"),
                 info.displayName, Int64(delay), Int64(attempt), Int64(AutoContinue.transientRetryLimit)
             ))
             HydraWatchdog.stalledHeadIDs.remove(head.id)
@@ -1405,8 +1411,8 @@ extension AppModel {
               thread(id)?.hydra?.targetCheckout == info.targetCheckout else {
             landing.patchPath = keepHydraPatch(patch.text, of: info, headID: head.id)
             landing.error = landing.patchPath == nil
-                ? AppText.localized("The head's recovery patch could not be saved; its copy was kept.")
-                : AppText.localized("The head changed while its landing was waiting; its patch was kept.")
+                ? AppText.localized("The sub-agent's recovery patch could not be saved; its copy was kept.")
+                : AppText.localized("The sub-agent changed while its landing was waiting; its patch was kept.")
             noteHydraLanding(landing, of: info, to: parentID)
             return landing
         }
@@ -1420,7 +1426,7 @@ extension AppModel {
             return landing
         }
         guard let recovery = keepHydraPatch(patch.text, of: info, headID: head.id) else {
-            landing.error = AppText.localized("The head's recovery patch could not be saved; its copy was kept.")
+            landing.error = AppText.localized("The sub-agent's recovery patch could not be saved; its copy was kept.")
             noteHydraLanding(landing, of: info, to: parentID)
             return landing
         }
@@ -1588,7 +1594,7 @@ extension AppModel {
             // edits are expected and it is removed with force.
             guard let base = info.baseTree,
                   await keepHydraCopyAsPatch(id, name: info.persona.name, copy: copy, base: base) else {
-                throw ShellError(AppText.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
+                throw ShellError(AppText.localized("The sub-agent's unfinished work could not be preserved. Its copy was kept so you can retry."))
             }
             let root = try await git.repositoryRoot()
             guard !libraryWritesBlocked, thread(id)?.hydra == info, thread(id)?.worktreePath == copy,
@@ -1636,6 +1642,10 @@ extension AppModel {
 
     // MARK: - Watchdog
 
+    private var hasRunningTivanoHead: Bool {
+        threads.contains { $0.isHydraHead && $0.hydra?.kind == .tivano && $0.hydra?.status == .running }
+    }
+
     /// Keeps an eye on the Tivano-run heads at work, every half minute. One quiet for
     /// three minutes (no tool, no word of a reply) says so in its row, "Thinking for 3
     /// min…", rather than sitting on its last tool; one quiet for ten with nothing edited
@@ -1645,12 +1655,14 @@ extension AppModel {
     /// `finishHydraHead`). One loop for the app; calling this again does nothing.
     func startHydraWatchdog() {
         guard HydraWatchdog.loop == nil else { return }
+        guard !CaptureRun.isEnabled, hasRunningTivanoHead else { return }
         HydraWatchdog.loop = Task { [weak self] in
             defer { HydraWatchdog.loop = nil }
             while !Task.isCancelled {
                 try? await Task.sleep(for: HydraWatchdog.tick)
                 guard !Task.isCancelled, let self else { return }
                 self.watchHydraHeads()
+                guard self.hasRunningTivanoHead else { return }
             }
         }
     }
@@ -1749,35 +1761,5 @@ extension AppModel {
             updateHydraHead(head.id) { $0.baseTree = nil }
         }
         startHydraWatchdog()
-    }
-
-    /// What a head sent out from the queue is told about the main chat: the user's last
-    /// request, the lead's latest reply and the files it has touched this turn. Read from
-    /// the timeline, so it costs no model call.
-    func hydraChatContext(for parentID: UUID) -> HydraPrompts.ChatContext {
-        guard let leadRuntime = existingRuntime(for: parentID) else { return HydraPrompts.ChatContext() }
-        var context = HydraPrompts.ChatContext()
-        for entry in leadRuntime.entries.reversed() {
-            switch entry.item.content {
-            case .user(let message) where context.lastUserPrompt == nil && !message.isFromHydra:
-                context.lastUserPrompt = message.text
-            case .assistant(let message) where context.lastReply == nil:
-                context.lastReply = message.text
-            default:
-                break
-            }
-            if context.lastUserPrompt != nil, context.lastReply != nil { break }
-        }
-        let currentTurn = leadRuntime.turns.last?.id
-        var touched: [String] = []
-        var seen: Set<String> = []
-        for entry in leadRuntime.entries where entry.kind == .tool && entry.item.turnID == currentTurn {
-            guard case .tool(let call) = entry.item.content else { continue }
-            for edit in call.edits where !edit.path.isEmpty && seen.insert(edit.path).inserted {
-                touched.append(edit.path)
-            }
-        }
-        context.touchedPaths = touched
-        return context
     }
 }

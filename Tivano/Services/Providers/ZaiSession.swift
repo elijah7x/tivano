@@ -53,7 +53,7 @@ final class ZaiSession: OpenAICompatibleSession {
             return AppText.localized("The conversation no longer fits GLM-5.3's context window. Start a new thread or compact first.")
         }
         if statusCode == 401 || lower.contains("token expired") || lower.contains("incorrect") || lower.contains("authentication") {
-            return AppText.localized("Z.ai rejected the API key. Check your GLM Coding Plan key in Settings › Providers › Z.ai. Your plan may have expired; a Standard API key will not work here.")
+            return AppText.localized("Z.ai rejected the API key. Check your GLM Coding Plan key in Settings › Provider management › Z.ai. Your plan may have expired; a Standard API key will not work here.")
         }
         // 1311: the plan does not carry the model asked for. Nothing was spent, no window
         // is involved, and the model is named back so the picker can be set right.

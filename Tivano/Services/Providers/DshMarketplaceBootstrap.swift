@@ -211,7 +211,7 @@ enum DshMarketplaceBootstrap {
         if (telemetry) rows = boot.composeEntries([[{ insert: rows }, telemetry]]);
         // Patches name rows by id, which upstream renames; package names keep delegation off across versions.
         const delegationOff = options.overlays.some(file => ['no-delegation.yml', 'minimal.yml'].includes(path.basename(file)));
-        const delegation = /^@deepseek-ai\/dsh-(tool-subagent|tool-workflow|tool-goal|command-goal)(?:[-/].*)?$/;
+        const delegation = /^@deepseek-ai\/dsh-(tool-subagent|tool-workflow|tool-goal|command-goal|agent-team|tool-agent-team)(?:[-/].*)?$/;
         if (delegationOff) {
             function guardDelegation(list) {
                 return list.map(row => {

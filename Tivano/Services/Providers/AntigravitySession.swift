@@ -1,6 +1,60 @@
 import Foundation
 import OSLog
 
+private struct AntigravityModelsProbeKey: Hashable {
+    let executable: String
+    let environment: String
+
+    init(executable: URL, environment: [String: String]) {
+        self.executable = executable.resolvingSymlinksInPath().standardizedFileURL.path
+        self.environment = environment.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "\0")
+    }
+}
+
+private actor AntigravityModelsProbeCache {
+    struct Entry {
+        let key: AntigravityModelsProbeKey
+        let task: Task<ShellResult, Error>
+        var completedAt: Date?
+    }
+
+    var entry: Entry?
+
+    func reset(key: AntigravityModelsProbeKey) {
+        if entry?.key == key { entry = nil }
+    }
+
+    func models(
+        key: AntigravityModelsProbeKey,
+        force: Bool,
+        operation: @escaping @Sendable () async throws -> ShellResult
+    ) async throws -> ShellResult {
+        if force { entry = nil }
+        if let entry, entry.key == key,
+           entry.completedAt.map({ (0..<5).contains(Date.now.timeIntervalSince($0)) }) ?? true {
+            return try await entry.task.value
+        }
+        let task = Task { try await operation() }
+        entry = Entry(key: key, task: task, completedAt: nil)
+        do {
+            let result = try await task.value
+            if entry?.task == task {
+                if result.succeeded {
+                    entry?.completedAt = .now
+                } else {
+                    entry = nil
+                }
+            }
+            return result
+        } catch {
+            if entry?.task == task { entry = nil }
+            throw error
+        }
+    }
+}
+
 /// Drives Google's Antigravity CLI (`agy`) in headless streaming mode.
 ///
 /// The CLI speaks newline-delimited JSON on stdio, much like Claude's
@@ -68,6 +122,11 @@ final class AntigravitySession: ProviderSession {
 
     /// Reasoning efforts `agy --effort` accepts.
     static let efforts = ["low", "medium", "high", "xhigh", "max"]
+    private static let modelsProbeCache = AntigravityModelsProbeCache()
+
+    static func beginCatalogProbeCycle(executable: URL, environment: [String: String]) async {
+        await modelsProbeCache.reset(key: AntigravityModelsProbeKey(executable: executable, environment: environment))
+    }
 
     init(configuration: SessionConfiguration) {
         self.configuration = configuration
@@ -737,7 +796,11 @@ final class AntigravitySession: ProviderSession {
     /// are collapsed into a single base model entry whose supported efforts are
     /// toggled via the reasoning effort slider.
     static func listModels(executable: URL, environment: [String: String]) async throws -> [ModelOption] {
-        async let modelsFetch: ShellResult = try Shell.run(executable, ["models"], environment: environment, timeout: 30)
+        try await listModels(executable: executable, environment: environment, force: false)
+    }
+
+    static func listModels(executable: URL, environment: [String: String], force: Bool) async throws -> [ModelOption] {
+        async let modelsFetch: ShellResult = try modelsResult(executable: executable, environment: environment, force: force)
         // The default model is a print-mode read too, so it is skipped offline like the limits.
         async let defaultFetch: ShellResult? = NetworkPath.isUsable() ? try? Shell.run(executable, ["-p", "/model", "--output-format", "json"], environment: environment, timeout: 30) : nil
         let models = try? await modelsFetch
@@ -810,10 +873,17 @@ final class AntigravitySession: ProviderSession {
             && !text.contains(" ")
     }
 
+    private static func modelsResult(executable: URL, environment: [String: String], force: Bool = false) async throws -> ShellResult {
+        let key = AntigravityModelsProbeKey(executable: executable, environment: environment)
+        return try await modelsProbeCache.models(key: key, force: force) {
+            try await Shell.run(executable, ["models"], environment: environment, timeout: 30)
+        }
+    }
+
     /// Sign-in state without spending tokens: `agy models` needs the cached
     /// Google session (or `GEMINI_API_KEY`) and fails loudly without one.
     static func authStatus(executable: URL, environment: [String: String]) async -> ProviderStatus.Auth {
-        guard let result = try? await Shell.run(executable, ["models"], environment: environment, timeout: 20) else {
+        guard let result = try? await modelsResult(executable: executable, environment: environment) else {
             return .unknown
         }
         let text = TextCleanup.stripANSI(result.output + result.errorOutput)

@@ -9,8 +9,9 @@ import Foundation
 /// with `extension_ui_response`. The session file pi reports in `get_state` is the
 /// resume id, so a thread's conversation survives relaunches in `~/.pi/agent`.
 ///
-/// Pi itself keeps approving everything (`--approve`) or nothing (`--no-approve`),
-/// so Tivano gates the tools itself through a pi extension (`PiCLI`) loaded
+/// Pi has no tool approval of its own (`--approve`/`--no-approve` only decide whether
+/// project-local `.pi` files are trusted, so Tivano leaves that to the user's own trust
+/// settings), so Tivano gates the tools itself through a pi extension (`PiCLI`) loaded
 /// with `-e`: every tool that could change something lands as a `tivano-gate`
 /// select request, which the app answers or asks the user. Supervised asks for all
 /// of them, Auto-accept edits waves file changes through, Auto also passes shell
@@ -92,7 +93,6 @@ final class PiSession: ProviderSession {
         try writeGate(finalReport: false)
 
         var arguments = ["--mode", "rpc", "-e", extensionURL.path]
-        arguments.append(runtimeMode == .auto || runtimeMode == .fullAccess ? "--approve" : "--no-approve")
         if let model, !model.isEmpty, model != "default", let slash = model.firstIndex(of: "/") {
             arguments += ["--provider", String(model[..<slash]), "--model", String(model[model.index(after: slash)...])]
         }
@@ -511,7 +511,7 @@ final class PiSession: ProviderSession {
     }
 
     private static func unifiedDiff(path: String, old: String, new: String) -> FileEdit {
-        let relative = path.hasPrefix("/") ? path : path
+        let relative = path
         let header = "--- a/\(relative)\n+++ b/\(relative)"
         let body = old.components(separatedBy: "\n").filter { !$0.isEmpty }.map { "-\($0)" }
             + new.components(separatedBy: "\n").filter { !$0.isEmpty }.map { "+\($0)" }

@@ -42,12 +42,13 @@ struct ProviderSwitchTab: View {
 
 private struct ProviderSwitchTabSurface: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
         let shape = UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12, style: .continuous)
         content
-            .background(shape.fill(Chrome.overlay(0.05)).background(shape.fill(Color(nsColor: .controlBackgroundColor))))
+            .background(shape.fill(Chrome.overlay(0.05)).background(shape.fill(solid?.elevated ?? Color(nsColor: .controlBackgroundColor))))
             .clipShape(shape)
-            .overlay { shape.strokeBorder(Chrome.floatingGlassRim(isDark: colorScheme == .dark), lineWidth: 1) }
+            .overlay { shape.strokeBorder(solid?.hairline ?? Chrome.floatingGlassRim(isDark: colorScheme == .dark), lineWidth: 1) }
     }
 }

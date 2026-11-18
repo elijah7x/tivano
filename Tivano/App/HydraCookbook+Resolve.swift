@@ -46,11 +46,17 @@ extension HydraCookbook {
     }
 
     /// A fragment names a family; the newest member the catalog lists wins, so a new
-    /// release moves a recipe up on its own.
+    /// release moves a recipe up on its own. Multi-word tokens match every word as a
+    /// substring so 'Gemini Flash' finds 'Gemini 3.8 Flash' without matching other Flashes.
     @MainActor static func model(named names: [String], for provider: ProviderKind, registry: ProviderRegistry) -> ModelOption? {
         let options = registry.models(for: provider)
         for name in names {
-            let matches = options.filter { $0.name.localizedCaseInsensitiveContains(name) || $0.id.localizedCaseInsensitiveContains(name) }
+            let tokens = name.split(separator: " ")
+            let matches = options.filter { option in
+                !tokens.isEmpty && tokens.allSatisfy {
+                    option.name.localizedCaseInsensitiveContains($0) || option.id.localizedCaseInsensitiveContains($0)
+                }
+            }
             guard !matches.isEmpty else { continue }
             return matches.max { lhs, rhs in
                 let lhsVersion = version(of: lhs.name) ?? -1

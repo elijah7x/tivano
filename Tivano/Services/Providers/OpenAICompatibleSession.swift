@@ -341,7 +341,7 @@ class OpenAICompatibleSession: ProviderSession {
                 let round = try await streamOneRound(model: currentModel, effort: input.effort)
                 reportUsage(round)
                 if round.statusCode == 401 || (round.rawError?.localizedCaseInsensitiveContains("invalid") == true && round.rawError?.localizedCaseInsensitiveContains("key") == true) {
-                    throw ProviderError.failed(String(format: AppText.localized("%@ rejected the API key. Check it in Settings › Providers › %@."), config.title, config.title))
+                    throw ProviderError.failed(String(format: AppText.localized("%@ rejected the API key. Check it in Settings › Provider management › %@."), config.title, config.title))
                 }
                 if let error = round.rawError, !error.isEmpty {
                     throw ProviderError.failed(friendlyError(error, statusCode: round.statusCode))
@@ -629,22 +629,21 @@ class OpenAICompatibleSession: ProviderSession {
         var streamError: String?
         let statusCode = 200
 
-        let bytes: URLSession.AsyncBytes
-        let response: URLResponse
+        let chunked: SSEChunkedResponse
         do {
-            (bytes, response) = try await URLSession.shared.bytes(for: request)
+            chunked = try await SSEChunkReader.read(for: request)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             // Nothing was streamed, but the error still goes up as it was thrown.
             throw StreamAttemptFailure(underlying: error, emittedOutput: false)
         }
-        defer { bytes.task.cancel() }
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+        defer { chunked.task.cancel() }
+        if let http = chunked.response as? HTTPURLResponse, http.statusCode != 200 {
             // Read the error body for a useful message.
             var bodyData = Data()
-            for try await byte in bytes {
-                bodyData.append(byte)
+            for try await chunk in chunked.chunks {
+                bodyData.append(chunk.prefix(8_000 - bodyData.count))
                 if bodyData.count >= 8_000 { break }
             }
             let body = String(decoding: bodyData, as: UTF8.self)
@@ -654,7 +653,7 @@ class OpenAICompatibleSession: ProviderSession {
             return round
         }
 
-        // The byte loop and JSON parsing run in a detached task; only
+        // The chunk loop and JSON parsing run in a detached task; only
         // coalesced chunks hop back here to emit.
         sseDrain?.cancel()
         let contextWindow = config.contextWindow
@@ -662,7 +661,7 @@ class OpenAICompatibleSession: ProviderSession {
             let coalescer = StreamCoalescer(continuation: continuation)
             let drain = Task.detached(priority: .userInitiated) {
                 do {
-                    try await Self.drainSSE(bytes: bytes, into: coalescer, contextWindow: contextWindow)
+                    try await Self.drainSSE(chunks: chunked.chunks, into: coalescer, contextWindow: contextWindow)
                 } catch is CancellationError {
                     await coalescer.finish()
                 } catch {
@@ -695,7 +694,7 @@ class OpenAICompatibleSession: ProviderSession {
                 if !sawReasoning { sawReasoning = true }
                 onEvent?(.reasoningDelta(id: thoughtID, text: think))
             case .toolCall(let index, let id, let name, let args):
-                var acc = accumulators[index] ?? Accumulator()
+                var acc = accumulators.removeValue(forKey: index) ?? Accumulator()
                 if !id.isEmpty { acc.id = id }
                 if !name.isEmpty { acc.name = name }
                 acc.arguments += args
@@ -748,7 +747,7 @@ class OpenAICompatibleSession: ProviderSession {
     /// Runs off the main actor: trims, parses and picks apart each SSE line,
     /// then feeds chunks to the coalescer. A transport failure is delivered as
     /// a chunk; CancellationError is rethrown for the stop path.
-    private nonisolated static func drainSSE(bytes: URLSession.AsyncBytes, into coalescer: StreamCoalescer, contextWindow: Int) async throws {
+    private nonisolated static func drainSSE(chunks: AsyncThrowingStream<Data, Error>, into coalescer: StreamCoalescer, contextWindow: Int) async throws {
         func handleJSON(_ json: JSONValue) async {
             if let err = json["error"], !err.isNull {
                 await coalescer.emitStreamError(err["message"]?.string ?? err.displayText)
@@ -805,36 +804,44 @@ class OpenAICompatibleSession: ProviderSession {
                 await handleJSON(json)
                 return true
             }
-            let payload = pending.isEmpty ? data : pending + "\n" + data
+            if pending.isEmpty {
+                pending = data.utf8.count <= 16 * 1024 * 1024 ? data : ""
+                return true
+            }
+            var payload = pending
+            pending = ""
+            payload += "\n"
+            payload += data
             guard let json = JSONValue.parse(payload) else {
                 pending = payload.utf8.count <= 16 * 1024 * 1024 ? payload : ""
                 return true
             }
-            pending = ""
             await handleJSON(json)
             return true
         }
 
         do {
-            var line = Data()
-            for try await byte in bytes {
+            var framer = SSEByteFramer(byteLimit: 16 * 1024 * 1024, newlineMode: .lf)
+            for try await chunk in chunks {
                 if Task.isCancelled { throw CancellationError() }
-                if byte == UInt8(ascii: "\n") {
-                    let shouldContinue = try await handleLine(line)
-                    line.removeAll(keepingCapacity: true)
-                    if !shouldContinue { break }
-                } else {
-                    guard line.count < 16 * 1024 * 1024 else {
-                        throw ProviderError.failed(AppText.localized("The server sent a stream line larger than 16 MB."))
+                for frame in try framer.append(chunk) {
+                    guard case .line(let line) = frame else { continue }
+                    guard try await handleLine(line.content) else {
+                        await coalescer.finish()
+                        return
                     }
-                    line.append(byte)
                 }
             }
-            if !line.isEmpty { _ = try await handleLine(line) }
+            if let line = try framer.finish() {
+                _ = try await handleLine(line.content)
+            }
             await coalescer.finish()
         } catch is CancellationError {
             await coalescer.finish()
             throw CancellationError()
+        } catch is SSEByteFramer.Error {
+            let error = ProviderError.failed(AppText.localized("The server sent a stream line larger than 16 MB."))
+            await coalescer.fail(chunkError: error)
         } catch {
             await coalescer.fail(chunkError: error)
         }
@@ -1218,11 +1225,11 @@ class OpenAICompatibleSession: ProviderSession {
         case (.build, .fullAccess):
             "You are in BUILD mode with full access: use tools freely without asking."
         }
-        // The optional Hydra policy and the anti-slop guidance go in once each. The off
-        // notice goes out too, so a resumed thread cannot keep earlier guidance alive.
+        // The optional Hydra policy and Tivano's built-in anti-slop guidance go in once
+        // each, since Tivano is the harness for these API providers.
         let policy = [
             configuration.hydra.map(HydraPrompts.fallbackPolicy),
-            AntiSlopPolicy.instructions(enabled: configuration.antiSlopEnabled),
+            AntiSlopPolicy.instructions,
         ]
         .compactMap { $0 }
         .joined(separator: "\n\n")

@@ -49,7 +49,7 @@ enum VoiceRejection: Error, Sendable, Equatable {
     var text: String {
         switch self {
         case .unsupported: "Voice requires Codex 0.159 or later with realtime voice support. Update Codex and try again."
-        case .wrongProvider: "Install and enable Codex in Settings › Providers to use voice."
+        case .wrongProvider: "Install and enable Codex in Settings › Provider management to use voice."
         case .chatgptRequired: "Sign in to Codex with ChatGPT to use voice."
         case .nativeRuntimeUnavailable:
             "Install or update Codex on this device to use voice. Its voice runtime ships with Codex 0.159 or later."
@@ -59,7 +59,7 @@ enum VoiceRejection: Error, Sendable, Equatable {
         case .microphoneMetadataMissing: "Microphone setup is missing. Rebuild or reinstall Tivano, then restart it."
         case .protocol: "Voice could not connect or was disconnected. Check your network and Codex, then try again."
         case .busy: "Another window already owns the voice session."
-        case .noProject: "Add a project first: the voice session works in it."
+        case .noProject: "This chat's working folder is unavailable."
         default: "Voice could not connect. Try again in a moment."
         }
     }

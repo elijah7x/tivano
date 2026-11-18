@@ -176,15 +176,28 @@ enum TextGeneration {
         }
     }
 
-    static func review(_ prompt: String, engine: Engine, directory: URL) async -> Result<String, ReviewFailure> {
+    static func review(
+        _ prompt: String,
+        engine: Engine,
+        directory: URL,
+        readableDirectories: [URL] = []
+    ) async -> Result<String, ReviewFailure> {
         do {
             switch engine {
             case .claude(let executable, let environment, let model, let effort):
                 var arguments = [
-                    "-p", "--output-format", "text", "--tools", "",
+                    "-p", "--output-format", "text",
+                    "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob",
                     "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk",
                     "--no-session-persistence",
                 ]
+                let basePath = directory.standardizedFileURL.path
+                var seenPaths: Set<String> = [basePath]
+                for url in readableDirectories {
+                    let standardizedPath = url.standardizedFileURL.path
+                    guard seenPaths.insert(standardizedPath).inserted else { continue }
+                    arguments += ["--add-dir", url.path]
+                }
                 if let model, !model.isEmpty, model != "default" { arguments += ["--model", model] }
                 if let effort, !effort.isEmpty { arguments += ["--effort", effort] }
                 let result = try await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900)
@@ -199,6 +212,7 @@ enum TextGeneration {
                     "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model,
                 ]
                 if let effort, !effort.isEmpty { arguments += ["--config", "model_reasoning_effort=\"\(effort)\""] }
+                arguments += CodexSession.oneShotConfigArguments
                 arguments += ["--output-last-message", output.path, "-"]
                 let result = try await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 900)
                 if result.timedOut { return .failure(.timedOut) }
@@ -245,6 +259,7 @@ enum TextGeneration {
                 defer { try? FileManager.default.removeItem(at: output) }
                 var arguments = ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "--model", model]
                 if let effort, !effort.isEmpty { arguments += ["--config", "model_reasoning_effort=\"\(effort)\""] }
+                arguments += CodexSession.oneShotConfigArguments
                 arguments += ["--output-last-message", output.path, "-"]
                 let result = try await Shell.run(executable, arguments, in: directory, environment: environment, input: Data(prompt.utf8), timeout: 180)
                 guard result.succeeded else { return (nil, failure(result)) }

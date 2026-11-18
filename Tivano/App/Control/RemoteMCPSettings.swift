@@ -7,14 +7,14 @@ struct RemoteMCPSettingsRows: View {
 
     var body: some View {
         @Bindable var settings = model.settings
-        ChromeRow(title: "Remote MCP", detail: "Let cloud agents such as Muse or Grok Bot control this edition of Tivano over MCP, through a tunnel you run. Each agent needs your approval here once. Approvals and questions in threads still wait in Tivano.") {
+        ChromeRow(title: "Remote MCP", detail: "Let cloud agents such as Muse or Grok Bot control this edition of Tivano over MCP, through a tunnel you run. Each agent needs your approval here once. Approvals and questions in chats still wait in Tivano.") {
             SettingsSwitch(isOn: $settings.remoteMCPEnabled)
                 .accessibilityLabel(Text("Remote MCP"))
         }
         ChromeRowDivider()
-        ChromeRow(title: "Run remote threads without approval", detail: "Threads that cloud agents create start in Full access: commands and file changes run without asking. Threads created while this is off, and your own threads, keep their permissions. Questions still wait in Tivano.") {
+        ChromeRow(title: "Run remote chats without approval", detail: "Chats that cloud agents create start in Full access: commands and file changes run without asking. Chats created while this is off, and your own chats, keep their permissions. Questions still wait in Tivano.") {
             SettingsSwitch(isOn: $settings.remoteMCPFullAccess)
-                .accessibilityLabel(Text("Run remote threads without approval"))
+                .accessibilityLabel(Text("Run remote chats without approval"))
         }
         ChromeRowDivider()
         ChromeRow(title: "Public address", detail: addressDetail) {
@@ -51,15 +51,15 @@ struct RemoteMCPSettingsRows: View {
         ForEach(model.remoteMCP.grants) { grant in
             ChromeRowDivider()
             ChromeRow(title: grant.clientName, detail: grantDetail(grant)) {
-                ChromeTextButton(symbol: "xmark.circle", title: "Disconnect", help: "Disconnect", isEnabled: true, isDestructive: true) {
+                ChromeTextButton(symbol: "xmark.circle", title: "Revoke access", help: "Revoke access", isEnabled: true, isDestructive: true) {
                     model.remoteMCP.revoke(grant)
                 }
             }
         }
         if model.remoteMCP.grants.count >= 2 {
             ChromeRowDivider()
-            ChromeRow(title: "Disconnect all") {
-                ChromeTextButton(symbol: "xmark.circle", title: "Disconnect all", help: "Disconnect all", isEnabled: true, isDestructive: true) {
+            ChromeRow(title: "Revoke all") {
+                ChromeTextButton(symbol: "xmark.circle", title: "Revoke all", help: "Revoke all", isEnabled: true, isDestructive: true) {
                     model.remoteMCP.revokeAll()
                 }
             }
@@ -69,7 +69,7 @@ struct RemoteMCPSettingsRows: View {
     private var addressDetail: String {
         let address = model.settings.remoteMCPPublicURL
         if !address.isEmpty && RemoteMCP.normalizedPublicURL(address) == nil {
-            return "Enter an HTTPS address. Plain HTTP works only for this Mac."
+            return "Enter an HTTPS address, or leave it empty for this Mac only."
         }
         return String(format: Chrome.localized("Your tunnel's HTTPS address, forwarding to http://127.0.0.1:%d. Leave empty to allow only this Mac."), Int(model.remoteMCP.port))
     }
