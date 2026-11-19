@@ -8,6 +8,11 @@ struct AppAlert: Identifiable {
     var message: String
 }
 
+enum AppSpace: Equatable {
+    case session
+    case tokens
+}
+
 /// The app's library of projects and threads, plus everything that spans threads.
 @MainActor
 @Observable
@@ -23,31 +28,14 @@ final class AppModel {
         KeepsakeStore.save(.init(keepsakes: keepsakes, seen: keepsakesSeen))
     }
 
-    func lightKeepsake(_ id: String) {
-        guard let index = keepsakes.firstIndex(where: { $0.id == id }), keepsakes[index].litAt == nil else { return }
-        keepsakes[index].litAt = Date()
-        KeepsakeStore.save(.init(keepsakes: keepsakes, seen: keepsakesSeen))
-    }
-
-    #if DEBUG
-    func prepareKeepsakePreview() {
-        guard CaptureRun.isEnabled else { return }
-        let id = "early-supporter"
-        if let index = keepsakes.firstIndex(where: { $0.id == id }) {
-            keepsakes[index].litAt = nil
-        } else {
-            keepsakes.append(Keepsake(id: id, earnedAt: Date(), litAt: nil))
-        }
-        KeepsakeStore.save(.init(keepsakes: keepsakes, seen: keepsakesSeen))
-    }
-    #endif
-
     let settings: AppSettings
     let providers: ProviderRegistry
     /// The user's MCP connections, handed to every provider session at launch.
     let mcp: MCPStore
     let terminals: TerminalStore
     let sidebar: SidebarLayout
+    let tokenUsage = TokenUsageModel()
+    var appSpace: AppSpace = .session
     /// Picks chats back up once a spent usage limit resets, with the setting on.
     @ObservationIgnored private(set) var autoContinue: AutoContinue!
     @ObservationIgnored private(set) var voice: VoiceController!
@@ -67,13 +55,20 @@ final class AppModel {
         didSet {
             Self.write(Self.sync(&projectCells, with: projects))
             projectsRevision &+= 1
+            refreshShelvedUnreadCount()
         }
     }
     @ObservationIgnored private var threadStorage: [ChatThread] = []
     private(set) var threadsRevision: UInt64 = 0
+    /// Advances only when thread membership or placement fields change, keeping
+    /// SidebarView isolated from background title/status/unread/progress updates.
+    private(set) var sidebarPlacementRevision: UInt64 = 0
+    private(set) var threadCount: Int = 0
+    private(set) var shelvedUnreadCount: Int = 0
     /// Only fields used by control-list membership/search/order, not streamed status
     /// or timestamps. Cursor snapshots still use the full threadsRevision.
     private(set) var controlThreadMembershipRevision: UInt64 = 0
+    var threadsUnobserved: [ChatThread] { threadStorage }
     private(set) var threads: [ChatThread] {
         get {
             _ = threadsRevision
@@ -88,12 +83,38 @@ final class AppModel {
     }
 
     private func synchronizeThreads() {
+        let syncStart: ContinuousClock.Instant? = SwitchLatency.isActive && archiveProbeDepth > 0 ? .now : nil
         // Finish storage/index borrows before any observed write can rebuild Commands.
         threadIndex = ThreadIndex(threadStorage)
         let writes = Self.sync(&threadCells, with: threadStorage)
         Self.write(writes)
         syncChildCells()
+        let nextCount = threadStorage.count
+        if threadCount != nextCount { threadCount = nextCount }
+        refreshShelvedUnreadCount()
+        if let syncStart {
+            archiveProbeSyncTotal += syncStart.duration(to: .now)
+            archiveProbeSyncCount += 1
+        }
+        sidebarPlacementRevision &+= 1
         threadsRevision &+= 1
+    }
+
+    private func refreshShelvedUnreadCount() {
+        let shelvedIDs = Set(projects.lazy.filter(\.isShelved).map(\.id))
+        let next: Int
+        if shelvedIDs.isEmpty {
+            next = 0
+        } else {
+            var count = 0
+            for thread in threadStorage where !thread.isArchived && thread.hasUnread {
+                if let projectID = thread.projectID, shelvedIDs.contains(projectID) {
+                    count += 1
+                }
+            }
+            next = count
+        }
+        if shelvedUnreadCount != next { shelvedUnreadCount = next }
     }
     private var threadIndex = ThreadIndex([])
 
@@ -146,6 +167,8 @@ final class AppModel {
     var sidebarRevealThreadID: UUID?
 
     var isCommandPalettePresented = false
+    /// Whether the chat header's collapsed controls are shown; shared by every chat so a switch keeps it.
+    var isTopControlsExpanded = false
     var alert: AppAlert?
 
     /// True while any chat still has work in flight — a running turn, voice, a merge,
@@ -166,10 +189,15 @@ final class AppModel {
         runtimes.values.contains { !$0.draft.isEmpty || !$0.followUps.isEmpty || $0.hasPendingSendForUpdate }
     }
     private var creatingWorktrees: Set<UUID> = []
+    @ObservationIgnored private var worktreeTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var pendingLocalTurnStarts: [UUID: String] = [:]
     @ObservationIgnored private var runtimeLastAccess: [UUID: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var runtimeCapacityScheduled = false
     @ObservationIgnored private var runtimeCapacityRetry: Task<Void, Never>?
+    @ObservationIgnored private var runtimeCapacityTarget = 12
     @ObservationIgnored private var runtimeReleasesAwaitingSave: Set<UUID> = []
+    @ObservationIgnored private var freshThreadIDs: Set<UUID> = []
+    @ObservationIgnored private var memoryPressureObserver: NSObjectProtocol?
     @ObservationIgnored private var idleSessionStops: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var lastLibrarySave: ContinuousClock.Instant?
@@ -179,6 +207,7 @@ final class AppModel {
     /// its files forever, with the merge note still promising they go out. The sweep asks
     /// again every few minutes; it skips anything still running, so a busy chat is left alone.
     @ObservationIgnored private var hydraMergeSweepTask: Task<Void, Never>?
+    @ObservationIgnored private var hydraMergeSweepID = UUID()
     @ObservationIgnored private var autoShelveTimer: Timer?
     @ObservationIgnored private var autoShelveActivationObserver: NSObjectProtocol?
     @ObservationIgnored private var lastActivationAutoShelve: Date?
@@ -188,6 +217,9 @@ final class AppModel {
     @ObservationIgnored private(set) var persistenceEnabled = true
     @ObservationIgnored var libraryWritesBlocked = false
     @ObservationIgnored private var libraryRecoveryURL: URL?
+    @ObservationIgnored private var archiveProbeDepth = 0
+    @ObservationIgnored private var archiveProbeSyncTotal: Duration = .zero
+    @ObservationIgnored private var archiveProbeSyncCount = 0
     @ObservationIgnored private var librarySaveFailureShown = false
     @ObservationIgnored private var didRequestNotifications = false
 
@@ -208,31 +240,113 @@ final class AppModel {
         settings.onSleepPreventionChanged = { [weak self] in
             self?.updateTaskSleepPrevention()
         }
+        settings.onHydraAutoOpensPanelsChanged = { [weak self] in
+            guard let self, !self.settings.hydraAutoOpensPanels else { return }
+            self.hideFloatingSubagentPanels()
+        }
         observeHydraEnabled()
+        MemoryPressureMonitor.start()
+        memoryPressureObserver = NotificationCenter.default.addObserver(
+            forName: .memoryPressure, object: nil, queue: .main
+        ) { [weak self] notification in
+            let critical = notification.userInfo?["critical"] as? Bool ?? false
+            MainActor.assumeIsolated {
+                self?.handleMemoryPressure(critical: critical)
+            }
+        }
     }
 
     isolated deinit {
-        autoShelveTimer?.invalidate()
-        if let autoShelveActivationObserver {
-            NotificationCenter.default.removeObserver(autoShelveActivationObserver)
+        stopAutoShelveSchedule()
+        if let memoryPressureObserver {
+            NotificationCenter.default.removeObserver(memoryPressureObserver)
         }
+        hydraMergeSweepTask?.cancel()
     }
 
     private func startAutoShelveSchedule() {
-        guard autoShelveTimer == nil, !CaptureRun.isEnabled else { return }
-        autoShelveActivationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                // Switching apps back and forth needs no rescan each time; the timer covers the rest.
-                guard let self, (self.lastActivationAutoShelve.map { Date.now.timeIntervalSince($0) >= 300 } ?? true) else { return }
-                self.lastActivationAutoShelve = .now
-                self.autoShelveIdleProjects()
+        guard settings.autoShelveDays > 0, !CaptureRun.isEnabled else {
+            stopAutoShelveSchedule()
+            return
+        }
+        if autoShelveActivationObserver == nil {
+            autoShelveActivationObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    // Switching apps back and forth needs no rescan each time; the timer covers the rest.
+                    guard let self, (self.lastActivationAutoShelve.map { Date.now.timeIntervalSince($0) >= 300 } ?? true) else { return }
+                    self.lastActivationAutoShelve = .now
+                    self.autoShelveIdleProjects()
+                }
             }
         }
-        autoShelveTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in
+        if autoShelveTimer == nil {
+            autoShelveTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.autoShelveIdleProjects()
+                }
+            }
+        }
+    }
+
+    private func stopAutoShelveSchedule() {
+        autoShelveTimer?.invalidate()
+        autoShelveTimer = nil
+        if let autoShelveActivationObserver {
+            NotificationCenter.default.removeObserver(autoShelveActivationObserver)
+        }
+        autoShelveActivationObserver = nil
+    }
+
+    private func observeAutoShelveDays() {
+        withObservationTracking {
+            _ = settings.autoShelveDays
+        } onChange: { [weak self] in
             Task { @MainActor [weak self] in
-                self?.autoShelveIdleProjects()
+                guard let self else { return }
+                self.startAutoShelveSchedule()
+                self.observeAutoShelveDays()
+            }
+        }
+    }
+
+    private func syncHydraMergeSweep() {
+        guard settings.hydraAutoMerge, !libraryWritesBlocked, !CaptureRun.isEnabled else {
+            hydraMergeSweepID = UUID()
+            hydraMergeSweepTask?.cancel()
+            hydraMergeSweepTask = nil
+            return
+        }
+        guard hydraMergeSweepTask == nil else { return }
+        let sweepID = UUID()
+        hydraMergeSweepID = sweepID
+        // The launch sweep alone is not enough: a merge can also be missed while the app
+        // stays up, and then nothing asks again until the next launch. This task asks every
+        // five minutes for as long as the app runs; the sweep itself skips chats with a turn
+        // or a head still running, so it is safe to repeat.
+        hydraMergeSweepTask = Task { [weak self] in
+            defer {
+                if self?.hydraMergeSweepID == sweepID {
+                    self?.hydraMergeSweepTask = nil
+                }
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(300))
+                guard !Task.isCancelled, let self, !self.libraryWritesBlocked, self.settings.hydraAutoMerge else { return }
+                await self.resumeHydraMerges()
+            }
+        }
+    }
+
+    private func observeHydraAutoMerge() {
+        withObservationTracking {
+            _ = settings.hydraAutoMerge
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.syncHydraMergeSweep()
+                self.observeHydraAutoMerge()
             }
         }
     }
@@ -278,11 +392,11 @@ final class AppModel {
             let reason = if runtime.isRunning { "Running" }
                 else if runtime.isCLIStarting { "Starting its session" }
                 else if runtime.isVoiceOrchestrator { "Voice is live" }
-                else if runtime.isHydraMerging { "Landing Hydra work" }
-                else if runtime.hydraReviewRunning != nil { "Reviewing Hydra work" }
+                else if runtime.isHydraMerging { "Landing sub-agent work" }
+                else if runtime.hydraReviewRunning != nil { "Reviewing sub-agent work" }
                 else if !runtime.backgroundTasks.isEmpty { "Running background tasks" }
                 else if runtime.isWaitingForLimit { "Waiting for its usage limit to reset" }
-                else { "Its helpers or heads are still working" }
+                else { "Its helpers or sub-agents are still working" }
             let title = thread(runtime.threadID)?.title ?? ""
             out.append((runtime.threadID, title.isEmpty ? Chrome.localized("New thread") : title, reason))
         }
@@ -474,6 +588,7 @@ final class AppModel {
         if restoreSelectionAfterLoad { openThreadOnLaunch() }
         autoShelveIdleProjects()
         startAutoShelveSchedule()
+        observeAutoShelveDays()
         // The threads most likely to be opened first decode in the background from the start,
         // so the first click into a conversation never parses its history on the main thread.
         let recent = threads.filter { !$0.isArchived && !$0.isInPanel }.sorted { $0.updatedAt > $1.updatedAt }.prefix(12).map(\.id)
@@ -499,18 +614,8 @@ final class AppModel {
             }
             await resumeHydraMerges()
         }
-        // The launch sweep alone is not enough: a merge can also be missed while the app
-        // stays up, and then nothing asks again until the next launch. This task asks every
-        // five minutes for as long as the app runs; the sweep itself skips chats with a turn
-        // or a head still running, so it is safe to repeat.
-        hydraMergeSweepTask?.cancel()
-        hydraMergeSweepTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(300))
-                guard !Task.isCancelled, let self, !self.libraryWritesBlocked else { return }
-                await self.resumeHydraMerges()
-            }
-        }
+        syncHydraMergeSweep()
+        observeHydraAutoMerge()
         await providers.refreshAll()
         // Load the live catalogs behind the launch seeds, overlapped. Claude's brings its
         // slash commands too, so the picker and the composer are complete before any turn.
@@ -570,13 +675,12 @@ final class AppModel {
     var currentProject: Project? { project(currentAffiliation.projectID) }
 
     private func rememberAffiliation(_ affiliation: ThreadAffiliation) {
-        settings.lastThreadAffiliation = affiliation
-        settings.lastProjectID = affiliation.projectID
-    }
-
-    private func rememberLastProject(_ id: UUID) {
-        guard project(id) != nil else { return }
-        rememberAffiliation(.project(id))
+        if settings.lastThreadAffiliation != affiliation {
+            settings.lastThreadAffiliation = affiliation
+        }
+        if settings.lastProjectID != affiliation.projectID {
+            settings.lastProjectID = affiliation.projectID
+        }
     }
 
     /// Resolves without touching disk. A missing project is an error, never a task.
@@ -785,37 +889,82 @@ final class AppModel {
         return runtime
     }
 
-    private func releaseExcessIdleRuntimes(isRetry: Bool = false) {
-        guard runtimes.count > 12 else { return }
+    private func handleMemoryPressure(critical: Bool) {
+        for thread in threadStorage {
+            DocumentPrefetch.shared.forget(thread.id)
+        }
+        releaseExcessIdleRuntimes(keeping: critical ? 2 : 4)
+    }
+
+    private func releaseExcessIdleRuntimes(keeping limit: Int = 12, isRetry: Bool = false) {
+        guard runtimes.count > limit else {
+            if isRetry { runtimeCapacityTarget = 12 }
+            return
+        }
         let fallback = ContinuousClock.now
         let candidates = runtimes.keys.sorted {
             (runtimeLastAccess[$0] ?? fallback) < (runtimeLastAccess[$1] ?? fallback)
         }
         var awaitingSave: Set<UUID> = []
         for id in candidates {
-            guard runtimes.count > 12 else { break }
+            guard runtimes.count > limit else { break }
             releaseIdleRuntime(id)
             if runtimeReleasesAwaitingSave.contains(id) { awaitingSave.insert(id) }
         }
+        // Under memory pressure, warm idle sessions within the 10-minute keep-alive window
+        // also yield so `releaseIdleRuntime` can drop their history from memory.
+        if limit < 12, runtimes.count > limit {
+            // Stop only as many warm sessions as the limit is exceeded by: runtimes that can
+            // never be released must not make every warm session pay for them.
+            // Releases still waiting on a save already count toward the target.
+            var excess = runtimes.count - limit - awaitingSave.count
+            for id in candidates where !awaitingSave.contains(id) && runtimes[id] != nil {
+                guard excess > 0 else { break }
+                guard canStopSessionForMemoryPressure(id), let runtime = runtimes[id] else { continue }
+                runtime.stopHeadSessionAfterProviderHistory()
+                if releaseIdleRuntime(id) || runtimeReleasesAwaitingSave.contains(id) { excess -= 1 }
+                if runtimeReleasesAwaitingSave.contains(id) { awaitingSave.insert(id) }
+            }
+        }
         // A save still under way just keeps the runtime for now; a failed one already
         // says so in its own timeline and retries there.
-        guard !awaitingSave.isEmpty, !isRetry else { return }
+        guard !awaitingSave.isEmpty, !isRetry else {
+            if isRetry { runtimeCapacityTarget = 12 }
+            return
+        }
+        runtimeCapacityTarget = min(runtimeCapacityTarget, limit)
         if runtimeCapacityRetry == nil {
             runtimeCapacityRetry = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, let self else { return }
-                self.releaseExcessIdleRuntimes(isRetry: true)
+                let target = self.runtimeCapacityTarget
+                self.releaseExcessIdleRuntimes(keeping: target, isRetry: true)
                 self.runtimeCapacityRetry = nil
             }
         }
     }
 
+    private func canStopSessionForMemoryPressure(_ id: UUID) -> Bool {
+        guard let runtime = runtimes[id], selectedThreadID != id, voice.threadID != id, let thread = thread(id),
+              thread.parentThreadID == nil || thread.parentThreadID != selectedThreadID,
+              selectedThread?.parentThreadID != id,
+              // Stopping must leave nothing but the saved document, or the session dies and
+              // the runtime stays anyway.
+              runtime.holdsOnlyPersistedStateBesidesSession,
+              !thread.isInPanel, thread.hydra?.status != .running,
+              !Self.hasActiveTasks(runtime), runtime.approvals.isEmpty, runtime.questions.isEmpty,
+              runtime.draft.isEmpty, runtime.followUps.isEmpty, !runtime.hasPendingSendForUpdate,
+              !sessionsToRelease.contains(id), autoContinue.resumesAt[id] == nil,
+              terminals.sessions(for: id).isEmpty,
+              !children(of: id).contains(where: {
+                  $0.hydra?.status == .running || existingRuntime(for: $0.id)?.isRunning == true
+              }) else { return false }
+        return true
+    }
+
     func existingRuntime(for id: UUID) -> ThreadRuntime? {
         runtimes[id]
     }
-
-    /// Every runtime alive right now, for checks that span chats (a merge still in flight at quit).
-    var liveRuntimes: [ThreadRuntime] { Array(runtimes.values) }
 
     /// Decodes threads' histories ahead of time, off the main thread, so opening one costs no
     /// parse on the click. Threads already open have their history in memory and are skipped.
@@ -1024,7 +1173,7 @@ final class AppModel {
 
     func removeProject(_ project: Project) {
         guard !isAnyHydraMergeRunning else {
-            alert = AppAlert(title: "Project is busy", message: Chrome.localized("Wait for Hydra to finish merging before removing this project."))
+            alert = AppAlert(title: "Project is busy", message: Chrome.localized("Wait for sub-agent merges to finish before removing this project."))
             return
         }
         let removed = threadsRemovedWithProject(project)
@@ -1034,6 +1183,10 @@ final class AppModel {
         library.threads.removeAll { ids.contains($0.id) }
         library.projects.removeAll { $0.id == project.id }
         guard commitLibrary(library) else { return }
+        for id in ids {
+            pendingLocalTurnStarts.removeValue(forKey: id)
+            worktreeTasks.removeValue(forKey: id)?.cancel()
+        }
         completeThreadDeletion(removed, cleanup: cleanup)
         projects.removeAll { $0.id == project.id }
         updateDockBadge()
@@ -1079,7 +1232,7 @@ final class AppModel {
     }
 
     @discardableResult
-    func newThread(affiliation choice: NewThreadAffiliation, workspace: WorkspaceMode? = nil, overridingModel: NewThreadModelSelection? = nil) -> ChatThread? {
+    func newThread(affiliation choice: NewThreadAffiliation, workspace: WorkspaceMode? = nil, overridingModel: NewThreadDefault? = nil) -> ChatThread? {
         let affiliation: ThreadAffiliation
         switch choice {
         case .current:
@@ -1101,11 +1254,12 @@ final class AppModel {
         var thread = makeThread(
             in: project,
             carrying: selectedThread,
-            modelSelection: CaptureRun.isEnabled ? nil : (overridingModel ?? settings.newThreadModelSelection)
+            modelSelection: CaptureRun.isEnabled ? nil : (overridingModel ?? settings.newThreadDefault)
         )
         if project != nil, (workspace ?? settings.defaultWorkspaceMode) == .worktree {
             thread.controlWorkspace = ControlWorkspace(mode: .worktree, phase: .preparing, enforcesExecutionReadiness: false)
         }
+        freshThreadIDs.insert(thread.id)
         threads.append(thread)
         unshelveForWork(project?.id)
         if let project { updateProject(project.id) { $0.isExpanded = true } }
@@ -1113,18 +1267,22 @@ final class AppModel {
         selectedThreadID = thread.id
         scheduleSave()
         if project != nil, (workspace ?? settings.defaultWorkspaceMode) == .worktree {
-            Task { await createWorktree(for: thread.id) }
+            Task { await createWorktree(for: thread.id, explicit: workspace == .worktree) }
         }
         return thread
     }
 
+    func takeFreshThread(_ id: UUID) -> Bool {
+        freshThreadIDs.remove(id) != nil
+    }
+
     /// Previews the model for quick chat without creating or selecting a thread.
-    func newThreadPreview(overridingModel: NewThreadModelSelection? = nil) -> ChatThread {
+    func newThreadPreview(overridingModel: NewThreadDefault? = nil) -> ChatThread {
         let affiliation: ThreadAffiliation = !CaptureRun.isEnabled && settings.newThreadLocation == .standalone
             ? .standalone : currentAffiliation
         let project = project(affiliation.projectID)
         return makeThread(in: project, carrying: selectedThread,
-                          modelSelection: CaptureRun.isEnabled ? nil : (overridingModel ?? settings.newThreadModelSelection))
+                          modelSelection: CaptureRun.isEnabled ? nil : (overridingModel ?? settings.newThreadDefault))
     }
 
     /// Copies conversation context into an unsent thread with independent provider state.
@@ -1154,26 +1312,58 @@ final class AppModel {
         return thread
     }
 
+    private func applyPair(_ pair: HydraPair, to thread: inout ChatThread) {
+        let lead = hydraLead(of: pair, for: thread)
+        thread.model = lead.model
+        thread.effort = lead.effort
+        thread.fastMode = lead.fastMode
+        thread.dshMode = lead.dshMode
+        thread.hydraPairID = pair.id
+        thread.hydraEnabled = true
+    }
+
     /// A chat as it would start in `project`, not yet in `threads`. Only ordinary new
     /// chats pass a fixed selection; continuations retain the existing inheritance chain.
-    private func makeThread(in project: Project?, carrying current: ChatThread?, modelSelection: NewThreadModelSelection? = nil) -> ChatThread {
+    private func makeThread(in project: Project?, carrying current: ChatThread?, modelSelection: NewThreadDefault? = nil) -> ChatThread {
         let installed = ProviderKind.allCases.filter { providers.status($0).isInstalled && settings.isEnabled($0) }
         // The project's own pair, when it has one, sets the provider before anything else.
-        let projectPair = HydraPair.projectPair(project?.hydraPairID, hydraOn: settings.hydraEnabled, in: hydraPickerPairs)
-        if projectPair == nil, let selection = modelSelection,
-           providers.availableProviders.contains(selection.provider),
-           let option = providers.model(selection.modelID, for: selection.provider) {
-            let preference = settings.preference(for: selection.provider, model: option.id)
-            let effort = selection.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
-                ?? preference.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
-            return ChatThread(
-                projectID: project?.id,
-                provider: selection.provider,
-                model: option.id,
-                effort: effort,
-                runtimeMode: settings.defaultRuntimeMode,
-                fastMode: option.supportsFast && preference.fastMode
-            )
+        var projectPair = HydraPair.projectPair(project?.hydraPairID, hydraOn: settings.hydraEnabled, in: hydraPickerPairs)
+        if projectPair == nil, let defaultChoice = modelSelection {
+            switch defaultChoice {
+            case .model(let selection):
+                if providers.availableProviders.contains(selection.provider),
+                   let option = providers.model(selection.modelID, for: selection.provider) {
+                    let preference = settings.preference(for: selection.provider, model: option.id)
+                    let effort = selection.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
+                        ?? preference.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
+                    return ChatThread(
+                        projectID: project?.id,
+                        provider: selection.provider,
+                        model: option.id,
+                        effort: effort,
+                        runtimeMode: settings.defaultRuntimeMode,
+                        fastMode: option.supportsFast && preference.fastMode
+                    )
+                }
+            case .pair(let id):
+                if settings.hydraEnabled, let pair = hydraPickerPairs.first(where: { $0.id == id }) {
+                    // A pair with no lead model runs on any model, so the chat keeps the
+                    // current chat's model when it is on the pair's provider, as the picker does.
+                    let keepsCurrent = pair.orchestratorModel == nil && current?.provider == pair.provider
+                    let model = keepsCurrent ? current?.model : providers.defaultModel(for: pair.provider)?.id
+                    let preference = settings.preference(for: pair.provider, model: model)
+                    var thread = ChatThread(
+                        projectID: project?.id,
+                        provider: pair.provider,
+                        model: model,
+                        effort: preference.effort,
+                        runtimeMode: settings.defaultRuntimeMode,
+                        fastMode: preference.fastMode
+                    )
+                    applyPair(pair, to: &thread)
+                    return thread
+                }
+            }
         }
         // With no chat to carry from (a fresh launch), the pair last entered from the
         // picker is where the new chat starts. Before any pair has been entered since
@@ -1186,6 +1376,7 @@ final class AppModel {
             : nil
         var provider = projectPair?.provider ?? current?.provider ?? lastPair?.provider ?? settings.defaultProvider
         if !installed.isEmpty, !installed.contains(provider) { provider = installed[0] }
+        if projectPair?.provider != provider { projectPair = nil }
         // A chat that starts on the project's pair takes that pair's lead model. A pair with
         // no lead model keeps the current chat's model, as the picker does.
         let carriesModel = projectPair?.orchestratorModel == nil && current?.provider == provider
@@ -1207,24 +1398,12 @@ final class AppModel {
         // pair wins over all of that: the user set it as the rule for this project, so
         // every new chat here starts on it.
         if let pair = projectPair {
-            let lead = hydraLead(of: pair, for: thread)
-            thread.model = lead.model
-            thread.effort = lead.effort
-            thread.fastMode = lead.fastMode
-            thread.dshMode = lead.dshMode
-            thread.hydraPairID = pair.id
-            thread.hydraEnabled = true
+            applyPair(pair, to: &thread)
         } else if carriesModel {
             thread.hydraPairID = inheritableHydraPair(from: current, into: project)
             thread.temporaryHydraPair = thread.hydraPairID == nil ? nil : current?.temporaryHydraPair
         } else if let pair = lastPair, pair.provider == provider {
-            let lead = hydraLead(of: pair, for: thread)
-            thread.model = lead.model
-            thread.effort = lead.effort
-            thread.fastMode = lead.fastMode
-            thread.dshMode = lead.dshMode
-            thread.hydraPairID = pair.id
-            thread.hydraEnabled = true
+            applyPair(pair, to: &thread)
         }
         return thread
     }
@@ -1238,11 +1417,15 @@ final class AppModel {
         guard thread != previous else { return }
         if Self.controlListMembershipChanged(previous, thread) { controlThreadMembershipRevision &+= 1 }
         threadStorage[index] = thread
-        if Self.structureChanged(previous, thread) {
+        if Self.hierarchyChanged(previous, thread) {
             synchronizeThreads()
         } else {
             let cell = threadCells[id]
             cell?.value = thread
+            if Self.placementChanged(previous, thread) { sidebarPlacementRevision &+= 1 }
+            if previous.isArchived != thread.isArchived || previous.hasUnread != thread.hasUnread {
+                refreshShelvedUnreadCount()
+            }
             threadsRevision &+= 1
         }
         scheduleSave()
@@ -1254,7 +1437,12 @@ final class AppModel {
             || previous.parentThreadID != thread.parentThreadID || previous.isHydraHead != thread.isHydraHead
     }
 
-    private static func structureChanged(_ previous: ChatThread, _ thread: ChatThread) -> Bool {
+    private static func hierarchyChanged(_ previous: ChatThread, _ thread: ChatThread) -> Bool {
+        previous.id != thread.id || previous.projectID != thread.projectID
+            || previous.parentThreadID != thread.parentThreadID
+    }
+
+    private static func placementChanged(_ previous: ChatThread, _ thread: ChatThread) -> Bool {
         previous.id != thread.id || previous.projectID != thread.projectID
             || previous.parentThreadID != thread.parentThreadID
             || previous.isArchived != thread.isArchived
@@ -1336,6 +1524,8 @@ final class AppModel {
     }
 
     private func applyThreadAffiliation(_ id: UUID, _ affiliation: ThreadAffiliation) {
+        pendingLocalTurnStarts.removeValue(forKey: id)
+        worktreeTasks.removeValue(forKey: id)?.cancel()
         existingRuntime(for: id)?.stopSession()
         terminals.closeAll(for: id)
         updateThread(id) { thread in
@@ -1370,6 +1560,48 @@ final class AppModel {
         scheduleSave()
     }
 
+    /// updateThread for several threads at once: the same bookkeeping, one structure sync.
+    private func updateEachThread(_ ids: some Collection<UUID>, _ change: (inout ChatThread) -> Void) {
+        var didChange = false
+        var didChangeMembership = false
+        var didChangeHierarchy = false
+        var didChangePlacement = false
+        var didChangeUnread = false
+        var updatedIDs: [UUID] = []
+        var seenUpdated: Set<UUID> = []
+        var visitedAny = false
+        for id in ids {
+            guard let index = threadIndex.positions[id] else { continue }
+            visitedAny = true
+            let previous = threadStorage[index]
+            var thread = previous
+            change(&thread)
+            guard thread != previous else { continue }
+            didChange = true
+            if Self.controlListMembershipChanged(previous, thread) { didChangeMembership = true }
+            if Self.hierarchyChanged(previous, thread) { didChangeHierarchy = true }
+            if Self.placementChanged(previous, thread) { didChangePlacement = true }
+            if previous.hasUnread != thread.hasUnread || previous.isArchived != thread.isArchived { didChangeUnread = true }
+            threadStorage[index] = thread
+            if seenUpdated.insert(id).inserted { updatedIDs.append(id) }
+        }
+        defer { if visitedAny && isLibraryLoaded { announceLoweredPermissions() } }
+        guard didChange else { return }
+        if didChangeMembership { controlThreadMembershipRevision &+= 1 }
+        if didChangeHierarchy {
+            synchronizeThreads()
+        } else {
+            for id in updatedIDs {
+                guard let index = threadIndex.positions[id] else { continue }
+                threadCells[id]?.value = threadStorage[index]
+            }
+            if didChangePlacement { sidebarPlacementRevision &+= 1 }
+            if didChangeUnread { refreshShelvedUnreadCount() }
+            threadsRevision &+= 1
+        }
+        scheduleSave()
+    }
+
     @ObservationIgnored private var announcedPermissionLowerings: Set<String> = []
 
     @discardableResult
@@ -1397,20 +1629,114 @@ final class AppModel {
         }
     }
 
+    private func archivableThreadIDs(from id: UUID) -> [UUID] {
+        var ordered: [UUID] = []
+        var seen: Set<UUID> = []
+        func visit(_ currentID: UUID) {
+            guard seen.insert(currentID).inserted else { return }
+            for helper in helpers(of: currentID) {
+                visit(helper.id)
+            }
+            ordered.append(currentID)
+        }
+        visit(id)
+        return ordered
+    }
+
     func archive(_ id: UUID) {
-        // The helpers under a thread go with it, and come back with it.
-        for helper in helpers(of: id) { archive(helper.id) }
-        if selectedThreadID == id { selectNeighbor(of: id) }
-        existingRuntime(for: id)?.stopSession()
-        autoContinue.dismiss(id)
-        releaseHydraCopy(of: id)
-        updateThread(id) {
+        let probing = SwitchLatency.isActive
+        let probeOuter = probing && archiveProbeDepth == 0
+        if probing { archiveProbeDepth += 1 }
+        defer { if probing { archiveProbeDepth -= 1 } }
+        defer { if probeOuter { SwitchLatency.endAction() } }
+
+        var isSelected = false
+        var isRunning = false
+        var t0: ContinuousClock.Instant?
+        if probeOuter {
+            archiveProbeSyncTotal = .zero
+            archiveProbeSyncCount = 0
+            SwitchLatency.beginAction("archive " + (thread(id)?.title ?? "?"))
+            isRunning = existingRuntime(for: id).map { $0.phase != .idle } ?? false
+            t0 = .now
+        }
+
+        // The helpers under a thread go with it, depth-first, and come back with it.
+        let orderedIDs = archivableThreadIDs(from: id)
+        let collectedSet = Set(orderedIDs)
+        let helperCount = max(0, orderedIDs.count - 1)
+        let t1: ContinuousClock.Instant? = probeOuter ? .now : nil
+
+        let deferredSelection: UUID??
+        if let selected = selectedThreadID, collectedSet.contains(selected) {
+            isSelected = true
+            deferredSelection = .some(neighbor(of: selected, excluding: collectedSet))
+        } else {
+            deferredSelection = nil
+        }
+        let t2: ContinuousClock.Instant? = probeOuter ? .now : nil
+
+        for threadID in orderedIDs {
+            pendingLocalTurnStarts.removeValue(forKey: threadID)
+            if let creation = worktreeTasks.removeValue(forKey: threadID) {
+                creation.cancel()
+                // Like a restart mid-preparation: the thread has no worktree, so its first
+                // turn must not fall back to the project's own checkout once it is restored.
+                updateThread(threadID) {
+                    guard $0.worktreePath == nil, $0.controlWorkspace?.phase == .preparing else { return }
+                    $0.controlWorkspace?.phase = .failed
+                    $0.controlWorkspace?.failure = ControlFailure(code: .workspaceFailed, detail: "archived_during_preparation")
+                }
+            }
+            existingRuntime(for: threadID)?.stopSession()
+            autoContinue.dismiss(threadID)
+            releaseHydraCopy(of: threadID)
+        }
+        let t3: ContinuousClock.Instant? = probeOuter ? .now : nil
+
+        updateEachThread(orderedIDs) {
             $0.isArchived = true
             $0.isPinned = false
         }
-        CheckoutClaims.deactivate(owner: id)
+        let t4: ContinuousClock.Instant? = probeOuter ? .now : nil
+
+        for threadID in orderedIDs {
+            CheckoutClaims.deactivate(owner: threadID)
+        }
         // An archived thread is out of the list, so its unread mark leaves the dock with it.
         updateDockBadge()
+        if let nextSelection = deferredSelection {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(16))
+                guard let self, let selected = self.selectedThreadID, collectedSet.contains(selected) else { return }
+                let target: UUID?
+                if let nextSelection {
+                    if let candidate = self.thread(nextSelection), !candidate.isArchived {
+                        target = nextSelection
+                    } else {
+                        target = self.neighbor(of: nextSelection, excluding: collectedSet)
+                            ?? self.sidebarThreads.first(where: { !collectedSet.contains($0.id) })?.id
+                    }
+                } else {
+                    target = nil
+                }
+                self.selectedThreadID = target
+            }
+        }
+
+        if let t0, let t1, let t2, let t3, let t4 {
+            let t5 = ContinuousClock.now
+            SwitchLatency.note(
+                "archive steps: helpers=\(helperCount) selected=\(isSelected) running=\(isRunning) " +
+                "collect=\(SwitchLatency.ms(t0.duration(to: t1)))ms " +
+                "neighborResolve=\(SwitchLatency.ms(t1.duration(to: t2)))ms " +
+                "sideEffects=\(SwitchLatency.ms(t2.duration(to: t3)))ms " +
+                "update=\(SwitchLatency.ms(t3.duration(to: t4)))ms " +
+                "tail=\(SwitchLatency.ms(t4.duration(to: t5)))ms " +
+                "sync=\(SwitchLatency.ms(archiveProbeSyncTotal))msx\(archiveProbeSyncCount) " +
+                "total=\(SwitchLatency.ms(t0.duration(to: t5)))ms"
+            )
+        }
     }
 
     func unarchive(_ id: UUID) {
@@ -1526,6 +1852,10 @@ final class AppModel {
         var library = currentLibrary()
         library.threads.removeAll { ids.contains($0.id) }
         guard commitLibrary(library) else { return }
+        for id in ids {
+            pendingLocalTurnStarts.removeValue(forKey: id)
+            worktreeTasks.removeValue(forKey: id)?.cancel()
+        }
         completeThreadDeletion(removed, cleanup: cleanup)
         updateDockBadge()
         scheduleSave()
@@ -1559,7 +1889,7 @@ final class AppModel {
                     if let base = item.patchBase {
                         // The work survives in the patch, so the copy goes even with changes.
                         guard await keepHydraCopyAsPatch(item.id, name: item.headName ?? "head", copy: copy, base: base) else {
-                            alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The head's unfinished work could not be preserved. Its copy was kept so you can retry."))
+                            alert = AppAlert(title: "Could not remove worktree", message: Chrome.localized("The sub-agent's unfinished work could not be preserved. Its copy was kept so you can retry."))
                             continue
                         }
                     } else {
@@ -1583,10 +1913,49 @@ final class AppModel {
     /// interrupted turn has finished (see turnFinished).
     @ObservationIgnored private var sessionsToRelease: Set<UUID> = []
 
-    /// The helper a thread spawned and still shows in its floating panel, if any. Hydra
-    /// heads have a panel of their own (see `hydraHeads(of:)`).
+    /// The panel helper a thread will reuse. With panels off, reuse also finds the newest
+    /// plain helper outside a panel, preferring one still at work.
     func subagent(of parentID: UUID) -> ChatThread? {
-        panelSubagent(of: parentID)
+        if let panel = panelSubagent(of: parentID) { return panel }
+        guard !settings.hydraAutoOpensPanels else { return nil }
+        let candidates = children(of: parentID)
+            .filter { !$0.isArchived && !$0.isHydraHead && !$0.isInPanel }
+            .sorted { $0.createdAt > $1.createdAt }
+        return candidates.first { isWorkingHelper($0) } ?? candidates.first
+    }
+
+    /// Opens a helper's panel beside its parent without touching its runtime.
+    func showSubagentPanel(_ id: UUID) {
+        guard let parentThreadID = thread(id)?.parentThreadID else { return }
+        // The panel shows one plain helper; any other one returns to the sidebar,
+        // still running, instead of being hidden behind the requested one.
+        for other in children(of: parentThreadID) where other.id != id && other.isInPanel && !other.isHydraHead {
+            updateThread(other.id) { $0.isInPanel = false }
+        }
+        updateThread(id) { $0.isInPanel = true }
+        selectedThreadID = parentThreadID
+    }
+
+    /// The newest plain helper working outside a panel, using the sidebar's activity test.
+    func runningHelperOutsidePanel(of parentID: UUID) -> ChatThread? {
+        children(of: parentID)
+            .filter { !$0.isHydraHead && !$0.isInPanel }
+            .sorted { $0.createdAt > $1.createdAt }
+            .first { isWorkingHelper($0) }
+    }
+
+    private func isWorkingHelper(_ thread: ChatThread) -> Bool {
+        guard let runtime = existingRuntime(for: thread.id) else { return false }
+        return runtime.isRunning || runtime.isHydraMerging
+    }
+
+    private func hideFloatingSubagentPanels() {
+        for helper in threads where helper.isHelper && !helper.isHydraHead && helper.isInPanel {
+            updateThread(helper.id) { $0.isInPanel = false }
+        }
+        for runtime in runtimes.values {
+            runtime.isHydraPanelHidden = true
+        }
     }
 
     /// Adds a thread the app made for another thread: a head, say. The caller selects it
@@ -1624,7 +1993,7 @@ final class AppModel {
             fastMode: parent.fastMode
         )
         thread.parentThreadID = parentID
-        thread.isInPanel = true
+        thread.isInPanel = settings.hydraAutoOpensPanels
         thread.title = title
         thread.hasCustomTitle = true
         threads.append(thread)
@@ -1639,15 +2008,11 @@ final class AppModel {
     /// that spawned it, as a smaller row, so what it did stays a click away.
     func closeSubagent(_ id: UUID) {
         guard thread(id) != nil else { return }
-        if let runtime = existingRuntime(for: id) {
-            // A running turn ends as interrupted and releases its session once it has
-            // (see turnFinished); an idle one has nothing to wait for.
-            if runtime.isRunning {
-                sessionsToRelease.insert(id)
-                runtime.interrupt()
-            } else {
-                runtime.stopSession()
-            }
+        // Closing only folds the panel away: a helper still at work keeps working, shown by
+        // the pill at the end of its parent's stream and in the sidebar; an idle one has
+        // nothing to wait for and lets its session go.
+        if let runtime = existingRuntime(for: id), !runtime.isRunning, !runtime.isHydraMerging {
+            runtime.stopSession()
         }
         updateThread(id) { $0.isInPanel = false }
     }
@@ -1666,14 +2031,20 @@ final class AppModel {
         if deletingDocument { Storage.deleteDocument(thread.id) }
     }
 
-    private func selectNeighbor(of id: UUID) {
+    private func neighbor(of id: UUID, excluding: Set<UUID>) -> UUID? {
         let order = sidebarThreads
-        guard let index = order.firstIndex(where: { $0.id == id }) else {
-            selectedThreadID = nil
-            return
+        guard let index = order.firstIndex(where: { $0.id == id }) else { return nil }
+        if let after = order[(index + 1)...].first(where: { !excluding.contains($0.id) }) {
+            return after.id
         }
-        let neighbor = order.indices.contains(index + 1) ? order[index + 1] : (index > 0 ? order[index - 1] : nil)
-        selectedThreadID = neighbor?.id
+        if let before = order[..<index].last(where: { !excluding.contains($0.id) }) {
+            return before.id
+        }
+        return nil
+    }
+
+    private func selectNeighbor(of id: UUID) {
+        selectedThreadID = neighbor(of: id, excluding: [id])
     }
 
     var topScript: ProjectScript? {
@@ -1789,41 +2160,229 @@ final class AppModel {
         }
     }
 
-    func createWorktree(for threadID: UUID, branch: String? = nil) async {
-        guard let thread = thread(threadID), thread.worktreePath == nil, let project = project(thread.projectID),
-              creatingWorktrees.insert(threadID).inserted else { return }
-        defer { creatingWorktrees.remove(threadID) }
-        updateThread(threadID) { $0.controlWorkspace = ControlWorkspace(mode: .worktree, phase: .preparing, enforcesExecutionReadiness: false) }
-        let git = Git(project.path)
-        guard await git.isRepository(), await git.hasCommits() else {
-            updateThread(threadID) { $0.controlWorkspace?.phase = .failed; $0.controlWorkspace?.failure = ControlFailure(code: .workspaceFailed) }
-            alert = AppAlert(title: "Worktree unavailable", message: "New worktrees need a git repository with at least one commit.")
+    enum FirstTurnWorkspaceOutcome {
+        case ready(reserved: Bool)
+        case deferred(String)
+        case failed(String)
+    }
+
+    enum AutoWorktreeEligibility: Equatable {
+        case nonGit
+        case eligible
+        case unavailable
+    }
+
+    nonisolated static func canonicalWorkspacePath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    nonisolated static func workspacePathsOverlap(_ lhs: String, _ rhs: String) -> Bool {
+        let a = canonicalWorkspacePath(lhs)
+        let b = canonicalWorkspacePath(rhs)
+        return a == b || TouchedPaths.relative(a, root: b) != nil || TouchedPaths.relative(b, root: a) != nil
+    }
+
+    nonisolated static func autoWorktreeEligibility(in projectPath: String) async -> AutoWorktreeEligibility {
+        let git = Git(projectPath)
+        guard await git.isRepository() else { return .nonGit }
+        let canonicalProject = canonicalWorkspacePath(projectPath)
+        guard let root = try? await git.repositoryRoot(),
+              canonicalWorkspacePath(root.path) == canonicalProject,
+              await git.hasCommits(),
+              !(await git.hasOperationInProgress()) else {
+            return .unavailable
+        }
+        return .eligible
+    }
+
+    nonisolated static func canAutoCreateWorktree(in projectPath: String) async -> Bool {
+        await autoWorktreeEligibility(in: projectPath) == .eligible
+    }
+
+    func isLocalCheckoutBusy(projectPath: String, excluding threadID: UUID) -> Bool {
+        let canonicalProject = Self.canonicalWorkspacePath(projectPath)
+        if pendingLocalTurnStarts.contains(where: { id, reservedPath in
+            id != threadID && Self.workspacePathsOverlap(reservedPath, canonicalProject)
+        }) {
+            return true
+        }
+        return threads.contains { other in
+            guard !other.isArchived, other.id != threadID,
+                  existingRuntime(for: other.id)?.isUsingWorkspace == true,
+                  let directory = try? executionDirectory(for: other) else { return false }
+            return Self.workspacePathsOverlap(Self.canonicalWorkspacePath(directory), canonicalProject)
+        }
+    }
+
+    func releasePendingLocalTurnStart(_ threadID: UUID) {
+        pendingLocalTurnStarts.removeValue(forKey: threadID)
+    }
+
+    func shouldDeferWarmupForWorkspace(_ thread: ChatThread, turnsEmpty: Bool) -> Bool {
+        if creatingWorktrees.contains(thread.id) || worktreeTasks[thread.id] != nil {
+            return true
+        }
+        guard !thread.hasStartedTurn, turnsEmpty, thread.worktreePath == nil, thread.controlWorkspace == nil,
+              !thread.isHydraHead, !thread.isHelper, settings.defaultWorkspaceMode == .auto,
+              let project = project(thread.projectID) else {
+            return false
+        }
+        return isLocalCheckoutBusy(projectPath: project.path, excluding: thread.id)
+    }
+
+    func prepareWorkspaceForFirstTurn(for threadID: UUID, runtime: ThreadRuntime) async -> FirstTurnWorkspaceOutcome {
+        let deferredMessage = Chrome.localized("Created a new Git worktree and started its setup scripts in Terminal. Send again once setup finishes.")
+        let unavailableMessage = Chrome.localized("Another chat is active in this repository, and a separate Git worktree isn't available right now. Wait for it to finish, then send again.")
+        if let inFlight = worktreeTasks[threadID] {
+            if runtime.hasWarmOrLiveSession { await runtime.stopSessionAndWait() }
+            await inFlight.value
+            guard let current = thread(threadID) else { return .ready(reserved: false) }
+            if current.worktreePath != nil {
+                if project(current.projectID)?.scripts.contains(where: \.runOnWorktreeCreate) == true {
+                    return .deferred(deferredMessage)
+                }
+                return .ready(reserved: false)
+            }
+            if current.controlWorkspace == nil { return .ready(reserved: false) }
+            if current.controlWorkspace?.phase == .failed {
+                return .failed(Chrome.localized("Could not create a worktree"))
+            }
+        }
+        if let current = thread(threadID), !current.hasStartedTurn, runtime.turns.isEmpty,
+           current.worktreePath == nil,
+           current.controlWorkspace?.mode == .worktree,
+           current.controlWorkspace?.phase == .failed {
+            return .failed(Chrome.localized("Could not create a worktree"))
+        }
+        guard let current = thread(threadID), !current.hasStartedTurn, runtime.turns.isEmpty,
+              current.worktreePath == nil, current.controlWorkspace == nil,
+              !current.isHydraHead, !current.isHelper,
+              settings.defaultWorkspaceMode == .auto,
+              let project = project(current.projectID) else {
+            return .ready(reserved: false)
+        }
+        let canonicalProject = Self.canonicalWorkspacePath(project.path)
+        if !isLocalCheckoutBusy(projectPath: project.path, excluding: threadID) {
+            pendingLocalTurnStarts[threadID] = canonicalProject
+            return .ready(reserved: true)
+        }
+        switch await Self.autoWorktreeEligibility(in: project.path) {
+        case .nonGit:
+            pendingLocalTurnStarts[threadID] = canonicalProject
+            return .ready(reserved: true)
+        case .unavailable:
+            guard let refreshed = thread(threadID), !refreshed.hasStartedTurn,
+                  refreshed.affiliation == current.affiliation, !refreshed.isArchived,
+                  refreshed.worktreePath == nil else {
+                return .ready(reserved: false)
+            }
+            if !isLocalCheckoutBusy(projectPath: project.path, excluding: threadID) {
+                pendingLocalTurnStarts[threadID] = canonicalProject
+                return .ready(reserved: true)
+            }
+            return .failed(unavailableMessage)
+        case .eligible:
+            break
+        }
+        guard let refreshed = thread(threadID), !refreshed.hasStartedTurn,
+              refreshed.affiliation == current.affiliation, !refreshed.isArchived,
+              refreshed.worktreePath == nil else {
+            return .ready(reserved: false)
+        }
+        if !isLocalCheckoutBusy(projectPath: project.path, excluding: threadID) {
+            pendingLocalTurnStarts[threadID] = canonicalProject
+            return .ready(reserved: true)
+        }
+        if runtime.hasWarmOrLiveSession { await runtime.stopSessionAndWait() }
+        await createWorktree(for: threadID, explicit: false, showsAlertOnError: false)
+        if let after = thread(threadID), after.worktreePath != nil {
+            if self.project(after.projectID)?.scripts.contains(where: \.runOnWorktreeCreate) == true {
+                return .deferred(deferredMessage)
+            }
+            return .ready(reserved: false)
+        }
+        updateThread(threadID) { $0.controlWorkspace = nil }
+        return .failed(Chrome.localized("Could not create a worktree"))
+    }
+
+    func createWorktree(for threadID: UUID, branch: String? = nil, explicit: Bool = true, showsAlertOnError: Bool = true) async {
+        if let inFlight = worktreeTasks[threadID] {
+            await inFlight.value
             return
         }
-        let suffix = String(threadID.uuidString.lowercased().prefix(8))
-        let folder = project.name.replacingOccurrences(of: " ", with: "-").lowercased()
-        let path = Storage.worktreesDirectory.appendingPathComponent("\(folder)-\(suffix)").path
-        let branch = branch ?? "tivano/\(suffix)"
-        let base = await git.status()?.branch
-        guard self.thread(threadID)?.affiliation == thread.affiliation else { return }
-        do {
-            try await git.addWorktree(at: path, branch: branch, base: base)
-            updateThread(threadID) {
-                $0.worktreePath = path
-                $0.branch = branch
-                let unobservedSetup = project.scripts.contains(where: \.runOnWorktreeCreate)
-                $0.controlWorkspace = ControlWorkspace(mode: .worktree, phase: unobservedSetup ? .failed : .ready,
-                                                       failure: unobservedSetup ? ControlFailure(code: .unsupported, detail: "ui_setup_completion_unobserved") : nil,
-                                                       enforcesExecutionReadiness: false)
+        guard let thread = thread(threadID), !thread.isArchived, thread.worktreePath == nil, let project = project(thread.projectID),
+              creatingWorktrees.insert(threadID).inserted else { return }
+        let task = Task { @MainActor in
+            updateThread(threadID) { $0.controlWorkspace = ControlWorkspace(mode: .worktree, phase: .preparing, enforcesExecutionReadiness: false) }
+            let git = Git(project.path)
+            guard await git.isRepository(), await git.hasCommits() else {
+                if explicit {
+                    updateThread(threadID) { $0.controlWorkspace?.phase = .failed; $0.controlWorkspace?.failure = ControlFailure(code: .workspaceFailed) }
+                    alert = AppAlert(title: "Worktree unavailable", message: "New worktrees need a git repository with at least one commit.")
+                } else {
+                    updateThread(threadID) { $0.controlWorkspace = nil }
+                }
+                return
             }
-            for script in project.scripts where script.runOnWorktreeCreate {
-                terminals.run(script, threadID: threadID, directory: path)
-                runtime(for: threadID).isTerminalVisible = true
+            guard !Task.isCancelled else { return }
+            let suffix = String(threadID.uuidString.lowercased().prefix(8))
+            let folder = project.name.replacingOccurrences(of: " ", with: "-").lowercased()
+            let path = Storage.worktreesDirectory.appendingPathComponent("\(folder)-\(suffix)").path
+            let branch = branch ?? "tivano/\(suffix)"
+            let base = await git.status()?.branch
+            guard !Task.isCancelled, let current = self.thread(threadID), !current.isArchived, current.affiliation == thread.affiliation else { return }
+            // Anything already at the path belongs to an earlier attempt, not this one.
+            let pathPreexisted = FileManager.default.fileExists(atPath: path)
+            do {
+                try await git.addWorktree(at: path, branch: branch, base: base)
+                guard !Task.isCancelled, let current = self.thread(threadID), !current.isArchived, current.affiliation == thread.affiliation else {
+                    await Self.abandonCreatedWorktree(git: git, path: path, branch: branch)
+                    return
+                }
+                updateThread(threadID) {
+                    $0.worktreePath = path
+                    $0.branch = branch
+                    let unobservedSetup = project.scripts.contains(where: \.runOnWorktreeCreate)
+                    $0.controlWorkspace = ControlWorkspace(mode: .worktree, phase: unobservedSetup ? .failed : .ready,
+                                                           failure: unobservedSetup ? ControlFailure(code: .unsupported, detail: "ui_setup_completion_unobserved") : nil,
+                                                           enforcesExecutionReadiness: false)
+                }
+                for script in project.scripts where script.runOnWorktreeCreate {
+                    terminals.run(script, threadID: threadID, directory: path)
+                    runtime(for: threadID).isTerminalVisible = true
+                }
+            } catch {
+                guard !Task.isCancelled else {
+                    // Git may have finished before the cancellation was noticed; a copy and
+                    // branch left behind would block the next attempt at the same path.
+                    if !pathPreexisted { await Self.abandonCreatedWorktree(git: git, path: path, branch: branch) }
+                    return
+                }
+                updateThread(threadID) { $0.controlWorkspace?.phase = .failed; $0.controlWorkspace?.failure = ControlFailure(code: .workspaceFailed) }
+                if showsAlertOnError {
+                    alert = AppAlert(title: "Could not create a worktree", message: error.localizedDescription)
+                }
             }
-        } catch {
-            updateThread(threadID) { $0.controlWorkspace?.phase = .failed; $0.controlWorkspace?.failure = ControlFailure(code: .workspaceFailed) }
-            alert = AppAlert(title: "Could not create a worktree", message: error.localizedDescription)
         }
+        worktreeTasks[threadID] = task
+        defer {
+            creatingWorktrees.remove(threadID)
+            if worktreeTasks[threadID] == task { worktreeTasks.removeValue(forKey: threadID) }
+        }
+        await task.value
+    }
+
+    /// Removes a worktree this run created but never handed to its thread, with the branch
+    /// `git worktree add -b` made for it. Runs in a task of its own so the creation's
+    /// cancellation does not cancel the cleanup.
+    private static func abandonCreatedWorktree(git: Git, path: String, branch: String) async {
+        await Task {
+            guard FileManager.default.fileExists(atPath: path) else { return }
+            // Only a copy Git really registered there is removed, and only then its branch:
+            // a branch that existed before would have made `worktree add -b` fail.
+            guard (try? await git.removeWorktree(at: path, force: true)) != nil else { return }
+            try? await git.deleteBranch(branch)
+        }.value
     }
 
     // MARK: - Attention
@@ -1900,7 +2459,7 @@ final class AppModel {
         guard !stillWorking, !userStopped else { return }
         let chimed = settings.chimeWhenFinished && status != .interrupted
         if chimed { FinishChime.play() }
-        guard !isVisible, settings.notifyWhenFinished, let thread = thread(id) else { return }
+        guard !isVisible, let thread = thread(id) else { return }
         let body = switch status {
         case .completed: Chrome.localized("Finished.")
         case .interrupted: Chrome.localized("Stopped.")
@@ -1954,6 +2513,29 @@ final class AppModel {
         return matches.first
     }
 
+    /// Resolves a Grok catalog model and reasoning effort to the CLI wire arguments.
+    /// Variant-backed families encode effort in the variant id, so `--effort` is never
+    /// sent alongside a variant id.
+    func grokWireSelection(model: String, effort: String?) -> (model: String, effort: String?) {
+        let requestedEffort = effort?.nilIfEmpty
+        let catalog = providers.models(for: .grok)
+        if let row = catalog.first(where: { $0.id == model }) {
+            if !row.variants.isEmpty {
+                return (row.providerID(effort: requestedEffort, fastMode: false), nil)
+            }
+            let resolvedEffort = requestedEffort.flatMap { row.efforts.contains($0) ? $0 : nil }
+            return (model, resolvedEffort)
+        }
+        if let family = catalog.first(where: { $0.variant(model) != nil }),
+           let variant = family.variant(model) {
+            let wireModel = requestedEffort == nil
+                ? model
+                : family.providerID(effort: requestedEffort ?? variant.effort, fastMode: false)
+            return (wireModel, nil)
+        }
+        return (model, nil)
+    }
+
     func textEngine(preferring provider: ProviderKind?, allowsDefaultModel: Bool = true) -> TextGeneration.Engine? {
         func claude(model: String? = nil, effort: String? = nil) -> TextGeneration.Engine? {
             guard providers.status(.claude).auth != .signedOut, let executable = providers.executable(for: .claude) else { return nil }
@@ -1964,6 +2546,18 @@ final class AppModel {
                   let executable = providers.executable(for: .codex),
                   let model = model ?? providers.defaultModel(for: .codex)?.id else { return nil }
             return .codex(executable: executable, environment: providers.environment(for: .codex), model: model, effort: effort)
+        }
+        func grok(model: String?, effort: String? = nil) -> TextGeneration.Engine? {
+            guard providers.status(.grok).auth != .signedOut,
+                  let executable = providers.executable(for: .grok) else { return nil }
+            // No model leaves the choice to the CLI's own default (no catalog yet, or none picked).
+            let wire = model.map { grokWireSelection(model: $0, effort: effort) } ?? (model: nil, effort: effort)
+            return .grok(executable: executable, environment: providers.environment(for: .grok), model: wire.model, effort: wire.effort)
+        }
+        func pi(model: String? = nil, effort: String? = nil) -> TextGeneration.Engine? {
+            guard providers.status(.pi).auth != .signedOut,
+                  let executable = providers.executable(for: .pi) else { return nil }
+            return .pi(executable: executable, environment: providers.environment(for: .pi), model: model, effort: effort)
         }
         // Codex's default effort for a model that has no "low", so a model without it never fails.
         func lowEffort(_ model: ModelOption) -> String? {
@@ -1997,6 +2591,13 @@ final class AppModel {
         case .off: return nil
         case .claude: return selectedModel(for: .claude)
         case .codex: return selectedModel(for: .codex)
+        case .grok:
+            // An unset model runs the CLI's default, never the model last used in a chat.
+            let model = providers.model(settings.textGenerationModelID, for: .grok)
+            return grok(model: model?.id, effort: chosenEffort(model))
+        case .pi:
+            let model = providers.model(settings.textGenerationModelID, for: .pi)
+            return pi(model: model?.id, effort: chosenEffort(model))
         // Claude chats use Haiku, every other chat Terra. Without Terra, Haiku comes before
         // the Codex default, which may be a costly model. A caller that runs on every reply
         // passes `allowsDefaultModel: false` so it never reaches that costly default.
@@ -2096,7 +2697,14 @@ final class AppModel {
             let branch = "tivano/control-\(suffix)"
             // Git resolves HEAD at creation; never silently substitute another checkout.
             try await git.addWorktree(at: path, branch: branch, base: "HEAD")
-            try requireExternalWorkspaceOwner(id, original: original, projectPath: project.path)
+            do {
+                try requireExternalWorkspaceOwner(id, original: original, projectPath: project.path)
+            } catch {
+                // Archived or moved while Git ran: the copy was never recorded, so remove it
+                // and its branch rather than leave them orphaned.
+                await Self.abandonCreatedWorktree(git: git, path: path, branch: branch)
+                throw error
+            }
             updateThread(id) { $0.worktreePath = path; $0.branch = branch }
             try commitExternalLibrary()
             let scripts = project.scripts.filter(\.runOnWorktreeCreate)

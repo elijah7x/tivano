@@ -1,6 +1,6 @@
 # Hydra 2.0 设计
 
-状态：2.2.0 起正式提供，是唯一的 Hydra 流程。v1 已在 2.2.0 移除，代码保留在 Git 历史中。本文描述当前设计；依据包括 `docs/research/hydra2-code-map-2026-10-26.md`、`docs/research/hydra2-audit/docs-data.md` 和 Hydra 1 基线（`scripts/hydra_eval.py baseline`，输出在仓库外 `private-artifacts/hydra-eval/2026-10-26-hydra1-baseline/`）。
+状态：2.2.0 起正式提供，是唯一的 Hydra 流程。v1 已在 2.2.0 移除，代码保留在 Git 历史中。本文描述当前设计；依据包括 `docs/research/hydra2-code-map-2026-10-26.md`、`docs/research/hydra2-audit/docs-data.md` 和 Hydra 1 基线（`scripts/hydra_eval.py baseline`，输出在仓库外 `private-artifacts/hydra-eval/2026-10-26-hydra1-baseline/`；`scripts/hydra_eval.py` 等评测脚本已于 2026-11-15 归档到仓库外 `private-artifacts/retired-probes-20261115/`）。
 
 ## 目标与边界
 
@@ -68,11 +68,11 @@ lead 在每条用户消息开始、首次工具调用之前明确决定哪些部
 
 `reviewSkipped` 使用稳定的英文原因：`no changes`、`independent review is off`、`no review model available`、`not applicable: no checkout` 表示未执行审查的条件，不算审查失败。非正常完成且尚无审查结果的 job 记录 `not run: <ending>`，其中 ending 使用原始值。实际失败记录为 `review failed: ...`（如 `git tree`、`git diff`）或 `review failed (<reviewer>): ...`，保留所选审查者及超时、退出码、启动失败或空输出的原因。
 
-- v2 的固定环节，没有单独开关。Claude lead 用 Codex，Codex lead 用 Claude，其他 lead 优先 Claude、再试 Codex。Codex 使用默认模型、高推理和 read-only sandbox；Claude 单次禁用工具，未显式固定模型或推理强度。不可用、失败或 15 分钟超时记录原因，继续后续收尾。
+- v2 的固定环节，审查顺序来自设置（第一选择/第二选择，默认先 Codex 后 Claude；设置文案建议选择与 lead 不同的厂商）。Codex 使用默认或所选模型与 read-only sandbox；Claude 仅启用只读的 Read/Grep/Glob 工具，并可读取 diff 中的其他 checkout；不可用、失败或 15 分钟超时记录原因，继续后续收尾。
 - lead 工作回合结束后，对 job 的改动尝试审查，自动合并开启时先审后合；关闭自动合并也审查。无改动记录为不适用，不算审查失败。
 - job 为每个 checkout 保存 `baseTrees`，按各 checkout 自己的 base tree、只对本 job 触及的路径生成 diff。范围包含 lead、共享 checkout 的 heads 以及其他 checkout 的 heads；不能用 lead 的根目录与 base 代替全部项目，也不能把无关路径带入审查。
-- 输入为用户请求、非空三栏和带 checkout 标识的 diff，总 diff 预算 80,000 字符，截断须注明；审查不落地、不进入团队面板批次。base 缺失或 diff 收集失败须说明覆盖限制，不宣称审过完整代码。
-- 只报告会导致错误行为的问题，每条包含文件位置和失败情形；lead 须明确采纳修改或驳回说明。账本记录 findings 与匹配到的 accepted 数，不把无法匹配的文本算作明确驳回，也不以零 findings 保证正确。
+- 输入为用户请求、非空三栏和带 checkout 标识的 diff，总 diff 预算 80,000 字符，截断须注明；审查者可读取 diff 中各 checkout 的文件以确认上下文，并被告知看不到 lead 的对话回复、构建与检查、部署或 Git 外文件，且 diff 可能包含已合并的提交；审查不落地、不进入团队面板批次。base 缺失或 diff 收集失败须说明覆盖限制，不宣称审过完整代码。
+- 只报告会导致错误行为的问题，每条包含文件位置和失败情形；lead 须明确采纳修改或驳回说明。账本记录 findings 与匹配到的 accepted 数：findings 按以 `Finding N` 开头的行计数（容忍列表符号或加粗），无此类行计为零；accepted 汇总审查回合中每条助手消息的采纳结果，每个 finding 编号以最后一次 accepted / rejected 表态为准、只计一次且不超过 findings 数；非审查发起的回合不计入。不把无法匹配的文本算作明确驳回，也不以零 findings 保证正确。
 - 审查作为 `[Hydra] Review` 交给 lead 处理。lead 忙时把完整消息留在 `pendingReview`，待空闲后交付；job 在交付并处理之前不关闭。等待期间的新用户消息仍属于这个 job。审查调用失败可以收尾，已产生但尚未交付的意见不能当作失败或跳过而丢弃。
 
 ## 7. 评分账本

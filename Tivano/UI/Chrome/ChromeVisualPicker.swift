@@ -104,6 +104,8 @@ struct ChromeVisualTile<Content: View>: View {
             .foregroundStyle(isSelected ? Chrome.primaryText : Chrome.secondaryText)
             .multilineTextAlignment(.center)
             .lineLimit(2)
+            .minimumScaleFactor(0.85)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(width: width)
     }
 

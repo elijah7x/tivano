@@ -20,6 +20,26 @@ enum CaptureRun {
 
     nonisolated static var isEnabled: Bool { outputDirectory != nil }
 
+    /// When launched with `--no-providers`, the capture run reports every provider as
+    /// uninstalled instead of installed and signed in, to preview the no-provider state.
+    nonisolated static let simulatesNoProviders: Bool = {
+        #if DEBUG
+        return isEnabled && CommandLine.arguments.contains("--no-providers")
+        #else
+        return false
+        #endif
+    }()
+
+    /// When launched with `--blank-home` or `--mention-demo`, sending a message rehearses a
+    /// local demo reply instead of starting a real provider turn.
+    nonisolated static let rehearsesSends: Bool = {
+        #if DEBUG
+        return isEnabled && (CommandLine.arguments.contains("--blank-home") || CommandLine.arguments.contains("--mention-demo"))
+        #else
+        return false
+        #endif
+    }()
+
     /// The library and thread files the run reads, under the output folder.
     nonisolated static var storageRoot: URL? {
         outputDirectory?.appendingPathComponent("storage", isDirectory: true)

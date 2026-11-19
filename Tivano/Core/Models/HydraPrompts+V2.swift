@@ -77,7 +77,7 @@ extension HydraPrompts {
 
     /// A new v2 head's whole brief: the lead's entry, the handoff packet, the workplace,
     /// how to work and the three-line report format.
-    static func v2HeadPrompt(persona: HydraPersona, delegation: HydraDelegation, workplace: Workplace, packet: HydraHandoffPacket) -> String {
+    static func v2HeadPrompt(persona: HydraPersona, delegation: HydraDelegation, workplace: Workplace, packet: HydraHandoffPacket, rolePrompt: String? = nil) -> String {
         let workplaceText = workplaceRules(workplace)
         let limit = HydraHandoffPacket.requestLimit
         let request = String(packet.request.prefix(limit))
@@ -86,8 +86,9 @@ extension HydraPrompts {
         let team = packet.team.map { member in
             "- \(member.name)\(member.name == persona.name ? " (you)" : ""): \(member.task) (\(member.files.isEmpty ? "reads only" : "owns: " + member.files.joined(separator: ", ")))"
         }.joined(separator: "\n")
+        let roleSection = rolePrompt?.trimmed.nilIfEmpty.map { "\n\n## Your role\n\($0)" } ?? ""
         return """
-        You are \(persona.name), a Hydra head in Tivano: one of several helpers working in parallel for a lead agent. The lead delegated this task to you.
+        You are \(persona.name), a Hydra head in Tivano: one of several helpers working in parallel for a lead agent. The lead delegated this task to you.\(roleSection)
 
         ## Your task: \(delegation.task)
         \(withoutVerificationSteps(delegation.prompt))
@@ -276,14 +277,26 @@ extension HydraPrompts {
         "[Hydra] \(name) was not sent back: \(reason). Do that part yourself or send a new head; this is a note for you, not something to tell the user."
     }
 
+    /// Tells the lead that tasks from its delegation block are waiting on the concurrency cap,
+    /// so it does not conclude the dispatch failed and send them again.
+    static func v2QueuedHeadsNote(queued: Int, maxHeads: Int) -> String {
+        let tasks = queued == 1 ? "1 of your tasks is" : "\(queued) of your tasks are"
+        let heads = maxHeads == 1 ? "1 head" : "\(maxHeads) heads"
+        return "[Hydra] \(tasks) queued, not lost: the cap allows \(heads) at once. They start automatically as heads finish; do not send them again."
+    }
+
     static func v2EarlierHeadBrief(name: String, prompt: String) -> String {
         "\(name) worked on this part in an earlier request of this chat; its changes are already in the checkout. Continue from them:\n\n" + prompt
     }
 
-    /// The cross-vendor reviewer's whole prompt: request, head notes and the job's diff.
+    /// The cross-vendor reviewer's whole prompt: request, head notes and the job's diff; the reviewer may read the checkouts.
     static func v2ReviewPrompt(request: String, notes: String, patch: String) -> String {
         """
-        You are an independent reviewer from another vendor, with no tools. Use only the material below. Find only problems that would make the change behave wrongly or fail the user's request: bugs, broken callers, missing pieces of the request and unsafe operations. Report no style, naming or preference issues.
+        You are an independent reviewer from another vendor, reviewing this job's change. You may read files in the checkouts named by the `# checkout:` headers in the diff to confirm declarations, callers and surrounding code before you report; read only, change nothing and run nothing that writes. If you cannot read files, use only the material below.
+
+        Report only problems that would make the change behave wrongly or fail the user's request: bugs, broken callers, missing pieces of the request and unsafe operations. Report a problem only when the diff or the files you read show it; leave out claims about compiler, OS or library behaviour you have not confirmed. Report no style, naming or preference issues.
+
+        You do not see the lead's chat replies, the builds and checks it ran, deployments, or files outside Git, so do not report something as missing, unbuilt or unverified on that basis. The diff starts from the tree at the beginning of the job, so it can include commits the user asked to merge or earlier approved work; do not ask to revert them unless they break the request.
 
         If there are none, output exactly NO FINDINGS. Otherwise output at most 8 lines, most severe first. Each line starts `Finding N:` and gives `path:line`, the concrete failure scenario and the fix. Add no introduction or summary.
 
@@ -309,7 +322,7 @@ extension HydraPrompts {
 
         ---
         For the lead:
-        For each finding, write one line `Finding N: accepted - <what you changed>` or `Finding N: rejected - <why>`. Fix accepted findings yourself, send no heads out, and run the narrowest build if you changed code. Then answer the user in one or two lines about what the review changed.
+        Check each finding against the checkout before acting, and reject any that is already handled, out of scope or false. For each finding, write one plain line, without bullets or bold, `Finding N: accepted - <what you changed>` or `Finding N: rejected - <why>`. Fix accepted findings yourself, send no heads out, and run the narrowest build if you changed code. Then answer the user in one or two lines about what the review changed.
         """
     }
 }

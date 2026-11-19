@@ -135,8 +135,6 @@ final class OrbAnimator {
 
     private(set) var state: OrbState
     private(set) var size: OrbSize
-    /// Multiplier on top of the preset's baked speed.
-    private(set) var speed: Float = 1.0
     /// Crossfade duration for state changes, in seconds (0 = no fade).
     var transitionDuration: TimeInterval
     private var clock = OrbAnimationClock()
@@ -162,8 +160,6 @@ final class OrbAnimator {
     var rMin: Float { resolved.opts.rMin ?? 0.3 }
 
     var isRunning: Bool { clock.isRunning }
-
-    var isTransitioning: Bool { transition != nil }
 
     /// Change state. `visible` is the frame on screen now: an interrupted fade continues from
     /// its visible composite instead of jumping back.
@@ -192,14 +188,6 @@ final class OrbAnimator {
         return true
     }
 
-    @discardableResult
-    func setSpeed(_ speed: Float) -> Bool {
-        let speed: Float = speed.isFinite ? OrbMath.clamp(speed, 0.0, 100.0) : 1.0
-        let changed = self.speed != speed
-        self.speed = speed
-        return changed
-    }
-
     /// Audio affects only visual motion, with independent microphone and speaker envelopes.
     @discardableResult
     func setAudioLevels(microphone: Float, speaker: Float, now: TimeInterval) -> Bool {
@@ -221,7 +209,7 @@ final class OrbAnimator {
     /// Advance the clock to `now`. Time only accumulates while `animating`.
     func tick(now: TimeInterval, animating: Bool, reduced: Bool) {
         let audioSpeed: Double = audio?.speed(now) ?? 1.0
-        let rate: Double = Double(resolved.speed) * Double(speed) * audioSpeed
+        let rate: Double = Double(resolved.speed) * audioSpeed
         clock.advance(now: now, rate: rate, running: animating)
         t = reduced ? orbReducedMotionT : Float(clock.seconds)
         if reduced {

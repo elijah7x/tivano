@@ -329,6 +329,7 @@ enum InteractionMode: String, Codable, Sendable {
 }
 
 enum WorkspaceMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case auto
     case local
     case worktree
 
@@ -336,8 +337,25 @@ enum WorkspaceMode: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
+        case .auto: "Auto"
         case .local: "Local"
         case .worktree: "New worktree"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .auto: "Edits your project folder directly, and creates a Git worktree when another chat is already active there."
+        case .local: "Edits files directly in your project folder."
+        case .worktree: "Isolates each chat in its own Git worktree copy. Non-Git folders stay local."
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .auto: "wand.and.sparkles"
+        case .local: "folder"
+        case .worktree: "arrow.triangle.branch"
         }
     }
 }

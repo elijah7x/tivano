@@ -15,6 +15,7 @@ struct ProviderSwitchTab: View {
             .padding(.top, 6)
             .padding(.bottom, 6 + ThreadChangesTab.overlap)
             .modifier(ProviderSwitchTabSurface())
+            .pointerStyle(.default)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -31,6 +32,7 @@ struct ProviderSwitchTab: View {
                 .accessibilityLabel(Text(verbatim: back))
                 .controlSize(.small)
                 .focusable(false)
+                .pointerStyle(.default)
                 .padding(.leading, 4)
         }
         .font(.ui(.callout, weight: .medium).monospacedDigit())
@@ -42,12 +44,13 @@ struct ProviderSwitchTab: View {
 
 private struct ProviderSwitchTabSurface: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
         let shape = UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12, style: .continuous)
         content
-            .background(shape.fill(Chrome.overlay(0.05)).background(shape.fill(Color(nsColor: .controlBackgroundColor))))
+            .background(shape.fill(Chrome.overlay(0.05)).background(shape.fill(solid?.elevated ?? Color(nsColor: .controlBackgroundColor))))
             .clipShape(shape)
-            .overlay { shape.strokeBorder(Chrome.floatingGlassRim(isDark: colorScheme == .dark), lineWidth: 1) }
+            .overlay { shape.strokeBorder(solid?.hairline ?? Chrome.floatingGlassRim(isDark: colorScheme == .dark), lineWidth: 1) }
     }
 }

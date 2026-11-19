@@ -14,14 +14,6 @@ enum APIKeychain {
         return fallback
     }
 
-    /// Stores the key, or removes it for an empty one. Returns whether the Keychain
-    /// took it.
-    @discardableResult
-    static func setKey(_ key: String, for provider: ProviderKind) -> Bool {
-        guard let account = account(for: provider) else { return false }
-        return set(key, account: account)
-    }
-
     /// Returns the system error description, or nil when the key was stored.
     static func store(_ key: String, for provider: ProviderKind) -> String? {
         let status: OSStatus
@@ -32,6 +24,37 @@ enum APIKeychain {
         }
         guard status != errSecSuccess else { return nil }
         return SecCopyErrorMessageString(status, nil) as String? ?? String(status)
+    }
+
+    /// A provider's item as read, telling a confirmed absence from a locked or denied read.
+    static func readResult(for provider: ProviderKind) -> ReadResult {
+        guard let account = account(for: provider) else { return .unavailable(errSecParam) }
+        return readResult(account)
+    }
+
+    enum InsertResult: Sendable {
+        case inserted
+        /// An item appeared since the read; it is kept, never replaced.
+        case existing
+        case failed(String)
+    }
+
+    /// Adds a migrated key only where no item exists: unlike `store`, it never updates one.
+    static func insertIfMissing(_ key: String, for provider: ProviderKind) -> InsertResult {
+        guard let account = account(for: provider), !CaptureRun.isEnabled else {
+            return .failed(SecCopyErrorMessageString(errSecParam, nil) as String? ?? String(errSecParam))
+        }
+        let attributes: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: AppInfo.libraryName,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: Data(key.trimmed.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
+        ]
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        if status == errSecSuccess { return .inserted }
+        if status == errSecDuplicateItem { return .existing }
+        return .failed(SecCopyErrorMessageString(status, nil) as String? ?? String(status))
     }
 
     /// Returns the system error description, or nil when the key was stored.

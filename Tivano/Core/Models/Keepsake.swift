@@ -31,7 +31,7 @@ enum KeepsakeCatalog {
         all.first { $0.id == id }
     }
 
-    /// Issuing is version-controlled, with no server: a later release stops issuing
-    /// a keepsake by removing its id here. Already earned keepsakes remain stored.
-    static let grantedByThisBuild: [String] = ["early-supporter"]
+    /// Issuing is version-controlled, with no server: 3.0 stopped issuing
+    /// early-supporter by removing its id here. Already earned keepsakes remain stored.
+    static let grantedByThisBuild: [String] = []
 }

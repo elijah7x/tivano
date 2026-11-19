@@ -32,7 +32,145 @@ def methods(file: str, *markers: str) -> str:
     return "\n".join(declaration(PROVIDERS / file, marker) for marker in markers) + "\n"
 
 
-swift = "import Foundation\nimport CoreFoundation\n"
+def unique_declaration(path: Path, marker: str) -> str:
+    count = path.read_text().count(marker)
+    if count != 1:
+        raise ValueError(f"{path}: marker {marker!r} found {count} times, expected 1")
+    return declaration(path, marker)
+
+
+def source_block(text: str, marker: str, label: str) -> str:
+    count = text.count(marker)
+    if count != 1:
+        raise ValueError(f"{label}: marker {marker!r} found {count} times, expected 1")
+    start = text.index(marker)
+    opening = text.find("{", start)
+    if opening == -1:
+        raise ValueError(f"{label}: marker {marker!r} has no opening brace")
+    depth, end = 1, opening + 1
+    while depth and end < len(text):
+        depth += (text[end] == "{") - (text[end] == "}")
+        end += 1
+    if depth:
+        raise ValueError(f"{label}: unterminated block for {marker!r}")
+    return text[start:end]
+
+
+def extract_calls(text: str, prefix: str, label: str) -> list[str]:
+    calls = []
+    cursor = 0
+    while True:
+        start = text.find(prefix, cursor)
+        if start == -1:
+            break
+        opening = start + len(prefix) - 1
+        depth, end = 1, opening + 1
+        while depth and end < len(text):
+            depth += (text[end] == "(") - (text[end] == ")")
+            end += 1
+        if depth:
+            raise ValueError(f"{label}: unterminated call for {prefix!r}")
+        calls.append(text[start:end])
+        cursor = end
+    if not calls:
+        raise ValueError(f"{label}: expected at least one call to {prefix!r}")
+    return calls
+
+
+def check_source_invariants() -> None:
+    app_model = ROOT / "Tivano/App/AppModel.swift"
+    runtime = ROOT / "Tivano/App/Runtime/ThreadRuntime.swift"
+    hydra = ROOT / "Tivano/App/AppModel+Hydra.swift"
+
+    # 1. Auto-shelve teardown must not unregister memoryPressureObserver; isolated deinit must.
+    stop_auto_shelve = unique_declaration(app_model, "    private func stopAutoShelveSchedule()")
+    if "memoryPressureObserver" in stop_auto_shelve:
+        raise AssertionError("AppModel.stopAutoShelveSchedule() must not reference memoryPressureObserver")
+    isolated_deinit = unique_declaration(app_model, "    isolated deinit")
+    if "NotificationCenter.default.removeObserver(memoryPressureObserver)" not in isolated_deinit:
+        raise AssertionError("AppModel.isolated deinit must remove memoryPressureObserver")
+
+    # 2. ThreadRuntime.install(_:prepared:) must preserve an in-memory forwardedContinuation.
+    install = unique_declaration(
+        runtime, "    private func install(_ document: ThreadDocument, prepared: Bool = false)"
+    )
+    forwarded_lines = [line.strip() for line in install.splitlines() if "forwardedContinuation =" in line]
+    if not forwarded_lines:
+        raise AssertionError("ThreadRuntime.install(_:prepared:) is missing forwardedContinuation assignment")
+    for line in forwarded_lines:
+        if "?? forwardedContinuation" not in line:
+            raise AssertionError(
+                f"ThreadRuntime.install(_:prepared:) must preserve forwardedContinuation with '?? forwardedContinuation': {line}"
+            )
+
+    # 3. Busy/reverting refuseBlock must defer refusals instead of starting a turn;
+    #    finishTurn (via finalizeTurn after flushHydraReports) and startHydraReportTurn must drain them.
+    refuse_block = unique_declaration(
+        runtime, "    private func refuseBlock(_ message: String, dropped: String) -> DelegationOutcome"
+    )
+    busy_refusal = source_block(refuse_block, "guard phase == .idle, !isReverting else {", "ThreadRuntime.refuseBlock")
+    if "deferredRefusals.append(" not in busy_refusal:
+        raise AssertionError("ThreadRuntime.refuseBlock(_:dropped:) must append to deferredRefusals when busy or reverting")
+    if "startTurn" in busy_refusal:
+        raise AssertionError("ThreadRuntime.refuseBlock(_:dropped:) must not call startTurn when busy or reverting")
+
+    finish_turn = unique_declaration(
+        runtime, "    private func finishTurn(status: TurnStatus, turnID: UUID?, error: String? = nil) async"
+    )
+    if "await finalizeTurn(" not in finish_turn:
+        raise AssertionError("ThreadRuntime.finishTurn must delegate to finalizeTurn")
+    finalize_turn = unique_declaration(
+        runtime, "    private func finalizeTurn(status: TurnStatus, turnID: UUID?, error: String? = nil) async"
+    )
+    flush_marker = "if !continues, status != .interrupted, flushHydraReports() { continues = true }"
+    deferred_marker = "if !continues, status != .interrupted, !deferredRefusals.isEmpty {"
+    if flush_marker not in finalize_turn:
+        raise AssertionError("ThreadRuntime.finalizeTurn is missing trailing flushHydraReports() check")
+    deferred_branch = source_block(finalize_turn, deferred_marker, "ThreadRuntime.finalizeTurn")
+    if finalize_turn.index(flush_marker) >= finalize_turn.index(deferred_marker):
+        raise AssertionError("ThreadRuntime.finalizeTurn must drain deferredRefusals after flushHydraReports()")
+    for required in (
+        "deferredRefusals.joined(",
+        "deferredRefusals.removeAll()",
+        "continues = true",
+        "startRefusalTurn(refusal)",
+    ):
+        if required not in deferred_branch:
+            raise AssertionError(f"ThreadRuntime.finalizeTurn deferredRefusals branch missing {required!r}")
+    if "if status == .interrupted { deferredRefusals.removeAll() }" not in finalize_turn:
+        raise AssertionError("ThreadRuntime.finalizeTurn must drop deferredRefusals when the user stops the turn")
+    # A refusal starts only on a lead still idle once loaded; otherwise it stays internal.
+    start_refusal = unique_declaration(runtime, "    private func startRefusalTurn(_ message: String)")
+    guard_marker = "guard phase == .idle, !isReverting else {"
+    refusal_guard = source_block(start_refusal, guard_marker, "ThreadRuntime.startRefusalTurn")
+    if "deferredRefusals.append(message)" not in refusal_guard or "startTurn" in refusal_guard:
+        raise AssertionError("ThreadRuntime.startRefusalTurn must keep the refusal internal when the lead is busy")
+    if start_refusal.index(guard_marker) >= start_refusal.index("await startTurn(text: message, attachments: [], hydraHeads: [])"):
+        raise AssertionError("ThreadRuntime.startRefusalTurn must check the lead is idle before startTurn")
+    clear_queued = unique_declaration(runtime, "    func clearQueuedHydraHeads()")
+    if "deferredRefusals.removeAll()" not in clear_queued:
+        raise AssertionError("ThreadRuntime.clearQueuedHydraHeads() must drop deferredRefusals")
+
+    start_report_turn = unique_declaration(runtime, "    private func startHydraReportTurn() async")
+    for required in ("let refused = deferredRefusals.map", "deferredRefusals.removeAll()", "let text = refused + "):
+        if required not in start_report_turn:
+            raise AssertionError(f"ThreadRuntime.startHydraReportTurn() missing {required!r}")
+    if start_report_turn.index("let refused = deferredRefusals.map") >= start_report_turn.index("deferredRefusals.removeAll()"):
+        raise AssertionError("ThreadRuntime.startHydraReportTurn() must read deferredRefusals before removeAll()")
+
+    # 4. failHydraRoute and hydraHeadStartedWaiting must pass endsStreaming: false to appendHydraNote.
+    for marker, label in (
+        ("    private func failHydraRoute(_ id: UUID, _ message: String) -> Bool", "AppModel.failHydraRoute"),
+        ("    func hydraHeadStartedWaiting(_ id: UUID)", "AppModel.hydraHeadStartedWaiting"),
+    ):
+        body = unique_declaration(hydra, marker)
+        for call in extract_calls(body, "appendHydraNote(", label):
+            if "endsStreaming: false" not in call:
+                raise AssertionError(f"{label} must pass endsStreaming: false to appendHydraNote: {call}")
+
+
+
+swift = "import Foundation\nimport CoreFoundation\nimport OSLog\n"
 swift += (ROOT / "Tivano/Core/Support/JSONValue.swift").read_text()
 swift += r'''
 // Dependencies outside the send lifecycle are in-memory fixtures. Gates ignore
@@ -323,9 +461,11 @@ actor MCPHub {
     var specs: [String: MCPServerSpec]?
     var clients: [String: MCPClient] = [:]
     var toolCache: [String: [Tool]] = [:]
+    var combinedToolCache: [Tool]?
     var failed: Set<String> = []
     var generation = UUID()
     var shuttingDown = false
+    static let log = Logger(subsystem: "dev.tivano.Tivano", category: "mcp-hub")
     func install(_ specs: [String: MCPServerSpec]) { self.specs = specs }
     nonisolated static func readSpecs() -> [String: MCPServerSpec] { ["fresh": MCPServerSpec()] }
 '''
@@ -503,6 +643,10 @@ swift += r'''
         } else {
             try await session.discoverMCPTools()
             precondition(session.mcpTools.map(\.server) == ["fresh"])
+            await hub.reload()
+            await hub.install(["reloaded": MCPServerSpec()])
+            let reloaded = try await hub.tools()
+            precondition(reloaded.map(\.server) == ["reloaded"])
         }
         precondition(session.didLoadMCPTools)
     }
@@ -609,6 +753,9 @@ swift += r'''
     }
 }
 '''
+
+check_source_invariants()
+print("PASS: AppModel observer lifecycle, forwardedContinuation preservation, deferred Hydra refusals and appendHydraNote streaming guards")
 
 with tempfile.TemporaryDirectory(prefix="tivano-runtime-audit-") as folder:
     out = Path(folder)

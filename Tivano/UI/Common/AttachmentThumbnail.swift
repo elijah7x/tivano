@@ -1,22 +1,24 @@
 import AppKit
 import SwiftUI
 
-/// Thumbnails refresh on mount, path changes and hidden-column restoration. They
-/// intentionally keep that snapshot while mounted; only an open preview polls.
+/// Thumbnails refresh on mount, path changes, hidden-column restoration and app
+/// reactivation. Only an open preview polls, and only while its column and app are active.
 struct AttachmentFileTracker: ViewModifier {
     let path: String
     @Binding var snapshot: AttachmentFileSnapshot?
     var continuously = false
     @Environment(\.veilRenderScope) private var scope
+    @State private var appIsActive = NSApp.isActive
 
     private struct Watch: Hashable {
         let path: String
         let visible: Bool
+        let appIsActive: Bool
         let continuously: Bool
     }
 
     func body(content: Content) -> some View {
-        let watch = Watch(path: path, visible: scope?.isVisible ?? true, continuously: continuously)
+        let watch = Watch(path: path, visible: scope?.isVisible ?? true, appIsActive: appIsActive, continuously: continuously)
         content.task(id: watch) {
             guard watch.visible, !watch.path.isEmpty else { return }
             while !Task.isCancelled {
@@ -24,9 +26,16 @@ struct AttachmentFileTracker: ViewModifier {
                 guard !Task.isCancelled else { return }
                 let next = AttachmentFileSnapshot(path: watch.path, version: version)
                 if snapshot != next { snapshot = next }
-                guard watch.continuously else { return }
+                // Polling, not the first read, waits for the app to be active again.
+                guard watch.continuously, watch.appIsActive else { return }
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            appIsActive = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            appIsActive = false
         }
     }
 }

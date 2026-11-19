@@ -48,7 +48,7 @@ def main():
 
     try:
         send = block(sources[RUNTIME],
-                     '    @discardableResult\n    func sendContinuation(after turnID: UUID, text: String) -> Bool {',
+                     '    @discardableResult\n    func sendContinuation(after turnID: UUID, text: String, preservesHeadTiming: Bool = false) -> Bool {',
                      RUNTIME)
         # The guards live in the helper sendContinuation calls before and after loading.
         send += block(sources[RUNTIME], '    private func canContinue(after turnID: UUID) -> Bool {', RUNTIME)
@@ -91,16 +91,22 @@ def main():
         return 1
     translations = {
         'Continue': '继续',
-        'Continue head': '继续此 head',
+        'Continue sub-agent': '继续此子代理',
         'Connection to Antigravity dropped. Continuing the same conversation in %lld s (attempt %lld of %lld)…':
             '与 Antigravity 的连接中断，%1$lld 秒后在同一对话中继续（第 %2$lld/%3$lld 次）…',
-        'Antigravity head %@ lost its connection; continuing the same conversation in %lld s (attempt %lld of %lld)…':
-            'Antigravity head %1$@ 连接中断，%2$lld 秒后在同一对话中继续（第 %3$lld/%4$lld 次）…',
+        'Antigravity sub-agent %@ lost its connection; continuing the same conversation in %lld s (attempt %lld of %lld)…':
+            'Antigravity 子代理 %1$@ 连接中断，%2$lld 秒后在同一对话中继续（第 %3$lld/%4$lld 次）…',
     }
     for key, expected in translations.items():
-        value = catalog.get('strings', {}).get(key, {}).get('localizations', {}).get('zh-Hans', {}).get('stringUnit', {}).get('value')
+        localizations = catalog.get('strings', {}).get(key, {}).get('localizations', {})
+        value = localizations.get('zh-Hans', {}).get('stringUnit', {}).get('value')
         if value != expected:
             failures.append(f'{CATALOG}: {key!r} zh-Hans is {value!r}, expected {expected!r}')
+        for locale in ('zh-Hant', 'ja', 'ko', 'fr'):
+            unit = localizations.get(locale, {}).get('stringUnit', {})
+            loc_value = unit.get('value')
+            if unit.get('state') != 'translated' or not isinstance(loc_value, str) or not loc_value.strip():
+                failures.append(f'{CATALOG}: {key!r} {locale} is missing or empty ({loc_value!r})')
 
     if failures:
         for failure in failures:

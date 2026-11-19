@@ -7,6 +7,9 @@ import SwiftUI
 final class SelectionCopy {
     private weak var holder: NSView?
     private(set) var text: String?
+    /// Whether a selection was captured, multi-range ones included (those copy natively
+    /// but have no single `text`).
+    var hasSelection: Bool { holder != nil }
 
     fileprivate func capture(in area: RightClickCatcherView, owner: UUID) {
         holder = nil
@@ -90,7 +93,11 @@ private struct RightClickPopoverModifier: ViewModifier {
                 attachmentAnchor: .rect(.rect(CGRect(origin: anchor ?? .zero, size: CGSize(width: 1, height: 1)))),
                 arrowEdge: .top
             ) {
-                PopoverMenu { RowActionItems(actions: menuActions) }
+                PopoverMenu {
+                    RowActionItems(actions: menuActions)
+                        .pointerStyle(.default)
+                }
+                .pointerStyle(.default)
             }
     }
 }

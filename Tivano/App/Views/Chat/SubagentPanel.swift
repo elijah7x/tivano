@@ -248,7 +248,7 @@ struct SubagentPanel: View {
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
     let thread: ChatThread
     let size: CGSize
     let workingDirectory: String?
@@ -261,7 +261,6 @@ struct SubagentPanel: View {
     @State private var scrollChrome = ChromeScrollModel()
     @State private var scrollState = TimelineScrollState()
     /// Closing while the helper works stops its turn, so that one is asked for first.
-    @State private var isConfirmingClose = false
 
     private static let cornerRadius: CGFloat = 22
     private static let handleHeight: CGFloat = Chrome.chromeTopPadding + Chrome.capsuleHeight + 6
@@ -285,7 +284,8 @@ struct SubagentPanel: View {
                     columnHeight: size.height,
                     // A panel's transcript needs no rail, and the rail's hover tracking
                     // and geometry reader are per-frame work under the pointer.
-                    showsMinimap: false
+                    showsMinimap: false,
+                    usesTimelineTopFade: true
                 )
                 .equatable()
             }
@@ -296,7 +296,6 @@ struct SubagentPanel: View {
                     JumpToLatestButton(scrollState: scrollState)
                 }
         }
-        .chromeEdgeFade(scrollChrome)
         .overlay(alignment: .top) {
             HStack(alignment: .top, spacing: 8) {
                 // The handle. Invisible, like a window's title bar with no title; the
@@ -311,18 +310,10 @@ struct SubagentPanel: View {
                 SubagentWorkingBox(title: thread.title, isRunning: runtime.isRunning)
                     .padding(.top, Chrome.chromeTopPadding)
                 // The same mark as the team panel's, which closes nothing that is working:
-                // this one ends a turn, so a helper still at it is asked about first.
-                ChromeCircleButton(
-                    symbol: "xmark",
-                    help: runtime.isRunning ? "Close this chat and stop its turn" : "Close this chat"
-                ) {
-                    if runtime.isRunning { isConfirmingClose = true } else { close() }
-                }
+                // a helper still at it keeps working behind the pill in the stream.
+                ChromeCircleButton(symbol: "xmark", help: "Close this chat") { close() }
                 .padding(.top, Chrome.chromeTopPadding)
                 .padding(.trailing, Chrome.chromeHorizontalPadding)
-                .popover(isPresented: $isConfirmingClose, arrowEdge: .bottom) {
-                    ClosePanelPopover(title: thread.title) { close() }
-                }
             }
         }
         .frame(width: size.width, height: size.height)
@@ -333,21 +324,35 @@ struct SubagentPanel: View {
             // The window's own recipe, on the panel: one glass surface, a scrim for the
             // text over whatever the panel floats above, and the theme's tint.
             let isDark = colorScheme == .dark
-            if !performanceMode {
+#if DEBUG
+            if ProbeKnobs.isOff("glass") {
+                shape.fill(Color(nsColor: .windowBackgroundColor))
+            } else if let solid {
+                shape
+                    .fill(solid.elevated)
+                    .overlay { shape.strokeBorder(solid.hairline, lineWidth: 1) }
+            } else {
                 shape
                     .fill(.clear)
-                    .glassEffect(.regular, in: shape)
+                    .chromeGlassEffect(.regular, in: shape)
                     .overlay {
                         shape.fill(Chrome.glassTint.opacity(isDark ? 0.22 : 0.16))
                     }
-            } else {
-                // Without glass the panel has neither its edge nor its shadow, and the
-                // window's solid backdrop is the same colour: the floating surfaces' flat
-                // recipe (control fill and rim) keeps it apart from the chat under it.
-                shape
-                    .fill(Color(nsColor: .controlBackgroundColor))
-                    .overlay { shape.strokeBorder(Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1) }
             }
+#else
+            if let solid {
+                shape
+                    .fill(solid.elevated)
+                    .overlay { shape.strokeBorder(solid.hairline, lineWidth: 1) }
+            } else {
+                shape
+                    .fill(.clear)
+                    .chromeGlassEffect(.regular, in: shape)
+                    .overlay {
+                        shape.fill(Chrome.glassTint.opacity(isDark ? 0.22 : 0.16))
+                    }
+            }
+#endif
         }
         // Glass supplies the edge (as in `WindowBackdrop`): a hairline on top of it
         // read as a second ring around the panel whenever its window was key.
@@ -359,7 +364,12 @@ struct SubagentPanel: View {
             let isDark = colorScheme == .dark
             shape
                 .fill((isDark ? Color.black : Color.white).opacity(isDark ? 0.3 : 0.34))
-                .shadow(color: performanceMode ? .clear : .black.opacity(isDark ? 1 : 0.65), radius: performanceMode ? 0 : 28, y: performanceMode ? 0 : 10)
+                // A solid theme lifts the panel with a soft shadow rather than the glass's deep one.
+                .shadow(
+                    color: solid != nil ? .black.opacity(0.1) : .black.opacity(isDark ? 1 : 0.65),
+                    radius: solid != nil ? 18 : 28,
+                    y: solid != nil ? 6 : 10
+                )
         }
     }
 }
@@ -420,25 +430,6 @@ private struct SubagentWorkingBox: View {
     }
 }
 
-/// What the helper panel's close mark asks while its turn is running, in the popover the
-/// sidebar's delete question uses: the stop is the destructive row, and clicking away keeps
-/// the helper working.
-private struct ClosePanelPopover: View {
-    let title: String
-    let onClose: () -> Void
-
-    var body: some View {
-        PopoverMenu {
-            PopoverSectionHeader("Stop this helper?")
-            PopoverNote(String(format: Chrome.localized("“%@” is still working. Closing the panel stops its turn. What it has done so far stays, and its chat moves to the sidebar under this one."), title))
-            PopoverDivider()
-            PopoverItem("Close and stop", symbol: "stop.circle", isDestructive: true) { onClose() }
-            PopoverItem("Keep it working", symbol: "arrow.uturn.backward") {}
-        }
-        .frame(width: 300)
-    }
-}
-
 /// A floating panel's place while its handle is held: the corner under the pointer, and
 /// the flick it is let go with. Its own object rather than chat state on purpose: only the
 /// panel's placement reads it, so each pointer move re-lays out that one offset and nothing
@@ -487,6 +478,13 @@ final class PanelDragState {
         guard let position else { return }
         let next = layout.clamped(position)
         if next != position { self.position = next }
+    }
+
+    /// Clears any active pointer offset or velocity when switching a recycled column.
+    func reset() {
+        if position != nil { position = nil }
+        grab = nil
+        velocity = .zero
     }
 
     /// Lets the panel go, and says where it was heading: where it is, carried on a little
@@ -592,6 +590,11 @@ final class PanelResizeState {
     }
 
     func end() { start = nil }
+
+    func reset() {
+        if start != nil { start = nil }
+        if liveSize != nil { liveSize = nil }
+    }
 }
 
 /// The grips: a thin strip along each free edge for one dimension, and a square at the

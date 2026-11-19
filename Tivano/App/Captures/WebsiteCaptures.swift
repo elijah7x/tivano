@@ -59,31 +59,13 @@ enum WebsiteCaptures {
         static let widgets = UUID(uuidString: "B0000000-0000-4000-8000-000000000009")!
         static let fresh = UUID(uuidString: "B0000000-0000-4000-8000-000000000010")!
         static let freshPlan = UUID(uuidString: "B0000000-0000-4000-8000-000000000011")!
+        static let mentionDemoProject = UUID(uuidString: "A0000000-0000-4000-8000-000000000020")!
+        static let mentionDemoThread = UUID(uuidString: "B0000000-0000-4000-8000-000000000020")!
     }
 
     /// Writes the library, the thread histories and the project folders the run opens, and
     /// resets the run's defaults. Called before anything reads settings or the library.
     static func prepare() {
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--standalone-task-probe") {
-            StandaloneTaskProbe.prepare()
-            return
-        }
-        if DshNativeIntegrationProbe.isRequested {
-            DshNativeIntegrationProbe.prepare()
-            return
-        }
-        if DshCaptureReplay.isEnabled {
-            DshCaptureReplay.prepare()
-            return
-        }
-        if DshIntegrationConfiguration.isOfflineHydra {
-            DshHydraIntegrationProbe.prepare()
-            return
-        }
-        if DshIntegrationConfiguration.isEnabled {
-            DshIntegrationProbe.prepare()
-            return
-        }
         guard let output = CaptureRun.outputDirectory, let root = CaptureRun.storageRoot, let defaults = CaptureRun.defaults else { return }
         let files = FileManager.default
         try? files.removeItem(at: root)
@@ -91,14 +73,20 @@ enum WebsiteCaptures {
         try? files.createDirectory(at: output, withIntermediateDirectories: true)
 
         defaults.removePersistentDomain(forName: CaptureRun.suiteName)
-        defaults.set("dark", forKey: "appTheme")
-        defaults.set(false, forKey: "notifyWhenFinished")
+        // `--blank-home`: a fresh install, so no settings and no library at all.
+        if CommandLine.arguments.contains("--blank-home") {
+            defaults.synchronize()
+            return
+        }
+        let isMentionDemo = CommandLine.arguments.contains("--mention-demo")
+        defaults.set("system", forKey: "appTheme")
+        defaults.set("dark", forKey: "appearanceMode")
         defaults.set(false, forKey: "chimeWhenFinished")
         defaults.set(true, forKey: "showReasoning")
         defaults.set(true, forKey: "sidebarActivityView")
         defaults.set("supervised", forKey: "defaultRuntimeMode")
         defaults.set("claude", forKey: "defaultProvider")
-        defaults.set(ID.tivanoApp.uuidString, forKey: "lastProjectID")
+        defaults.set((isMentionDemo ? ID.mentionDemoProject : ID.tivanoApp).uuidString, forKey: "lastProjectID")
         // The switcher shows a curated list, as a set-up Mac would.
         let pins = [
             ModelPin(provider: .claude, modelID: "opus"),
@@ -114,6 +102,19 @@ enum WebsiteCaptures {
             defaults.set(true, forKey: "hydraEnabled")
         }
         let repos = output.appendingPathComponent("repos", isDirectory: true)
+        if isMentionDemo {
+            var library = Library()
+            library.projects = [
+                project(ID.mentionDemoProject, "星河笔记", repos, mentionDemoFiles),
+            ]
+            let now = Date.now
+            library.threads = [
+                thread(ID.mentionDemoThread, ID.mentionDemoProject, "新手引导文案", .claude, "opus", "high", age: 180, status: .completed, now),
+            ]
+            write(library, to: root.appendingPathComponent("library.json"))
+            write(mentionDemoHistory(now), to: root.appendingPathComponent("threads/\(ID.mentionDemoThread.uuidString).json"))
+            return
+        }
         var library = Library()
         library.projects = [
             project(ID.tivanoApp, "Tivano", repos, ["Tivano/App/Views/Composer/ComposerView.swift": composerSource]),
@@ -139,41 +140,14 @@ enum WebsiteCaptures {
             thread(ID.liveActivity, ID.ios, "Live Activity for Pomodoro", .claude, "opus", "high", age: 3 * day, status: .completed, now),
             thread(ID.widgets, ID.ios, "Widget snapshots", .antigravity, "gemini-3.8-flash", "high", age: 6 * day, status: .completed, now),
         ]
-        if HeroSwitchProbe.isColdRequested {
-            for (index, id) in HeroSwitchProbe.longThreadIDs.enumerated() {
-                let number = index + 1
-                library.threads.append(thread(id, ID.tivanoApp, "Long history \(number)", .claude, "opus", "high", age: Double(19 + number) * day, status: .completed, now))
-            }
-        }
         if CaptureRun.isEnabled {
             ProductCaptures.addHydraMocks(to: &library, storageRoot: root, repos: repos, now: now)
         }
-        if QuotePreview.isRequested {
-            library.threads = [thread(ID.composer, ID.tivanoApp, "Quote preview", .claude, "opus", "high", age: 0, status: .completed, now)]
-        }
-        if PredictionPreview.isRequested {
-            library.threads = PredictionPreview.cases.enumerated().map { index, previewCase in
-                thread(previewCase.id, ID.tivanoApp, previewCase.title, .claude, "opus", "high",
-                       age: Double(index) * 10, status: .completed, now)
-            }
-        }
         write(library, to: root.appendingPathComponent("library.json"))
 
-        if PredictionPreview.isRequested {
-            for previewCase in PredictionPreview.cases {
-                write(PredictionPreview.history(for: previewCase, now: now),
-                      to: root.appendingPathComponent("threads/\(previewCase.id.uuidString).json"))
-            }
-        } else {
-            write(QuotePreview.isRequested ? QuotePreview.history(now) : composerHistory(now), to: root.appendingPathComponent("threads/\(ID.composer.uuidString).json"))
-        }
+        write(composerHistory(now), to: root.appendingPathComponent("threads/\(ID.composer.uuidString).json"))
         write(finalAnswerHistory(now), to: root.appendingPathComponent("threads/\(ID.finalAnswer.uuidString).json"))
         write(pricingHistory(now), to: root.appendingPathComponent("threads/\(ID.pricing.uuidString).json"))
-        if HeroSwitchProbe.isColdRequested {
-            for (index, id) in HeroSwitchProbe.longThreadIDs.enumerated() {
-                write(longHistory(id, seed: index + 1, now), to: root.appendingPathComponent("threads/\(id.uuidString).json"))
-            }
-        }
     }
 
     private static func write<Value: Encodable>(_ value: Value, to url: URL) {
@@ -220,64 +194,6 @@ enum WebsiteCaptures {
         return thread
     }
 
-    private static func longHistory(_ id: UUID, seed: Int, _ now: Date) -> ThreadDocument {
-        var document = ThreadDocument(threadID: id)
-        for index in 0..<120 {
-            let completedAt = now.addingTimeInterval(-20 * 86_400 - Double(119 - index) * 60)
-            var turn = TurnRecord(index: index)
-            turn.startedAt = completedAt.addingTimeInterval(-50)
-            turn.completedAt = completedAt
-            turn.status = .completed
-            let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
-                text: "Review pass \(index + 1) of long history \(seed) for cold-switch rendering costs. Keep the existing timeline structure and report what this exchange shows.")))
-            turn.userItemID = user.id
-            let reasoning = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(2), content: .reasoning(ReasoningBlock(
-                text: "Pass \(index + 1) begins with the cached row state for fixture \(seed). The source read shows which values can be reused. The command output checks that the same path still builds. I will keep the conclusion limited to this pass.")))
-            let source = (1...40).map { line in
-                "let cachedRow\(line) = HistoryRow(pass: \(index + 1), fixture: \(seed), offset: \(line))"
-            }.joined(separator: "\n")
-            var read = ToolCall(kind: .read, title: "Read", detail: "Tivano/App/Views/RootView.swift")
-            read.status = .completed
-            read.output = source
-            read.startedAt = turn.startedAt.addingTimeInterval(4)
-            read.finishedAt = turn.startedAt.addingTimeInterval(10)
-            let readItem = TimelineItem(turnID: turn.id, date: read.startedAt, content: .tool(read))
-            let buildLog = (1...15).map { line in
-                "Pass \(index + 1), fixture \(seed), step \(line)/15: Compiling HistoryRow\(line).swift"
-            }.joined(separator: "\n")
-            var command = ToolCall(kind: .command, title: "xcodebuild -scheme Tivano build", detail: "Long history \(seed), pass \(index + 1)")
-            command.status = .completed
-            command.output = buildLog
-            command.startedAt = turn.startedAt.addingTimeInterval(12)
-            command.finishedAt = turn.startedAt.addingTimeInterval(20)
-            let commandItem = TimelineItem(turnID: turn.id, date: command.startedAt, content: .tool(command))
-            let code = (1...12).map { line in
-                "let value\(line) = cache.value(pass: \(index + 1), fixture: \(seed), offset: \(line))"
-            }.joined(separator: "\n")
-            let markdown = """
-            Pass \(index + 1) for long history \(seed) keeps the existing timeline behavior and reuses its cached row data. The values below are specific to this exchange.
-
-            The read and build results support a narrow change rather than a new layout. The fixture remains deterministic while every response stays distinct.
-
-            ```swift
-            \(code)
-            ```
-
-            - Preserve the existing row components.
-            - Reuse the cached values for pass \(index + 1).
-            - Keep the current loading and error states.
-            - Record the result for fixture \(seed).
-            """
-            let answer = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(30), content: .assistant(AssistantMessage(text: markdown)))
-            let end = TimelineItem(turnID: turn.id, date: turn.completedAt!, content: .turnEnd(TurnSummary(
-                turnID: turn.id, status: .completed, duration: 50, filesChanged: 0, additions: 0, deletions: 0)))
-            document.turns.append(turn)
-            document.items.append(contentsOf: [user, reasoning, readItem, commandItem, answer, end])
-        }
-        document.usage = ContextUsage(usedTokens: 180_000, windowTokens: 200_000)
-        return document
-    }
-
     /// The composer thread's earlier turn: a question about the strip, answered.
     private static func composerHistory(_ now: Date) -> ThreadDocument {
         var document = ThreadDocument(threadID: ID.composer)
@@ -316,12 +232,8 @@ enum WebsiteCaptures {
         let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
             text: "The last reply of a turn gets lost between the tool calls. What would you change?")))
         turn.userItemID = user.id
-        let reply = CaptureRun.isEnabled && (CommandLine.arguments.contains("--render-cost-probe")
-            || CommandLine.arguments.contains("--heavy-load-probe"))
-            ? RenderCostProbe.fixtureAnswer
-            : "Three things, and I would keep them small: tag the final text so the timeline knows which block is the answer, give that block the glass card the plan cards already use, and leave streaming text plain so nothing flickers while it arrives."
         let answer = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(6), content: .assistant(AssistantMessage(
-            text: reply)))
+            text: "Three things, and I would keep them small: tag the final text so the timeline knows which block is the answer, give that block the glass card the plan cards already use, and leave streaming text plain so nothing flickers while it arrives.")))
         let end = TimelineItem(turnID: turn.id, date: turn.completedAt!, content: .turnEnd(TurnSummary(
             turnID: turn.id, status: .completed, duration: 41, filesChanged: 0, additions: 0, deletions: 0)))
         document.turns = [turn]
@@ -340,6 +252,114 @@ enum WebsiteCaptures {
         turn.userItemID = user.id
         document.turns = [turn]
         document.items = [user]
+        return document
+    }
+
+    private static let mentionDemoFiles: [String: String] = [
+        "Docs/产品/新手引导/欢迎.md": """
+            # 欢迎来到星河笔记
+
+            ## 第一节：创建你的第一条笔记
+            按下快捷键即可随时记下想法，无需先想好分类。
+
+            ## 第二节：快速构建个人知识库
+            使用双向链接和标签整理零散内容，让每次记录都能在需要时被重新发现。
+
+            """,
+        "Docs/营销/欢迎.md": """
+            # 星河笔记，让好想法不再走丢
+
+            轻巧、顺手的跨端笔记工具，从随手记一笔到系统整理项目资料都能胜任。
+
+            """,
+        "Docs/Q4 规划.md": """
+            # Q4 产品规划
+
+            - 优化首次打开的新手引导体验，缩短上手路径
+            - 上线移动端离线同步与快速搜索
+            - 统一产品文档与官网营销页的语气风格
+
+            """,
+        "Docs/会议纪要/2026-11-18 周会.md": """
+            # 2026-11-18 产品周会纪要
+
+            - 新手引导文案将在本周完成口语化改写
+            - 前端同步更新欢迎页顶部导航和主按钮文案
+
+            """,
+        "src/components/Header.tsx": """
+            import React from "react";
+
+            export function Header({ title = "星河笔记" }: { title?: string }) {
+              return (
+                <header className="app-header">
+                  <h1>{title}</h1>
+                </header>
+              );
+            }
+
+            """,
+        "src/components/Button.tsx": """
+            import React from "react";
+
+            type ButtonProps = {
+              label: string;
+              onClick?: () => void;
+            };
+
+            export function Button({ label, onClick }: ButtonProps) {
+              return <button onClick={onClick}>{label}</button>;
+            }
+
+            """,
+        "src/pages/welcome.tsx": """
+            import React from "react";
+            import { Header } from "../components/Header";
+            import { Button } from "../components/Button";
+
+            export function WelcomePage() {
+              return (
+                <main>
+                  <Header title="欢迎使用星河笔记" />
+                  <Button label="开始记第一笔" />
+                </main>
+              );
+            }
+
+            """,
+        "README.md": """
+            # 星河笔记
+
+            一款面向个人与小团队的轻量知识笔记应用。
+
+            """,
+        "package.json": """
+            {
+              "name": "xinghe-notes",
+              "version": "0.4.0",
+              "private": true
+            }
+
+            """,
+    ]
+
+    /// The mention-demo thread: one finished Chinese exchange.
+    private static func mentionDemoHistory(_ now: Date) -> ThreadDocument {
+        var document = ThreadDocument(threadID: ID.mentionDemoThread)
+        var turn = TurnRecord(index: 0)
+        turn.startedAt = now.addingTimeInterval(-240)
+        turn.completedAt = now.addingTimeInterval(-180)
+        turn.status = .completed
+        let user = TimelineItem(turnID: turn.id, date: turn.startedAt, content: .user(UserMessage(
+            text: "把新手引导第二节改得更口语一点")))
+        turn.userItemID = user.id
+        let answer = TimelineItem(turnID: turn.id, date: turn.startedAt.addingTimeInterval(6), content: .assistant(AssistantMessage(
+            text: "好，我把第二节里的“快速构建个人知识库”改成了更自然的“随手记下灵感，慢慢长成你的知识库”，读起来会轻快很多。按钮文案也顺手收短了一点，方便新用户一眼看懂下一步。你可以先看看整体语气，有想再调整的地方直接告诉我。")))
+        let end = TimelineItem(turnID: turn.id, date: turn.completedAt!, content: .turnEnd(TurnSummary(
+            turnID: turn.id, status: .completed, duration: 14, filesChanged: 0, additions: 0, deletions: 0)))
+        document.turns = [turn]
+        document.items = [user, answer, end]
+        document.usage = ContextUsage(usedTokens: 6_400, windowTokens: 200_000)
         return document
     }
 
@@ -387,33 +407,40 @@ enum WebsiteCaptures {
 
     // MARK: - Run
 
+    private static var blankHomeWindow: NSWindow?
+    private static var mentionDemoWindow: NSWindow?
+
     static func run(model: AppModel) async {
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--standalone-task-probe") {
-            await StandaloneTaskProbe.run(model: model)
+        if WeatherPreview.isPreviewRequested {
+            await WeatherPreview.runPreview(model: model)
             return
         }
-        if HeroSwitchProbe.isRequested {
-            await HeroSwitchProbe.run(model: model)
+        if WeatherPreview.isCapturesRequested {
+            await WeatherPreview.runCaptures(model: model)
             return
         }
-        if KeepsakePreview.isRequested {
-            await KeepsakePreview.run(model: model)
+        // Interactive: an empty isolated library left open, to look at the blank first launch.
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--blank-home") {
+            await model.bootstrap()
+            let window = WindowManager.shared.makeCaptureWindow(size: NSSize(width: 1280, height: 800))
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            blankHomeWindow = window
             return
         }
-        if UsageLimitPreview.isRequested {
-            await UsageLimitPreview.run(model: model)
-            return
-        }
-        if ChimeraCastingPreview.isRequested {
-            await ChimeraCastingPreview.run(model: model)
-            return
-        }
-        if PredictionPreview.isRequested {
-            await PredictionPreview.run(model: model)
-            return
-        }
-        if QuotePreview.isRequested {
-            await QuotePreview.run(model: model)
+        // Interactive: one seeded project and thread with inline @file mention chips in the composer.
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--mention-demo") {
+            await model.bootstrap()
+            model.settings.hasSeenHydraIntro = true
+            model.selectedThreadID = ID.mentionDemoThread
+            model.runtime(for: ID.mentionDemoThread).draft.text =
+                "帮我看下 @Docs/产品/新手引导/欢迎.md 第二节的措辞，再对照 @Docs/营销/欢迎.md 和 @src/components/Header.tsx 的写法，顺便参考 @Docs/Q4 规划.md "
+            let window = WindowManager.shared.makeCaptureWindow(size: NSSize(width: 1280, height: 800))
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            mentionDemoWindow = window
             return
         }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--hydra-panels-preview") {
@@ -428,54 +455,39 @@ enum WebsiteCaptures {
             await ProductCaptures.settingsPagePreview(model: model)
             return
         }
-        if HeroPreview.isRequested {
-            await HeroPreview.run(model: model)
-            return
-        }
-        if DshNativeIntegrationProbe.isRequested {
-            await DshNativeIntegrationProbe.run(model: model)
-            return
-        }
-        if DshCaptureReplay.isEnabled {
-            await DshCaptureReplay.run(model: model)
-            return
-        }
-        if DshIntegrationConfiguration.isOfflineHydra {
-            await DshHydraIntegrationProbe.run(model: model)
-            return
-        }
-        if DshIntegrationConfiguration.isEnabled {
-            await DshIntegrationProbe.run(model: model)
-            return
-        }
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--text-parity-probe") {
-            await TextParityProbe.run(model: model)
-            return
-        }
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--website-captures"),
-           CommandLine.arguments.contains("--settings-interaction-probe") {
-            await SettingsInteractionProbe.run(model: model)
-            return
-        }
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--website-captures"),
-           CommandLine.arguments.contains("--heavy-load-probe") {
-            await HeavyLoadProbe.run(model: model)
-            return
-        }
-        if CaptureRun.isEnabled, CommandLine.arguments.contains("--render-cost-probe") {
-            await RenderCostProbe.run(model: model)
-            return
-        }
-        if CommandLine.arguments.contains("--unread-regression") {
-            await UnreadRegression.run(model: model)
-            return
-        }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--history-scroll") {
             await TimelineStress.runHistory(model: model)
             return
         }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--history-flick") {
+            await TimelineStress.runHistoryFlick(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, [
+            "--mid-scroll",
+            "--mid-scroll-cold",
+            "--mid-scroll-history",
+            "--mid-scroll-mix",
+            "--mid-scroll-resize",
+            "--mid-scroll-serif",
+        ].contains(where: CommandLine.arguments.contains) {
+            await TimelineStress.runMidScroll(model: model)
+            return
+        }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--held-drag") {
             await TimelineStress.runHeldDrag(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--subagent-panel-loop") {
+            await TimelineStress.runSubagentPanelLoop(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--subagent-pill-demo") {
+            await TimelineStress.runSubagentPillDemo(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--split-reply-demo") {
+            await TimelineStress.runSplitReplyDemo(model: model)
             return
         }
         // `--timeline-stress` is the chat-timeline jitter run. Without it, the product
@@ -538,10 +550,66 @@ enum WebsiteCaptures {
         await recorder.still("editing", stage.captureRect)
     }
 
+    /// Rehearses a complete local turn for interactive `--blank-home` previews: reasoning,
+    /// a read tool call, a streamed Chinese markdown answer, and normal turn completion.
+    static func rehearseReply(to text: String, runtime: ThreadRuntime) async {
+        let prefix = UUID().uuidString.prefix(8)
+        let reasoningID = "\(prefix)-r"
+        let readID = "\(prefix)-read"
+        let messageID = "\(prefix)-m"
+
+        runtime.rehearseTurn(text)
+        runtime.rehearseTitle(text)
+        let turn = runtime.rehearsalTurnID
+        let live = { runtime.isRunning && runtime.rehearsalTurnID == turn }
+        try? await Task.sleep(for: .milliseconds(350))
+        guard live() else { return }
+
+        await stream(
+            runtime,
+            id: reasoningID,
+            reasoning: true,
+            alive: live,
+            "正在理解你的请求，并快速检查当前工作区的上下文。确认目标后，我会整理一份清晰的处理步骤与演示回复。",
+            step: 35
+        )
+        guard live() else { return }
+        runtime.rehearse(.reasoningCompleted(id: reasoningID, text: ""))
+        try? await Task.sleep(for: .milliseconds(250))
+        guard live() else { return }
+
+        runtime.rehearse(.toolStarted(id: readID, call: ToolCall(kind: .read, title: "Read", detail: "README.md")))
+        try? await Task.sleep(for: .milliseconds(450))
+        guard live() else { return }
+        runtime.rehearse(.toolUpdated(id: readID, update: ToolUpdate(
+            output: "# Preview Workspace\n\nDemo context loaded for the preview instance.\n",
+            status: .completed
+        )))
+        try? await Task.sleep(for: .milliseconds(250))
+        guard live() else { return }
+
+        let summary = TextCleanup.singleLine(text, limit: 36)
+        let requestNote = summary.isEmpty ? "你的消息" : "「\(summary)」"
+        let answer = """
+        已收到\(requestNote)，我先梳理了当前上下文，接下来可以按下面三步推进：
+
+        - 确认需求边界与受影响的文件范围，避免改动扩散到无关区域。
+        - 按最小改动完成核心实现，并同步补齐必要的交互状态。
+        - 运行本地验证并逐项核对渲染与边界表现。
+
+        这是一条来自预览实例的演示回复（未连接真实服务商）。
+        """
+        await stream(runtime, id: messageID, reasoning: false, alive: live, answer, step: 28)
+        guard live() else { return }
+        runtime.rehearse(.messageCompleted(id: messageID, text: ""))
+        runtime.rehearse(.turnCompleted(status: .completed, error: nil))
+    }
+
     /// Streams `text` into the timeline a few characters at a time, as a provider does.
-    private static func stream(_ runtime: ThreadRuntime, id: String, reasoning: Bool, _ text: String, step: Int) async {
+    private static func stream(_ runtime: ThreadRuntime, id: String, reasoning: Bool, alive: (() -> Bool)? = nil, _ text: String, step: Int) async {
         var index = text.startIndex
         while index < text.endIndex {
+            guard alive?() ?? runtime.isRunning else { return }
             let end = text.index(index, offsetBy: 4, limitedBy: text.endIndex) ?? text.endIndex
             let chunk = String(text[index..<end])
             runtime.rehearse(reasoning ? .reasoningDelta(id: id, text: chunk) : .messageDelta(id: id, text: chunk))
@@ -869,114 +937,6 @@ final class Recorder {
         configuration.scalesToFit = false
         configuration.showsCursor = false
         return configuration
-    }
-}
-/// Holds a disposable library open for native interaction checks after real-model checks.
-@MainActor
-private enum StandaloneTaskProbe {
-    static func prepare() {
-        guard let root = CaptureRun.storageRoot, let defaults = CaptureRun.defaults else { return }
-        do {
-            try FileManager.default.createDirectory(at: root.appendingPathComponent("threads"), withIntermediateDirectories: true)
-            defaults.removePersistentDomain(forName: CaptureRun.suiteName)
-            defaults.set(false, forKey: "notifyWhenFinished")
-            defaults.set(false, forKey: "chimeWhenFinished")
-            try JSONEncoder.storage.encode(Library()).write(to: root.appendingPathComponent("library.json"), options: .atomic)
-        } catch {
-            WebsiteCaptures.log("standalone fixture failed: \(error)")
-            exit(1)
-        }
-    }
-
-    static func run(model: AppModel) async {
-        guard let output = CaptureRun.outputDirectory else { return }
-        await model.bootstrap()
-        guard model.isLibraryLoaded else { exit(1) }
-        model.settings.hydraEnabled = false
-        model.settings.hasSeenHydraIntro = true
-        model.settings.defaultWorkspaceMode = .local
-        model.settings.defaultProvider = .deepseek
-        model.settings.theme = .breeze
-        for provider in ProviderKind.allCases {
-            model.settings.setBinaryPath("/usr/bin/true", for: provider)
-        }
-        model.selectedThreadID = nil
-        var checks: [String: Bool] = [:]
-        checks["zero-project-create"] = model.projects.isEmpty && model.newThread(affiliation: .standalone) != nil
-        let folder = output.appendingPathComponent("repos/tivano")
-        let otherFolder = output.appendingPathComponent("repos/second-project")
-        do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
-        } catch { exit(1) }
-        let project = model.addProject(at: folder)
-        let second = model.addProject(at: otherFolder)
-        model.updateProject(second.id) { $0.name = "用于检查窄窗口的长项目名称 · Long Project Name" }
-        model.updateProject(project.id) { $0.icon = .emoji("🛠️") }
-        guard let draft = model.newThread(affiliation: .project(project.id)) else { exit(1) }
-        model.rename(draft.id, to: "项目会话 · 图标与归属测试")
-        checks["project-default"] = model.newThread()?.projectID == project.id
-        guard let task = model.newThread(affiliation: .standalone) else { exit(1) }
-        model.rename(task.id, to: "独立任务 · 工作目录测试")
-        checks["task-default"] = model.newThread()?.projectID == nil
-        let runtime = model.runtime(for: task.id)
-        await runtime.ensureLoaded()
-        runtime.draft.text = "草稿应在切换归属后保留"
-        checks["task-to-project"] = model.moveThread(task.id, to: .project(project.id))
-        checks["project-to-task"] = model.moveThread(task.id, to: .standalone)
-        checks["draft-preserved"] = runtime.draft.text == "草稿应在切换归属后保留"
-        runtime.draft.text = ""
-        do {
-            let directory = try model.ensureExecutionDirectory(for: model.thread(task.id)!)
-            let payload = URL(fileURLWithPath: directory).appendingPathComponent("task-result.txt")
-            try Data("isolated task file\n".utf8).write(to: payload)
-            checks["task-directory"] = directory == StoragePaths.taskWorkspace(task.id).path
-            model.archive(task.id)
-            checks["archive-keeps-files"] = FileManager.default.fileExists(atPath: payload.path)
-            model.updateThread(task.id) { $0.isArchived = false }
-            checks["task-restored"] = model.standaloneTasks.contains { $0.id == task.id }
-        } catch {
-            checks["task-directory"] = false
-            WebsiteCaptures.log("standalone task directory: \(error)")
-        }
-        model.selectedThreadID = task.id
-        checks["flush"] = model.flushForQuit()
-        if case .success(let library) = Storage.loadLibrary() {
-            checks["persist-task"] = library.threads.contains { $0.id == task.id && $0.projectID == nil }
-            checks["persist-icon"] = library.projects.first { $0.id == project.id }?.icon == .emoji("🛠️")
-        }
-        write(checks, name: "model-checks.json", output: output)
-        guard checks.values.allSatisfy({ $0 }) else { exit(1) }
-        model.selectedThreadID = draft.id
-        if !model.sidebar.isVisible { model.sidebar.toggle() }
-        WindowManager.shared.showMain()
-        NSApp.activate(ignoringOtherApps: true)
-        WebsiteCaptures.log("standalone task probe ready pid=\(ProcessInfo.processInfo.processIdentifier)")
-        let deadline = Date.now.addingTimeInterval(1200)
-        while Date.now < deadline, !FileManager.default.fileExists(atPath: output.appendingPathComponent("finish").path) {
-            let state: [String: Any] = [
-                "pid": ProcessInfo.processInfo.processIdentifier,
-                "selectedThread": model.selectedThreadID?.uuidString ?? "",
-                "projects": model.projects.map { ["id": $0.id.uuidString, "name": $0.name, "icon": $0.icon?.storage ?? ""] },
-                "threads": model.threads.map { thread in
-                    ["id": thread.id.uuidString, "projectID": thread.projectID?.uuidString ?? "", "title": thread.title,
-                     "directory": (try? model.executionDirectory(for: thread)) ?? "",
-                     "terminals": model.terminals.sessions(for: thread.id).map(\.directory)] as [String: Any]
-                }
-            ]
-            write(state, name: "inspection-state.json", output: output)
-            try? await Task.sleep(for: .seconds(1))
-        }
-        model.terminals.terminateAll()
-        for thread in model.threads { model.existingRuntime(for: thread.id)?.stopSession() }
-        _ = model.flushForQuit()
-        WebsiteCaptures.log("standalone task probe finished")
-        exit(0)
-    }
-
-    private static func write(_ value: Any, name: String, output: URL) {
-        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]) else { return }
-        try? data.write(to: output.appendingPathComponent(name), options: .atomic)
     }
 }
 #endif
