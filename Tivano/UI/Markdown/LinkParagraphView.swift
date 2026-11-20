@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 
 /// Selectable paragraph with real links. SwiftUI `Text` with selection shows
@@ -10,6 +11,8 @@ struct LinkParagraphView: NSViewRepresentable {
     let source: String
     var pointSize: CGFloat = TypeScale.shared.content(13)
     var codePointSize: CGFloat = TypeScale.shared.code(12)
+    var serif: Bool = TypeScale.shared.serif
+    var lineSpacingOverride: CGFloat? = nil
     var dimmed: Bool = false
     /// Whether the text is still arriving, so its parses bypass the shared caches.
     var streaming: Bool = false
@@ -18,6 +21,7 @@ struct LinkParagraphView: NSViewRepresentable {
     var mentions: [HydraPersona] = []
     var targets: [String: HydraMentionTarget] = [:]
     var linkBase: String? = nil
+    var hugsContent: Bool = false
     var onOpenHead: ((URL) -> Void)?
 
     /// Receives the text view, so the hover that sets the cursor can ask it what is under
@@ -51,25 +55,30 @@ struct LinkParagraphView: NSViewRepresentable {
         let coordinator = context.coordinator
         let veiled = context.environment.markdownVeiled
         let scope = context.environment.veilRenderScope
+        let mentionNames = mentions.map(\.name)
+        let effectiveLineSpacing = lineSpacingOverride ?? TypeScale.proseLineSpacing(pointSize)
         var rendered = false
         if coordinator.lastSource != source || coordinator.lastPointSize != pointSize
-            || coordinator.lastCodePointSize != codePointSize
+            || coordinator.lastCodePointSize != codePointSize || coordinator.lastSerif != serif
+            || coordinator.lastLineSpacing != effectiveLineSpacing
             || coordinator.lastDimmed != dimmed || coordinator.lastStreaming != streaming
-            || coordinator.lastRevision != revision || coordinator.lastVeiled != veiled
-            || coordinator.lastMentions != mentions.map(\.name) || coordinator.lastTargets != targets {
+            || coordinator.lastRevision != revision
+            || coordinator.lastMentions != mentionNames || coordinator.lastTargets != targets {
             coordinator.lastSource = source
             coordinator.lastPointSize = pointSize
             coordinator.lastCodePointSize = codePointSize
+            coordinator.lastSerif = serif
+            coordinator.lastLineSpacing = effectiveLineSpacing
             coordinator.lastDimmed = dimmed
             coordinator.lastStreaming = streaming
             coordinator.lastRevision = revision
-            coordinator.lastVeiled = veiled
-            coordinator.lastMentions = mentions.map(\.name)
+            coordinator.lastMentions = mentionNames
             coordinator.lastTargets = targets
-            view.render(Self.attributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: streaming, mentions: mentions, targets: targets))
+            view.render(Self.attributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: streaming, mentions: mentions, targets: targets, lineSpacingOverride: lineSpacingOverride))
             rendered = true
         }
-        if rendered || coordinator.lastRenderScope !== scope {
+        if rendered || coordinator.lastVeiled != veiled || coordinator.lastRenderScope !== scope {
+            coordinator.lastVeiled = veiled
             coordinator.lastRenderScope = scope
             view.streamVeil.update(view, active: veiled, scope: scope)
         }
@@ -78,6 +87,10 @@ struct LinkParagraphView: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: LinkTextView, context: Context) -> CGSize? {
         guard let width = proposal.width else { return nil }
+        guard width > 0 else { return .zero }
+        if !hugsContent, !width.isFinite {
+            return CGSize(width: width, height: nsView.cachedHeightHint)
+        }
         return CGSize(width: width, height: nsView.height(forWidth: width))
     }
 
@@ -102,6 +115,8 @@ struct LinkParagraphView: NSViewRepresentable {
         var lastBlocks: [MarkdownBlock]?
         var lastPointSize: CGFloat = 0
         var lastCodePointSize: CGFloat = 0
+        var lastSerif = false
+        var lastLineSpacing: CGFloat = -1
         var lastDimmed = false
         var lastStreaming = false
         var lastRevision: Int = 0
@@ -126,9 +141,9 @@ struct LinkParagraphView: NSViewRepresentable {
     /// Same pretty string the `Text` path renders (short titles, bold
     /// links), rebuilt on AppKit types with an explicit base font, adaptive
     /// colors and favicon attachments.
-    /// The four faces per point size, looked up once: the italic conversion goes through
+    /// The four faces per point size and typeface, looked up once: the italic conversion goes through
     /// the font manager, and a streaming link paragraph rebuilds its string every flush.
-    private struct FontKey: Hashable { let prose: CGFloat; let code: CGFloat }
+    private struct FontKey: Hashable { let prose: CGFloat; let code: CGFloat; let serif: Bool }
     /// Quote and thinking text. `withAlphaComponent` on `labelColor` resolves it once,
     /// in the appearance current when the string is built (the system's, not the chat's),
     /// so dark chats on a light system drew near-black quotes; this resolves per draw.
@@ -141,14 +156,85 @@ struct LinkParagraphView: NSViewRepresentable {
     }
 
     @MainActor private static var fonts: [FontKey: (base: NSFont, bold: NSFont, italic: NSFont, mono: NSFont)] = [:]
+    private struct ParagraphStyleKey: Hashable {
+        let lineSpacing: CGFloat
+        let paragraphSpacing: CGFloat
+    }
+    @MainActor private static var paragraphStyles: [ParagraphStyleKey: NSParagraphStyle] = [:]
 
     @MainActor
-    static func attributed(source: String, pointSize: CGFloat, codePointSize: CGFloat = TypeScale.shared.code(12), dimmed: Bool, streaming: Bool = false, mentions: [HydraPersona] = [], targets: [String: HydraMentionTarget] = [:]) -> NSAttributedString {
+    static func sharedParagraphStyle(lineSpacing: CGFloat, paragraphSpacing: CGFloat = 0) -> NSParagraphStyle {
+        let key = ParagraphStyleKey(lineSpacing: lineSpacing, paragraphSpacing: paragraphSpacing)
+        if let cached = paragraphStyles[key] { return cached }
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = lineSpacing
+        style.paragraphSpacing = paragraphSpacing
+        let frozen = style.copy() as! NSParagraphStyle
+        paragraphStyles[key] = frozen
+        return frozen
+    }
+
+    private struct AttributedCacheKey: Hashable {
+        let source: String
+        let pointSize: CGFloat
+        let codePointSize: CGFloat
+        let serif: Bool
+        let lineSpacing: CGFloat
+        let dimmed: Bool
+        let mentions: [HydraPersona]
+        let targetURLs: [String: URL]
+        let assetGeneration: Int
+    }
+
+    @MainActor private static var attributedCache = RecentCache<AttributedCacheKey, NSAttributedString>(
+        limit: 512,
+        costLimit: 12 * 1024 * 1024,
+        entryCostLimit: 1 * 1024 * 1024
+    )
+
+    @MainActor
+    static func clearCache() {
+        attributedCache = RecentCache<AttributedCacheKey, NSAttributedString>(
+            limit: 512,
+            costLimit: 12 * 1024 * 1024,
+            entryCostLimit: 1 * 1024 * 1024
+        )
+    }
+
+    @MainActor
+    static func attributed(source: String, pointSize: CGFloat, codePointSize: CGFloat = TypeScale.shared.code(12), dimmed: Bool, streaming: Bool = false, mentions: [HydraPersona] = [], targets: [String: HydraMentionTarget] = [:], lineSpacingOverride: CGFloat? = nil) -> NSAttributedString {
+        let resolvedLineSpacing = lineSpacingOverride ?? TypeScale.proseLineSpacing(pointSize)
+        if !streaming {
+            let key = AttributedCacheKey(
+                source: source,
+                pointSize: pointSize,
+                codePointSize: codePointSize,
+                serif: TypeScale.shared.serif,
+                lineSpacing: resolvedLineSpacing,
+                dimmed: dimmed,
+                mentions: mentions,
+                targetURLs: targets.mapValues(\.url),
+                assetGeneration: RichLink.assetGeneration
+            )
+            if let hit = attributedCache.value(for: key) { return hit }
+            let style = sharedParagraphStyle(lineSpacing: resolvedLineSpacing)
+            let built = mutableAttributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: false, mentions: mentions, targets: targets, paragraphStyle: style)
+            let frozen = NSAttributedString(attributedString: built)
+            attributedCache.insert(frozen, for: key, cost: max(64, frozen.length * 4))
+            return frozen
+        }
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = resolvedLineSpacing
+        return mutableAttributed(source: source, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, streaming: true, mentions: mentions, targets: targets, paragraphStyle: style)
+    }
+
+    @MainActor
+    static func mutableAttributed(source: String, pointSize: CGFloat, codePointSize: CGFloat = TypeScale.shared.code(12), dimmed: Bool, streaming: Bool = false, mentions: [HydraPersona] = [], targets: [String: HydraMentionTarget] = [:], paragraphStyle: NSParagraphStyle? = nil) -> NSMutableAttributedString {
         let pretty = RichLink.prettyAttributed(source, streaming: streaming)
-        let key = FontKey(prose: pointSize, code: codePointSize)
+        let key = FontKey(prose: pointSize, code: codePointSize, serif: TypeScale.shared.serif)
         let (base, bold, italic, mono) = fonts[key] ?? {
-            let base = NSFont.systemFont(ofSize: pointSize)
-            let set = (base, NSFont.boldSystemFont(ofSize: pointSize),
+            let base = ThemeTypeface.nsFont(size: pointSize)
+            let set = (base, ThemeTypeface.nsFont(size: pointSize, weight: .bold),
                        NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask),
                        NSFont.monospacedSystemFont(ofSize: codePointSize, weight: .regular))
             fonts[key] = set
@@ -172,7 +258,9 @@ struct LinkParagraphView: NSViewRepresentable {
                    let icon = FaviconCache.cached(host: host) {
                     let attachment = NSTextAttachment()
                     attachment.image = icon
-                    attachment.bounds = NSRect(x: 0, y: base.descender + 1, width: 14, height: 14)
+                    let iconSize = min(20, max(12, (pointSize * 0.95).rounded()))
+                    let iconY = ((base.capHeight - iconSize) * 0.5).rounded()
+                    attachment.bounds = NSRect(x: 0, y: iconY, width: iconSize, height: iconSize)
                     out.append(NSAttributedString(attachment: attachment))
                     out.append(NSAttributedString(string: " ", attributes: [
                         .font: base,
@@ -188,8 +276,7 @@ struct LinkParagraphView: NSViewRepresentable {
                 appendProse(string, font: font, color: textColor, base: base, bold: bold, mentions: mentions, targets: targets, into: out)
             }
         }
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = TypeScale.proseLineSpacing(pointSize)
+        let style = paragraphStyle ?? sharedParagraphStyle(lineSpacing: TypeScale.proseLineSpacing(pointSize))
         out.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: out.length))
         return out
     }
@@ -318,15 +405,11 @@ extension EnvironmentValues {
 /// Non-editable selectable text view that sizes itself to its content width.
 /// No continuous work: layout runs once per text or width change.
 final class LinkTextView: NSTextView {
-    #if DEBUG
-    private static let legacyFullReplace = CaptureRun.isEnabled && CommandLine.arguments.contains("--legacy-native-render-probe")
-    private static var captureAppends = 0
-    private static var captureReplacements = 0
+    /// Keep at most one active selection per window (tracked per window) so a stale inactive gray
+    /// selection never sits beside the active one.
+    private static let activeSelectionViews = NSMapTable<NSWindow, LinkTextView>.weakToWeakObjects()
+    private static var isClearingPreviousSelection = false
 
-    static func captureMutationCounts() -> [String: Int] {
-        ["appends": captureAppends, "fullReplacements": captureReplacements]
-    }
-    #endif
     private var lastLaidOutWidth: CGFloat = 0
     private var lastMeasuredHeight: CGFloat = 0
 
@@ -407,6 +490,16 @@ final class LinkTextView: NSTextView {
     }
 
     override func resetCursorRects() {}
+
+    override func cursorUpdate(with event: NSEvent) {}
+
+    /// Whether `point`, in this view's coordinates, sits over rendered text glyphs of a selectable view.
+    func isOverText(at point: CGPoint) -> Bool {
+        guard isSelectable, let layoutManager, let textContainer, let textStorage, textStorage.length > 0 else { return false }
+        let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+        guard glyph < layoutManager.numberOfGlyphs else { return false }
+        return layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil).contains(point)
+    }
 
     /// Whether `point`, in this view's coordinates, is over a link or a head mention.
     /// Whether a real link sits under `point`, for the pointing hand. A head mention is
@@ -507,6 +600,14 @@ final class LinkTextView: NSTextView {
             return
         }
         super.mouseDown(with: event)
+        guard let window else {
+            NSCursor.arrow.set()
+            return
+        }
+        let endPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        if !bounds.contains(endPoint) || (!isOverText(at: endPoint) && !hasLink(at: endPoint)) {
+            NSCursor.arrow.set()
+        }
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -538,10 +639,26 @@ final class LinkTextView: NSTextView {
 
     // Half-point line spacing leaves bottom selection pixels stranded when clearing selection.
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
-        let hadSelection = selectedRange().length > 0
+        let hadSelection = selectedRanges.contains { $0.rangeValue.length > 0 }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
-        if hadSelection && selectedRange().length == 0 {
+        let hasSelection = selectedRanges.contains { $0.rangeValue.length > 0 }
+        if hadSelection && !hasSelection {
             needsDisplay = true
+        }
+        guard !Self.isClearingPreviousSelection else { return }
+        guard let window else { return }
+        if hasSelection {
+            if let old = Self.activeSelectionViews.object(forKey: window), old !== self,
+               old.window === window, old.selectedRanges.contains(where: { $0.rangeValue.length > 0 }) {
+                Self.isClearingPreviousSelection = true
+                defer { Self.isClearingPreviousSelection = false }
+                let location = old.selectedRange().location
+                let clampedLocation = location == NSNotFound ? 0 : min(location, old.textStorage?.length ?? 0)
+                old.setSelectedRange(NSRange(location: clampedLocation, length: 0))
+            }
+            Self.activeSelectionViews.setObject(self, forKey: window)
+        } else if Self.activeSelectionViews.object(forKey: window) === self {
+            Self.activeSelectionViews.removeObject(forKey: window)
         }
     }
 
@@ -569,10 +686,12 @@ final class LinkTextView: NSTextView {
     private var measuredHeights: [CGFloat: CGFloat] = [:]
     private var measuredWidthOrder: [CGFloat] = []
     private var needsSettleAfterResize = false
+    private var intrinsicInvalidationQueued = false
+    var cachedHeightHint: CGFloat {
+        lastMeasuredHeight > 0 ? lastMeasuredHeight : (measuredHeights.values.first ?? 20)
+    }
 
-    /// New content; skips the layout pass when nothing changed (favicons and
-    /// streaming rebuilds both funnel through here).
-    func render(_ text: NSAttributedString) {
+    private func updateLinkTextAttributes() {
         // Links wear the theme's accent with no underline, like the rest of
         // the chrome; the system accent for System/Light/Dark. Set per render
         // so a theme change recolours links already on screen.
@@ -581,19 +700,25 @@ final class LinkTextView: NSTextView {
             .underlineStyle: 0,
             .cursor: NSCursor.pointingHand,
         ]
-        #if DEBUG
-        if Self.legacyFullReplace {
-            if textStorage?.isEqual(to: text) != true {
-                textStorage?.setAttributedString(text)
-                Self.captureReplacements += 1
-                lastMeasuredHeight = 0
-                measuredHeights.removeAll()
-                measuredWidthOrder.removeAll()
-            }
-            invalidateIntrinsicContentSize()
-            return
-        }
-        #endif
+    }
+
+    private func invalidateMeasuredText() {
+        lastMeasuredHeight = 0
+        measuredHeights.removeAll()
+        measuredWidthOrder.removeAll()
+        resetHeal()
+        // resetHeal cancels any pending check; new text needs one of its own.
+        scheduleHeightCheck()
+        // `render` runs from `updateNSView`, often inside the hosting view's layout pass
+        // (a column laid out as it is shown); invalidating there can skip the pass and
+        // leave the text undrawn inside its bubble.
+        queueIntrinsicContentSizeInvalidation()
+    }
+
+    /// New content; skips the layout pass when nothing changed (favicons and
+    /// streaming rebuilds both funnel through here).
+    func render(_ text: NSAttributedString) {
+        updateLinkTextAttributes()
         if let storage = textStorage, !storage.isEqual(to: text) {
             let count = storage.length
             let extends = text.length >= count && text.string.utf16.starts(with: storage.string.utf16)
@@ -603,21 +728,38 @@ final class LinkTextView: NSTextView {
             if text.length > count, extends,
                text.attributedSubstring(from: NSRange(location: 0, length: count)).isEqual(to: storage) {
                 storage.append(text.attributedSubstring(from: NSRange(location: count, length: text.length - count)))
-                #if DEBUG
-                if CaptureRun.isEnabled { Self.captureAppends += 1 }
-                #endif
             } else {
                 storage.setAttributedString(text)
-                #if DEBUG
-                if CaptureRun.isEnabled { Self.captureReplacements += 1 }
-                #endif
             }
             if !selection.isEmpty { selectedRanges = selection }
-            lastMeasuredHeight = 0
-            measuredHeights.removeAll()
-            measuredWidthOrder.removeAll()
-            invalidateIntrinsicContentSize()
+            invalidateMeasuredText()
         }
+    }
+
+    /// A literal tail extension follows `render`'s selection rule; anything else needs its full path.
+    @discardableResult
+    func replaceStreamingTail(from utf16Offset: Int, with tail: NSAttributedString) -> Bool {
+        guard let storage = textStorage, utf16Offset >= 0, utf16Offset <= storage.length else { return false }
+        let oldTailLength = storage.length - utf16Offset
+        guard tail.length >= oldTailLength,
+              tail.string.utf16.starts(with: storage.string.utf16.dropFirst(utf16Offset)) else { return false }
+        updateLinkTextAttributes()
+        let range = NSRange(location: utf16Offset, length: oldTailLength)
+        if oldTailLength == tail.length,
+           storage.attributedSubstring(from: range).isEqual(to: tail) { return true }
+        let selection = selectedRange().length > 0 ? selectedRanges : []
+        // Like `render`: an unchanged attributed tail keeps its glyph layout and only the
+        // new characters are appended; a restyled tail is replaced whole.
+        if tail.length > oldTailLength,
+           tail.attributedSubstring(from: NSRange(location: 0, length: oldTailLength))
+               .isEqual(to: storage.attributedSubstring(from: range)) {
+            storage.append(tail.attributedSubstring(from: NSRange(location: oldTailLength, length: tail.length - oldTailLength)))
+        } else {
+            storage.replaceCharacters(in: range, with: tail)
+        }
+        if !selection.isEmpty { selectedRanges = selection }
+        invalidateMeasuredText()
+        return true
     }
 
     func height(forWidth width: CGFloat) -> CGFloat {
@@ -637,10 +779,77 @@ final class LinkTextView: NSTextView {
         return height
     }
 
+    private func queueIntrinsicContentSizeInvalidation() {
+        guard !intrinsicInvalidationQueued else { return }
+        intrinsicInvalidationQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            intrinsicInvalidationQueued = false
+            invalidateIntrinsicContentSize()
+        }
+    }
+
     override var intrinsicContentSize: NSSize {
         let width = bounds.width > 0 ? bounds.width : lastLaidOutWidth
         guard width > 0 else { return NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
         return NSSize(width: NSView.noIntrinsicMetric, height: height(forWidth: width))
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let oldSize = frame.size
+        super.setFrameSize(newSize)
+        // A view growing out of a zero-area frame can miss its initial draw if AppKit
+        // clipped an earlier invalidation to empty bounds.
+        if (oldSize.width <= 0 || oldSize.height <= 0), newSize.width > 0, newSize.height > 0 {
+            needsDisplay = true
+        }
+        // Avoid short-circuiting an in-flight backoff when AppKit reapplies the same size.
+        if newSize != oldSize || healAttempt == 0 {
+            scheduleHeightCheck()
+        }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let oldWindow = window {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didChangeOcclusionStateNotification,
+                object: oldWindow
+            )
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // A reply mounted while its turn folds (running block → finished block) can be
+        // handed its text before it has a window; draw it once it is on screen.
+        if window != nil { needsDisplay = true }
+        resetHeal()
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidChangeOcclusionState(_:)),
+                name: NSWindow.didChangeOcclusionStateNotification,
+                object: window
+            )
+            scheduleHeightCheck()
+        }
+    }
+
+    @objc private func windowDidChangeOcclusionState(_ notification: Notification) {
+        if window?.occlusionState.contains(.visible) == true {
+            needsDisplay = true
+            resetHeal()
+            scheduleHeightCheck()
+        }
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        needsDisplay = true
+        resetHeal()
+        scheduleHeightCheck()
     }
 
     override func layout() {
@@ -650,6 +859,8 @@ final class LinkTextView: NSTextView {
         // to the frame it was actually given, not the last probe.
         if width > 0, let container = textContainer, container.containerSize.width != width {
             container.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+            // Resizing the container discards the glyph layout from an earlier width probe.
+            needsDisplay = true
         }
         // While the window is being dragged SwiftUI already sizes the view through
         // `sizeThatFits` for every width it proposes; the second measurement here only
@@ -660,11 +871,25 @@ final class LinkTextView: NSTextView {
             return
         }
         guard width > 0, abs(width - lastLaidOutWidth) > 0.5 else { return }
+        // The first real width (or a new one) may arrive after the text was set while the
+        // frame was still zero; without an explicit mark the text could stay undrawn in a
+        // frame of the right height until something else forced a redraw.
+        let firstWidth = lastLaidOutWidth == 0
         lastLaidOutWidth = width
-        let height = height(forWidth: width)
+        resetHeal()
+        scheduleHeightCheck()
+        if firstWidth { needsDisplay = true }
+        let existing = measuredHeights[width]
+        let height = existing ?? height(forWidth: width)
+        // Skip the second invalidation when SwiftUI's `sizeThatFits` already measured this width.
+        if lastMeasuredHeight == 0, existing != nil {
+            lastMeasuredHeight = height
+            return
+        }
         guard abs(height - lastMeasuredHeight) > 0.5 else { return }
         lastMeasuredHeight = height
-        invalidateIntrinsicContentSize()
+        // Invalidating during layout makes the hosting view skip the whole pass, which could leave a just-mounted reply undrawn.
+        queueIntrinsicContentSizeInvalidation()
     }
 
     override func viewDidEndLiveResize() {
@@ -677,5 +902,105 @@ final class LinkTextView: NSTextView {
         guard abs(height - lastMeasuredHeight) > 0.5 else { return }
         lastMeasuredHeight = height
         invalidateIntrinsicContentSize()
+    }
+
+    // MARK: - Height heal
+
+    #if DEBUG
+    static var debugHeightHealDisabled = false
+    #endif
+
+    private static let heightHealLog = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Tivano",
+        category: "LinkTextView"
+    )
+    private var healAttempt = 0
+    /// After an attempt, the earliest time the next may run: checks triggered sooner (a
+    /// report, a frame set) leave it to the scheduled follow-up, so a cause that lasts a
+    /// moment cannot use up every attempt at once.
+    private var healNotBefore: CFTimeInterval = 0
+    private var healGeneration = 0
+    private var heightCheckQueued = false
+    /// The height SwiftUI was last given per width (`ProseRunRepresentable.sizeThatFits`).
+    /// The text view sizes its own frame to its text, so its bounds alone can look right
+    /// while SwiftUI still lays it out in a slot measured before the text arrived.
+    private var reportedHeights: [CGFloat: CGFloat] = [:]
+
+    func noteReportedHeight(_ height: CGFloat, forWidth width: CGFloat) {
+        if reportedHeights.count >= 8, reportedHeights[width] == nil { reportedHeights.removeAll() }
+        reportedHeights[width] = height
+        // A stale report with an unchanged frame calls no other trigger.
+        scheduleHeightCheck()
+    }
+
+    private func resetHeal() {
+        healAttempt = 0
+        healNotBefore = 0
+        healGeneration &+= 1
+        heightCheckQueued = false
+    }
+
+    func scheduleHeightCheck(after delay: TimeInterval = 0) {
+        let generation = healGeneration
+        if delay <= 0 {
+            guard !heightCheckQueued else { return }
+            heightCheckQueued = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.healGeneration == generation else { return }
+                self.heightCheckQueued = false
+                self.verifyHeight()
+            }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.healGeneration == generation else { return }
+                self.verifyHeight()
+            }
+        }
+    }
+
+    private func verifyHeight() {
+        #if DEBUG
+        if Self.debugHeightHealDisabled { return }
+        #endif
+        guard healAttempt <= 3,
+              let window,
+              !isHiddenOrHasHiddenAncestor,
+              !window.inLiveResize,
+              bounds.width > 0,
+              let textStorage, textStorage.length > 0 else { return }
+        if intrinsicInvalidationQueued {
+            // A fresh measurement is already on its way; yield back to the run loop so
+            // it can land before re-checking, without spinning DispatchQueue.main.
+            guard !heightCheckQueued else { return }
+            heightCheckQueued = true
+            let generation = healGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+                guard let self, self.healGeneration == generation else { return }
+                self.heightCheckQueued = false
+                self.verifyHeight()
+            }
+            return
+        }
+        let expected = height(forWidth: bounds.width)
+        let actual = bounds.height
+        let reported = reportedHeights[bounds.width]
+        let staleSlot = reported.map { abs($0 - expected) > 0.5 } ?? false
+        if abs(actual - expected) <= 0.5, !staleSlot {
+            if healAttempt > 0 { resetHeal() }
+            return
+        }
+        guard CACurrentMediaTime() >= healNotBefore else { return }
+        lastMeasuredHeight = expected
+        healAttempt += 1
+        let attempt = healAttempt
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
+        superview?.needsLayout = true
+        Self.heightHealLog.info("height heal attempt \(attempt): bounds \(Double(actual)) reported \(Double(reported ?? -1)) expected \(Double(expected))")
+        if healAttempt <= 3 {
+            let delay = [0.25, 1.0, 3.0][healAttempt - 1]
+            healNotBefore = CACurrentMediaTime() + delay - 0.01
+            scheduleHeightCheck(after: delay)
+        }
     }
 }

@@ -17,6 +17,7 @@ struct ChatBadge<Glyph: View, Detail: View>: View {
     @ViewBuilder let detail: () -> Detail
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.chatColumnVisibility) private var columnVisibility
     @State private var coordinator = BadgePopoverCoordinator()
 
     var body: some View {
@@ -53,10 +54,9 @@ struct ChatBadge<Glyph: View, Detail: View>: View {
         .disabled(!isEnabled)
         .overlay(alignment: .top) {
             if needsAttention {
-                GeometryReader { proxy in
-                    DotFieldLayerView.Representable(color: Chrome.accentNSColor, animated: !reduceMotion)
+                TopQuarterLayout {
+                    DotFieldLayerView.Representable(color: Chrome.accentNSColor, animated: !reduceMotion && columnVisibility.isShown)
                         .scaleEffect(y: -1)
-                        .frame(height: proxy.size.height * 0.25)
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -80,19 +80,32 @@ struct ChatBadge<Glyph: View, Detail: View>: View {
     }
 }
 
+private struct TopQuarterLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let childProposal = ProposedViewSize(width: bounds.width, height: bounds.height * 0.25)
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading, proposal: childProposal)
+        }
+    }
+}
+
 extension View {
     /// `detail` as the anchored popover the chat's pills open (see `BadgePopoverCoordinator`),
     /// for a pill that draws itself rather than through `ChatBadge`: it hangs from this
     /// view's window rect with the popover's own animation, growing out of the pill. A
     /// SwiftUI `.popover` on the same pill came in from the top edge instead.
-    func badgePopover(isPresented: Binding<Bool>, @ViewBuilder detail: @escaping () -> some View) -> some View {
-        modifier(BadgePopoverModifier(isPresented: isPresented, detail: { AnyView(detail()) }))
+    func badgePopover<Detail: View>(isPresented: Binding<Bool>, @ViewBuilder detail: @escaping () -> Detail) -> some View {
+        modifier(BadgePopoverModifier(isPresented: isPresented, detail: detail))
     }
 }
 
-private struct BadgePopoverModifier: ViewModifier {
+private struct BadgePopoverModifier<Detail: View>: ViewModifier {
     @Binding var isPresented: Bool
-    let detail: () -> AnyView
+    @ViewBuilder let detail: () -> Detail
     @State private var coordinator = BadgePopoverCoordinator()
 
     func body(content: Content) -> some View {

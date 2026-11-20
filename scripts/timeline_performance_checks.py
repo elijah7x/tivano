@@ -113,6 +113,28 @@ require_source(
     "removeDocumentObserver()" in scroll_view_probe,
     "ScrollViewProbe.dismantleNSView must remove the document frame observer",
 )
+# A trackpad flick keeps moving the clip between geometry callbacks: history anchoring
+# must read the live clip, measure wheel movement over the same interval as the clip
+# baseline, and keep counting a gesture whose pointer drifts off the timeline.
+for marker in ("let liveOffset = tracking.liveOffset", "viewportFrame(block.id, offset: liveOffset)"):
+    require_source(marker in load_earlier, f"loadEarlier must anchor on the live clip offset ({marker!r})")
+for marker in ("let liveOffset = tracking.liveOffset", "viewportFrame(anchorID, offset: liveOffset)"):
+    require_source(marker in settle_measurements, f"history restore must measure against the live clip ({marker!r})")
+require_source(
+    "viewportFrame(block.id, offset: tracking.offset" not in load_earlier
+    and "viewportFrame(anchorID, offset: tracking.offset" not in settle_measurements,
+    "history anchoring must not measure against the last reported geometry offset",
+)
+probe_baseline = declaration("        func syncDocumentBaseline() {")
+require_source(
+    "wheelSinceObservation = 0" in probe_baseline,
+    "syncDocumentBaseline must reset wheel movement with the clip baseline",
+)
+require_source(
+    "gestureRoutesToTimeline = Self.routesVerticalWheel" in probe_view
+    and "routesToTimeline = gestureRoutesToTimeline" in probe_view,
+    "a phased trackpad gesture must keep the routing it began with",
+)
 for marker in (
     "HistoryAnchorMath.readerDelta(",
     "isSyncShiftingHistory",
@@ -221,6 +243,76 @@ require_source(
     "scrolled branch must unpin on upward reader movement and re-pin only within 8pt",
 )
 print("PASS: wheel preserves history loading; history pages record and restore one reader anchor")
+
+# Above-viewport height stability: per-row frozen estimates prevent meanHeight drift from
+# moving top spacers, and row geometry changes strictly above the viewport synchronously
+# compensate NSClipView without cancelling gestures or fighting history/placement/pinning.
+measurements_class = declaration("private final class TimelineMeasurements")
+row_height_fn = declaration("    func rowHeight(_ id: String) -> CGFloat {")
+prefix_fn = declaration("    func prefix(_ blocks: [DisplayBlock]) -> [CGFloat] {")
+invalidate_fn = declaration("    func invalidate(width: CGFloat) {")
+restore_frames_fn = declaration("    func restoreFrames(_ restored: [String: CGRect]) {")
+row_fn = declaration("    private func row(_ block: DisplayBlock,")
+above_viewport_if_needed = declaration("    private func compensateAboveViewportIfNeeded(")
+above_viewport_skip_reason = declaration("    private func aboveViewportSkipReason(")
+tracking_compensate = declaration("    func compensateAboveViewport(delta: CGFloat, rowID: String) -> CGFloat {")
+probe_compensate = declaration("        func compensateAboveViewport(delta: CGFloat, rowID: String) -> CGFloat {")
+
+for marker in ("frozenEstimates", "func assumedHeight(_ id: String) -> CGFloat?"):
+    require_source(marker in measurements_class, f"TimelineMeasurements must maintain frozen estimates ({marker!r})")
+for marker in ("frames[id]?.height", "frozenEstimates[id]", "meanHeight"):
+    require_source(marker in row_height_fn, f"rowHeight must read measured height, else freeze meanHeight ({marker!r})")
+require_source("rowHeight(blocks[index].id)" in prefix_fn, "prefix must build sums through rowHeight")
+require_source("frozenEstimates.removeAll()" in invalidate_fn, "invalidate(width:) must clear frozenEstimates")
+require_source("frozenEstimates.removeAll()" in restore_frames_fn, "restoreFrames(_:) must clear frozenEstimates")
+
+for marker in ("measurements.assumedHeight(block.id)", "compensateAboveViewportIfNeeded("):
+    require_source(marker in row_fn, f"row geometry handler must query assumedHeight and compensate above-viewport changes ({marker!r})")
+for marker in (
+    "let liveOffset = tracking.liveOffset",
+    "let viewportTop = liveOffset - Chrome.contentTopInset",
+    "frame.minY + assumedHeight <= viewportTop",
+    "abs(delta) > 0.5",
+    "aboveViewportSkipReason(",
+    "tracking.compensateAboveViewport(delta: delta, rowID: blockID)",
+):
+    require_source(marker in above_viewport_if_needed, f"compensateAboveViewportIfNeeded must check live above-viewport bounds ({marker!r})")
+for marker in (
+    "measurementGeneration != measurements.generation",
+    "stackOwner != stackGeneration",
+    "tracking.rebuildingStackGeneration != nil",
+    "remeasurePending",
+    "historyLoadPending",
+    "tracking.historyLoadPending",
+    "tracking.isRestoringHistory",
+    "tracking.isSyncShiftingHistory",
+    "tracking.placementToken != nil",
+    "tracking.isPinnedToBottom",
+    "anchorsBottomOnGrowth",
+    "tracking.isNudging",
+    "liveResize.isActive",
+    "isReshaping",
+):
+    require_source(marker in above_viewport_skip_reason, f"above-viewport compensation must skip on {marker!r}")
+
+require_source(
+    "probeView.compensateAboveViewport(delta: delta, rowID: rowID)" in tracking_compensate,
+    "TimelineScrollTracking.compensateAboveViewport must delegate synchronously to ProbeView",
+)
+for marker in (
+    "clip.scroll(to: clip.constrainBoundsRect(target).origin)",
+    "scrollView.reflectScrolledClipView(clip)",
+    "lastDocumentHeight = documentView.frame.height",
+    "lastClipMinY = afterY",
+    "wheelSinceObservation = 0",
+    "noteAboveViewportCompensation(",
+):
+    require_source(marker in probe_compensate, f"ProbeView.compensateAboveViewport must shift clip and update baselines ({marker!r})")
+require_source(
+    "noteUserNavigation" not in probe_compensate and "noteUserNavigation" not in tracking_compensate,
+    "above-viewport compensation must never cancel reader gesture or momentum via noteUserNavigation",
+)
+print("PASS: frozen estimates and synchronous above-viewport compensation guards verified")
 
 
 # Only unrelated dependencies are stubbed. The measured-height implementation and
@@ -432,8 +524,10 @@ struct Checks {
             let heights = reference.values.map(\.height).filter { $0.isFinite && $0 > 0 }
             return heights.isEmpty ? fallback : min(1600, max(48, heights.reduce(0, +) / CGFloat(heights.count)))
         }
+        var estimateProbe = 0
         func checkEstimate() {
-            precondition(abs(m.rowHeight("unknown") - estimate()) < 0.000001)
+            estimateProbe += 1
+            precondition(abs(m.rowHeight("unknown-\(estimateProbe)") - estimate()) < 0.000001)
         }
         checkEstimate()
         // Repeated streaming growth, replacement, origin-only changes, zero and
@@ -466,6 +560,35 @@ struct Checks {
         reference.removeAll()
         checkEstimate()
         print("PASS: 20,000 height updates, restoration, invalidation and stale generations")
+
+        // Frozen per-row estimates: measuring rows below the viewport must not shift
+        // prefix sums of unmeasured rows above it, while measured rows keep exact heights.
+        let frozen = TimelineMeasurements()
+        let frozenBlocks = (0..<6).map { DisplayBlock(id: "b-\($0)") }
+        let initialPrefix = frozen.prefix(frozenBlocks)
+        let aboveBefore = initialPrefix[3]
+        precondition(frozen.assumedHeight("b-0") == 160, "unmeasured row in prefix must freeze initial estimate")
+        precondition(frozen.assumedHeight("unseen") == nil, "never-placed row must have nil assumedHeight")
+        precondition(frozen.record("b-4", frame: CGRect(x: 0, y: 800, width: 720, height: 1200), generation: frozen.generation))
+        precondition(frozen.record("b-5", frame: CGRect(x: 0, y: 2012, width: 720, height: 1400), generation: frozen.generation))
+        let afterBelowPrefix = frozen.prefix(frozenBlocks)
+        precondition(afterBelowPrefix[3] == aboveBefore,
+                     "measuring rows below the window must not change the prefix sum of unmeasured rows above it")
+        precondition(frozen.rowHeight("b-0") == 160 && frozen.rowHeight("b-1") == 160 && frozen.rowHeight("b-2") == 160,
+                     "frozen estimates for unmeasured rows above the window must stay constant")
+        precondition(frozen.rowHeight("brand-new") > 1000,
+                     "meanHeight must still track measured heights for newly estimated rows")
+        precondition(frozen.assumedHeight("b-1") == 160)
+        precondition(frozen.record("b-1", frame: CGRect(x: 0, y: 172, width: 720, height: 240), generation: frozen.generation))
+        precondition(frozen.assumedHeight("b-1") == 240 && frozen.rowHeight("b-1") == 240,
+                     "a measured row must use its exact measured height for future layouts and spacers")
+        frozen.invalidate(width: 680)
+        precondition(frozen.assumedHeight("b-0") == nil, "invalidate(width:) must clear frozen estimates")
+        _ = frozen.rowHeight("b-0")
+        precondition(frozen.assumedHeight("b-0") != nil)
+        frozen.restoreFrames(["b-4": CGRect(x: 0, y: 0, width: 680, height: 300)])
+        precondition(frozen.assumedHeight("b-0") == nil, "restoreFrames(_:) must clear frozen estimates")
+        print("PASS: frozen estimates keep prefix sums above the window stable")
 
         let t = TrackingHarness()
         let r = ThreadRuntime()

@@ -25,41 +25,28 @@ struct AlphaSettingsPage: View {
                         .foregroundStyle(SettingsPage.alpha.tint)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Alpha")
+                        Text("Labs")
                             .font(.ui(.title3, weight: .semibold))
                             .foregroundStyle(Chrome.primaryText)
-                        Text(verbatim: Chrome.localized("Features here are early versions and may be unstable. Turning Alpha off disables them. Individual feature choices are kept."))
+                        Text(verbatim: Chrome.localized("Features here are early versions and may be unstable. Turning Labs off disables them. Individual feature choices are kept."))
                             .font(.ui(.subheadline))
                             .foregroundStyle(Chrome.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 12)
                     SettingsSwitch(isOn: $settings.alphaEnabled)
-                        .accessibilityLabel(Text("Alpha"))
+                        .accessibilityLabel(Text("Labs"))
                 }
                 .padding(.leading, 16)
                 .padding(.trailing, Chrome.rowControlTrailingPadding)
                 .padding(.vertical, 14)
             }
             if !settings.alphaEnabled {
-                Text("Switch Alpha on to try its features.")
+                Text("Switch Labs on to try its features.")
                     .font(.ui(.subheadline))
                     .foregroundStyle(Chrome.secondaryText)
                     .padding(.horizontal, 4)
             }
-        }
-        ChromeSection(title: "Chimera") {
-            ChromeCard {
-                ChromeRow(title: "Chimera", detail: "The lead assigns roles mid-conversation and you pick each role's model. Switch on to add Chimera under Hydra in the sidebar.") {
-                    SettingsSwitch(isOn: $settings.alphaChimeraEnabled)
-                        .accessibilityLabel(Text("Chimera"))
-                }
-            }
-        }
-        .modifier(AlphaGated(isOn: settings.alphaEnabled))
-        // Off for the app, Chimera gives every chat it held back to its Hydra.
-        .onChange(of: settings.isChimeraEnabled) { _, on in
-            if !on { model.leaveChimeraEverywhere() }
         }
     }
 }

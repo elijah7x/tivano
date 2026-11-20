@@ -23,8 +23,8 @@ struct PlanLimitsView: View {
             if scoped {
                 ChromeRow(title: account.map { registry.accounts.title(of: $0) } ?? Chrome.localized("No Claude account bound"),
                           detail: account.map { Chrome.localized($0.requiresClaudeCleanup
-                            ? ($0.requiresClaudeActivation ? "Cleanup required. Retry removing this account." : "Login replacement was interrupted. Sign in again to recover this account.")
-                            : $0.requiresClaudeActivation ? "Saved, not activated"
+                            ? ($0.requiresClaudeActivation ? "Cleanup required. Retry removing this account." : "Sign-in needs attention. Sign in again to restore this account.")
+                            : $0.requiresClaudeActivation ? "Sign in again to use this account."
                             : $0.isDefault ? "Default profile: follows the external Claude CLI login."
                             : "This chat uses this Claude account, regardless of the account selected for new chats.") }
                             ?? Chrome.localized("Usage appears after this chat binds to an account."), localizesDetail: false) {}
@@ -41,8 +41,7 @@ struct PlanLimitsView: View {
                     Button("Refresh") {
                         registry.refreshPlanLimits(.codex, force: true)
                     }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
+                    .chromePillButton()
                     .disabled(isLoading || registry.signingIn == .codex)
                 }
             }
@@ -78,6 +77,7 @@ struct PlanLimitsView: View {
                                     loginError = nil
                                     Task { loginError = await registry.signIn(provider) }
                                 }
+                                .chromePillButton(.compact)
                                 .disabled(registry.signingIn != nil || isLoading)
                             }
                             Button("Retry") {
@@ -88,13 +88,12 @@ struct PlanLimitsView: View {
                                     registry.refreshPlanLimits(provider, force: true)
                                 }
                             }
+                            .chromePillButton(.compact)
                             .disabled(isLoading || registry.signingIn == provider || (scoped && !eligible))
                             if registry.signingIn == provider {
                                 ProgressView().controlSize(.mini)
                             }
                         }
-                        .buttonStyle(.glass)
-                        .controlSize(.small)
                     }
                     .padding(.top, 14)
                 }
@@ -158,8 +157,7 @@ struct CreditsView: View {
                 }
                 if let topUpURL = CreditsReader.topUpURL(provider) {
                     Link("Top up", destination: topUpURL)
-                        .buttonStyle(.glass)
-                        .controlSize(.small)
+                        .chromePillButton()
                 }
             }
         }
@@ -387,8 +385,8 @@ private struct BankedResetRow: View {
         switch phase {
         case .confirming(let id) where id == row.id:
             HStack(spacing: 6) {
-                Button("Cancel", action: onCancel).buttonStyle(.glass).controlSize(.small)
-                Button("Reset now", action: onUse).buttonStyle(.glassProminent).controlSize(.small).tint(Chrome.accent)
+                Button("Cancel", action: onCancel).chromePillButton(.compact)
+                Button("Reset now", action: onUse).chromePillButton(.compact, prominent: true).tint(Chrome.accent)
             }
             .transition(.blurReplace)
         case .applying(let id) where id == row.id:
@@ -400,7 +398,7 @@ private struct BankedResetRow: View {
             }
             .transition(.blurReplace)
         default:
-            Button("Use reset", action: onConfirm).buttonStyle(.glass).controlSize(.small)
+            Button("Use reset", action: onConfirm).chromePillButton(.compact)
                 .disabled(isApplying)
                 .transition(.blurReplace)
         }

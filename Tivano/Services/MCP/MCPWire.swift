@@ -62,6 +62,8 @@ enum MCPWire {
 
     // MARK: - Streamable HTTP
 
+    nonisolated private static let httpSession = URLSession(configuration: .ephemeral)
+
     nonisolated static func post(
         to url: URL,
         headers: [String: String],
@@ -79,45 +81,37 @@ enum MCPWire {
         request.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
         if let sessionID { request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
 
-        // A dedicated session gives cancellation ownership even before headers arrive.
         let postRequest = request
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.invalidateAndCancel() }
-        return try await withTaskCancellationHandler {
-            try await withThrowingTaskGroup(of: MCPHTTPReply.self) { group in
-                group.addTask { try await readPost(postRequest, session: session, id: id) }
-                group.addTask {
-                    try await Task.sleep(for: .seconds(timeout))
-                    session.invalidateAndCancel()
-                    throw MCPWireError.timedOut
-                }
-                defer { group.cancelAll() }
-                guard let reply = try await group.next() else { throw CancellationError() }
-                try Task.checkCancellation()
-                return reply
+        return try await withThrowingTaskGroup(of: MCPHTTPReply.self) { group in
+            group.addTask { try await readPost(postRequest, session: httpSession, id: id) }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                throw MCPWireError.timedOut
             }
-        } onCancel: {
-            session.invalidateAndCancel()
+            defer { group.cancelAll() }
+            guard let reply = try await group.next() else { throw CancellationError() }
+            try Task.checkCancellation()
+            return reply
         }
     }
 
     nonisolated private static let responseLimit = 16 * 1024 * 1024
 
     nonisolated private static func readPost(_ request: URLRequest, session: URLSession, id: Int?) async throws -> MCPHTTPReply {
-        let (bytes, response) = try await session.bytes(for: request)
-        // AsyncBytes.task owns the transfer; cancel also on early SSE success or error.
-        defer { bytes.task.cancel() }
+        let chunked = try await SSEChunkReader.read(for: request, session: session)
+        // The task owns the transfer; cancel also on early SSE success or error.
+        defer { chunked.task.cancel() }
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            guard let http = response as? HTTPURLResponse else {
+            guard let http = chunked.response as? HTTPURLResponse else {
                 throw MCPHTTPError(status: nil, body: "")
             }
             let sessionID = http.value(forHTTPHeaderField: "Mcp-Session-Id")
             guard (200..<300).contains(http.statusCode) else {
                 var data = Data()
-                for try await byte in bytes {
+                for try await chunk in chunked.chunks {
                     try Task.checkCancellation()
-                    data.append(byte)
+                    data.append(chunk.prefix(2_000 - data.count))
                     if data.count >= 2_000 { break }
                 }
                 throw MCPHTTPError(status: http.statusCode, body: String(decoding: data, as: UTF8.self).trimmed)
@@ -125,13 +119,13 @@ enum MCPWire {
             let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? ""
             guard contentType.lowercased().contains("text/event-stream") else {
                 var data = Data()
-                for try await byte in bytes {
+                for try await chunk in chunked.chunks {
                     try Task.checkCancellation()
-                    guard data.count < responseLimit else {
-                        bytes.task.cancel()
+                    guard chunk.count <= responseLimit - data.count else {
+                        chunked.task.cancel()
                         throw MCPResponseError.responseTooLarge
                     }
-                    data.append(byte)
+                    data.append(chunk)
                 }
                 guard !data.isEmpty else { return MCPHTTPReply(sessionID: sessionID, body: nil) }
                 let body = JSONValue.parse(data)
@@ -144,50 +138,77 @@ enum MCPWire {
             }
             guard let id else { return MCPHTTPReply(sessionID: sessionID, body: nil) }
             var event = SSEEvent()
-            for try await byte in bytes {
+            for try await chunk in chunked.chunks {
                 try Task.checkCancellation()
-                if let text = try event.append(byte),
-                   let value = JSONValue.parse(text), isReply(value, to: id) {
+                for text in try event.append(contentsOf: chunk) {
+                    if let value = JSONValue.parse(text), isReply(value, to: id) {
+                        return MCPHTTPReply(sessionID: sessionID, body: value)
+                    }
+                }
+            }
+            for text in try event.finish() {
+                if let value = JSONValue.parse(text), isReply(value, to: id) {
                     return MCPHTTPReply(sessionID: sessionID, body: value)
                 }
             }
             return MCPHTTPReply(sessionID: sessionID, body: nil)
         } onCancel: {
-            bytes.task.cancel()
+            chunked.task.cancel()
         }
     }
 
     /// Limits raw event bytes, including ignored fields and an unterminated line.
     private struct SSEEvent {
-        var line = Data()
+        var framer = SSEByteFramer(byteLimit: MCPWire.responseLimit)
         var data = Data()
         var size = 0
-        var afterCR = false
         var firstLine = true
 
-        mutating func append(_ byte: UInt8) throws -> String? {
-            if afterCR {
-                afterCR = false
-                if byte == 0x0A {
+        mutating func append(contentsOf chunk: Data) throws -> [String] {
+            let frames: [SSEByteFramer.Frame]
+            do {
+                frames = try framer.append(chunk)
+            } catch is SSEByteFramer.Error {
+                throw MCPResponseError.eventTooLarge
+            }
+            var events: [String] = []
+            for frame in frames {
+                switch frame {
+                case .pairedLineFeed:
                     if size > 0 {
                         guard size < MCPWire.responseLimit else { throw MCPResponseError.eventTooLarge }
                         size += 1
                     }
-                    return nil
+                case .line(let line):
+                    if let text = try append(line) {
+                        events.append(text)
+                    }
                 }
             }
-            guard size < MCPWire.responseLimit else { throw MCPResponseError.eventTooLarge }
-            size += 1
-            if byte != 0x0A && byte != 0x0D {
-                line.append(byte)
-                return nil
+            guard framer.bufferedByteCount <= MCPWire.responseLimit - size else {
+                throw MCPResponseError.eventTooLarge
             }
-            afterCR = byte == 0x0D
+            return events
+        }
+
+        mutating func finish() throws -> [String] {
+            do {
+                _ = try framer.finish()
+            } catch is SSEByteFramer.Error {
+                throw MCPResponseError.eventTooLarge
+            }
+            return []
+        }
+
+        private mutating func append(_ line: SSEByteFramer.Line) throws -> String? {
+            let wireCount = line.content.count + (line.terminator == nil ? 0 : 1)
+            guard wireCount <= MCPWire.responseLimit - size else { throw MCPResponseError.eventTooLarge }
+            size += wireCount
+            var line = line.content
             if firstLine {
                 firstLine = false
                 if line.starts(with: [0xEF, 0xBB, 0xBF]) { line.removeFirst(3) }
             }
-            defer { line.removeAll(keepingCapacity: true) }
             if line.isEmpty {
                 size = 0
                 guard !data.isEmpty else { return nil }

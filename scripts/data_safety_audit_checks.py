@@ -25,14 +25,17 @@ ROOT = Path(__file__).resolve().parents[1]
 GIT = "Tivano/Services/Git/Git.swift"
 STORE = "Tivano/Services/Store/Storage.swift"
 TIMELINE = "Tivano/Core/Models/Timeline.swift"
+APP_MODEL = "Tivano/App/AppModel.swift"
+APP_SETTINGS = "Tivano/App/AppSettings.swift"
 CASES = (
     "sync-nonoverlap", "sync-overlap", "staged-unrelated", "staged-overlap",
     "file-shapes", "capture-rebase", "invalid-ref", "query-status", "query-cat-file",
-    "query-check-ignore", "query-ls-files", "query-truncated", "apply-failure",
+    "query-check-ignore", "query-ls-files", "query-truncated", "restore-blobs", "apply-failure",
     "tracked-artifacts", "dirty-worktree", "repository-lock", "before-ref", "after-ref",
     "attachments-bad-json", "attachments-bad-schema", "attachments-missing-turn",
     "attachments-missing-revision", "attachments-wrong-turn-id", "attachments-unreadable", "attachments-orphan",
     "attachments-save-before", "attachments-save-during", "attachment-import", "claims", "thread-save-scale", "unborn-head", "non-repository", "apply-success",
+    "read-thread-barrier", "archive-worktree-cleanup", "keychain-migration",
 )
 
 SWIFT_SUPPORT = r'''
@@ -122,6 +125,12 @@ struct Git: Sendable {
 /* GIT_METHODS */
 }
 
+extension Git {
+    func auditBlobs(in ref: String, at paths: [String], root: URL) async throws -> [String: String] {
+        try await blobs(in: ref, at: paths, root: root)
+    }
+}
+
 struct Attachment: Codable, Equatable, Sendable {
     var id: UUID
     var name: String
@@ -154,7 +163,6 @@ enum Storage {
     static var threadsDirectory: URL { root.appendingPathComponent("threads") }
     static var attachmentsDirectory: URL { root.appendingPathComponent("attachments") }
     static func threadURL(_ id: UUID) -> URL { threadsDirectory.appendingPathComponent("\(id).json") }
-    static func prepareLibraryWrite(_ library: Library, to url: URL) throws {}
 /* STORE_METHODS */
 }
 enum HeadFilter {
@@ -241,6 +249,19 @@ func emit(_ object: [String: Any]) throws {
                 default: values = Array(try await git.presentPaths(among: ["f"], in: a[4]))
                 }
                 try emit(["paths": values])
+            case "blobs":
+                let root = try await git.repositoryRoot()
+                try emit(["blobs": try await git.auditBlobs(in: a[3], at: Array(a[4...]), root: root)])
+            case "preview":
+                let preview = try await git.previewRestore(base: a[3], end: a[4], paths: Array(a[5...]))
+                let files: [[String: Any]] = preview.files.map { file in
+                    ["path": file.path, "additions": file.additions, "deletions": file.deletions,
+                     "isBinary": file.isBinary, "isKept": file.isKept]
+                }
+                try emit(["files": files])
+            case "restore":
+                try await git.restore(Array(a[4...]), from: a[3])
+                try emit(["ok": true])
             case "apply":
                 try emit(["conflicts": try await git.apply(String(contentsOfFile: a[3], encoding: .utf8))])
             case "remove": try await git.removeWorktree(at: a[3]); try emit(["ok": true])
@@ -347,14 +368,15 @@ def build_source():
 
     methods = [
         "    func repositoryWriteLease(", "    func output(", "    static func check(",
-        "    func isRepository(", "    func hasCommits(", "    func captureTree(paths: [String])",
-        "    func captureTree(paths: [String], onto", "    private func blobData(",
-        "    private func fileMode(", "    func treeHash(", "    func commitHash(",
+        "    func isRepository(", "    func repositoryRoot(", "    func hasCommits(",
+        "    func captureTree(paths: [String])", "    func captureTree(paths: [String], onto",
+        "    private func blobData(", "    private func fileMode(", "    func treeHash(", "    func commitHash(",
         "    func updateRef(_ ref: String, to commit: String) async", "    func changedPaths(",
         "    func dirtyPaths(", "    func ignoredPaths(", "    func trackedPaths(",
-        "    func presentPaths(", "    private static func nulSeparated(",
+        "    func presentPaths(", "    private func treeObjects(", "    private static func nulSeparated(",
         "    func synchronizeCheckout(", "    func captureTree()", "    func diff(from:",
-        "    func removeWorktree(", "    func apply(_ patch:",
+        "    func previewRestore(", "    func restore(_ paths:", "    private func blobs(",
+        "    private func workingBlobs(", "    func removeWorktree(", "    func apply(_ patch:",
     ]
     git_methods = "\n".join(decl(GIT, marker) for marker in methods)
     # Foundation may ignore TMPDIR on macOS. Relocate only scratch-index storage.
@@ -377,6 +399,7 @@ def build_source():
     names_end = usage_text.index("\n    ]", names_start) + len("\n    ]")
     storage += "\n" + usage_text[names_start:names_end] + "\n" + decl(usage, "    nonisolated static func removeBuildFiles(")
     models = whole("Tivano/Core/Support/Coding.swift")
+    models += "\n" + whole("Tivano/Services/Git/RevertPreview.swift")
     models += "\n" + "\n".join(decl(TIMELINE, marker) for marker in (
         "struct ContextUsage:", "struct ThreadTurnReference:", "struct ThreadDocument:"))
     models += "\n" + "\n".join(decl(STORE, marker) for marker in (
@@ -400,10 +423,102 @@ def build_source():
         "HEAD_FILTER": filter_method.replace("private static func", "static func", 1),
         "TOUCHED_PATHS": touched,
     }
+    sources.update((APP_MODEL, APP_SETTINGS))
     result = SWIFT_SUPPORT
     for key, value in replacements.items():
         result = result.replace("/* " + key + " */", value)
     return result, sorted(sources)
+
+
+def require_declaration(path, marker):
+    try:
+        return declaration(path, marker)
+    except SystemExit as error:
+        raise ValueError(str(error)) from None
+
+
+def source_block(text, marker, label):
+    count = text.count(marker)
+    if count != 1:
+        raise ValueError(f"{label}: marker {marker!r} found {count} times, expected 1")
+    start = text.index(marker)
+    opening = text.find("{", start)
+    if opening == -1:
+        raise ValueError(f"{label}: marker {marker!r} has no opening brace")
+    depth, end = 1, opening + 1
+    while depth and end < len(text):
+        depth += (text[end] == "{") - (text[end] == "}")
+        end += 1
+    if depth:
+        raise ValueError(f"{label}: unterminated block for {marker!r}")
+    return text[start:end]
+
+
+def check_read_thread_barrier():
+    body = require_declaration(STORE, "    func readThreadSynchronously<Value>(")
+    sync_marker = "threadQueue.sync {"
+    lock_marker = "withThreadLock("
+    if sync_marker not in body:
+        raise AssertionError("DiskWriter.readThreadSynchronously must run inside threadQueue.sync")
+    if lock_marker not in body:
+        raise AssertionError("DiskWriter.readThreadSynchronously is missing withThreadLock")
+    if body.index(sync_marker) >= body.index(lock_marker):
+        raise AssertionError("DiskWriter.readThreadSynchronously must call threadQueue.sync before withThreadLock")
+    sync_block = source_block(body, sync_marker, "DiskWriter.readThreadSynchronously")
+    if lock_marker not in sync_block:
+        raise AssertionError("DiskWriter.readThreadSynchronously must wrap withThreadLock inside threadQueue.sync")
+
+
+def check_archive_worktree_cleanup():
+    archive = require_declaration(APP_MODEL, "    func archive(_ id: UUID)")
+    cancel_block = source_block(
+        archive,
+        "if let creation = worktreeTasks.removeValue(forKey: threadID) {",
+        "AppModel.archive",
+    )
+    for required in (
+        "creation.cancel()",
+        "$0.controlWorkspace?.phase == .preparing",
+        "$0.controlWorkspace?.phase = .failed",
+        '$0.controlWorkspace?.failure = ControlFailure(code: .workspaceFailed, detail: "archived_during_preparation")',
+    ):
+        if required not in cancel_block:
+            raise AssertionError(f"AppModel.archive worktree cancellation branch missing {required!r}")
+
+    abandon = require_declaration(APP_MODEL, "    private static func abandonCreatedWorktree(")
+    remove_guard = "guard (try? await git.removeWorktree(at: path, force: true)) != nil else { return }"
+    delete_branch = "git.deleteBranch(branch)"
+    if remove_guard not in abandon:
+        raise AssertionError("AppModel.abandonCreatedWorktree must guard removeWorktree before deleting branch")
+    if delete_branch not in abandon:
+        raise AssertionError("AppModel.abandonCreatedWorktree is missing git.deleteBranch(branch)")
+    if abandon.index(remove_guard) >= abandon.index(delete_branch):
+        raise AssertionError("AppModel.abandonCreatedWorktree must only call deleteBranch after removeWorktree succeeds")
+
+
+def check_keychain_migration():
+    stored_key = require_declaration(
+        APP_SETTINGS,
+        "    private nonisolated static func storedKey(for provider: ProviderKind, fallback: String) -> StoredKey",
+    )
+    if "APIKeychain.store" in stored_key or "insertIfMissing" in stored_key:
+        raise AssertionError("AppSettings.storedKey(for:fallback:) must only read the Keychain")
+    if "APIKeychain.readResult(for: provider)" not in stored_key or "case .missing:" not in stored_key:
+        raise AssertionError("AppSettings.storedKey(for:fallback:) must tell a confirmed missing item from a failed read")
+
+    fill_keys = require_declaration(APP_SETTINGS, "    private func fillKeys(_ keys: StoredKeys)")
+    if "APIKeychain.insertIfMissing(" not in fill_keys or "key.keychainMissing" not in fill_keys:
+        raise AssertionError("AppSettings.fillKeys(_:) must migrate legacy keys insert-only, after a confirmed missing read")
+    if "APIKeychain.store(" in fill_keys:
+        raise AssertionError("AppSettings.fillKeys(_:) must never overwrite a Keychain item while migrating")
+
+    key_fallbacks = require_declaration(APP_SETTINGS, "    private var keyFallbacks:")
+    settings_text = (ROOT / APP_SETTINGS).read_text()
+    for legacy_key in ("deepseekAPIKey", "metaAPIKey", "zaiAPIKey", "commandcodeAPIKey"):
+        if f"defaults.string(forKey: Key.{legacy_key})" not in key_fallbacks:
+            raise AssertionError(f"AppSettings.keyFallbacks must read legacy key Key.{legacy_key}")
+        if f'static let {legacy_key} = "{legacy_key}"' not in settings_text:
+            raise AssertionError(f"AppSettings.Key.{legacy_key} must keep legacy defaults key name {legacy_key!r}")
 
 
 class Fixtures:
@@ -428,6 +543,24 @@ class Fixtures:
 
     def app(self, repo, action, *args, expected=0, fault=""):
         return json.loads(self.run([self.binary, action, repo, *args], repo, expected, fault))
+
+    def expected_blobs(self, repo, ref, paths):
+        listing = self.git(repo, "ls-tree", "-r", "-t", "-z", "--full-tree", ref)
+        objects = {}
+        for entry in listing.split("\0"):
+            if not entry:
+                continue
+            metadata, name = entry.split("\t", 1)
+            fields = metadata.split(" ", 2)
+            if len(fields) != 3:
+                raise AssertionError(f"invalid ls-tree fixture entry: {entry!r}")
+            objects[name] = fields[2]
+        expected = {}
+        for path in paths:
+            normalized = os.path.normpath(path)
+            if normalized in objects:
+                expected[path] = objects[normalized]
+        return expected
 
     def seed(self, case):
         repo = Path(tempfile.mkdtemp(prefix=case + "-", dir=self.output / "repos"))
@@ -501,6 +634,12 @@ class Fixtures:
                 assert (repo / "new-name").read_text() == "rename me\n"
 
     def case(self, name):
+        if name == "read-thread-barrier":
+            return check_read_thread_barrier()
+        if name == "archive-worktree-cleanup":
+            return check_archive_worktree_cleanup()
+        if name == "keychain-migration":
+            return check_keychain_migration()
         if name in {"sync-nonoverlap", "sync-overlap", "staged-unrelated", "staged-overlap", "file-shapes", "before-ref", "after-ref"}:
             return self.sync_fixture(name)
         repo, head = self.seed(name)
@@ -539,6 +678,51 @@ class Fixtures:
             assert not self.git(repo, "for-each-ref", "--format=%(refname)", "refs/tivano/recovery")
         elif name == "invalid-ref":
             self.app(repo, "query", "present", "refs/heads/absent", expected=1)
+        elif name == "restore-blobs":
+            (repo / "space name").write_text("spaces\n")
+            (repo / "line\nbreak").write_text("newlines\n")
+            (repo / "folder").mkdir()
+            (repo / "folder/nested").write_text("nested\n")
+            os.symlink("f", repo / "link")
+            self.git(repo, "mv", "old-name", "new-name")
+            self.git(repo, "rm", "gone")
+            (repo / "f").write_text(lines({2: "turn"}))
+            self.git(repo, "add", "-A")
+            self.git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},submodule")
+            # A real submodule's commit lives only in its own object store.
+            self.git(repo, "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},foreign-submodule")
+            self.git(repo, "commit", "-m", "restore blob shapes")
+            end = self.git(repo, "rev-parse", "HEAD")
+            paths = [
+                "f", "gone", "old-name", "new-name", "space name", "line\nbreak",
+                "link", "submodule", "foreign-submodule", "folder", "folder/nested", "missing", "f", "./f", "folder/../f",
+            ]
+            for ref in (head, end):
+                expected = self.expected_blobs(repo, ref, paths)
+                assert self.app(repo, "blobs", ref, *paths)["blobs"] == expected
+            linked = repo.parent / (repo.name + "-linked")
+            self.git(repo, "worktree", "add", "--detach", linked, end)
+            expected = self.expected_blobs(repo, end, paths)
+            assert self.app(linked, "blobs", end, *paths)["blobs"] == expected
+            self.app(repo, "blobs", "refs/heads/absent", "f", expected=1)
+
+            (repo / "f").write_text("user late\n")
+            changed = ["f", "gone", "old-name", "new-name", "space name", "line\nbreak"]
+            preview = self.app(repo, "preview", head, end, *changed)["files"]
+            files = {file["path"]: file for file in preview}
+            assert set(files) == set(changed)
+            assert files["f"]["isKept"]
+            assert all(not file["isKept"] for path, file in files.items() if path != "f")
+            self.app(repo, "preview", head, "refs/heads/absent", "f", expected=1)
+            self.app(repo, "restore", "refs/heads/absent", "new-name", expected=1)
+            assert (repo / "new-name").read_text() == "rename me\n"
+
+            self.app(repo, "restore", head, "gone", "gone", "old-name", "new-name", "missing")
+            assert (repo / "gone").read_text() == "delete me\n"
+            assert (repo / "old-name").read_text() == "rename me\n"
+            assert not (repo / "new-name").exists()
+            assert (repo / "f").read_text() == "user late\n"
+            assert os.readlink(repo / "link") == "f"
         elif name.startswith("query-"):
             fault = name.removeprefix("query-")
             query = {"status": "dirty", "check-ignore": "ignored", "ls-files": "tracked"}.get(fault, "present")

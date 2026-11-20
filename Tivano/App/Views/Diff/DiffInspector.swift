@@ -20,49 +20,10 @@ struct DiffInspector: View {
     }
 
     var body: some View {
-        @Bindable var runtime = runtime
         VStack(spacing: 0) {
-            GlassEffectContainer(spacing: 2) {
-                HStack(spacing: 10) {
-                    ChromeTextMenu(
-                        symbol: "plusminus",
-                        title: runtime.diffSelection
-                            .flatMap { id in runtime.turns.first { $0.id == id } }
-                            .map { String(format: Chrome.localized("Turn %lld"), $0.index + 1) } ?? "All changes",
-                        help: "Choose which changes to show"
-                    ) {
-                        PopoverItem("All changes", isChecked: runtime.diffSelection == nil) {
-                            runtime.clearDiffFocus()
-                            runtime.diffSelection = nil
-                        }
-                        ForEach(changedTurns) { turn in
-                            PopoverItem(String(format: Chrome.localized("Turn %lld"), turn.index + 1), isChecked: runtime.diffSelection == turn.id) {
-                                runtime.clearDiffFocus()
-                                runtime.diffSelection = turn.id
-                            }
-                        }
-                    }
-                    Spacer(minLength: 8)
-                    if !files.isEmpty {
-                        Text(verbatim: summary.files.count == 1 ? Chrome.localized("1 file") : String(format: Chrome.localized("%lld files"), summary.files.count))
-                            .font(.ui(.subheadline))
-                            .foregroundStyle(Chrome.secondaryText)
-                        DiffStatLabel(
-                            additions: summary.additions,
-                            deletions: summary.deletions
-                        )
-                    }
-                    ChromeCapsule {
-                        ChromeMenuButton(symbol: "ellipsis", help: "More") {
-                            PopoverItem("Expand all", symbol: "arrow.down.right.and.arrow.up.left") { collapsed.removeAll() }
-                            PopoverItem("Collapse all", symbol: "arrow.up.left.and.arrow.down.right") { collapsed = Set(files.map(\.id)) }
-                        }
-                        ChromeDivider()
-                        ChromeIconButton(symbol: "xmark", help: Chrome.localized("Hide changes") + ShortcutStore.hint(for: .toggleChanges)) {
-                            runtime.isDiffVisible = false
-                        }
-                    }
-                }
+            // Keep one unconditional path so Creation switches preserve top-controls identity.
+            ChromeGlassEffectContainer(spacing: 2) {
+                topControls
             }
             .padding(.horizontal, Chrome.chromeHorizontalPadding)
             .padding(.top, Chrome.chromeTopPadding)
@@ -117,6 +78,49 @@ struct DiffInspector: View {
                 guard !Task.isCancelled else { return }
             }
             await load()
+        }
+    }
+
+    private var topControls: some View {
+        HStack(spacing: 10) {
+            ChromeTextMenu(
+                symbol: "plusminus",
+                title: runtime.diffSelection
+                    .flatMap { id in runtime.turns.first { $0.id == id } }
+                    .map { String(format: Chrome.localized("Turn %lld"), $0.index + 1) } ?? "All changes",
+                help: "Choose which changes to show"
+            ) {
+                PopoverItem("All changes", isChecked: runtime.diffSelection == nil) {
+                    runtime.clearDiffFocus()
+                    runtime.diffSelection = nil
+                }
+                ForEach(changedTurns) { turn in
+                    PopoverItem(String(format: Chrome.localized("Turn %lld"), turn.index + 1), isChecked: runtime.diffSelection == turn.id) {
+                        runtime.clearDiffFocus()
+                        runtime.diffSelection = turn.id
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+            if !files.isEmpty {
+                Text(verbatim: summary.files.count == 1 ? Chrome.localized("1 file") : String(format: Chrome.localized("%lld files"), summary.files.count))
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                DiffStatLabel(
+                    additions: summary.additions,
+                    deletions: summary.deletions
+                )
+            }
+            ChromeCapsule {
+                ChromeMenuButton(symbol: "ellipsis", help: "More") {
+                    PopoverItem("Expand all", symbol: "arrow.down.right.and.arrow.up.left") { collapsed.removeAll() }
+                    PopoverItem("Collapse all", symbol: "arrow.up.left.and.arrow.down.right") { collapsed = Set(files.map(\.id)) }
+                }
+                ChromeDivider()
+                ChromeIconButton(symbol: "xmark", help: Chrome.localized("Hide changes") + ShortcutStore.hint(for: .toggleChanges)) {
+                    runtime.isDiffVisible = false
+                }
+            }
         }
     }
 
@@ -499,7 +503,6 @@ struct DiffLinesView: View, Equatable {
             }
         }
         .font(.code(size: 11.5))
-        .textSelection(.enabled)
         .task(id: preparationKey) {
             let key = preparationKey
             let snapshot = file
@@ -571,6 +574,7 @@ private struct DiffLineRow: View {
                 .foregroundStyle(markerColor)
             Text(line.text.isEmpty ? " " : line.text)
                 .foregroundStyle(line.kind == .note ? .secondary : .primary)
+                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 1)

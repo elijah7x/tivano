@@ -33,7 +33,6 @@ private struct PreviewMetadataCache<Value> {
 private enum AttachmentFileMetadata {
     private static var existence = PreviewMetadataCache<Bool>()
     private static var sizes = PreviewMetadataCache<Int64?>()
-    private static var textSizes = PreviewMetadataCache<Int?>()
 
     nonisolated static func fileExists(atPath path: String) -> Bool {
         guard Thread.isMainThread else { return FileManager.default.fileExists(atPath: path) }
@@ -47,12 +46,6 @@ private enum AttachmentFileMetadata {
     static func fileSize(_ path: String) -> Int64? {
         sizes.value(for: (path as NSString).standardizingPath, keeps: { $0 != nil }) {
             (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value
-        }
-    }
-
-    static func textFileSize(_ url: URL) -> Int? {
-        textSizes.value(for: (url.path as NSString).standardizingPath, keeps: { $0 != nil }) {
-            try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
         }
     }
 }
@@ -510,6 +503,20 @@ struct ToolImagePreview: View {
     @State private var loadFailed = false
     @State private var retry = 0
 
+    /// Point sizes of previously loaded tool images, keyed by standardized path, so a
+    /// remounted preview reserves its final aspect height while the thumbnail reloads.
+    /// Each size carries the file version it was read from: a file replaced at the same path
+    /// stops reserving the old shape as soon as its new version is known.
+    private struct ReservedSize {
+        let size: CGSize
+        let version: AttachmentFileVersion
+    }
+    @MainActor private static var imageSizes = RecentCache<String, ReservedSize>(limit: 500)
+
+    private static func sizeKey(for path: String) -> String {
+        (path as NSString).standardizingPath
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack {
@@ -523,6 +530,13 @@ struct ToolImagePreview: View {
                 } else if loadFailed {
                     AttachmentPreviewFailure { retry += 1 }
                 } else {
+                    if let reserved = Self.imageSizes.value(for: Self.sizeKey(for: path)),
+                       fileSnapshot == nil || fileSnapshot?.version == reserved.version,
+                       case let size = reserved.size, size.width > 0, size.height > 0 {
+                        Color.clear
+                            .frame(idealWidth: size.width, idealHeight: size.height)
+                            .aspectRatio(size.width / size.height, contentMode: .fit)
+                    }
                     ProgressView()
                         .controlSize(.small)
                 }
@@ -548,8 +562,13 @@ struct ToolImagePreview: View {
             guard !Task.isCancelled else { return }
             image = nil
             loadFailed = false
-            let loaded = await ThumbnailCache.shared.thumbnail(for: path, pointSize: 900)?.image
+            let thumbnail = await ThumbnailCache.shared.thumbnail(for: path, pointSize: 900)
+            let loaded = thumbnail?.image
             guard !Task.isCancelled else { return }
+            if let thumbnail, let loaded, loaded.width > 0, loaded.height > 0 {
+                let size = CGSize(width: CGFloat(loaded.width) / 2, height: CGFloat(loaded.height) / 2)
+                Self.imageSizes.insert(ReservedSize(size: size, version: thumbnail.version), for: Self.sizeKey(for: path))
+            }
             image = loaded
             loadFailed = loaded == nil
         }

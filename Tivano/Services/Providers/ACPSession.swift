@@ -282,6 +282,11 @@ final class ACPSession: ProviderSession {
             && error.message.localizedCaseInsensitiveContains("auth") && !authMethods.isEmpty
             && !(configuration.provider == .dsh && configuration.resumeID != nil) {
             if configuration.provider == .kimi { throw Self.kimiLoginRequired }
+            // Their authenticate opens a browser sign-in: a model probe or warm-up must not
+            // pop one up unasked. The user signs in from Settings when they choose to.
+            if configuration.provider == .cursor || configuration.provider == .grok {
+                throw Self.browserLoginRequired(configuration.provider)
+            }
             _ = try await deadlineRequest(connection, "authenticate", ["methodId": .string(authMethods[0])])
             session = try await openSession(connection)
         }
@@ -547,12 +552,16 @@ final class ACPSession: ProviderSession {
         }
     }
 
+    private static func browserLoginRequired(_ provider: ProviderKind) -> ProviderError {
+        .failed(String(format: AppText.localized("Sign in to %@ in Settings › Provider management, then try again."), provider.displayName))
+    }
+
     private static var kimiLoginRequired: ProviderError {
         .failed(AppText.localized("Sign in to Kimi Code with `kimi login`, then try again."))
     }
 
     private static var dshAPIKeyRequired: ProviderError {
-        .failed(AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings › Providers › DeepSeek."))
+        .failed(AppText.localized("DeepSeek Harness needs a signed-in DeepSeek account or a DeepSeek API key. Sign in with the DeepSeek Harness app, or add a key in Settings › Provider management › DeepSeek."))
     }
 
     private static var miniMaxAuthenticationRequired: ProviderError {
@@ -1324,7 +1333,14 @@ final class ACPSession: ProviderSession {
             currentMode = update["currentModeId"]?.string
             if let planMode { onEvent?(.modeChanged(currentMode == planMode ? .plan : .build)) }
         case "config_option_update":
-            if let options = update["configOptions"]?.array { applyConfigOptions(options) }
+            if let options = update["configOptions"]?.array {
+                // OpenCode reports agent-initiated mode switches only here, not via current_mode_update.
+                let previousMode = currentMode
+                applyConfigOptions(options)
+                if let planMode, currentMode != previousMode {
+                    onEvent?(.modeChanged(currentMode == planMode ? .plan : .build))
+                }
+            }
         case "session_info_update":
             if let title = update["title"]?.string, !title.isEmpty { onEvent?(.title(title)) }
         case "usage_update":
@@ -1678,9 +1694,10 @@ final class ACPSession: ProviderSession {
         // Scope it to bash presentation, never PTC output or authorization/edit evidence.
         if configuration.provider == .dsh, update["title"]?.string == "bash",
            result.exitCode == nil, result.status == .completed,
-           let line = output.split(whereSeparator: \.isNewline).last,
-           line.hasPrefix("[exit code: "), line.hasSuffix("]") {
-            result.exitCode = Int(line.dropFirst("[exit code: ".count).dropLast())
+           let line = output.split(whereSeparator: \.isNewline).last, line.hasSuffix("]"),
+           let prefix = ["[exit code: ", "[Command finished with exit code "].first(where: { line.hasPrefix($0) }) {
+            // tool-bash prints the first form; tool-bash-persistent (minimal profile) the second.
+            result.exitCode = Int(line.dropFirst(prefix.count).dropLast())
         }
         if !output.isEmpty, output != "(no output)" { result.output = output }
         let images: [Attachment]

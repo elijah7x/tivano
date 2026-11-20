@@ -1,5 +1,8 @@
 # DSH acceptance findings — 2026-10-18
 
+> Archived: the scripts and app-side probes this document runs were moved out of the repository on 2026-11-15 to `private-artifacts/retired-probes-20261115/` under the artifact root (the parent of the long-lived checkout). They remain in Git history before branch `slim/3.0-pre`. The rest of this page is a historical record.
+
+
 **Functional evidence is substantially complete for the exercised paths; full product acceptance remains open.** Evidence includes adapter 33/33, marketplace 16/16, native contract 11/11, native report guard 12/12, eight real App account turns, simulated-ACP App Hydra scheduling and a real 35-minute budget/report transition. After unlocking, four history views and the existing foreground Settings/HeavyLoad probes were captured and inspected. Their admission/reconciliation gates passed; matched pre-change performance comparison, real wheel/RAM checks, App MCP/tool execution and live login/picker interactions remain unverified. No new account prompts, installation, packaging, merge or release were performed during this follow-up.
 
 ## Initial baseline evidence

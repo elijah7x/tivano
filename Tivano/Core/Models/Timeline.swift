@@ -80,6 +80,10 @@ struct FollowUpPrompt: Codable, Hashable, Identifiable, Sendable {
     /// Prompts sharing a bundle sit together, show one number and go out as one
     /// message (see `ThreadRuntime.bundleFollowUp`).
     var bundleID: UUID? = nil
+    /// True for a turn Tivano started on its own (an auto-continuation, a report) that lost
+    /// the race to start and was queued: it keeps that provenance, so draining it does not
+    /// pass for the user's own message. Optional so queues saved before it decode.
+    var automatic: Bool? = nil
 
     var isEmpty: Bool {
         attachments.isEmpty && !text.contains { !$0.isWhitespace }

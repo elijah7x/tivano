@@ -42,30 +42,8 @@ enum Storage {
 
     static let libraryURL: URL = root.appendingPathComponent("library.json")
 
-    /// Only the library index changes format; histories and attachments stay in place.
-    static let preStandaloneLibraryURL = root.appendingPathComponent("library-before-standalone.json")
-
-    nonisolated static func prepareLibraryWrite(_ library: Library, to url: URL) throws {
-        let manager = FileManager.default
-        try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard url == libraryURL, library.threads.contains(where: { $0.projectID == nil }) else { return }
-        if manager.fileExists(atPath: preStandaloneLibraryURL.path) {
-            guard try manager.attributesOfItem(atPath: preStandaloneLibraryURL.path)[.type] as? FileAttributeType == .typeRegular else {
-                throw CocoaError(.fileWriteFileExists)
-            }
-            return
-        }
-        guard manager.fileExists(atPath: libraryURL.path) else { return }
-        let original = try Data(contentsOf: libraryURL)
-        // Atomic publication prevents an interrupted copy becoming a trusted backup.
-        let temporary = root.appendingPathComponent(".library-backup-\(UUID().uuidString).tmp")
-        defer { try? manager.removeItem(at: temporary) }
-        try original.write(to: temporary, options: .atomic)
-        try manager.linkItem(at: temporary, to: preStandaloneLibraryURL)
-    }
-
     nonisolated static func hasStoredTurns(_ id: UUID) throws -> Bool {
-        try DiskWriter.shared.readSynchronously {
+        try DiskWriter.shared.readThreadSynchronously(for: id) {
             let url = threadURL(id)
             guard FileManager.default.fileExists(atPath: url.path) else { return false }
             let document = try JSONDecoder.storage.decode(ThreadDocument.self, from: Data(contentsOf: url))
@@ -125,7 +103,11 @@ enum Storage {
         let previousURL = root.appendingPathComponent("library-previous.json")
         do {
             let library = try JSONDecoder.storage.decode(Library.self, from: data)
-            try? data.write(to: previousURL, options: .atomic)
+            let previousSize = (try? FileManager.default.attributesOfItem(atPath: previousURL.path)[.size] as? Int)
+            let matchesPrevious = previousSize == data.count && (try? Data(contentsOf: previousURL)) == data
+            if !matchesPrevious {
+                try? data.write(to: previousURL, options: .atomic)
+            }
             return .loaded(library)
         } catch {
             do {
@@ -242,7 +224,7 @@ enum Storage {
     }
 
     private nonisolated static func readDocument(_ id: UUID, recentOnly: Bool) -> (document: ThreadDocument, cost: Int)? {
-        DiskWriter.shared.readSynchronously {
+        DiskWriter.shared.readThreadSynchronously(for: id) {
             guard let data = try? Data(contentsOf: threadURL(id)),
                   var document = try? JSONDecoder.storage.decode(ThreadDocument.self, from: data) else { return nil }
             var cost = data.count
@@ -262,7 +244,7 @@ enum Storage {
     }
 
     nonisolated static func readTurns(_ id: UUID, references: [ThreadTurnReference]) -> (document: ThreadDocument, cost: Int)? {
-        DiskWriter.shared.readSynchronously { readTurnsUnlocked(id, references: references) }
+        DiskWriter.shared.readThreadSynchronously(for: id) { readTurnsUnlocked(id, references: references) }
     }
 
     /// Puts a thread's files that would not read somewhere a save can never reach: moved
@@ -270,7 +252,7 @@ enum Storage {
     /// newer ones are in use, and the next save prunes what its head no longer lists).
     /// Returns the folder, or nil when there was nothing to keep or it could not be made.
     nonisolated static func setAside(_ id: UUID, moving: Bool) -> URL? {
-        DiskWriter.shared.readSynchronously {
+        DiskWriter.shared.readThreadSynchronously(for: id) {
             let manager = FileManager.default
             let sources = [threadURL(id), turnsURL(id)].filter { manager.fileExists(atPath: $0.path) }
             guard !sources.isEmpty else { return nil }
@@ -612,6 +594,8 @@ final class DocumentPrefetch: Sendable {
 final class DiskWriter: Sendable {
     static let shared = DiskWriter()
     private let queue = DispatchQueue(label: "tivano.storage.write", qos: .utility)
+    private let threadQueue = DispatchQueue(label: "tivano.storage.threads", qos: .utility, attributes: .concurrent)
+    private let threadLocks = Mutex<[UUID: NSLock]>([:])
     private struct MutationState {
         var version: UInt64 = 0
         var admissions = 0
@@ -671,11 +655,24 @@ final class DiskWriter: Sendable {
         }
     }
 
+    private func withThreadLock<Value>(_ id: UUID, _ body: () throws -> Value) rethrows -> Value {
+        let lock = threadLocks.withLock { locks in
+            if let existing = locks[id] { return existing }
+            let created = NSLock()
+            locks[id] = created
+            return created
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+
     func writeThread(_ snapshot: ThreadSave, completion: @escaping @Sendable (Bool) -> Void) {
         beginMutation()
         defer { endMutation() }
-        let url = Storage.threadURL(snapshot.head.threadID)
-        DocumentPrefetch.shared.forget(snapshot.head.threadID)
+        let id = snapshot.head.threadID
+        let url = Storage.threadURL(id)
+        DocumentPrefetch.shared.forget(id)
         let queued = pendingThreads.withLock { pending in
             let previous = pending[url]
             var newest = snapshot
@@ -684,10 +681,15 @@ final class DiskWriter: Sendable {
             return previous != nil
         }
         guard !queued else { return }
-        queue.async { [self] in
-            guard let pending = pendingThreads.withLock({ $0.removeValue(forKey: url) }) else { return }
-            let success = writeThread(pending.snapshot)
-            for completion in pending.completions { completion(success) }
+        threadQueue.async { [self] in
+            let result: (success: Bool, completions: [@Sendable (Bool) -> Void])? = withThreadLock(id) {
+                guard let pending = pendingThreads.withLock({ $0.removeValue(forKey: url) }) else { return nil }
+                let success = writeThread(pending.snapshot)
+                return (success, pending.completions)
+            }
+            if let result {
+                for completion in result.completions { completion(result.success) }
+            }
         }
     }
 
@@ -695,16 +697,20 @@ final class DiskWriter: Sendable {
     func writeThreadSynchronously(_ snapshot: ThreadSave) -> Bool {
         beginMutation()
         defer { endMutation() }
-        let url = Storage.threadURL(snapshot.head.threadID)
-        let pending = pendingThreads.withLock { $0.removeValue(forKey: url) }
-        var newest = snapshot
-        newest.dirtyTurns = (pending?.snapshot.dirtyTurns ?? [:]).merging(snapshot.dirtyTurns) { _, new in new }
-        DocumentPrefetch.shared.forget(snapshot.head.threadID)
-        return queue.sync {
-            let success = writeThread(newest)
-            for completion in pending?.completions ?? [] { completion(success) }
-            return success
+        let id = snapshot.head.threadID
+        let url = Storage.threadURL(id)
+        DocumentPrefetch.shared.forget(id)
+        let result: (success: Bool, completions: [@Sendable (Bool) -> Void]) = threadQueue.sync {
+            withThreadLock(id) {
+                let pending = pendingThreads.withLock { $0.removeValue(forKey: url) }
+                var newest = snapshot
+                newest.dirtyTurns = (pending?.snapshot.dirtyTurns ?? [:]).merging(snapshot.dirtyTurns) { _, new in new }
+                let success = writeThread(newest)
+                return (success, pending?.completions ?? [])
+            }
         }
+        for completion in result.completions { completion(result.success) }
+        return result.success
     }
 
     private func writeThread(_ snapshot: ThreadSave) -> Bool {
@@ -789,7 +795,9 @@ final class DiskWriter: Sendable {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 do {
-                    if let library = value as? Library { try Storage.prepareLibraryWrite(library, to: url) }
+                    if value is Library {
+                        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    }
                     let data = try JSONEncoder.storage.encode(value)
                     try data.write(to: url, options: .atomic)
                     sizes.withLock { $0[url] = data.count }
@@ -819,7 +827,9 @@ final class DiskWriter: Sendable {
             urls.flatMap { pending.removeValue(forKey: $0)?.completions ?? [] }
         }
         queue.sync {
-            for url in urls { try? FileManager.default.removeItem(at: url) }
+            threadQueue.sync(flags: .barrier) {
+                for url in urls { try? FileManager.default.removeItem(at: url) }
+            }
             for completion in threadCompletions { completion(false) }
             for completion in completions { completion(false) }
         }
@@ -827,6 +837,28 @@ final class DiskWriter: Sendable {
 
     func readSynchronously<Value>(_ read: () throws -> Value) rethrows -> Value {
         try queue.sync(execute: read)
+    }
+
+    func readThreadSynchronously<Value>(for id: UUID, _ read: () throws -> Value) rethrows -> Value {
+        var flushed: (success: Bool, completions: [@Sendable (Bool) -> Void])?
+        defer {
+            if let flushed {
+                for completion in flushed.completions { completion(flushed.success) }
+            }
+        }
+        // Runs on `threadQueue` like every other thread write, so a deletion's barrier (and
+        // `waitForQueuedWrites`) waits for a flush made here instead of racing it: a flush
+        // outside the queue could write a just-deleted thread back to disk.
+        return try threadQueue.sync {
+            try withThreadLock(id) {
+                let url = Storage.threadURL(id)
+                if let pending = pendingThreads.withLock({ $0.removeValue(forKey: url) }) {
+                    let success = writeThread(pending.snapshot)
+                    flushed = (success, pending.completions)
+                }
+                return try read()
+            }
+        }
     }
 
     /// For imports outside the writer queue; never call recursively from a write or maintenance operation.
@@ -842,7 +874,9 @@ final class DiskWriter: Sendable {
     func performMaintenance(_ operation: @escaping @Sendable (@Sendable (@Sendable () -> Void) -> Bool) -> Void) async {
         let version: UInt64? = await withCheckedContinuation { continuation in
             queue.async { [self] in
-                continuation.resume(returning: mutations.withLock { $0.admissions == 0 ? $0.version : nil })
+                threadQueue.async(flags: .barrier) { [self] in
+                    continuation.resume(returning: mutations.withLock { $0.admissions == 0 ? $0.version : nil })
+                }
             }
         }
         guard let version else { return }
@@ -862,12 +896,15 @@ final class DiskWriter: Sendable {
     /// Returns once every write queued so far has landed, so a read that follows sees them.
     func waitForQueuedWrites() {
         queue.sync {}
+        threadQueue.sync(flags: .barrier) {}
     }
 
     @discardableResult
     private func write(_ value: any Encodable, to url: URL) -> Int? {
         do {
-            if let library = value as? Library { try Storage.prepareLibraryWrite(library, to: url) }
+            if value is Library {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
             let data = try JSONEncoder.storage.encode(value)
             try data.write(to: url, options: .atomic)
             errors.withLock { $0[url] = nil }

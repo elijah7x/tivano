@@ -127,9 +127,8 @@ enum PiCLI {
         return file
     }
 
-    /// The gate Tivano loads into every RPC session with `-e`. Pi itself keeps
-    /// approving everything (`--approve`) or nothing (`--no-approve`); this extension
-    /// gates the tools instead: every call that could change something is asked over
+    /// The gate Tivano loads into every RPC session with `-e`. Pi has no tool approval
+    /// of its own; this extension gates the tools instead: every call that could change something is asked over
     /// `ctx.ui.select`, which in RPC mode surfaces on stdout as an
     /// `extension_ui_request` the app answers. Read-only tools pass straight through.
     /// Supervised asks for all of them, Auto-accept edits waves file changes through,

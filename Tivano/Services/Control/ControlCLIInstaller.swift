@@ -4,7 +4,13 @@ import Darwin
 /// Only called by explicit App settings buttons. Symlinks avoid quoting/shell config,
 /// survive spaces in an App path, and can be repaired after an App move using a receipt.
 enum ControlCLIInstaller {
-    static func commandName(_ edition: ControlEdition) -> String { edition == .dev ? "tivano-dev" : "tivano" }
+    static func commandName(_ edition: ControlEdition) -> String {
+        switch edition {
+        case .release: "tivano"
+        case .dev: "tivano-dev"
+        case .preview: "tivano-preview"
+        }
+    }
     static let helperName = "tivano-control"
 
     static func install(directory: URL, helper: URL, name: String, previousTarget: String?) throws {

@@ -116,24 +116,15 @@ final class ClaudeSession: ProviderSession {
         let options = await Self.knownOptions(of: executable, environment: environment)
         // Resumed chats must use the current setting, even with Hydra off.
         if options.contains("--system-prompt-snapshot") { arguments += ["--system-prompt-snapshot", "off"] }
-        var hydraPolicy: String?
         if let hydra = configuration.hydra {
             // The system prompt is rendered fresh rather than replayed from the
             // conversation's first request, so switching Hydra on for an existing chat
             // reaches the model. The heads are threads Tivano starts: the lead asks
             // for them with the delegation block, and its own agent tool goes, since a
             // head it spawned itself would run inside this session instead of the app.
-            hydraPolicy = HydraPrompts.fallbackPolicy(hydra)
+            arguments += ["--append-system-prompt", HydraPrompts.fallbackPolicy(hydra)]
             arguments += ["--disallowedTools", "Agent", "Task"]
         }
-        // Exactly one combined system prompt segment for every session, Hydra or not. The
-        // off notice goes out too, so a resumed thread cannot keep earlier guidance alive.
-        arguments += [
-            "--append-system-prompt",
-            [hydraPolicy, AntiSlopPolicy.instructions(enabled: configuration.antiSlopEnabled)]
-                .compactMap { $0 }
-                .joined(separator: "\n\n"),
-        ]
         if let resumeID = configuration.resumeID {
             arguments += ["--resume", resumeID]
             if let anchor = configuration.resumeAt { arguments += ["--resume-session-at", anchor] }
@@ -183,38 +174,6 @@ final class ClaudeSession: ProviderSession {
                 isDefault: value == "default",
                 fastTier: entry["supportsFastMode"]?.bool == true ? "fast" : nil
             )
-        }
-    }
-
-    /// What the CLI reports in its handshake: its models, and the slash commands it finds
-    /// for `directory`. A bare process, not a session: it gets the initialize and nothing else.
-    static func handshake(executable: URL, directory: URL, environment: [String: String]) async throws -> (models: [ModelOption], commands: [SlashCommand]) {
-        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
-        let process = StdioProcess(
-            executable: executable,
-            arguments: ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--setting-sources", "user,project,local"],
-            directory: directory,
-            environment: environment
-        )
-        try process.start()
-        let watchdog = Task {
-            try? await Task.sleep(for: .seconds(20))
-            if !Task.isCancelled { process.terminate() }
-        }
-        defer { watchdog.cancel(); process.terminate() }
-        process.send(["type": "control_request", "request_id": "handshake", "request": ["subtype": "initialize", "hooks": .null]])
-        return try await withTaskCancellationHandler {
-            for await message in process.messages {
-                guard message["type"]?.string == "control_response",
-                      message["response"]?["request_id"]?.string == "handshake" else { continue }
-                guard let response = message["response"]?["response"], let commands = response["commands"]?.array else {
-                    throw ProviderError.failed(AppText.localized("Claude could not load its commands."))
-                }
-                return (models(in: response), SlashCommand.claudeCommands(commands))
-            }
-            throw ProviderError.failed(AppText.localized("Claude's command discovery did not finish. Try again."))
-        } onCancel: {
-            process.terminate()
         }
     }
 

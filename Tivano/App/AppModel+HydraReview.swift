@@ -126,14 +126,20 @@ extension AppModel {
         }
         let prompt = HydraPrompts.v2ReviewPrompt(request: job.request, notes: noteLines.joined(separator: "\n"), patch: patch)
         let findings: String
-        switch await TextGeneration.review(prompt, engine: selected.engine, directory: checkout) {
+        let readableDirectories = paths.keys.sorted().map { URL(fileURLWithPath: $0, isDirectory: true) }
+        switch await TextGeneration.review(
+            prompt,
+            engine: selected.engine,
+            directory: checkout,
+            readableDirectories: readableDirectories
+        ) {
         case .success(let text): findings = text
         case .failure(let failure):
             return skip("review failed (\(selected.reviewer)): \(failure.description)")
         }
         guard openHydraJob(of: leadID)?.id == jobID, openHydraJob(of: leadID)?.ending == nil else { return .skipped }
-        let findingCount = findings.contains("NO FINDINGS") ? 0 : findings.components(separatedBy: .newlines).count {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Finding ")
+        let findingCount = findings.components(separatedBy: .newlines).count {
+            $0.range(of: #"^[\s\-*>#_]*Finding\s*\d"#, options: [.regularExpression, .caseInsensitive]) != nil
         }
         updateHydraJob(jobID, of: leadID) {
             $0.reviewEngine = selected.reviewer
@@ -154,12 +160,13 @@ extension AppModel {
     private func hydraReviewEngine() -> (engine: TextGeneration.Engine, reviewer: String, provider: ProviderKind)? {
         for choice in [settings.hydraReviewFirst, settings.hydraReviewSecond] {
             let provider = choice.provider
-            guard provider == .claude || provider == .codex,
+            guard HydraReviewChoice.providers.contains(provider),
                   providers.status(provider).auth != .signedOut,
                   let executable = providers.executable(for: provider) else { continue }
             let environment = providers.environment(for: provider)
             let engine: TextGeneration.Engine
             let model: String?
+            var effort = choice.effort
             switch provider {
             case .claude:
                 model = choice.model
@@ -168,11 +175,28 @@ extension AppModel {
                 guard let resolvedModel = choice.model ?? providers.defaultModel(for: .codex)?.id else { continue }
                 model = resolvedModel
                 engine = .codex(executable: executable, environment: environment, model: resolvedModel, effort: choice.effort)
+            // For these CLIs an unset review model means the CLI's own default, not the
+            // model last used in a chat (which `defaultModel(for:)` prefers).
+            case .grok:
+                model = choice.model
+                let wire = choice.model.map { grokWireSelection(model: $0, effort: choice.effort) } ?? (model: nil, effort: choice.effort)
+                engine = .grok(executable: executable, environment: environment, model: wire.model, effort: wire.effort)
+            case .pi:
+                model = choice.model
+                engine = .pi(executable: executable, environment: environment, model: model, effort: choice.effort)
+            case .antigravity:
+                let rawModel = choice.model
+                let catalog = AntigravitySession.addingSeedRows(providers.models(for: .antigravity), seed: ProviderRegistry.antigravitySeed)
+                let normalized = AntigravitySession.normalize(model: rawModel, effort: choice.effort, catalog: catalog)
+                model = rawModel
+                // Without a model, normalize sends no effort; the label must not claim one.
+                if rawModel == nil { effort = nil }
+                engine = .antigravity(executable: executable, environment: environment, model: normalized.model, effort: normalized.effort)
             default: continue
             }
             var reviewer = provider.displayName
             if let model { reviewer += " \(providers.model(model, for: provider)?.name ?? model)" }
-            if let effort = choice.effort, !effort.isEmpty { reviewer += " · \(ModelOption.effortTitle(effort))" }
+            if let effort, !effort.isEmpty { reviewer += " · \(ModelOption.effortTitle(effort))" }
             return (engine, reviewer, provider)
         }
         return nil

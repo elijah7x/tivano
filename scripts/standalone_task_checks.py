@@ -31,9 +31,9 @@ import Foundation
 enum RuntimeMode: String, Codable { case supervised }
 // Provider execution is outside these persistence checks.
 enum ProviderKind: String, Codable, Sendable {
-    case codex, claude
+    case codex, claude, grok, pi, antigravity
     var displayName: String {
-        switch self { case .codex: "Codex"; case .claude: "Claude" }
+        switch self { case .codex: "Codex"; case .claude: "Claude"; case .grok: "Grok"; case .pi: "Pi"; case .antigravity: "Antigravity" }
     }
     func supported(_ mode: RuntimeMode) -> RuntimeMode { mode }
 }
@@ -47,6 +47,7 @@ struct HydraHeadInfo: Codable, Hashable { var targetCheckout: String? }
 struct HydraLaunch {
     var isChimera = false
     var chimeraPresets: [String] = []
+    var chimeraAutoDispatch = false
 }
 enum HydraPrompts {
     static func v2Policy(_ launch: HydraLaunch) -> String {
@@ -67,7 +68,7 @@ enum ProviderError: Error { case failed(String), notRunning }
 # Text.swift also contains app identity and FileEdit helpers; Hydra.swift imports
 # SwiftUI. Keep the required support declarations real without those dependencies.
 swift += "\n" + declaration("Tivano/Core/Support/Text.swift", "enum AppText {")
-swift += "\nextension String {\n" + declaration("Tivano/Core/Support/Text.swift", "    var trimmed:") + "\n}\n"
+swift += "\nextension String {\n" + declaration("Tivano/Core/Support/Text.swift", "    var trimmed:") + "\n" + declaration("Tivano/Core/Support/Text.swift", "    var nilIfEmpty:") + "\n}\n"
 swift += "\nextension HydraHeadInfo {\n" + declaration("Tivano/Core/Models/Hydra.swift", "    enum Status:") + "\n}\n"
 for path in ("Tivano/Core/Support/Coding.swift", "Tivano/Core/Models/LocalControl.swift",
              "Tivano/Core/Models/ProviderAccount.swift", "Tivano/Core/Models/Chimera.swift",
@@ -79,9 +80,7 @@ swift += r'''
 enum Storage {
     static let root = StoragePaths.root
     static let libraryURL = root.appendingPathComponent("library.json")
-    static let preStandaloneLibraryURL = root.appendingPathComponent("library-before-standalone.json")
 '''
-swift += declaration("Tivano/Services/Store/Storage.swift", "    nonisolated static func prepareLibraryWrite(")
 swift += "\n}\n"
 swift += r'''
 final class ModelHarness {
@@ -226,24 +225,6 @@ func makeThread(_ projectID: UUID? = nil) -> ChatThread {
         model.threads = [cycle, helper]
         expectFailure { _ = try model.executionDirectory(for: cycle) }
         print("PASS: task isolation, helper routing, explicit worktrees, restart files and missing/cyclic ancestry")
-
-        var legacyLibrary = Library()
-        legacyLibrary.projects = [project]
-        legacyLibrary.threads = [restored]
-        let original = try encoder.encode(legacyLibrary)
-        try original.write(to: Storage.libraryURL)
-        try Storage.prepareLibraryWrite(legacyLibrary, to: Storage.libraryURL)
-        check(!manager.fileExists(atPath: Storage.preStandaloneLibraryURL.path), "Legacy-only save created migration backup")
-        try Storage.prepareLibraryWrite(library, to: Storage.libraryURL)
-        let backup = try Data(contentsOf: Storage.preStandaloneLibraryURL)
-        check(backup == original, "Backup does not preserve original library")
-        try encoder.encode(library).write(to: Storage.libraryURL, options: .atomic)
-        try Storage.prepareLibraryWrite(library, to: Storage.libraryURL)
-        check(try Data(contentsOf: Storage.preStandaloneLibraryURL) == original, "Later save replaced migration backup")
-        try manager.removeItem(at: Storage.preStandaloneLibraryURL)
-        try manager.createDirectory(at: Storage.preStandaloneLibraryURL, withIntermediateDirectories: false)
-        expectFailure { try Storage.prepareLibraryWrite(library, to: Storage.libraryURL) }
-        print("PASS: pre-migration backup, no overwrite and invalid-backup failure")
     }
 }
 '''

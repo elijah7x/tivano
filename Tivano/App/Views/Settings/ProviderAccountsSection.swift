@@ -9,10 +9,6 @@ struct ProviderAccountsSection: View {
     @State private var isSingleAccountSigningIn = false
     @State private var error: String?
     @State private var candidates: [CodexImportCandidate] = []
-    @State private var claudeCandidates: [ClaudeSwapImportCandidate] = []
-    @State private var selectedClaudeCandidates: Set<String> = []
-    @State private var importResults: [String] = []
-    @State private var didPreviewClaude = false
 
     var body: some View {
         let accounts = model.providers.accounts
@@ -53,10 +49,13 @@ struct ProviderAccountsSection: View {
                             isAdding = false
                         }
                     } label: {
-                        Image(systemName: "plus")
-                            .frame(height: Chrome.rowButtonLabelHeight)
+                        Label {
+                            Text(verbatim: Chrome.localized("Add account"))
+                        } icon: {
+                            Image(systemName: "plus")
+                        }
                     }
-                    .buttonStyle(.glass)
+                    .chromePillButton(iconOnly: true)
                     .disabled(isAdding)
                     .help(Text(verbatim: Chrome.localized("Add account")))
                     .accessibilityLabel(Text(verbatim: Chrome.localized("Add account")))
@@ -93,9 +92,6 @@ struct ProviderAccountsSection: View {
                             ChromeRowDivider()
                             ProviderAccountSettingsRow(account: account)
                         }
-                        if provider == .claude {
-                            claudeImportRows(accounts: accounts)
-                        }
                     }
                 }
                 .clipped()
@@ -112,7 +108,7 @@ struct ProviderAccountsSection: View {
                             isImporting = false
                         }
                     }
-                    .buttonStyle(.glass)
+                    .chromePillButton()
                     .disabled(isImporting)
                 }
             }
@@ -139,70 +135,10 @@ struct ProviderAccountsSection: View {
 
         let summaryLine = summaryParts.isEmpty ? nil : summaryParts.joined(separator: " · ")
         let note = provider == .claude
-            ? Chrome.localized("Your selection applies only to new Claude chats. Existing chats keep their profile. The default profile follows your CLI login.")
+            ? Chrome.localized("Your selection applies only to new Claude chats. Existing chats keep their account. The default account follows your Claude CLI login.")
             : nil
         let lines = [summaryLine, note, error].compactMap { $0 }.filter { !$0.isEmpty }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
-    }
-
-    @ViewBuilder
-    private func claudeImportRows(accounts: ProviderAccounts) -> some View {
-        ChromeRowDivider()
-        ChromeRow(title: "Import from CSWAP", detail: "Import saves a copy without enabling it. The CSWAP backup may be outdated. macOS may ask for credential access.") {
-            Button("Choose accounts") {
-                error = nil
-                Task {
-                    await LoginEnvironment.load()
-                    do {
-                        claudeCandidates = try ClaudeSwapImport.candidates()
-                        selectedClaudeCandidates = []
-                        importResults = []
-                        didPreviewClaude = true
-                    } catch {
-                        self.error = ProviderAccounts.safeClaudeError(error)
-                    }
-                }
-            }
-            .buttonStyle(.glass)
-            .disabled(isImporting)
-        }
-        if didPreviewClaude && claudeCandidates.isEmpty {
-            ChromeRowDivider()
-            ChromeRow(title: "No CSWAP accounts found", detail: nil) {}
-        }
-        ForEach(claudeCandidates) { candidate in
-            ChromeRowDivider()
-            ChromeRow(title: candidate.label ?? candidate.email,
-                      detail: [candidate.email, candidate.organizationName ?? candidate.organizationID, candidate.slot].compactMap { $0 }.joined(separator: " · "),
-                      localizesDetail: false) {
-                SettingsSwitch(isOn: Binding(
-                    get: { selectedClaudeCandidates.contains(candidate.id) },
-                    set: { if $0 { selectedClaudeCandidates.insert(candidate.id) } else { selectedClaudeCandidates.remove(candidate.id) } }
-                ))
-                .disabled(isImporting)
-                .accessibilityLabel(candidate.email)
-            }
-        }
-        if !claudeCandidates.isEmpty {
-            ChromeRowDivider()
-            ChromeRow(title: "Import selected accounts", detail: "Existing accounts with the same account and organization are skipped.") {
-                Button("Import") {
-                    isImporting = true
-                    let selected = claudeCandidates.filter { selectedClaudeCandidates.contains($0.id) }
-                    Task {
-                        importResults = await accounts.importClaudeAccounts(selected)
-                        selectedClaudeCandidates = []
-                        isImporting = false
-                    }
-                }
-                .buttonStyle(.glass)
-                .disabled(isImporting || selectedClaudeCandidates.isEmpty)
-            }
-        }
-        ForEach(Array(importResults.enumerated()), id: \.offset) { _, result in
-            ChromeRowDivider()
-            ChromeRow(title: "Import result", detail: result, localizesDetail: false) {}
-        }
     }
 }
 
@@ -276,17 +212,21 @@ private struct ProviderAccountMenu: View {
     @Binding var isSigningIn: Bool
     @Binding var error: String?
     @State private var isRenaming = false
+    @State private var isRemoving = false
     @State private var confirmsRemoval = false
-    @State private var confirmsActivation = false
+    @State private var confirmsForceRemoval = false
     @State private var newName = ""
 
     private var accounts: ProviderAccounts { model.providers.accounts }
     private var state: ProviderAccounts.State? { accounts.states[account.id] }
     private var dependentChats: [ChatThread] {
-        model.threads.filter { $0.provider == .claude && ($0.claudeAccountID == account.id
-            || (account.isDefault && $0.claudeAccountID == nil && $0.claudeUsesDefaultAccount == true)) }
+        model.threads.filter {
+            $0.provider == .claude
+                && ($0.hasStartedTurn || $0.providerSessionID != nil)
+                && ($0.claudeAccountID == account.id
+                    || (account.isDefault && $0.claudeAccountID == nil && $0.claudeUsesDefaultAccount == true))
+        }
     }
-    private var hasDependentChats: Bool { !dependentChats.isEmpty }
     private var isActive: Bool { accounts.activeAccount(for: account.provider)?.id == account.id }
     private var isSignedIn: Bool {
         if case .signedIn? = state?.auth { return true }
@@ -303,9 +243,6 @@ private struct ProviderAccountMenu: View {
                 Divider()
             }
             if !account.requiresClaudeCleanup || !account.requiresClaudeActivation {
-                if account.requiresClaudeActivation {
-                    Button("Enable imported login") { confirmsActivation = true }
-                }
                 if !account.requiresClaudeActivation {
                     if !isActive && !account.requiresClaudeCleanup && (isSignedIn || account.provider == .claude) {
                         Button("Use this account") { accounts.use(account) }
@@ -324,7 +261,7 @@ private struct ProviderAccountMenu: View {
                         isSigningIn = false
                     }
                 }
-                .disabled(isSigningIn || state?.isSigningIn == true)
+                .disabled(isSigningIn || isRemoving || state?.isSigningIn == true)
                 Button("Rename…") {
                     newName = account.name ?? ""
                     isRenaming = true
@@ -332,20 +269,17 @@ private struct ProviderAccountMenu: View {
             }
             if !account.isDefault {
                 Button("Remove account", role: .destructive) { confirmsRemoval = true }
+                    .disabled(isRemoving || isSigningIn || state?.isSigningIn == true)
+                if account.provider == .claude && account.requiresClaudeCleanup {
+                    Button("Remove from Tivano anyway", role: .destructive) { confirmsForceRemoval = true }
+                        .disabled(isRemoving || isSigningIn || state?.isSigningIn == true)
+                }
             }
         } label: {
             Label("Account actions", systemImage: "ellipsis")
                 .labelStyle(.iconOnly)
         }
         .menuStyle(.borderlessButton)
-        .confirmationDialog("Enable imported login?", isPresented: $confirmsActivation, titleVisibility: .visible) {
-            Button("Enable imported login") {
-                Task { error = await accounts.activateClaudeAccount(account) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Refreshing this copied login may require CSWAP or another Tivano instance to sign in again. We recommend signing in separately in each instance.")
-        }
         .alert("Rename account", isPresented: $isRenaming) {
             TextField("Name", text: $newName)
             Button("Save") { accounts.rename(account, to: newName) }
@@ -353,21 +287,63 @@ private struct ProviderAccountMenu: View {
         }
         .confirmationDialog("Remove this account?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
             Button("Remove account", role: .destructive) {
-                Task { error = await accounts.remove(account, hasDependentChats: hasDependentChats) }
+                error = nil
+                isRemoving = true
+                Task {
+                    if account.provider == .claude {
+                        error = await ThreadRuntime.removeClaudeAccount(account, app: model)
+                    } else {
+                        error = await accounts.remove(account)
+                    }
+                    isRemoving = false
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             if account.provider == .claude {
-                Text("Accounts used by saved Claude chats cannot be removed. Removing another account deletes only its local Tivano credentials and profile; CSWAP is unchanged.")
+                Text(verbatim: claudeRemovalMessage)
             } else {
                 Text("Tivano signs this account out and deletes its sign-in folder on this Mac. Chats keep their history.")
             }
         }
+        .confirmationDialog("Remove from Tivano anyway?", isPresented: $confirmsForceRemoval, titleVisibility: .visible) {
+            Button("Remove from Tivano anyway", role: .destructive) {
+                error = nil
+                isRemoving = true
+                Task {
+                    error = await ThreadRuntime.removeClaudeAccount(account, app: model, forceRemoveLocal: true)
+                    isRemoving = false
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes this account from Tivano even if macOS Keychain denies credential cleanup. You can delete any remaining Keychain item in Keychain Access.")
+        }
+    }
+
+    private var claudeRemovalMessage: String {
+        let total = dependentChats.count
+        guard total > 0 else {
+            return Chrome.localized("Tivano signs this Claude account out and deletes its local profile on this Mac.")
+        }
+        let archived = dependentChats.count(where: \.isArchived)
+        if archived > 0 {
+            return String(
+                format: Chrome.localized("Tivano signs this Claude account out and deletes its local profile on this Mac. %lld saved chats (%lld archived) keep their history, but cannot send new messages."),
+                total, archived
+            )
+        }
+        return String(
+            format: Chrome.localized("Tivano signs this Claude account out and deletes its local profile on this Mac. %lld saved chats keep their history, but cannot send new messages."),
+            total
+        )
     }
 }
 
 @MainActor
 private enum AccountSupport {
+    static let resetFormatter = RelativeDateTimeFormatter()
+
     static func windows(for account: ProviderAccount, state: ProviderAccounts.State?) -> [PlanLimits.Window] {
         guard !account.requiresClaudeActivation, !account.requiresClaudeCleanup else { return [] }
         let windows = (state?.limits?.windows ?? []).filter { !$0.id.contains("extra") }
@@ -391,6 +367,7 @@ private enum AccountSupport {
 
     static func needsSignIn(_ account: ProviderAccount, state: ProviderAccounts.State?) -> Bool {
         guard state?.isSigningIn != true else { return false }
+        if account.requiresClaudeActivation && !account.requiresClaudeCleanup { return true }
         if account.requiresClaudeCleanup && !account.requiresClaudeActivation { return true }
         if state?.auth == .signedOut { return true }
         if let problem = state?.problem ?? state?.limits?.problem {
@@ -421,12 +398,14 @@ private enum AccountSupport {
             fullNotice = error
         } else if account.requiresClaudeCleanup {
             let message = Chrome.localized(account.requiresClaudeActivation
-                ? "Cleanup required. Retry removing this account."
-                : "Login replacement was interrupted. Sign in again to recover this account.")
+                ? "Removing this account did not finish. Try again."
+                : "Sign-in was interrupted. Sign in again to restore this account.")
             parts.append(message)
             fullNotice = message
         } else if account.requiresClaudeActivation {
-            parts.append(Chrome.localized("Saved, not activated"))
+            let message = Chrome.localized("Sign in again to use this account.")
+            parts.append(message)
+            fullNotice = message
         } else if isSigningIn || state?.isSigningIn == true {
             parts.append(Chrome.localized("Waiting for sign-in…"))
         } else if state?.isChecking == true {
@@ -443,8 +422,7 @@ private enum AccountSupport {
                 ? Chrome.localized("Login expired")
                 : localizedProblem)
         } else if let reset = state?.exhaustedUntil, reset > .now {
-            let formatter = RelativeDateTimeFormatter()
-            parts.append(String(format: Chrome.localized("Usage limit reached · resets %@"), formatter.localizedString(for: reset, relativeTo: .now)))
+            parts.append(String(format: Chrome.localized("Usage limit reached · resets %@"), Self.resetFormatter.localizedString(for: reset, relativeTo: .now)))
         } else if isActive {
             parts.append(Chrome.localized(account.provider == .claude ? "Selected for new chats" : "In use"))
         }

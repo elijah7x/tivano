@@ -1,5 +1,53 @@
 import Foundation
 
+private struct OmpCatalogProbeKey: Hashable {
+    let executable: String
+    let environment: String
+
+    init(executable: URL, environment: [String: String]) {
+        self.executable = executable.resolvingSymlinksInPath().standardizedFileURL.path
+        self.environment = environment.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "\0")
+    }
+}
+
+private actor OmpCatalogProbeCache {
+    struct Entry {
+        let key: OmpCatalogProbeKey
+        let task: Task<[JSONValue], Error>
+        var completedAt: Date?
+    }
+
+    var entry: Entry?
+
+    func reset(key: OmpCatalogProbeKey) {
+        if entry?.key == key { entry = nil }
+    }
+
+    func catalog(
+        key: OmpCatalogProbeKey,
+        force: Bool,
+        operation: @escaping @Sendable () async throws -> [JSONValue]
+    ) async throws -> [JSONValue] {
+        if force { entry = nil }
+        if let entry, entry.key == key,
+           entry.completedAt.map({ (0..<5).contains(Date.now.timeIntervalSince($0)) }) ?? true {
+            return try await entry.task.value
+        }
+        let task = Task { try await operation() }
+        entry = Entry(key: key, task: task, completedAt: nil)
+        do {
+            let models = try await task.value
+            if entry?.task == task { entry?.completedAt = .now }
+            return models
+        } catch {
+            if entry?.task == task { entry = nil }
+            throw error
+        }
+    }
+}
+
 /// The small surface Tivano needs of omp (oh-my-pi, `omp`, https://omp.sh): whether
 /// it is signed in, its model catalog, and the two files Tivano installs for its
 /// sessions.
@@ -17,6 +65,12 @@ enum OmpCLI {
         StoragePaths.directory("omp")
     }
 
+    private static let catalogProbeCache = OmpCatalogProbeCache()
+
+    static func beginCatalogProbeCycle(executable: URL, environment: [String: String]) async {
+        await catalogProbeCache.reset(key: OmpCatalogProbeKey(executable: executable, environment: environment))
+    }
+
     /// Distinct provider names with at least one usable model, else signed out; unknown
     /// when omp could not be asked.
     static func authStatus(executable: URL, environment: [String: String]) async -> ProviderStatus.Auth {
@@ -27,8 +81,12 @@ enum OmpCLI {
 
     /// The chat models omp can use, with the model omp itself is set to marked as the default.
     static func listModels(executable: URL, environment: [String: String]) async throws -> [ModelOption] {
+        try await listModels(executable: executable, environment: environment, force: false)
+    }
+
+    static func listModels(executable: URL, environment: [String: String], force: Bool) async throws -> [ModelOption] {
         async let current = currentModel(executable: executable, environment: environment)
-        let items = try await catalog(executable: executable, environment: environment)
+        let items = try await catalog(executable: executable, environment: environment, force: force)
         let currentSelector = await current
         var options: [ModelOption] = []
         for item in items {
@@ -52,19 +110,22 @@ enum OmpCLI {
     }
 
     /// `omp models --json`: no session and no frame size limit, unlike the same list over RPC.
-    private static func catalog(executable: URL, environment: [String: String]) async throws -> [JSONValue] {
-        let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? LoginEnvironment.homeDirectory
-        let result = try await Shell.run(
-            executable,
-            ["models", "--json", "--no-extensions"],
-            in: URL(fileURLWithPath: home),
-            environment: environment,
-            timeout: 30
-        )
-        guard result.succeeded, let models = JSONValue.parse(result.stdout)?["models"]?.array else {
-            throw ProviderError.failed(String(format: String(localized: "omp could not list its models. %@"), result.failureMessage))
+    private static func catalog(executable: URL, environment: [String: String], force: Bool = false) async throws -> [JSONValue] {
+        let key = OmpCatalogProbeKey(executable: executable, environment: environment)
+        return try await catalogProbeCache.catalog(key: key, force: force) {
+            let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? LoginEnvironment.homeDirectory
+            let result = try await Shell.run(
+                executable,
+                ["models", "--json", "--no-extensions"],
+                in: URL(fileURLWithPath: home),
+                environment: environment,
+                timeout: 30
+            )
+            guard result.succeeded, let models = JSONValue.parse(result.stdout)?["models"]?.array else {
+                throw ProviderError.failed(String(format: String(localized: "omp could not list its models. %@"), result.failureMessage))
+            }
+            return models
         }
-        return models
     }
 
     /// `provider/id` of the model omp starts on, from a throwaway `omp --mode rpc` process.
@@ -126,7 +187,7 @@ enum OmpCLI {
     /// A launch with no path is a new conversation, which omp would not start if the user's own
     /// config has `autoResume` on: it continues the folder's latest session instead, so a new
     /// chat in a project opens with another chat's conversation in it. Off here.
-    static func writeLaunchSettings(id: String, hydra: HydraLaunch?, leadModel: String?) throws -> URL {
+    static func writeLaunchSettings(id: String) throws -> URL {
         let lines = ["autoResume: false", "bash:", "  autoBackground:", "    enabled: false", "async:", "  enabled: false", "task:", "  maxRecursionDepth: 1"]
         let file = try launchDirectory("launch").appendingPathComponent("\(id).yml")
         try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: file, options: .atomic)
@@ -222,7 +283,7 @@ enum OmpCLI {
         const gate = readGate();
         if (!gate || gate.finalReport || gate.interactionMode === "plan"
             || gate.runtimeMode !== "fullAccess" || !gate.allowTask) {
-          return { block: true, reason: "Declined: OMP subagents require Full access with Hydra off." };
+          return { block: true, reason: "Declined: OMP's built-in sub-agents need Full access with Tivano sub-agents off." };
         }
       });
 
@@ -233,7 +294,7 @@ enum OmpCLI {
         const name = device ?? event.toolName;
         if (gate.finalReport) return { block: true, reason: "Declined: this is the final report, with no tools." };
         if (name === "task" && (gate.allowTask !== true || gate.runtimeMode !== "fullAccess")) {
-          return { block: true, reason: "Declined: OMP subagents require Full access with Hydra off." };
+          return { block: true, reason: "Declined: OMP's built-in sub-agents need Full access with Tivano sub-agents off." };
         }
         const deviceWrite = event.toolName === "write" && typeof event.input?.path === "string"
           && event.input.path.trim().toLowerCase().startsWith("xd://");

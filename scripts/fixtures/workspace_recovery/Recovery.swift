@@ -39,7 +39,6 @@ final class ISO8601DateFormatter {
 enum Storage {
     static let root = StoragePaths.root
     static let libraryURL = root.appendingPathComponent("library.json")
-    static let preStandaloneLibraryURL = root.appendingPathComponent("library-before-standalone.json")
     /* STORAGE_PRODUCTION */
 }
 
@@ -302,8 +301,7 @@ final class ModelHarness {
             try check(model.thread(subject.id) == nil, "Other undecodable fields were forced into the library")
         }
 
-        // Exercise the real save preparation and encoding; writer queues/App bootstrap are outside this fixture.
-        try Storage.prepareLibraryWrite(library, to: Storage.libraryURL)
+        // Exercise the real encoding; writer queues/App bootstrap are outside this fixture.
         try JSONEncoder.storage.encode(library).write(to: Storage.libraryURL, options: .atomic)
         guard case .loaded(let reloaded) = Storage.loadLibraryRecovering() else {
             throw Failure(message: "Saved recovery did not reload cleanly")

@@ -245,9 +245,13 @@ struct HydraReportsPopover: View {
     let title: String
     let text: String
     let personas: [HydraPersona]
+    let headIDs: [String: UUID]
     private let digest: HydraReportDigest
     private var single: HydraReportDigest.Head? { digest.heads.count == 1 ? digest.heads.first : nil }
 
+    @Environment(AppModel.self) private var model
+    @Environment(\.closePopoverBox) private var closePopoverBox
+    @Environment(\.dismiss) private var dismiss
     @State private var expanded: Set<String>
     @State private var blocks: [String: [MarkdownBlock]]
 
@@ -255,10 +259,11 @@ struct HydraReportsPopover: View {
     private static let width: CGFloat = 460
 
     @MainActor
-    init(title: String, text: String, personas: [HydraPersona]) {
+    init(title: String, text: String, personas: [HydraPersona], headIDs: [String: UUID] = [:]) {
         self.title = title
         self.text = text
         self.personas = personas
+        self.headIDs = headIDs
         let parsed = HydraReportDigest.parse(text)
         digest = parsed
         // One head's report reads whole; several start collapsed to their files.
@@ -354,12 +359,16 @@ struct HydraReportsPopover: View {
 
     private func singleHeader(_ head: HydraReportDigest.Head) -> some View {
         HStack(alignment: .center, spacing: 10) {
-            HydraGlyph(persona: persona(for: head), size: 24, status: Self.status(head.outcome))
+            openHeadButton(for: head, accessibilityHidden: true) {
+                HydraGlyph(persona: persona(for: head), size: 24, status: Self.status(head.outcome))
+            }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(head.name)
-                        .font(.ui(.body, weight: .semibold))
-                        .foregroundStyle(Chrome.primaryText)
+                    openHeadButton(for: head) {
+                        Text(head.name)
+                            .font(.ui(.body, weight: .semibold))
+                            .foregroundStyle(Chrome.primaryText)
+                    }
                     Text(Self.outcomeCaption(for: head))
                         .font(.ui(.subheadline))
                         .foregroundStyle(Self.outcomeColor(for: head.outcome))
@@ -459,7 +468,7 @@ struct HydraReportsPopover: View {
             default: break
             }
         }
-        var line = n == 1 ? Chrome.localized("1 head") : String(format: Chrome.localized("%d heads"), n)
+        var line = n == 1 ? Chrome.localized("1 sub-agent") : String(format: Chrome.localized("%d sub-agents"), n)
         guard !files.isEmpty else { return line }
         let f = files.count
         let a = files.reduce(0) { $0 + $1.additions }
@@ -497,8 +506,34 @@ struct HydraReportsPopover: View {
         }
     }
 
+    private func openHead(_ id: UUID) {
+        if let close = closePopoverBox?.close { close() } else { dismiss() }
+        Task { @MainActor in model.openThread(id) }
+    }
+
+    @ViewBuilder
+    private func openHeadButton<Label: View>(for head: HydraReportDigest.Head, accessibilityHidden: Bool = false, @ViewBuilder label: () -> Label) -> some View {
+        if let threadID = headIDs[head.name] {
+            let openLabel = String(format: Chrome.localized("Open %@'s chat"), head.name)
+            Button {
+                openHead(threadID)
+            } label: {
+                label()
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(Text(verbatim: openLabel))
+            .accessibilityLabel(Text(verbatim: openLabel))
+            .accessibilityHidden(accessibilityHidden)
+        } else {
+            label()
+        }
+    }
+
     /// One head: its name over its outcome, its task, its files, then its report. With
-    /// several heads the name row is the toggle that opens and closes the report.
+    /// several heads the trailing half of the top row toggles the report, while the head's
+    /// glyph and name open its chat when it has one.
     private func headCard(_ head: HydraReportDigest.Head, index: Int, collapsible: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if collapsible {
@@ -506,26 +541,37 @@ struct HydraReportsPopover: View {
                     // No animation, like the diff inspector's file cards: the popover takes
                     // its height from the content, and an animated toggle feeds it a new
                     // height every frame, which AppKit animates again on top.
-                    Button {
-                        if expanded.contains(head.name) {
-                            expanded.remove(head.name)
-                        } else {
-                            expanded.insert(head.name)
+                    HStack(alignment: .center, spacing: 8) {
+                        headIdentityButton(head)
+                        Button {
+                            if expanded.contains(head.name) {
+                                expanded.remove(head.name)
+                            } else {
+                                expanded.insert(head.name)
+                            }
+                        } label: {
+                            HStack(alignment: .center, spacing: 6) {
+                                outcomeLabel(head)
+                                Spacer(minLength: 8)
+                                effortLabel(head)
+                                Image(systemName: "chevron.right")
+                                    .font(.ui(.footnote, weight: .semibold))
+                                    .foregroundStyle(Chrome.secondaryText)
+                                    .rotationEffect(.degrees(expanded.contains(head.name) ? 90 : 0))
+                            }
+                            .contentShape(.rect)
                         }
-                    } label: {
-                        HStack(alignment: .center, spacing: 6) {
-                            nameRow(head)
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.ui(.footnote, weight: .semibold))
-                                .foregroundStyle(Chrome.secondaryText)
-                                .rotationEffect(.degrees(expanded.contains(head.name) ? 90 : 0))
-                        }
-                        .contentShape(.rect)
+                        .buttonStyle(.plain)
+                        .pointerStyle(.default)
+                        .accessibilityLabel(Text(verbatim: Chrome.localized(expanded.contains(head.name) ? "Collapse" : "Expand")))
                     }
-                    .buttonStyle(.plain)
                 } else {
-                    nameRow(head)
+                    HStack(alignment: .center, spacing: 8) {
+                        headIdentityButton(head)
+                        outcomeLabel(head)
+                        Spacer(minLength: 8)
+                        effortLabel(head)
+                    }
                 }
             }
             if collapsible {
@@ -553,33 +599,41 @@ struct HydraReportsPopover: View {
         }
     }
 
-    /// The head's name and, beside it, its outcome as a seal or caption plus its effort.
-    private func nameRow(_ head: HydraReportDigest.Head) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            HydraGlyph(persona: persona(for: head), size: 20, status: Self.status(head.outcome))
-            Text(head.name)
-                .font(.ui(.body, weight: .semibold))
-                .foregroundStyle(persona(for: head).color)
-            switch head.outcome {
-            case .done:
-                EmptyView()
-            case .failed:
-                Text("Failed")
-                    .font(.ui(.subheadline))
-                    .foregroundStyle(Chrome.danger)
-            case .stopped:
-                Text("Stopped")
-                    .font(.ui(.subheadline))
-                    .foregroundStyle(Chrome.warning)
+    private func headIdentityButton(_ head: HydraReportDigest.Head) -> some View {
+        openHeadButton(for: head) {
+            HStack(alignment: .center, spacing: 8) {
+                HydraGlyph(persona: persona(for: head), size: 20, status: Self.status(head.outcome))
+                Text(head.name)
+                    .font(.ui(.body, weight: .semibold))
+                    .foregroundStyle(persona(for: head).color)
             }
-            Spacer(minLength: 8)
-            if let effort = head.effort, !effort.isEmpty {
-                Text(effort)
-                    .font(.ui(.subheadline))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
+        }
+    }
+
+    @ViewBuilder
+    private func outcomeLabel(_ head: HydraReportDigest.Head) -> some View {
+        switch head.outcome {
+        case .done:
+            EmptyView()
+        case .failed:
+            Text("Failed")
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.danger)
+        case .stopped:
+            Text("Stopped")
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.warning)
+        }
+    }
+
+    @ViewBuilder
+    private func effortLabel(_ head: HydraReportDigest.Head) -> some View {
+        if let effort = head.effort, !effort.isEmpty {
+            Text(effort)
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+                .monospacedDigit()
+                .lineLimit(1)
         }
     }
 
@@ -683,7 +737,6 @@ struct HydraReportsPopover: View {
             .font(.ui(.callout))
             .environment(\.markdownPointSize, TypeScale.shared.content(12))
             .environment(\.markdownDimmed, false)
-            .textSelection(.enabled)
         } else {
             ProgressView()
                 .controlSize(.small)
@@ -711,6 +764,7 @@ struct HydraReportFlagsRows: View {
             if formatMissing {
                 Text("Report format not followed.")
                     .foregroundStyle(Chrome.warning)
+                    .textSelection(.enabled)
             }
             if let value = notes?.unfinished { flag("Unfinished: %@", value: value) }
             if let value = notes?.deviations { flag("Deviations: %@", value: value) }
@@ -718,12 +772,12 @@ struct HydraReportFlagsRows: View {
         }
         .font(.ui(.subheadline))
         .fixedSize(horizontal: false, vertical: true)
-        .textSelection(.enabled)
     }
 
     private func flag(_ key: String, value: String) -> some View {
         Text(verbatim: String(format: Chrome.localized(key), value))
             .foregroundStyle(Chrome.warning)
+            .textSelection(.enabled)
     }
 
     static func withoutTrailingFlags(_ text: String) -> String {
