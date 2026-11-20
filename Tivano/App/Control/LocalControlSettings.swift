@@ -12,9 +12,14 @@ struct LocalControlSettingsRows: View {
         ChromeRowDivider()
         ChromeRow(title: "Local control status", detail: status) {
             if model.settings.isExternalControlEnabled && !model.localControl.listening {
-                ChromeTextButton(symbol: "arrow.clockwise", title: "Retry", help: "Retry local control", isEnabled: true) {
+                Button {
                     model.localControl.refreshListening()
+                } label: {
+                    Label { Text(verbatim: Chrome.localized("Retry")) } icon: { Image.themed("arrow.clockwise") }
                 }
+                .chromePillButton()
+                .help(Text(verbatim: Chrome.localized("Retry local control")))
+                .accessibilityLabel(Text(verbatim: Chrome.localized("Retry local control")))
             }
         }
     }
@@ -38,8 +43,19 @@ struct CLIInstallationSettings: View {
         ChromeCard {
             ChromeRow(title: "CLI command", detail: detail, localizesDetail: false) {
                 HStack {
-                    ChromeTextButton(symbol: "terminal", title: installTitle, help: installTitle, isEnabled: true) { install() }
-                    ChromeTextButton(symbol: "trash", title: "Uninstall CLI", help: "Uninstall CLI", isEnabled: canUninstall, isDestructive: true) { uninstall() }
+                    Button { install() } label: {
+                        Label { Text(verbatim: Chrome.localized(installTitle)) } icon: { Image.themed("terminal") }
+                    }
+                    .chromePillButton()
+                    .help(Text(verbatim: Chrome.localized(installTitle)))
+                    .accessibilityLabel(Text(verbatim: Chrome.localized(installTitle)))
+                    Button(role: .destructive) { uninstall() } label: {
+                        Label { Text(verbatim: Chrome.localized("Uninstall CLI")) } icon: { Image.themed("trash") }
+                    }
+                    .chromePillButton()
+                    .disabled(!canUninstall)
+                    .help(Text(verbatim: Chrome.localized("Uninstall CLI")))
+                    .accessibilityLabel(Text(verbatim: Chrome.localized("Uninstall CLI")))
                 }
             }
         }

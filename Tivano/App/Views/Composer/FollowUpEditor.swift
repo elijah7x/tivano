@@ -17,9 +17,9 @@ struct FollowUpEditor: View {
         ) {
         } actions: {
             Button("Cancel", role: .cancel, action: cancel)
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
             Button("Save", action: save)
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .disabled(edit.isEmpty)
         }
     }

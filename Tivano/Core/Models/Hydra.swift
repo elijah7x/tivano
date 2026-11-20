@@ -173,6 +173,7 @@ struct HydraLaunch: Hashable, Sendable {
     /// The presets those numbered lines were written from, in Settings order: the lead's
     /// "preset" numbers resolve against this copy, not against Settings edited since.
     var chimeraPresetList: [ChimeraPreset] = []
+    var chimeraAutoDispatch: Bool = false
 
     /// How many Tivano-run heads may work at once for a pair with no cap of its own. The
     /// tasks past it wait their turn (`ThreadRuntime.spawnWaitingHeads`) and go out as
@@ -642,16 +643,31 @@ struct HydraReport: Hashable, Sendable {
     var expectsNotes = false
 }
 
+extension HydraReport {
+    /// A head that failed or was stopped and provably changed nothing: nothing landed from
+    /// its own copy, or it failed before a tool ran. A head working in place may have left
+    /// edits in the checkout whatever its status, so it never counts as having done nothing.
+    var producedNothing: Bool {
+        (status == .failed || status == .stopped) && landing == nil && (copyPath != nil || startupFailure)
+    }
+}
+
 /// The per-request budgets behind a lead's delegation blocks: how many rounds of heads
-/// have gone out for the user's current request, and how many times the lead has been
-/// told in a turn of its own that a block sent no heads out. A turn the user authored
-/// starts both over; a turn carrying head reports or a refusal notice continues the
-/// same request and does not.
+/// have gone out for the user's current request, how many failed rounds have been
+/// refunded, and how many times the lead has been told in a turn of its own that a
+/// block sent no heads out. A turn the user actually sent resets the budgets even while
+/// a job is open; automatic turns (head reports, reviews, refusals, auto-continuations,
+/// background wakes) continue the same request while a job is open and do not.
 struct HydraDelegationBudget {
     /// Rounds of heads gone out for the current request.
     private(set) var rounds = 0
     /// Refusals given a turn of their own in the current request.
     private(set) var refusals = 0
+    /// Bumped on every reset, so a batch sent for an earlier request cannot refund the
+    /// new one.
+    private(set) var generation = 0
+    /// Failed rounds already refunded for the current request.
+    private(set) var refunds = 0
     /// A dropped block's notice, waiting to ride on the front of the lead's next turn:
     /// past `maxRefusals` no turn of its own is spent on a refusal, and a turn that
     /// ended before its block's heads went out spent none to begin with, but the lead
@@ -661,19 +677,35 @@ struct HydraDelegationBudget {
     /// Whether another round of heads may still go out for this request.
     var canDelegate: Bool { rounds < HydraPrompts.maxDelegationRounds }
 
-    /// What a new turn does to the budget: `userAuthored` is what `hydraHeads == nil`
-    /// says at turn start — the user's own words, not heads reporting back and not a
-    /// refusal notice. The drop notice is not a turn start's to clear: `takeDropNotice`
+    /// What a new turn does to the budget: `userAuthored` is true for any turn whose
+    /// words the user actually sent (even while a Hydra job is open) and for non-head
+    /// turns when no job is open; automatic turns while a job is open leave the budget
+    /// intact. Resets bump `generation` so a batch from an earlier request cannot refund
+    /// the new one. The drop notice is not a turn start's to clear: `takeDropNotice`
     /// spends it when it actually reaches the lead.
     mutating func beginTurn(userAuthored: Bool) {
         guard userAuthored else { return }
         rounds = 0
         refusals = 0
+        refunds = 0
+        generation &+= 1
     }
 
-    /// A round of heads went out.
-    mutating func chargeRound() {
+    /// A round of heads went out. Returns the budget generation that was charged so the
+    /// batch can only refund this request if every head comes back with nothing.
+    @discardableResult
+    mutating func chargeRound() -> Int {
         rounds += 1
+        return generation
+    }
+
+    /// Gives back one charged round when every head in that batch came back with nothing.
+    /// Refuses stale batches from an earlier budget generation and caps refunds per request.
+    mutating func refundRound(generation charged: Int) -> Bool {
+        guard charged == generation, rounds > 0, refunds < Self.maxRefundedRounds else { return false }
+        rounds -= 1
+        refunds += 1
+        return true
     }
 
     /// A block sent no heads out. Returns whether the refusal gets a turn of its own;
@@ -705,6 +737,11 @@ struct HydraDelegationBudget {
     /// hear once that its rounds are spent; past it a reply that still ends in a block is
     /// treated as a plain reply, so no chat ever loops turn after turn on the same refusal.
     static let maxRefusals = 3
+
+    /// A round in which every head failed gives its round back, at most this many times
+    /// per request, so a provider that stays down cannot keep a lead sending heads
+    /// forever (hard ceiling `maxDelegationRounds + maxRefundedRounds`).
+    static let maxRefundedRounds = 2
 }
 
 /// The words Hydra puts in front of the lead and the heads, per provider.
@@ -745,15 +782,21 @@ enum HydraPrompts {
     /// How the lead tells the user what the heads did: one short human sentence per
     /// head, head's name first, everyday words for what changed for the user, file
     /// details on one short second line only, no audit-speak, no icons.
-    static let reportStyleRule = "For each head, give one plain sentence starting with its name and describing the user-visible result; add the file details only when useful, and keep the whole account bounded to a line or two per head. Omit repeated summaries, audit jargon and decorative symbols. Say plainly what you still need from the user and what you settled or fixed yourself."
+    static let reportStyleRule = "For each head, give one plain sentence starting with its name and describing the user-visible result; add the file details only when useful, and keep the whole account bounded to a line or two per head. Omit repeated summaries, audit jargon and decorative symbols. Say plainly what you still need from the user and what you settled or fixed yourself. \"Head\" is this prompt's jargon, not the user's: refer to a head by its name, or in another language by that language's ordinary word for a sub-agent (子代理 in Chinese), never a literal translation of \"head\"."
 
     // MARK: - Tivano-run heads
 
-    /// How many times in a row a lead may send heads out for one request of the user's: a
-    /// big job wants scouts to read, workers to change, and one round for what failed or
-    /// what the reports showed was missing. Past that the lead finishes by itself, so no
-    /// request can chain heads that verify heads that verify heads.
-    static let maxDelegationRounds = 3
+    /// How many rounds of heads a lead may send out for one request of the user's: a big
+    /// job wants scouts to read, workers to change, a round for what failed or what the
+    /// reports showed missing, and room for a staged build; recent jobs that hit 3 were
+    /// real work, mostly after failed heads. Past the cap the lead finishes by itself, so
+    /// no request chains heads that verify heads without end.
+    static let maxDelegationRounds = 5
+
+    /// A round whose every head came back with nothing does not count against the request.
+    static func refundsRound(_ reports: [HydraReport]) -> Bool {
+        !reports.isEmpty && reports.allSatisfy(\.producedNothing)
+    }
 
     /// The current request's heads and any still running, in one line, with earlier
     /// finished heads counted separately so the lead knows they cannot be sent back.
@@ -1047,15 +1090,6 @@ enum HydraPrompts {
         if kept.count == prompt.split(separator: "\n", omittingEmptySubsequences: false).count { return prompt }
         return kept.joined(separator: "\n")
             + "\nMake the assigned edits and report; the lead handles all validation."
-    }
-
-    /// What the lead's chat looked like when a queued task was handed to a head, so the
-    /// head knows what is going on without the lead's context. Built from the timeline,
-    /// not from another model call, so a queued task costs nothing extra.
-    struct ChatContext {
-        var lastUserPrompt: String?
-        var lastReply: String?
-        var touchedPaths: [String] = []
     }
 
     /// One line on where a head's work went, for its section of the report. Nothing for

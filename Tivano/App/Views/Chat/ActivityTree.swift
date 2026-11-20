@@ -173,9 +173,8 @@ struct ActivityHeaderLabel: View {
 /// seconds; a still frame while the reader scrolls, and none at all with reduced motion.
 private struct ActivityShimmer: ViewModifier {
     let isActive: Bool
-    @Environment(\.chatColumnIsShown) private var columnIsShown
+    @Environment(\.chatColumnVisibility) private var columnVisibility
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var width: CGFloat = 0
 
     private static let period: TimeInterval = 3.4
@@ -196,13 +195,13 @@ private struct ActivityShimmer: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        if !isActive || reduceMotion || performanceMode {
+        if !isActive || reduceMotion {
             content
         } else {
             content
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
                 .overlay {
-                    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: ScrollActivity.shared.isScrolling || !columnIsShown)) { context in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ScrollActivity.shared.isScrolling || !columnVisibility.isShown || !FrontMonitor.shared.isVisible)) { context in
                         let centre = Self.bandCentre(at: context.date)
                         content
                             .foregroundStyle(Chrome.primaryText)
@@ -260,7 +259,6 @@ private struct ActivityStep<Content: View>: View {
     let continues: Bool
     @ViewBuilder let content: Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var connector: CGFloat
     @State private var revealed: Bool
     private let delay: TimeInterval
@@ -276,7 +274,7 @@ private struct ActivityStep<Content: View>: View {
         delay = isFirstOfNewGroup ? ActivityMetrics.firstStepDelay : 0
     }
 
-    private var motionEnabled: Bool { !reduceMotion && !performanceMode }
+    private var motionEnabled: Bool { !reduceMotion }
 
     var body: some View {
         // Opacity, offset and line trim leave the measured row height at its final value.
@@ -328,10 +326,13 @@ struct ActivityTreeGroup: View {
     @Environment(\.timelineBlockID) private var blockID
     @Environment(\.timelineLiveAppearance) private var liveAppearance
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var fallbackCollapsed: Bool
-    @State private var stepLimit = ActivityMetrics.stepPage
+    @State private var localStepLimit: (id: String, limit: Int)?
     private var disclosureID: String { blockID + "/work/" + (entries.first.map { "\($0.id)" } ?? "") }
+    private var stepLimit: Int {
+        if let local = localStepLimit, local.id == disclosureID { return local.limit }
+        return ActivityPaging[disclosureID] ?? ActivityMetrics.stepPage
+    }
     private var isCollapsed: Bool {
         get { revealBox?.presentation.disclosures[disclosureID + "/collapsed"] ?? fallbackCollapsed }
         nonmutating set {
@@ -374,7 +375,7 @@ struct ActivityTreeGroup: View {
         }
     }
 
-    private var motionEnabled: Bool { !reduceMotion && !performanceMode }
+    private var motionEnabled: Bool { !reduceMotion }
 
     var body: some View {
         let facts = GroupFacts(entries: entries)
@@ -408,8 +409,9 @@ struct ActivityTreeGroup: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if hidden > 0 {
                         Button {
-                            stepLimit += ActivityMetrics.stepPage
-                            ActivityPaging[disclosureID] = stepLimit
+                            let next = stepLimit + ActivityMetrics.stepPage
+                            ActivityPaging[disclosureID] = next
+                            localStepLimit = (disclosureID, next)
                             revealBox?.action()
                         } label: {
                             Text(verbatim: TurnFinishedBlock.earlierStepsLabel(hidden: hidden))
@@ -444,7 +446,6 @@ struct ActivityTreeGroup: View {
                 isCollapsed = true
             }
         }
-        .onAppear { stepLimit = ActivityPaging[disclosureID] ?? ActivityMetrics.stepPage }
     }
 
     @ViewBuilder
@@ -466,17 +467,26 @@ struct ActivityTreeGroup: View {
 /// thinking still arrives and closing once it is done, unless the reader chose otherwise.
 private struct ActivityThoughtStep: View {
     let entry: TimelineEntry
+    @Environment(\.revealTimelineEnd) private var revealBox
+    @Environment(\.timelineBlockID) private var blockID
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
-    @State private var pin: Bool?
+    @State private var fallbackPin: Bool?
     @State private var isHovering = false
+    private var disclosureID: String { blockID + "/thought/\(entry.id)" }
+    private var pin: Bool? {
+        get { revealBox?.presentation.disclosures[disclosureID] ?? fallbackPin }
+        nonmutating set {
+            if let revealBox { revealBox.presentation.disclosures[disclosureID] = newValue }
+            else { fallbackPin = newValue }
+        }
+    }
 
     var body: some View {
         if case .reasoning(let block) = entry.item.content {
             let isOpen = pin ?? block.isStreaming
             VStack(alignment: .leading, spacing: 6) {
                 Button {
-                    withAnimation(reduceMotion || performanceMode ? nil : ActivityMetrics.fold) { pin = !isOpen }
+                    withAnimation(reduceMotion ? nil : ActivityMetrics.fold) { pin = !isOpen }
                 } label: {
                     HStack(spacing: TimelineMetrics.iconSpacing) {
                         Image(systemName: "bubble.left")
@@ -504,7 +514,7 @@ private struct ActivityThoughtStep: View {
                         .environment(\.markdownDimmed, true)
                         .padding(.leading, TimelineMetrics.iconWidth + TimelineMetrics.iconSpacing)
                         .padding(.trailing, 12)
-                        .transition(reduceMotion || performanceMode ? .identity : .opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                 }
             }
         }

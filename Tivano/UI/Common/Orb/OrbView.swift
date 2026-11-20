@@ -9,6 +9,7 @@
 // Redraws at 30 fps while on screen and not paused; hidden or paused, its clock stops so
 // motion resumes where it left off. Reduce Motion shows the static representative frame.
 
+import AppKit
 import SwiftUI
 
 struct ThinkingOrb: View {
@@ -28,17 +29,17 @@ struct ThinkingOrb: View {
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     @State private var player = ThinkingOrbPlayer()
     @State private var isOnScreen = false
+    @State private var isWindowVisible = false
 
     /// Below this the paint path skips a primitive.
     nonisolated private static let minAlpha: Float = 0.02
     /// The orb is a status indicator: at 30 fps its slow motion reads the same as 60.
     private static let frameInterval: TimeInterval = 1.0 / 30.0
 
-    private var reduced: Bool { reducedMotion || systemReduceMotion || performanceMode }
-    private var animating: Bool { isOnScreen && !paused && !reduced }
+    private var reduced: Bool { reducedMotion || systemReduceMotion }
+    private var animating: Bool { isOnScreen && isWindowVisible && !paused && !reduced }
 
     private var magnification: CGFloat {
         scale.isFinite ? Swift.min(Swift.max(scale, 0.25), 8.0) : 1.0
@@ -51,14 +52,17 @@ struct ThinkingOrb: View {
             orbCanvas(date: timeline.date, animating: isAnimating)
         }
         .frame(width: edge, height: edge)
+        .background {
+            OrbVisibilityObserver { isWindowVisible = $0 }
+        }
         .accessibilityHidden(true)
         .onAppear { isOnScreen = true }
         .onDisappear {
             isOnScreen = false
             player.hide()
         }
-        .onChange(of: paused) { _, nowPaused in
-            if nowPaused { player.stop() }
+        .onChange(of: animating) { _, nowAnimating in
+            if !nowAnimating && isOnScreen && !reduced { player.stop() }
         }
         .onChange(of: reduced) { _, nowReduced in
             if nowReduced { player.hide() }
@@ -168,5 +172,96 @@ final class ThinkingOrbPlayer {
     func hide() {
         animator?.stop(now: now)
         animator?.cancelTransition()
+    }
+}
+
+private struct OrbVisibilityObserver: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> ObserverView {
+        let view = ObserverView(frame: .zero)
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ view: ObserverView, context: Context) {
+        view.onChange = onChange
+    }
+
+    static func dismantleNSView(_ view: ObserverView, coordinator: ()) {
+        view.onChange = nil
+    }
+
+    @MainActor
+    final class ObserverView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private weak var observedWindow: NSWindow?
+        private var lastValue: Bool?
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            for name in [
+                NSApplication.didBecomeActiveNotification,
+                NSApplication.didResignActiveNotification,
+                NSApplication.didHideNotification,
+                NSApplication.didUnhideNotification,
+            ] {
+                NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged), name: name, object: nil)
+            }
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if observedWindow !== window {
+                let names = [
+                    NSWindow.didChangeOcclusionStateNotification,
+                    NSWindow.didMiniaturizeNotification,
+                    NSWindow.didDeminiaturizeNotification,
+                    NSWindow.willCloseNotification,
+                ]
+                if let observedWindow {
+                    for name in names {
+                        NotificationCenter.default.removeObserver(self, name: name, object: observedWindow)
+                    }
+                }
+                observedWindow = window
+                if let window {
+                    for name in names {
+                        NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged), name: name, object: window)
+                    }
+                }
+            }
+            visibilityChanged()
+        }
+
+        override func viewDidHide() {
+            super.viewDidHide()
+            visibilityChanged()
+        }
+
+        override func viewDidUnhide() {
+            super.viewDidUnhide()
+            visibilityChanged()
+        }
+
+        @objc nonisolated private func visibilityChanged() {
+            Task { @MainActor [weak self] in self?.report() }
+        }
+
+        private func report() {
+            let visible = window.map {
+                $0.isVisible && $0.occlusionState.contains(.visible) && !$0.isMiniaturized
+            } == true && NSApp.isActive && !NSApp.isHidden && !isHiddenOrHasHiddenAncestor
+            guard lastValue != visible else { return }
+            lastValue = visible
+            onChange?(visible)
+        }
     }
 }

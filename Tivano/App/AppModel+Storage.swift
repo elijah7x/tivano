@@ -18,11 +18,30 @@ extension AppModel {
     /// Only a folder no chat or project uses, with nothing uncommitted in it, is removed
     /// from the page. A chat's own worktree goes with the chat, when it is deleted.
     func canRemove(_ worktree: WorktreeUsage) -> Bool {
-        let path = Self.resolved(worktree.path)
-        guard threadsUsing(worktree).isEmpty,
-              !projects.contains(where: { Self.resolved($0.path) == path || Self.resolved($0.path).hasPrefix(path + "/") })
-        else { return false }
+        guard threadsUsing(worktree).isEmpty, !hasProject(inside: worktree) else { return false }
         return worktree.isRegistered ? worktree.changedFiles == 0 : true
+    }
+
+    /// True when no non-archived chat uses the worktree and no project points inside it.
+    func isIdle(_ worktree: WorktreeUsage) -> Bool {
+        threadsUsing(worktree).allSatisfy(\.isArchived) && !hasProject(inside: worktree)
+    }
+
+    /// Opens a new standalone chat prefilled with a read-only worktree review prompt.
+    func startWorktreeReview(for usage: StorageUsage) {
+        guard let thread = newThread(affiliation: .standalone, workspace: .local) else { return }
+        runtime(for: thread.id).draft.text = worktreeReviewPrompt(for: usage)
+        openThread(thread.id)
+        WindowManager.shared.showMain()
+        WindowManager.shared.hideSettings()
+    }
+
+    private func hasProject(inside worktree: WorktreeUsage) -> Bool {
+        let path = Self.resolved(worktree.path)
+        return projects.contains {
+            let resolved = Self.resolved($0.path)
+            return resolved == path || resolved.hasPrefix(path + "/")
+        }
     }
 
     /// Removes an unused worktree. Its branch stays, so committed work is never lost; a

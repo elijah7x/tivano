@@ -430,24 +430,24 @@ final class MCPProxy: @unchecked Sendable {
         if !body.isEmpty {
             request.httpBody = body
         }
-        var (stream, response) = try await URLSession.shared.bytes(for: request)
-        defer { stream.task.cancel() }
-        var http = response as? HTTPURLResponse
+        var chunked = try await SSEChunkReader.read(for: request)
+        defer { chunked.task.cancel() }
+        var http = chunked.response as? HTTPURLResponse
         if route.usesOAuth, http?.statusCode == 401 {
             if let refreshed = try? await MCPOAuth.accessToken(serverID: serverID) {
                 request.setValue("Bearer \(refreshed)", forHTTPHeaderField: "Authorization")
-                stream.task.cancel()
-                (stream, response) = try await URLSession.shared.bytes(for: request)
-                http = response as? HTTPURLResponse
+                chunked.task.cancel()
+                chunked = try await SSEChunkReader.read(for: request)
+                http = chunked.response as? HTTPURLResponse
             }
         }
         guard let http else {
             throw URLError(.badServerResponse)
         }
-        try await writeBack(box: box, serverID: serverID, response: http, stream: stream)
+        try await writeBack(box: box, serverID: serverID, response: http, chunked: chunked)
     }
 
-    private func writeBack(box: ConnectionBox, serverID: String, response: HTTPURLResponse, stream: URLSession.AsyncBytes) async throws {
+    private func writeBack(box: ConnectionBox, serverID: String, response: HTTPURLResponse, chunked: SSEChunkedResponse) async throws {
         let contentType = response.value(forHTTPHeaderField: "Content-Type")
         var headers: [(String, String)] = []
         if let contentType {
@@ -471,16 +471,55 @@ final class MCPProxy: @unchecked Sendable {
             var canSend = true
             do {
                 var buffer = Data()
-                for try await byte in stream {
-                    buffer.append(byte)
-                    if byte == UInt8(ascii: "\n") || buffer.count >= 16_384 {
-                        canSend = await send(connection, Self.chunk(buffer))
-                        buffer.removeAll(keepingCapacity: true)
-                        if !canSend { break }
+                var framer = SSEByteFramer(byteLimit: Int.max)
+                var framedByteCount = 0
+                var sentByteCount = 0
+                var flushAtPairedLineFeed = false
+
+                func sendBytes(_ amount: Int) async -> Bool {
+                    precondition(amount >= 0 && amount <= buffer.count)
+                    var remaining = amount
+                    while remaining > 0 {
+                        let count = min(16_384, remaining)
+                        guard await send(connection, Self.chunk(Data(buffer.prefix(count)))) else { return false }
+                        buffer.removeFirst(count)
+                        sentByteCount += count
+                        remaining -= count
+                    }
+                    return true
+                }
+
+                streamLoop: for try await chunk in chunked.chunks {
+                    try Task.checkCancellation()
+                    buffer.append(chunk)
+                    for frame in try framer.append(chunk) {
+                        switch frame {
+                        case .pairedLineFeed(let raw):
+                            framedByteCount += raw.count
+                            if flushAtPairedLineFeed {
+                                canSend = await sendBytes(framedByteCount - sentByteCount)
+                                if !canSend { break streamLoop }
+                            }
+                            flushAtPairedLineFeed = false
+                        case .line(let line):
+                            framedByteCount += line.raw.count
+                            flushAtPairedLineFeed = line.content.isEmpty && line.terminator == .cr
+                            if line.content.isEmpty {
+                                canSend = await sendBytes(framedByteCount - sentByteCount)
+                                if !canSend { break streamLoop }
+                            }
+                        }
+                    }
+                    while buffer.count >= 16_384 {
+                        canSend = await sendBytes(16_384)
+                        if !canSend { break streamLoop }
                     }
                 }
+                if canSend, let line = try framer.finish() {
+                    framedByteCount += line.raw.count
+                }
                 if canSend, !buffer.isEmpty {
-                    canSend = await send(connection, Self.chunk(buffer))
+                    canSend = await sendBytes(buffer.count)
                 }
             } catch {
                 // A broken upstream stream gets no terminating chunk: the client must see
@@ -500,12 +539,13 @@ final class MCPProxy: @unchecked Sendable {
             if response.expectedContentLength > 0 {
                 payload.reserveCapacity(Int(min(response.expectedContentLength, Int64(Self.responseLimit))))
             }
-            for try await byte in stream {
-                guard payload.count < Self.responseLimit else {
+            for try await chunk in chunked.chunks {
+                try Task.checkCancellation()
+                guard chunk.count <= Self.responseLimit - payload.count else {
                     respond(connection: connection, status: 502, body: Self.jsonError("upstream response too large"))
                     return
                 }
-                payload.append(byte)
+                payload.append(chunk)
             }
             headers.append(("Content-Length", "\(payload.count)"))
             headers.append(("Connection", "close"))

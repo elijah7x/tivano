@@ -45,7 +45,7 @@ struct ProviderUpdateSubtitle: View {
             status.append(phaseLine)
         }
         if !state.monitoringEnabled {
-            status.append(Chrome.localized("Update monitoring is off."))
+            status.append(Chrome.localized("Automatic update checks are off."))
         }
         if let protectionLine {
             status.append(protectionLine)
@@ -117,7 +117,7 @@ struct ProviderUpdateSubtitle: View {
         }
         if state.phase == .checking || state.channelKnown { return nil }
         if providerUpdateText(state.error) != nil { return nil }
-        return Chrome.localized("The install channel is unknown, so Tivano will not update it.")
+        return Chrome.localized("Tivano can't tell how this CLI was installed, so it won't update it.")
     }
 }
 
@@ -204,9 +204,8 @@ struct ProviderUpdateAction: View {
     private func glassButton(_ title: String, help: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         let button = Button(action: enabled ? action : {}) {
             Text(verbatim: title)
-                .frame(height: Chrome.rowButtonLabelHeight)
         }
-        .buttonStyle(.glass)
+        .chromePillButton()
         .disabled(!enabled)
         .help(Text(verbatim: help))
         .accessibilityLabel(Text(verbatim: title))

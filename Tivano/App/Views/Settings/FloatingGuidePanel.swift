@@ -7,7 +7,6 @@ import SwiftUI
 class FloatingGuidePanel {
     private(set) var panel: NSPanel?
     private var escapeMonitor: Any?
-    private var performanceModeObserver: NSObjectProtocol? = nil
     private let width: CGFloat
 
     init(width: CGFloat) {
@@ -15,10 +14,9 @@ class FloatingGuidePanel {
     }
 
     func present(_ content: some View) {
-        observePerformanceModeChanges()
         let height = NSHostingView(rootView: content.frame(width: width)).fittingSize.height.rounded(.up)
         let panel = self.panel ?? makePanel()
-        panel.hasShadow = !(CaptureRun.defaults ?? .standard).bool(forKey: "performanceMode")
+        panel.hasShadow = true
         panel.contentViewController = NSHostingController(rootView: content)
         panel.setContentSize(NSSize(width: width, height: max(height, 100)))
         if let visible = NSScreen.main?.visibleFrame {
@@ -55,21 +53,6 @@ class FloatingGuidePanel {
         }
         self.panel = panel
         return panel
-    }
-
-    private func observePerformanceModeChanges() {
-        guard performanceModeObserver == nil else { return }
-        performanceModeObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshShadow() }
-        }
-    }
-
-    private func refreshShadow() {
-        panel?.hasShadow = !(CaptureRun.defaults ?? .standard).bool(forKey: "performanceMode")
     }
 
     private func startEscapeMonitor() {

@@ -2,11 +2,509 @@
 
 All notable changes to Tivano are documented here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are the release tags without the `v`. The dated entries below are inherited from Droppy Code and kept as written.
 
-`scripts/publish_release.sh` reads the section whose heading matches the version in `config/release.xcconfig` (for example `## [1.5.4] - 2026-09-17`) and publishes it as the GitHub release notes, which Settings › About shows as its New features / Bug fixes / Refinements cards. Work that has merged but not shipped sits under `## [Unreleased]`, which publishing skips; the next release renames that heading to its version and date. A `### Thanks` heading under a version names every outside contributor whose pull request shipped in it, in the form `- Name (@github-handle): what they did (#PR).`; `python3 scripts/release_credits.py` prints the block for the changes since the previous tag, and publishing stops until every contributor is named.
+`scripts/publish_release.sh` reads the section whose heading matches the version in `config/release.xcconfig` (for example `## [1.5.4] - 2026-09-17`) and publishes it as the GitHub release notes, which Settings › Version shows as its New / Bugs / Refinements cards (opening New features / Bug fixes / Refinements popovers). Work that has merged but not shipped sits under `## [Unreleased]`, which publishing skips; the next release renames that heading to its version and date. A `### Thanks` heading under a version names every outside contributor whose pull request shipped in it, in the form `- Name (@github-handle): what they did (#PR).`; `python3 scripts/release_credits.py` prints the block for the changes since the previous tag, and publishing stops until every contributor is named.
 
-New entries use `### English` and `### 简体中文` sections, each with the existing third-level category headings: New features / Bug fixes / Refinements in English, 新功能 / 问题修复 / 优化改进 in Chinese. About selects the app's active language; a missing Chinese section, or one containing only whitespace and category headings, falls back to English. A single shared `### Thanks` section follows both languages.
+New entries use `### English` and `### 简体中文` sections, each with the existing third-level category headings: New features / Bug fixes / Refinements in English, 新功能 / 问题修复 / 优化改进 in Chinese. Settings › Version selects the app's active language; a missing Chinese section, or one containing only whitespace and category headings, falls back to English. A single shared `### Thanks` section follows both languages.
 
 ## [Unreleased]
+
+## [3.0.0] - 2026-11-20
+
+### English
+
+### New features
+
+- Sub-agents, redesigned. Hydra, combos and Chimera become three plain modes — Same-model, Preset and Adaptive sub-agents — set up in one place, Settings › Sub-agents & Combos.
+- Adaptive sub-agents work with identities. Six built-in identities (Scout, Builder, Reviewer, Designer, Researcher, Writer) plus your own, each a name, a short prompt and a model. Adaptive sub-agents leave Alpha, and Auto-dispatch can skip confirming every team.
+- Floating panels can stay out of the way. Choose Single panel, One per sub-agent or Off; with Off, working sub-agents show as a small pill at the end of the chat. Closing a panel no longer stops its sub-agent.
+- Independent review can use Grok, Pi or Antigravity as well as Codex and Claude, and finishes as one card listing what was accepted or rejected. Background models (titles, suggestions, commit messages) can also be Grok or Pi.
+- Weather window replaces Skylight. Porthole is a small ink scene above the thread list: wind when a chat waits on you, sun when work finishes, rain when it fails, and the sky follows the time of day. Full window spreads the weather across the window; Off hides it.
+- Token usage page. Settings › Token usage shows how many tokens you used over 7, 30 or 90 days or a year, roughly what they cost, and which tools and models took them. It reads locally from the companion app Token Taken.
+- New Creation theme with solid paper-white surfaces, serif type and hand-drawn icons, alongside Liquid Glass and the new Texture theme.
+- The app icon follows your theme in the Dock, Finder and Launchpad, or pin the one you like.
+- Runs on macOS 15 Sequoia. Liquid Glass still needs macOS 26; earlier systems use Texture or Creation.
+- Four more languages: Traditional Chinese, Japanese, Korean and French.
+- Workspace: Auto (the new default) edits your project folder directly and moves a chat into its own worktree only when another chat is already working in the same repository.
+- Files picked with @ become chips in the message box.
+- What's new after every update, including silent ones, in Settings › Version.
+- Model groups. Settings › Models sorts your models into groups, and the model picker follows them. New chats and Quick chat can also start from a sub-agent preset.
+
+### Bug fixes
+
+- Multiple Claude accounts stay signed in and can always be removed. CSWAP import is gone.
+- Antigravity chats fail far less: slow sign-ins, brief network blips and agy's own retries no longer end a turn with an error. Supervised mode asks before editing again with newer agy versions.
+- Quick chat uses the model you pick in it, even in a project with a default combo.
+- Cursor and Grok no longer open sign-in pages on their own when a saved sign-in expires.
+- Long chats no longer jump while you scroll, whether loading earlier messages or moving through the middle.
+- The pointer no longer sticks as a text cursor, and you can select text across a whole finished reply.
+- A new chat's first message shows up the moment you send it, and a finished reply no longer stays hidden until you switch chats.
+- Deleting or archiving a chat at an awkward moment no longer brings it back or leaves a half-made worktree, and long forwarded chats keep their handover.
+- Provider fixes: Codex rewind, DeepSeek Harness profiles, Pi tool approvals, OpenCode mode switches, and a resumed Codex chat with sub-agents turned off.
+
+### Refinements
+
+- A calmer window: the sidebar is a floating tray, the top bar keeps only what you use daily (click the +/− numbers or press ⌘D for the changes), and Settings is reorganized into fewer, clearer pages.
+- Much lighter on your Mac: a chat waiting on the model uses about a seventh of the CPU it did, animations stop when Tivano is in the background, floating panels stream without stalling (#56), and archiving a chat is instant.
+- Codex background tasks download under 1 MB per run instead of 35–65 MB.
+- Settings › Storage frees up space in one click and finds archived chats; MCP, remote MCP, local control and code hosts now live together in Settings › Connections, with servers shown as compact chips.
+- A request can send out up to 5 rounds of sub-agents, failed rounds don't count, and when the concurrency limit holds tasks back the chat says so. The reviewer can read your code, so it raises fewer false alarms.
+- Replies are easier to read: tables wrap to fit, and turns, lines and lists have more breathing room.
+- Smaller things: the right-click menu has a single Copy, the first-launch page offers Work in a project or Just chat, accent colors are 12 named colors, the sidebar no longer shows an archive button on hover, and Antigravity tells you when it is retrying.
+- Retired: Performance Mode and Clearer glass (their lighter look is now the Texture theme), Concise AI replies, the "Notify when a turn finishes" switch (it now always notifies), commit message instructions, and handing out keepsakes (ones you already have stay lit).
+
+### 简体中文
+
+### 新功能
+
+- 子代理全面改版。Hydra、组合和 Chimera 合并为三种模式：同模型子代理、模型搭配和自适应子代理，统一在「设置 › 子代理与组合」里配置。
+- 自适应子代理改用角色。内置侦察、实现、评审、设计、调研、文案六个角色，也可以自己写：起个名字、写段提示词、选个模型。自适应子代理正式脱离 Alpha，打开「自动派发」后不用每次确认。
+- 悬浮面板可以不打扰你。可选单个面板、独立面板或关闭；关闭时，正在工作的子代理在对话末尾显示为一个小胶囊。关掉面板也不会再停掉子代理。
+- 独立审查可以用 Grok、Pi 或 Antigravity，不再只限 Codex 和 Claude；审查结束后折叠成一张卡片，列出采纳和驳回的意见。后台模型（标题、输入建议、提交信息）也可以选 Grok 或 Pi。
+- 天气窗取代晴天窗。舷窗是对话列表上方的一幅墨线小景：有对话等你时起风，完成时出太阳，失败时下雨，天色随时间变化。落地窗让天气铺满整个窗口，也可以关闭。
+- 词元用量页。「设置 › 词元用量」显示近 7、30、90 天或一年用了多少 token、大概花了多少钱、花在哪些工具和模型上，数据在本地读取自配套应用 Token Taken。
+- 新主题「创作」：纸白实色界面、衬线字体、手绘图标；另有液态玻璃和新的质感主题。
+- 应用图标跟随主题，程序坞、访达和启动台里都会变；也可以固定一款。
+- 支持 macOS 15 Sequoia。液态玻璃仍需 macOS 26，更早的系统使用质感或创作主题。
+- 新增四种语言：繁体中文、日语、韩语、法语。
+- 工作区「自动」（新默认）：平时直接改项目文件夹，同一仓库已有别的对话在跑时才自动开独立 worktree。
+- 用 @ 选的文件在输入框里显示为标签。
+- 每次更新后都能看到更新内容（包括静默更新），在「设置 › 版本」里。
+- 模型分组。「设置 › 模型」可以把模型分组，模型选择器也按组显示；新对话和快速对话也能直接用模型搭配开始。
+
+### 问题修复
+
+- 多个 Claude 账号保持登录，也总能顺利移除；移除了 CSWAP 导入。
+- Antigravity 对话失败大幅减少：登录慢、网络短暂波动或 agy 自身重试不再让一轮对话报错；新版 agy 下，「需确认」模式在改文件前会重新征求确认。
+- 快速对话会用你在里面选的模型，即使项目设了默认模型搭配。
+- Cursor 和 Grok 登录过期时不再自己弹出登录页。
+- 长对话滚动不再跳动，无论是加载更早的消息还是在中间来回翻。
+- 鼠标指针不再卡成文字光标；一轮完成的回复可以整段选中。
+- 新对话的第一条消息发出即显示；完成的回复不再要切换对话才出现。
+- 在不凑巧的时刻删除或归档对话，不会再让它复活或留下半成品 worktree；转交到其他服务商的长对话也不再丢失交接状态。
+- 服务商修复：Codex 回退、DeepSeek Harness 配置、Pi 工具审批、OpenCode 模式切换，以及关闭子代理后恢复的 Codex 对话。### 优化改进
+
+### 优化改进
+
+- 界面更清爽：侧栏变成悬浮托盘，顶栏只留常用按钮（点 +/− 数字或按 ⌘D 查看改动），设置页重新整理，页数更少、更好找。
+- 更省资源：等待模型回复时 CPU 占用降到原来的约七分之一，Tivano 在后台时动画全部暂停，悬浮面板快速输出不再卡顿（#56），归档对话即点即走。
+- Codex 后台任务每次下载不到 1 MB，原来要 35–65 MB。
+- 「设置 › 存储空间」一键清理空间、搜索已归档对话；MCP、远程 MCP、本地控制和代码托管合并到「设置 › 连接」，服务器收成紧凑的标签。
+- 一次请求最多可派 5 轮子代理，全部失败的轮次不计数；并发达到上限时对话里会说明。审查模型可以读代码，误报更少。
+- 回复更好读：表格自动换行适应宽度，段落、行距和列表更舒展。
+- 一些小改动：右键菜单只保留一个「复制」；首次启动可选「在项目里工作」或「直接对话」；强调色精简为 12 种有名字的颜色；侧栏悬停时不再出现归档按钮；Antigravity 重试时会提示。
+- 移除：性能模式和「更通透的玻璃」（轻量的外观现在是质感主题）、简洁 AI 回复、「本轮完成时通知」开关（现在始终通知）、提交信息指引、信物发放（已点亮的保持不变）。
+
+### Thanks
+
+- No outside contributors.
+
+## [3.0.0-preview.91] - 2026-11-20
+
+### English
+
+### Bug fixes
+
+- A wallpaper in the Texture theme keeps the Texture look: it sits on Texture's frosted desktop under a light veil instead of switching to Liquid Glass, the window is never clearer than Texture without a wallpaper, and the picture stays partly visible even at the clearest transparency setting.
+- A finished reply no longer stays blank under its "Worked for" line until you switch chats and back: a reply whose space was measured empty while its turn folded now notices it and lays itself out again on its own.
+- Antigravity chats in Supervised mode ask before editing again: Antigravity CLI 1.5.7 and later start a session with no saved mode in Auto, which approves workspace edits on its own, so Tivano now pins Supervised chats to Antigravity's Default mode for that session only, without changing your Antigravity settings.
+
+### 简体中文
+
+### 问题修复
+
+- 质感主题下设置壁纸后保留质感效果：壁纸铺在质感的磨砂桌面之上，并覆盖一层淡淡的面纱，不再变成液态玻璃效果；窗口不会比没有壁纸的质感主题更透，透明度调到最低时也仍能看到部分壁纸。
+- 回复完成后，「已工作」下方不再一直空白、要切到别的对话再切回来才显示：回合折叠时如果回复的高度被量成了空，回复会自己发现并重新排版显示。
+- 「需确认」模式下的 Antigravity 对话恢复为编辑前先征求同意：Antigravity CLI 1.5.7 起，未保存模式的会话会以 Auto 启动并自动批准工作区内的编辑，Tivano 现在把「需确认」模式的对话固定为 Antigravity 的 Default 模式，只作用于本次会话，不改动你的 Antigravity 设置。
+
+## [3.0.0-preview.87] - 2026-11-20
+
+### English
+
+### Bug fixes
+
+- Multiple Claude accounts stay signed in and can always be removed: adding or re-signing an account now runs the official `claude auth login` directly in its isolated `CLAUDE_CONFIG_DIR` instead of copying Keychain items across profiles, keeps standard proxy variables aligned with the default profile, releases idle sessions before running `claude auth logout` on removal (with a local-only escape hatch if macOS Keychain denies deletion), keeps saved chat history without blocking removal, and removes CSWAP import.
+- Quick chat (the global shortcut panel) can change its model again: a model you pick there now wins over the project's default combo, and the whole Open in Tivano button responds, on the first click, bringing the main window up at once.
+- The text cursor no longer lingers over buttons after you select text in a reply: the top bar (including More and Settings), floating panels, the command palette, composer cards, popover menus, copy buttons and the terminal tab bar now show the arrow, and reply text scrolled under the top bar no longer turns the pointer into a text cursor.
+
+### Refinements
+
+- Buttons in Settings share one size: actions in rows, card and section headers, and popover footers now stand as tall as the pickers beside them, a smaller size is kept only for actions on secondary lines such as plan-limit errors and banked resets, the add-account button is a round icon button, and destructive actions such as Revoke access turn red when you point at them.
+- The independent review card now opens in place: the card grows to list each finding (accepted or rejected, click one for its full text), the reviewer's own findings, the steps and the edited files, while the lead's closing summary stays visible below it whether the card is open or not.
+- Sub-agents get more room on big jobs: a request can send out up to 5 rounds of sub-agents instead of 3, a round in which every sub-agent failed or was stopped without landing anything no longer counts (up to twice per request), and a message you send yourself, including Continue, starts the count over even while sub-agents are still working. Automatic continues and retries do not.
+
+### 简体中文
+
+### 问题修复
+
+- 修复多 Claude 账号容易掉登录和删不掉的问题：新增或重新登录账号时直接在独立 `CLAUDE_CONFIG_DIR` 中调用官方 `claude auth login`，不再跨目录复制或代写钥匙串凭证；保留标准代理环境变量以与默认账号保持一致；移除账号前自动释放空闲会话并调用官方 `claude auth logout`，保留历史聊天记录不再硬拦截删除（钥匙串被拒时提供仅从 Tivano 移除的兜底选项），并移除了 CSWAP 导入功能。
+- 快捷键呼出的快捷对话可以正常换模型了：在这里选的模型优先于项目的默认组合；「在 Tivano 中打开」整个按钮都能点、第一下就生效，主窗口会立即出现。
+- 在回复里选中文字后，按钮上不再残留文本光标：顶栏（包括「更多」和设置）、浮动面板、命令面板、输入框上方的卡片、弹出菜单、复制按钮和终端标签栏都显示箭头，滚到顶栏下方的回复文字也不会再把指针变成文本光标。
+
+### 优化改进
+
+- 设置里的按钮统一为同一尺寸：行内、卡片和区块标题上、弹窗底部的操作按钮都与旁边的选择器等高；只有额度报错、重置次数这类次要小字行里的操作保留较小尺寸；添加账号改为圆形图标按钮；「撤销授权」等危险操作在指针移上去时变红。
+- 独立审查卡现在就地展开：卡片本身变长，列出每条审查发现（采纳或驳回，点一条看全文）、审查原文、过程和改动文件；主代理最后的总结始终显示在卡片下方，展开与否都看得到。
+- 大任务里子代理的轮数更宽裕：每个请求最多可派 5 轮子代理（原为 3 轮）；一轮里所有子代理都失败或被中止且没有落地改动时，这一轮不计数（每个请求最多 2 次）；你亲自发出的消息（包括点「继续」）会重新计数，即使子代理仍在工作。自动续接和自动重试不会重新计数。
+
+## [3.0.0-preview.77] - 2026-11-19
+
+### English
+
+### New features
+
+- A file picked from the composer's @ suggestions now shows as an inline chip with its icon and name (full path on hover); Backspace and undo remove a chip whole, copying gives @path, and pasting @path of a project file makes a chip again. The message you send still contains @path.
+- A finished Hydra independent review folds into one card showing the reviewer, how many findings were accepted or rejected, the diff size and the duration; open it to see the full review turn.
+- Sub-agent tasks held back by the concurrency limit are now announced in the chat ("Sub-agent limit reached") with how many are waiting and where to change the limit, instead of looking lost.
+- Hydra's review models can now be Grok, Pi or Antigravity besides Codex and Claude, and background models (titles, prompt suggestions, commit messages) can be set to Grok or Pi. Automatic still picks Claude or Codex; an unset model uses the CLI's own default.
+
+### Bug fixes
+
+- Scrolling through the middle of a long chat no longer jumps a few lines now and then: messages above the screen keep their height when they come back into view (tables, edited-file cards, expanded code blocks and step lists, image previews), and if one still changes size the reading place is held where it was.
+- The app icon you choose in Settings › Appearance now also shows in Stage Manager, Finder, Launchpad and the Dock while Tivano is not running, not only in the running Dock tile, when Tivano is installed in Applications (or ~/Applications).
+- A reply that ends by sending out sub-agents no longer shows as a blank gap when its turn folds into "Worked for …"; the text is drawn as soon as it is on screen.
+- Memory pressure releases hidden chats and caches again with automatic shelving off (the default); turning shelving off had also switched the memory warning handling off.
+- When the lead is still replying, a skipped Chimera casting or a sub-agent that cannot start no longer stops the reply mid-stream, and the note to the lead is sent as its own message after the reply instead of appearing in your queue as if you had written it.
+- API keys kept in the old settings store by Tivano 2.x are read again after updating and moved into the Keychain, without overwriting a key you change at the same moment.
+- Reopening a long chat (more than six turns) that was forwarded to another provider keeps its handover state; it used to be lost on the next save.
+- Deleting a chat while its history was still loading can no longer write the chat back to disk.
+- Archiving a chat while its worktree is being created stops the creation and removes the half-made copy and branch; restoring the chat asks for a new worktree instead of running in the project folder.
+- Archived chats filtered by a project return to All projects once that project has no archived chats left, instead of showing an empty list.
+- Links in replies follow the Creation theme's serif font after switching themes.
+- The Token usage page stops animating while Settings or Voice covers it, and clears its charts when Token Taken is removed, including after Refresh.
+
+### Refinements
+
+- Settings › Sub-agent control is now called Sub-agents & Combos, in every language and in every hint that points to it.
+- The first-launch page is simpler: instead of the app icon and a full provider list, it offers two ways to start, Work in a project or Just chat, with ready providers folded into one line you can expand. Without any provider it lists what to install, and Start a chat waits until one is ready.
+- Liquid Glass now starts on a firmer backdrop (85% instead of 50%), so the desktop shows through less. A backdrop you set yourself in Settings › Appearance is kept, and Texture and Creation are unchanged.
+- The reasoning effort choice in Settings › Model selection › Add a model uses the same pop-up as the rest of Settings instead of a system menu.
+- Traditional Chinese, Japanese, Korean and French now cover every 3.0 string, including the porthole weather window, adaptive sub-agent roles and the first-launch page.
+
+### 简体中文
+
+### 新功能
+
+- 在输入框用 @ 选中的文件，现在显示为带图标和文件名的内联标签（悬停显示完整路径）；退格和撤销会整体删除标签，复制得到 @路径，粘贴项目文件的 @路径 会重新变成标签。发送的消息中仍是 @路径。
+- Hydra 独立审查结束后折叠成一张卡片，显示审查模型、采纳与驳回的条数、改动大小和用时；展开可查看完整的审查过程。
+- 因并发上限而排队的子代理任务，现在会在对话中提示「已达子代理上限」，并显示排队数量和调整上限的位置，不再像是丢失了。
+- Hydra 审查模型除 Codex 和 Claude 外，现在也可以选 Grok、Pi 或 Antigravity；后台模型（标题、输入预测、提交信息）可以手动选 Grok 或 Pi。「自动」仍只使用 Claude 或 Codex；未指定模型时使用对应 CLI 的默认模型。
+
+### 问题修复
+
+- 在长对话中间上下滑动时，画面不再偶尔突然跳动几行：滑出屏幕再回来的消息保持原有高度（表格、文件改动卡片、已展开的代码块和步骤列表、图片预览），即使上方内容仍有高度变化，当前阅读位置也会保持不动。
+- 在「设置 › 外观」中选择的 App 图标，现在也会显示在台前调度、访达、启动台以及 Tivano 未运行时的 Dock 中，不再只有运行时的 Dock 图标跟着变（Tivano 需安装在「应用程序」或 ~/Applications 中）。
+- 以派出子代理结尾的回复，在本轮折叠成「已工作…」时不再显示成一片空白，文字出现在屏幕上即会绘制。
+- 关闭自动搁置（默认设置）时，内存紧张会重新释放隐藏的对话和缓存；之前关闭搁置时会把内存告警的处理一并关掉。
+- 主代理还在回复时，跳过 Chimera 选角或子代理无法启动，不再打断正在输出的回复；给主代理的说明会在回复结束后作为单独一条发出，不再以你的名义出现在跟进队列里。
+- Tivano 2.x 保存在旧设置里的 API Key，更新后能重新读到并迁入钥匙串，不会覆盖你同时修改的 Key。
+- 重新打开转交给其他服务商、且超过六轮的长对话时，交接状态不再在下次保存时丢失。
+- 对话历史还在加载时删除该对话，不会再把它写回磁盘。
+- 在 worktree 创建过程中归档对话，会停止创建并移除做了一半的副本和分支；恢复对话后会提示重新创建 worktree，不会直接在项目目录里运行。
+- 已归档对话按项目筛选后，该项目的归档清空时会回到「所有项目」，不再停在空列表。
+- 切换主题后，回复中链接所在段落会跟随创作主题的衬线字体。
+- 词元用量页被设置或语音界面遮住时不再空转动画；移除 Token Taken 后（包括点「刷新」后）会清空图表。
+
+### 优化改进
+
+- 「设置 › 子代理控制」更名为「子代理与组合」（英文 Sub-agents & Combos，其他语言同步），各处提示中的入口名称同步更新。
+- 首次启动的页面更简洁：去掉 App 图标和完整的服务商列表，改为「在项目里工作」和「直接对话」两种开始方式，已就绪的服务商收成一行，可展开查看。还没有服务商时会列出可安装的选项，「开始对话」在至少一个服务商就绪后才可用。
+- 液态玻璃主题的默认背景更实（不透明度由 50% 提高到 85%），桌面透出更少。在「设置 › 外观」中自己调过的背景透明度保持不变，质感和创作主题不受影响。
+- 「设置 › 模型选择 › 添加模型」中的推理强度选择改用与设置其他地方一致的弹出面板，不再是系统菜单。
+- 繁体中文、日语、韩语和法语补齐了 3.0 的全部文案，包括舷窗天气、自适应子代理角色和首次启动页。
+
+## [3.0.0-preview.60] - 2026-11-18
+
+### English
+
+### Refinements
+
+- The top bar is simpler: the Open in, Scripts and Changes (±) buttons are gone, and the branch actions share one capsule with the terminal. Click the +/− numbers to show the thread's changes; the panel now opens right below them (⌘D too) instead of over the composer.
+
+### Bug fixes
+
+- Expanding or collapsing a running turn's work card no longer flashes blank, slides rows under the composer or restarts its progress wave; it opens and closes instantly, like a finished turn's card.
+- An Antigravity tool step without a usable name no longer shows a bare "Used" row: the name is taken from agy's tool info when the step's own name is empty, and a step with no name at all reads "Used tool".
+- Text selection in chat now works across a finished turn's replies: the replies before and after its folded tool steps can be drag-selected in one go, and selecting new text clears the previous selection instead of leaving it behind in gray.
+- The mouse pointer is calmer: in replies the text cursor appears only over the words themselves (links show the hand, empty space the arrow), and buttons, option rows and menus in popovers, question cards and the diff no longer show a text cursor.
+
+### 简体中文
+
+### 优化改进
+
+- 顶栏更简洁：去掉「打开方式」「脚本」和「改动（±）」按钮，分支操作与终端合为一个胶囊。点击 +/− 数字查看本会话的改动，面板改为在数字正下方弹出（⌘D 同样），不再盖在输入框上。
+
+### 问题修复
+
+- 运行中的工作卡展开或收起时，不再闪一下空白、把行露到输入框下方或让进度波纹重新开始；它和已完成的卡一样直接展开、收起。
+- Antigravity 中没有可用名称的工具步骤不再只显示「已用」：步骤名称为空时改从 agy 的工具信息中取名，完全没有名称时显示「已用工具」。
+- 对话中的文字选择现在可以跨越已完成回合的多段回复：折叠的工具步骤前后的回复可以一次拖选，选中新文字时也会清除上一处选区，不再留下一块灰色。
+- 鼠标指针更安静：回复里只有指在文字本身上才出现文本光标（链接是手形，空白处是箭头），弹窗、提问卡片和 diff 里的按钮、选项和菜单不再显示文本光标。
+
+## [3.0.0-preview.55] - 2026-11-18
+
+### English
+
+### Bug fixes
+
+- Antigravity chats and sub-agents fail less on Tivano's side: a slow agy sign-in at launch gets 90 seconds instead of 30 and no longer shows a wrong "Is agy signed in?" message; models are passed as agy's full ids (such as gemini-4-carbon-high), so a brief network hiccup at launch no longer ends in "invalid model selection"; Tivano no longer retries on top of agy's own retries when the server has no capacity; and a turn that worked is no longer marked failed because of an earlier turn's error.
+- A retried sub-agent keeps its real start time, so its reported duration is right, and a failed sub-agent no longer keeps showing "Thinking for N min".
+
+### Refinements
+
+- Sub-agent model pickers show just the model and effort, so the model name is no longer cut off behind the provider name; the provider icon stays, hovering shows the provider, and the menu is unchanged.
+- When Antigravity's agy retries a model request that failed or got no answer, the chat now says so (for example "no response for 5 minutes; agy is retrying, attempt 2") instead of sitting silently; nothing about the retry itself changes.
+- With floating panels Off, or after closing a sub-agent's panel, a sub-agent still at work shows as a pill at the end of the conversation ("Walter is working", or how many are working); clicking it opens its panel. Closing a working sub-agent's panel no longer asks whether to stop it: the panel folds away and the sub-agent keeps working.
+- In Settings › Models, the All view's model chips can now be dragged: drop one on another chip to reorder it or place it in that group, in a group's empty space to move it to the end, or on a group in the left list.
+- A provider's model list in Settings › Model selection has fewer lines: route headings such as DeepSeek account or API key are set apart by space instead of dividers, and the remaining dividers are inset evenly on both sides instead of running to the card's right edge.
+
+### 简体中文
+
+### 问题修复
+
+- Antigravity 对话和子代理由 Tivano 引起的失败更少：agy 启动时登录较慢可等待 90 秒（原为 30 秒），不再误报“agy 是否已登录”；模型按 agy 的完整 ID 传递（如 gemini-4-carbon-high），启动时网络短暂波动不再导致“invalid model selection”；服务器容量不足时 Tivano 不再在 agy 自身重试之外重复重试；正常完成的回合不再因之前回合的错误被标记为失败。
+- 子代理重试后保留真实开始时间，耗时统计正确；失败的子代理不再一直显示“已思考 N 分钟”。
+
+### 优化改进
+
+- 子代理的模型选择按钮只显示模型和推理强度，模型名不再被服务商名称挤到截断；服务商图标保留，悬停仍可看到服务商，点开的菜单不变。
+- Antigravity 的 agy 重试失败或无回应的模型请求时，对话中会显示说明（例如“5 分钟没有回应，agy 正在重试，第 2 次”），不再静默等待；重试行为本身不变。
+- 浮窗布局设为“关闭”时，或关闭子代理面板后，仍在工作的子代理会以胶囊形式显示在对话流末尾（「Walter 正在工作」或正在工作的数量），点击即可打开其面板。关闭正在工作的子代理面板不再询问是否停止：面板直接收起，子代理继续工作。
+- “设置 › 模型”的“全部”视图中，模型胶囊现在可以拖动：拖到另一个胶囊上可调整顺序或放入其所在分组，拖到分组空白处移到末尾，拖到左侧分组卡片上移入该分组。
+- “设置 › 模型选择”中服务商的模型列表线条更少：“DeepSeek 账号”“API 密钥”等接入方式小标题改用留白分隔，不再上下加线；其余分隔线左右等距缩进，不再一直延伸到卡片右边缘。
+
+## [3.0.0-preview.46] - 2026-11-18
+
+### English
+
+### New features
+
+- Token usage has its own page in Settings, right below Storage. One sentence sums up how many tokens you used in the last 7, 30 or 90 days or the last year and roughly what they cost, with a trend line, a share bar by tool or model, and the token breakdown folded away. It reads from the companion app Token Taken, which you can now get from the page.
+- Adaptive sub-agents now work with identities instead of model strengths. Six built-in identities (Scout, Builder, Reviewer, Designer, Researcher, Writer) are ready to use, and you can write your own with a name, a short prompt and a model. The lead picks an identity for each role and the identity's prompt goes to that sub-agent. A model left on Follow the lead uses the lead's own model, so you no longer pick one for every role.
+- A new Auto-dispatch switch, in Settings › Sub-agents and under Adaptive sub-agents in the model menu, sends sub-agents out as soon as the lead picks them. It is off by default, so you still confirm each team first.
+- Settings › Floating panel layout gains Off, which keeps sub-agents running without opening floating panels automatically, shows a small running indicator in the chat's top bar, and lets a sidebar helper row open its panel.
+
+### Bug fixes
+
+- Tivano no longer opens Cursor or Grok sign-in pages on its own when their saved sign-in has expired, for example while loading the model list at launch. A chat on them now says to sign in from Settings › Provider management instead.
+- A floating sub-agent panel streaming quickly does less layout work: the working card no longer forces the panel wider than it is, the panel uses the main chat's cheaper top fade, and its stream updates are paced, addressing the sustained CPU use and stalls reported in #56.
+- After archiving a chat, the chat Tivano switches to no longer shows an empty message bubble above its turn summary.
+- At night, a finished task no longer puts the sun next to the moon in the sidebar porthole: the moon turns full, with a soft cool glow and slightly brighter stars.
+
+### Refinements
+
+- Model strengths you wrote earlier become your own identities, with their text kept as the prompt and the same models, order and on/off state.
+- Settings copy is clearer throughout: labels now say what their control does (Interrupt and send, Revoke access, Blur, Working directory), archived chats are no longer called threads, and help text points to the right page and button.
+- A running chat uses far less CPU while it waits on the model: the working title's breathing now runs in Core Animation instead of redrawing the window eight to twelve times a second, which cut a quiet running chat from about 30% of a core to about 4% in our measurements, with the same look. Floating panels also stream at a calmer pace when they are not the chat you are in.
+- Archiving a chat now moves to the next one without the brief pause: the next chat is kept ready in the background and showing it no longer redraws the whole conversation, cutting the main-thread stall after the switch from about 200 ms to about 50 ms in our measurements.
+- Settings › Credits is shorter: the Droppy Code attribution and the license sit in one row, and the projects Tivano builds on are a compact list with one line each, now including Synara.
+- Keepsakes are a single card without the branch, and still open into the large view. From 3.0 they are no longer given or lit: a keepsake lit earlier stays lit and flips as before; everyone else sees the manuscript edition.
+
+### 简体中文
+
+### 新功能
+
+- 设置里新增「词元用量」页，位于「存储空间」下方。一句话告诉你近 7 天、30 天、90 天或一年用了多少 tokens、大约花了多少钱，配一条趋势线和按工具或模型的占比条，token 构成默认折叠。数据来自配套应用 Token Taken，未安装时可直接从这里获取。
+- 自适应子代理改为按「角色」分工，取代原来的模型特长。内置侦察、实现、评审、设计、调研、文案六个角色，开箱即用；也可以自定义角色，只需名称、一小段提示词和模型。主代理为每部分工作挑选角色，角色的提示词会交给对应的子代理。模型设为「跟随主代理」时直接用主代理的模型，不用再逐个挑选。
+- 新增「自动派发」开关，位于设置 › 子代理，以及模型菜单中的「自适应子代理」下方。打开后主代理选好角色和模型就直接派出子代理；默认关闭，仍由你确认后再派出。
+- 设置 › 悬浮面板排布新增「关闭」：不会自动打开悬浮面板，子代理仍会继续运行；对话顶栏显示小巧的运行指示，点击侧栏中的子代理行即可打开其面板。
+
+### 问题修复
+
+- Cursor 或 Grok 的登录过期时，Tivano 不会再自己弹出登录网页（例如启动时加载模型列表）。在对应对话里会提示你到 “设置 › 服务商配置”中登录。
+- 悬浮子代理面板快速流式输出时布局开销更低：工作卡片不再把面板撑得比实际更宽，面板改用主对话更轻量的顶部渐隐，流式更新也做了节流，针对 #56 报告的持续高 CPU 占用与界面卡顿。
+- 归档对话后自动切换到的对话，不会再在回合摘要上方显示一个空白的消息气泡。
+- 夜里任务完成时，侧栏舷窗不再出现太阳与月亮同框：改为月亮变圆，带一圈柔和的冷色月光，星星也稍亮一些。
+
+### 优化改进
+
+- 之前写的模型特长会自动变成「自定义角色」，原文作为提示词，模型、顺序和开关状态都保持不变。
+- 设置页文案全面梳理：「服务商管理」改名「服务商配置」，「模型」改名「模型选择」；子代理的「身份」统一称「角色」，主代理与子代理的模型组合统一称「模型搭配」；按钮和说明改为直接说明作用（如「打断并立即发送」「撤销授权」「工作目录」），术语前后一致，提示指向正确的页面和按钮。
+- 对话运行中、等待模型时的 CPU 占用大幅降低：工作标题的呼吸效果改由 Core Animation 驱动，不再每秒让整个窗口重绘 8–12 次；在我们的测量中，静默运行的对话从约 30% 的单核占用降到约 4%，观感不变。不是当前对话的悬浮面板，流式更新的节奏也更平缓。
+- 归档对话后切换到下一个对话不再顿一下：下一个对话会提前在后台准备好，显示时也不再重绘整段对话；在我们的测量中，切换后的主线程卡顿从约 200 ms 降到约 50 ms。
+- 设置 › 致谢更精简：Droppy Code 署名与许可证合为一行，所依赖的项目改为每项一行的紧凑列表，并补上 Synara。
+- 信物改为一张卡片，去掉树枝，点开仍可查看大图。自 3.0 起不再发放和点亮：之前点亮过的保持点亮、仍可翻面，其他人看到的是手稿版。
+
+## [3.0.0-preview.36] - 2026-11-17
+
+### English
+
+### New features
+
+- The small weather window above the thread list is back. Settings › Appearance › Weather window now offers Porthole, Full window or Off. The Porthole is a quiet ink scene that fades into the sidebar: the sky follows the time of day, wind blows while a chat waits on you, the sun comes out when a turn finishes and it rains when one fails. It works in the Liquid Glass and Texture themes, cannot be clicked, and pauses whenever it is out of view. Porthole is the default for anyone who never changed this setting; each option is shown as a small picture of the window so the choice is clear, and a sub-agent waiting on your approval or answer also brings the wind.
+
+### Bug fixes
+
+- The model chip under the message box shows the full name of the selected sub-agent preset; short names such as two Chinese characters no longer collapse to "…".
+
+### 简体中文
+
+### 新功能
+
+- 对话列表上方的天气小窗回来了。设置 › 外观 › 天气窗口现在可选舷窗、落地窗或关闭。舷窗是一幅融入侧栏的墨线小景：天色随时间变化，有对话等你回复时起风，回合完成时出太阳，失败时下雨。在液态玻璃和质感主题下可用，不可点击，看不到时自动暂停。没改过这项设置的用户默认使用舷窗；三个选项都配有窗口缩略图，一眼就能看出区别。子代理等你审批或回答时，同样会起风。
+
+### 问题修复
+
+- 输入框下方的模型按钮会完整显示所选子代理预设的名称，两个汉字这类短名称不再只显示成“…”。
+
+## [3.0.0-preview.32] - 2026-11-17
+
+### English
+
+### Refinements
+
+- Tables in replies wrap long cells to fit the chat width instead of stretching sideways, so narrow chats (for example beside Hydra cards) need far less horizontal scrolling; only a table with too many columns to fit still scrolls.
+- Less overhead in everyday work: DeepSeek, Meta and Z.ai replies and remote MCP responses are read in chunks instead of byte by byte, the Hydra recovery check no longer opens chats whose work is all merged, reverting a turn looks up only its own files instead of listing the whole repository, a chat's activity no longer rebuilds the whole library index, and agent CLIs are asked for their version and model list once instead of twice at launch.
+- Tivano does less work in the background: animations, timers and glass effects pause while the app is inactive, minimized or out of view, and resume where they were when you come back. Streaming replies add only the new text to the paragraph being written, the timeline outline finds your place without rescanning, and the snapshot taken after each command reuses the file changes macOS already reports.
+- With the old Performance Mode retired, the sidebar magnifier and the shadow under the settings icon rail now work for everyone who had it turned on.
+- Hydra's independent review gives fewer false alarms: the reviewer may now read the project's code to check callers and declarations, and it no longer flags work as missing or unverified just because it cannot see the lead's replies, builds or files outside Git. Review statistics count findings and accepted fixes more accurately.
+- The app icon is refined for Liquid Glass and Creation: the Liquid Glass icon's sky is a clearer blue at the top so the doll's head stands apart from it, and a stray ink line at the hem of the Creation icon is gone.
+- Settings › Connections is far more compact: connected servers stay on top, and every other server appears as a small chip you can filter by category. Click a chip to see what it does and connect; tool names stay hidden until you ask for them, and adding a custom server is the last chip.
+- The Concise AI replies setting is gone. Tivano no longer adds its own reply-style guidance to Claude Code, Codex, Copilot, OMP and other agents, which manage that themselves; the guidance is now a fixed part of Tivano's own harness for DeepSeek, Meta and Z.ai.
+- The default model for new chats in Settings › Conversation, and the model picker in Quick Chat, can now pick a sub-agent preset, so new chats start with that preset's lead model and sub-agents. If the preset is deleted, new chats go back to Last selection; if its provider is unavailable, they use Last selection until it is back.
+- Codex background work uses far less network data: thread titles, prompt predictions, commit messages, Hydra reviews, and model, usage and reset-credit checks start Codex without plugins, apps or telemetry, so each run downloads under 1 MB instead of 35–65 MB of plugin catalog, and finishes faster. Regular Codex chats keep your plugins.
+- Settings › Storage is reorganized around what you come there to do: one total with a single Free up button for files that come back on their own (old diagnostic reports, obsolete updates, and dependencies and build output in idle worktrees), a search box with your latest archived chats, and a worktree summary with a button that opens a new chat prefilled with a review prompt and a list of your worktrees, so an agent can suggest which are safe to delete. It is not sent until you send it. The full archive, the per-worktree list and the diagnostics controls are one click away, and the page no longer slows down while other chats are working.
+- Archiving a chat feels instant: its row leaves the sidebar right away, and the next chat opens just after instead of holding the sidebar back while it loads. A chat with many sub-agents archives with them in one step.
+
+### Bug fixes
+
+- In Today's focus, thread titles show more before truncating: the row now reserves only the width its project or task tag actually takes, not a fixed maximum.
+- The model and effort popover above the composer no longer slides sideways when you pick another sub-agent preset, and the preset name in the chip no longer briefly shrinks to an ellipsis.
+- The mouse pointer no longer gets stuck as the text cursor across the whole window, including the sidebar and toolbar, after passing over a link in a message.
+- Sub-agent mode cards in the model and effort popover select on a click anywhere in the card, including its edges, instead of only on the title and description text.
+- A finished reply no longer sometimes stays hidden under the turn's Worked for summary until you switch to another chat and back.
+- A Codex chat that had sub-agents turned off no longer keeps following the earlier sub-agent instructions after it is resumed.
+
+### 简体中文
+
+### 优化改进
+
+- 回复中的表格会按对话宽度自动换行，不再整体横向撑开；对话变窄时（例如旁边有 Hydra 卡片）基本不用左右滚动，只有列数多到放不下的表格才保留横向滚动。
+- 日常开销更低：DeepSeek、Meta 和 Z.ai 的回复以及远程 MCP 响应改为成块读取，不再逐字节处理；Hydra 恢复检查不再打开工作已全部合并的对话；撤销一轮时只查这一轮涉及的文件，不再列出整个仓库；对话有活动时不再重建整个库的索引；启动时向各 agent CLI 查询版本和模型列表各只查一次，不再两次。
+- Tivano 在后台做的事更少：应用未激活、最小化或界面不可见时，动画、计时器和玻璃效果会暂停，回来后从原处继续。流式回复只往正在写的段落追加新文字，时间线大纲不再每次重新扫描就能定位，每条命令结束后的快照直接复用 macOS 已报告的文件变化。
+- 旧的性能模式已退役，之前开过它的用户现在也能用侧栏放大效果，设置图标栏下的阴影也恢复了。
+- Hydra 独立审查误报更少：审查者现在可以只读查看项目代码，核对调用方和声明；也不会再因为看不到主智能体的回复、构建或 Git 之外的文件，就把工作报成缺失或未验证。审查统计对问题数和采纳数的计数更准确。
+- 应用图标细修：液态玻璃图标顶部改为更清澈的晴空蓝，娃娃的头不再和背景融在一起；创作图标去掉了裙摆下沿多出的一笔墨线。
+- 设置 › 连接页面大幅精简：已连接的服务保留在顶部，其余服务改为可按分类筛选的小标签，点开即可查看说明并连接；工具名默认隐藏，需要时再展开，添加自定义服务器也收进最后一个标签。
+- 移除「简洁 AI 回复」设置。Tivano 不再向 Claude Code、Codex、Copilot、OMP 等自带管理的 Agent 额外注入回复风格指引；这套指引改为 Tivano 自有 harness（DeepSeek、Meta、Z.ai）的固定部分。
+- 设置 › 对话中的新对话默认模型，以及 Quick Chat 的模型选择，现在都可以选子代理预设，新对话直接以该预设的主模型和子代理开始。预设被删除后改回「上一次选择」；预设的 provider 不可用时暂时使用「上一次选择」，恢复后自动生效。
+- Codex 后台任务大幅节省网络流量：生成对话标题、预测下一句、写提交信息、Hydra 审查，以及读取模型、用量和重置额度时，启动 Codex 不再加载插件、apps 和遥测，单次下载从 35–65 MB 的插件目录降到 1 MB 以内，也更快完成。正常的 Codex 对话仍保留你的插件。
+- 设置 › 存储按用途重新组织：顶部是总占用和一个「释放空间」按钮，只清理会自动重新生成的文件（旧诊断报告、过期更新包、闲置工作树里的依赖和构建产物）；中间是搜索框和最近归档的对话；工作树部分给出概况，并可一键新建一个预填好整理 prompt 和工作树清单的对话，让 AI 建议哪些可以安全删除，由你决定是否发送。完整归档列表、逐个工作树和诊断文件管理都收在下一层，其他对话运行时页面也不再卡顿。
+- 归档对话更跟手：对话行立即从侧栏移走，下一个对话随后再打开，不再等它加载完侧栏才动。带多个子代理的对话会连同子代理一次归档。
+
+### 问题修复
+
+- 今日聚焦中的对话标题能显示更多内容：行尾只按项目或任务标签的实际宽度留位，不再固定预留最大宽度。
+- 切换子代理预设时，输入框上方的模型与强度面板不再左右跳动，胶囊里的预设名也不再短暂缩成省略号。
+- 鼠标经过消息里的链接后，指针不再卡在文字输入的竖杠形态，在侧栏和工具栏也能正常恢复。
+- 模型与强度面板里的子代理模式卡片，点卡片任意位置（包括边缘）都能选中，不再只有标题和说明文字可点。
+- 一轮结束后的回复不会再偶尔不显示，只剩「已工作」摘要、要切到别的对话再切回来才看得到。
+- Codex 对话关闭子代理后再恢复，不会再沿用之前的子代理指令。
+
+## [3.0.0-preview.10] - 2026-11-16
+
+### English
+
+### New features
+
+- Tivano runs on macOS 15 Sequoia again. Below macOS 26 it uses the Texture theme, drawn without Liquid Glass, and Liquid Glass is unavailable in Settings › Appearance with a note that it needs macOS 26 or later; Creation works on both. On macOS 26 nothing changes.
+
+### Bug fixes
+
+- On a first launch with no earlier version recorded, What's new no longer labels an older version's notes as the current version's.
+
+### 简体中文
+
+### 新功能
+
+- Tivano 重新支持 macOS 15 Sequoia。低于 macOS 26 时使用不依赖液态玻璃绘制的质感主题，「设置 › 外观」中的液态玻璃不可选，并提示需要 macOS 26 或更高版本；创作主题在两种系统上都可用。macOS 26 上没有变化。
+
+### 问题修复
+
+- 首次启动且没有记录过旧版本时，「新功能」不再把较早版本的说明标成当前版本。
+
+## [3.0.0-preview.8] - 2026-11-16
+
+### English
+
+### New features
+
+- After Tivano updates, including a silent automatic update, Settings › Version shows a one-time Updated to banner; View or close it and the Version information card keeps a What's new row that expands into the new features, fixes and refinements of every version since the last one you ran.
+
+### Bug fixes
+
+- The effort name above the slider (for example Medium) no longer disappears after switching a new chat from Preset sub-agents to Adaptive sub-agents.
+- Scrolling up through a long chat with the trackpad no longer jumps while earlier messages load: the loaded page is compensated in the same layout pass, so the reading place stays under your fingers.
+
+### Refinements
+
+- Switching into or out of the Creation theme no longer freezes the window: the hitch drops from about half a second to about a tenth with several chats open, and the Dock icon follows a moment later instead of holding up the switch.
+- A message's right-click menu now has one copy item: Copy copies the selected text, and when nothing is selected it reads Copy all and copies the whole message as Markdown. Copy message as markdown and Copy last code block are gone; code blocks keep their own copy button.
+- Settings pages no longer show a search field in the top-right corner.
+- The chat header's More controls (…) stay open or closed across chats: expanding them in one chat keeps them expanded when you switch, and collapsing them collapses them everywhere.
+- Settings › Conversation has the Concise AI replies switch again, and a choice to turn it off made before 3.0 is kept.
+
+### 简体中文
+
+### 新功能
+
+- Tivano 更新后（包括静默自动更新），「设置 › 版本」会显示一次「已更新到」横幅；点「查看」或关闭后，「版本信息」卡片保留一行「更新内容」，展开即可看到自上次运行的版本以来的新功能、问题修复和优化改进。
+
+### 问题修复
+
+- 新对话从「预设子代理」切换到「自适应子代理」后，滑块上方的强度名称（如「中」）不再消失。
+- 用触控板在长对话中往上滑动时，加载更早的消息不再让页面跳动：新加载的内容在同一次布局中完成补偿，阅读位置跟手不变。
+
+### 优化改进
+
+- 切换到「创作」主题或从它切回时窗口不再卡住：开着多个对话时，卡顿从约半秒降到约十分之一秒；程序坞图标稍后跟着更新，不再拖慢切换。
+- 消息右键菜单只保留一个复制项：选中内容时为「复制」，只复制选中部分；未选中时为「复制全文」，以 Markdown 复制整条消息。移除「以 Markdown 复制消息」和「复制最后一个代码块」，代码块自带的复制按钮保留。
+- 设置各页面右上角不再显示搜索框。
+- 对话顶部的「更多控制」（…）展开状态在各对话间保持一致：在一个对话里展开后切换对话仍保持展开，收起则全部收起。
+- 「设置 › 对话」重新提供「简洁的 AI 回复」开关，在 3.0 之前关闭该选项的设置也会保留。
+
+## [3.0.0-preview.1] - 2026-11-16
+
+### English
+
+### New features
+
+- A new Creation theme (Settings › Appearance): solid near-white surfaces instead of Liquid Glass, New York and Songti SC serif type, and hand-drawn icons. Entering it selects Coral Red, which you can change; Transparency lets the desktop through a little or deepens the page tone. Coral Red is retuned closer to Claude's coral, slightly softer.
+- Tokens now reads usage from Token Taken, a companion app, instead of TokenTracker. Settings › Connections detects Token Taken and opens it; without it installed, token usage is unavailable. Previously saved TokenTracker usage is no longer shown.
+- Settings › Conversation › Workspace adds Auto (now the default): new chats edit your project folder directly when it is idle, and create an isolated Git worktree on first send when another chat is already active in that repository.
+- Settings › Appearance › App language adds Traditional Chinese, Japanese, Korean and French.
+- Settings › Appearance adds App icon: Match Theme (default) switches the Dock icon with the theme — a new Liquid Glass icon, the current green Texture icon, or a new engraved Creation icon — or pin any one of them.
+
+### Bug fixes
+
+- A new chat's first message appears as soon as it is sent instead of seconds later while many chats are busy: the bubble no longer waits for the library save, which takes it back and returns the text to the composer if the save fails, and a just-created chat no longer reads history it cannot have.
+
+### Refinements
+
+- Settings › Sub-agent control renames the two sub-agent panel rows to Floating panel content (Progress bar / Live steps) and Floating panel layout (Single panel / One per sub-agent), with live descriptions explaining what each option changes in the floating panel over the chat and that chat messages and the sidebar stay unchanged.
+- Aligns UI wording and localizations across Settings, chat, revert prompts, voice and provider/MCP error messages with current settings pages and runtime behavior.
+- Weather window in the Liquid Glass theme (Settings › Appearance) is redesigned: it shows subtle behind-the-glass wind when a chat waits for an answer or approval, warm sunlight on completion, and fine rain with ground ripples on failure, staying completely idle while agents are working.
+- Chat messages have slightly more room between turns, lines and paragraphs, with aligned list markers, balanced nested-list and heading spacing, clearer quote bars, table dividers and code line spacing that scale cleanly across font sizes.
+
+### 简体中文
+
+### 新功能
+
+- 新增「创作」主题（「设置 › 外观」）：以近白的实色表面取代液态玻璃，使用 New York 与宋体衬线字体和手绘风格图标。每次进入会切换为珊瑚红，可自行更换；透明度可稍稍透出桌面，或让页面色调更沉。珊瑚红调整为更接近 Claude 的珊瑚色，略微柔和。
+- Token 用量改为读取配套应用 Token Taken 的数据，不再使用 TokenTracker。「设置 › 连接」会检测并可直接打开 Token Taken；未安装时该功能不可用。此前保存的 TokenTracker 用量数据不再显示。
+- 「设置 › 对话 › 工作区」新增「自动」选项并设为默认：项目目录空闲时直接就地修改，已有其他对话正在该仓库工作时会在首次发送时自动创建独立的 Git worktree。
+- 「设置 › 外观 › 应用语言」新增繁体中文、日语、韩语和法语。
+- 「设置 › 外观」新增「应用图标」：选「跟随主题」（默认）时 Dock 图标随主题切换——新的液态玻璃图标、现行绿色质感图标或新的铜版创作图标——也可以固定其中任意一个。
+
+### 问题修复
+
+- 多个会话同时运行时，新会话的第一条消息发送后立即显示，不再延迟数秒：消息气泡不再等待会话库保存，保存失败时撤回气泡并把文字放回输入框；刚新建的会话也不再读取不存在的历史。
+
+### 优化改进
+
+- 「设置 › 子代理控制」将两个子代理面板选项更名为「悬浮面板内容」（进度条 / 实时步骤）与「悬浮面板排布」（单个面板 / 独立面板），并随所选项说明对话区上方悬浮面板的变化及主消息流与侧边栏不受影响。
+- 校准设置、对话、还原提示、语音及服务商 / MCP 错误提示的中英文案与实际功能及当前设置路径保持一致。
+- 液态玻璃主题下的「天气窗」（「设置 › 外观」）重新设计：对话等待回答或确认时在玻璃后拂过微风，完成时洒下暖阳，失败时落下细雨并泛起地面涟漪，代理正在工作时则保持完全静止。
+- 适度放大对话消息的回合间距、行距与段距，统一无序与有序列表的标记对齐及嵌套层级留白，并同步优化标题间距、引用竖线、表格分隔线与代码块行距，在不同字号缩放下保持稳定易读。
 
 ## [2.5.41] - 2026-11-15
 
@@ -204,6 +702,7 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 - The README now links prominently to [tivano.app](https://tivano.app/), the new website and download page.
 - Several chats streaming at once keep the app responsive: a chat you are not looking at now updates its text once a second instead of every frame and catches up the moment you open it, and switching back to a chat that is still running no longer rebuilds it from scratch.
+- Sidebar thread rows no longer show an archive button on hover; archive from the row’s … menu, so a stray click can’t archive a thread.
 
 ### 简体中文
 
@@ -211,6 +710,7 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 - README 顶部突出显示新官网与下载页 [tivano.app](https://tivano.app/)。
 - 多个对话同时输出时界面更流畅：未在查看的对话改为每秒刷新一次文字，打开时立即补齐；切回仍在运行的对话也不再从头重建。
+- 侧栏对话行悬停时不再显示归档按钮，归档改从行右侧的 … 菜单进行，避免误触归档。
 
 ### Thanks
 

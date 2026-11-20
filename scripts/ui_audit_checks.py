@@ -114,6 +114,7 @@ def generated_source():
         "    }\n}\n",
         declaration("Tivano/UI/Chrome/Chrome.swift", "enum Chrome {"),
         read("Tivano/UI/Theme/AppTheme.swift"),
+        read("Tivano/UI/Theme/ThemeStyle.swift"),
         read("Tivano/UI/Theme/TypeScale.swift"),
         declaration(popovers, "final class PopoverCloseBox:"),
         declaration(popovers, "extension EnvironmentValues {\n    @Entry var closePopoverBox:"),

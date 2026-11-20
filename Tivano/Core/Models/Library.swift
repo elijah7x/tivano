@@ -168,6 +168,8 @@ struct ProviderSwitchOrigin: Codable, Hashable, Sendable {
 
 struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     static let untitled = "New thread"
+    /// The title as shown to the user: the untitled sentinel is translated; real titles stay as typed.
+    var displayTitle: String { title == Self.untitled ? AppText.localized(Self.untitled) : title }
 
     var id: UUID
     var projectID: UUID?

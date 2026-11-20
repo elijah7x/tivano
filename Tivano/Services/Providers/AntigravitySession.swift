@@ -1,6 +1,95 @@
 import Foundation
 import OSLog
 
+private struct AntigravityModelsProbeKey: Hashable {
+    let executable: String
+    let environment: String
+
+    init(executable: URL, environment: [String: String]) {
+        self.executable = executable.resolvingSymlinksInPath().standardizedFileURL.path
+        self.environment = environment.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "\0")
+    }
+}
+
+private actor AntigravityModelsProbeCache {
+    struct Entry {
+        let key: AntigravityModelsProbeKey
+        let task: Task<ShellResult, Error>
+        var completedAt: Date?
+    }
+
+    var entry: Entry?
+
+    func reset(key: AntigravityModelsProbeKey) {
+        if entry?.key == key { entry = nil }
+    }
+
+    func models(
+        key: AntigravityModelsProbeKey,
+        force: Bool,
+        operation: @escaping @Sendable () async throws -> ShellResult
+    ) async throws -> ShellResult {
+        if force { entry = nil }
+        if let entry, entry.key == key,
+           entry.completedAt.map({ (0..<5).contains(Date.now.timeIntervalSince($0)) }) ?? true {
+            return try await entry.task.value
+        }
+        let task = Task { try await operation() }
+        entry = Entry(key: key, task: task, completedAt: nil)
+        do {
+            let result = try await task.value
+            if entry?.task == task {
+                if result.succeeded {
+                    entry?.completedAt = .now
+                } else {
+                    entry = nil
+                }
+            }
+            return result
+        } catch {
+            if entry?.task == task { entry = nil }
+            throw error
+        }
+    }
+}
+
+/// Caches whether an `agy` binary accepts `--settings`. The key carries the resolved
+/// binary's size and modification date, so an upgrade or downgrade in place probes
+/// again. Only a definite answer is cached; a failed probe (`nil`) is retried next launch.
+private actor AntigravitySettingsFlagCache {
+    private var cached: [String: Bool] = [:]
+    private var inFlight: [String: Task<Bool?, Never>] = [:]
+
+    func supportsSettings(
+        executable: URL,
+        operation: @escaping @Sendable () async -> Bool?
+    ) async -> Bool? {
+        let resolved = executable.resolvingSymlinksInPath().standardizedFileURL.path
+        let attributes = try? FileManager.default.attributesOfItem(atPath: resolved)
+        let size = (attributes?[.size] as? NSNumber)?.int64Value ?? -1
+        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
+        let key = "\(resolved)|\(size)|\(modified)"
+        if let value = cached[key] {
+            return value
+        }
+        if let task = inFlight[key] {
+            return await task.value
+        }
+        let task = Task { await operation() }
+        inFlight[key] = task
+        let result = await task.value
+        if inFlight[key] == task {
+            inFlight[key] = nil
+        }
+        if let result {
+            cached[key] = result
+        }
+        return result
+    }
+}
+
 /// Drives Google's Antigravity CLI (`agy`) in headless streaming mode.
 ///
 /// The CLI speaks newline-delimited JSON on stdio, much like Claude's
@@ -53,8 +142,14 @@ final class AntigravitySession: ProviderSession {
     private var replyAfterCascadeError = false
     /// Errors each conversation has reported, kept across launches (heads relaunch per turn).
     /// agy repeats a conversation's earlier error on every later result, so only a result
-    /// error already seen here may be treated as stale; a new one still fails the turn.
+    /// error already seen in an earlier turn may be treated as stale; a new one still fails the turn.
     private static var knownConversationErrors: [String: Set<String>] = [:]
+    /// Snapshot of `knownConversationErrors` taken when the current turn started so an error
+    /// recorded mid-turn (e.g. from a retry log line) cannot treat this turn's own failure as stale.
+    private var priorConversationErrors: Set<String> = []
+    private var priorConversationID: String?
+    /// Whether at least one tool step completed cleanly (`DONE` with no error) during this turn.
+    private var hasCompletedToolWork = false
     /// Files an edit step is about to change, captured when the step went
     /// active. The stream never carries the edit itself, so the row's diff
     /// is the file before against the file after.
@@ -65,9 +160,23 @@ final class AntigravitySession: ProviderSession {
     /// Error steps already surfaced this turn, so a step reported again as its state
     /// changes does not repeat its notice.
     private var reportedErrors: Set<String> = []
+    /// Retry attempt numbers already surfaced this turn from agy's log file.
+    private var emittedRetryAttempts: Set<Int> = []
+    private var logTailer: AntigravityLogTailer?
+    private var logFileURL: URL?
+
+    /// Matches `ThreadRuntime.providerStartTimeout` (`Services` cannot import `App`).
+    /// Silent auth at launch can take over 30 s before `agy` emits `init`.
+    private static let startTimeout: Duration = .seconds(90)
 
     /// Reasoning efforts `agy --effort` accepts.
     static let efforts = ["low", "medium", "high", "xhigh", "max"]
+    private static let modelsProbeCache = AntigravityModelsProbeCache()
+    private static let settingsFlagCache = AntigravitySettingsFlagCache()
+
+    static func beginCatalogProbeCycle(executable: URL, environment: [String: String]) async {
+        await modelsProbeCache.reset(key: AntigravityModelsProbeKey(executable: executable, environment: environment))
+    }
 
     init(configuration: SessionConfiguration) {
         self.configuration = configuration
@@ -76,6 +185,10 @@ final class AntigravitySession: ProviderSession {
         model = configuration.model
         effort = configuration.effort
         spendBaselineKnown = configuration.resumeID?.isEmpty != false
+    }
+
+    isolated deinit {
+        logTailer?.shutDown()
     }
 
     var isRunning: Bool { !isStopping && (process?.isRunning ?? false) }
@@ -87,10 +200,21 @@ final class AntigravitySession: ProviderSession {
 
     func start() async throws -> String {
         guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
+        // Cleared before the probe so a stop() arriving while it runs is still seen below.
+        isStopping = false
+        let supportsSettingsFlag: Bool
+        if configuration.interactionMode != .plan && configuration.runtimeMode == .supervised {
+            supportsSettingsFlag = await Self.supportsSettingsFlag(executable: executable, environment: configuration.environment)
+        } else {
+            supportsSettingsFlag = false
+        }
+        try Task.checkCancellation()
+        if isStopping { throw ProviderError.notRunning }
         // `--add-dir` is what makes the thread's folder the workspace. The
         // CLI does not adopt its cwd (verified live, git repo or not): without
         // the flag the agent works in `~/.gemini/antigravity-cli/scratch` and
         // spends its first steps hunting the home directory for the project.
+        let logFileURL = Self.makeLogFileURL()
         var arguments = [
             "--input-format", "stream-json",
             "--output-format", "stream-json",
@@ -98,6 +222,7 @@ final class AntigravitySession: ProviderSession {
             // Tivano's watchdogs stop quiet turns: normal chats in ThreadRuntime, heads in HydraWatchdog.
             "--print-timeout", "0",
             "--add-dir", workingDirectory,
+            "--log-file", logFileURL.path,
         ]
         // `agy` 1.5.9 reads MCP servers only from the user's global
         // `~/.gemini/config/mcp_config.json` and has no per-session MCP flag or
@@ -106,7 +231,11 @@ final class AntigravitySession: ProviderSession {
         let (resolvedModel, resolvedEffort) = Self.normalize(model: model, effort: effort, catalog: Self.addingSeedRows(configuration.modelCatalog, seed: ProviderRegistry.antigravitySeed))
         if let resolvedModel, !resolvedModel.isEmpty { arguments += ["--model", resolvedModel] }
         if let resolvedEffort, !resolvedEffort.isEmpty { arguments += ["--effort", resolvedEffort] }
-        arguments += modeArguments(runtimeMode: configuration.runtimeMode, interaction: configuration.interactionMode)
+        arguments += modeArguments(
+            runtimeMode: configuration.runtimeMode,
+            interaction: configuration.interactionMode,
+            supportsSettingsFlag: supportsSettingsFlag
+        )
         if let resumeID = configuration.resumeID, !resumeID.isEmpty {
             arguments += ["--conversation", resumeID]
         }
@@ -118,8 +247,15 @@ final class AntigravitySession: ProviderSession {
             environment: configuration.environment
         )
         self.process = process
-        isStopping = false
+        self.logFileURL = logFileURL
         try process.start()
+        logTailer?.shutDown()
+        logTailer = AntigravityLogTailer(url: logFileURL) { [weak self] line in
+            guard let retry = Self.parseRetryDetails(line) else { return }
+            Task { @MainActor [weak self] in
+                self?.emitRetryNotice(attempt: retry.attempt, reason: retry.reason, labelKey: retry.labelKey)
+            }
+        }
         let messages = process.messages
         readTask = Task { [weak self] in
             for await message in messages {
@@ -131,24 +267,28 @@ final class AntigravitySession: ProviderSession {
         return try await withCheckedThrowingContinuation { continuation in
             initContinuation = continuation
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: Self.startTimeout)
                 self?.failStartAfterTimeout()
             }
         }
     }
 
-    /// `agy --mode` only knows `accept-edits` and `plan`: the default review
-    /// mode is the absence of the flag. Full access additionally approves
-    /// every tool, since headless runs soft-deny unapproved actions instead
-    /// of prompting.
-    private func modeArguments(runtimeMode: RuntimeMode, interaction: InteractionMode) -> [String] {
+    /// `agy --mode` only knows `accept-edits` and `plan`. Since `agy` 1.5.7 defaults
+    /// unsaved sessions to Auto, supervised mode pins Default via `--settings` (session-only,
+    /// never saved) when supported; older `agy` exits 2 on unknown flags. Full access
+    /// additionally approves every tool, since headless runs soft-deny unapproved actions
+    /// instead of prompting.
+    private func modeArguments(runtimeMode: RuntimeMode, interaction: InteractionMode, supportsSettingsFlag: Bool) -> [String] {
         var arguments: [String] = []
         if interaction == .plan {
             arguments += ["--mode", "plan"]
         } else {
             switch runtimeMode {
             case .supervised:
-                break
+                // agy 1.5.7+ defaults unsaved sessions to Auto; --settings is session-only and never saved, while older agy exits 2 on unknown flags.
+                if supportsSettingsFlag {
+                    arguments += ["--settings", "{\"agentMode\":\"\"}"]
+                }
             case .autoAcceptEdits, .auto, .fullAccess:
                 arguments += ["--mode", "accept-edits"]
             }
@@ -159,12 +299,41 @@ final class AntigravitySession: ProviderSession {
         return arguments
     }
 
+    /// An unknown answer (the probe failed or timed out) counts as supported: passing the
+    /// flag to an old `agy` fails the launch visibly, while omitting it from a current one
+    /// would silently run a supervised chat in Auto.
+    private static func supportsSettingsFlag(executable: URL, environment: [String: String]) async -> Bool {
+        let probed = await settingsFlagCache.supportsSettings(executable: executable) { () -> Bool? in
+            guard let result = try? await Shell.run(executable, ["--help"], environment: environment, timeout: 10),
+                  !result.timedOut,
+                  result.succeeded else {
+                return nil
+            }
+            let help = TextCleanup.stripANSI(result.output + "\n" + result.errorOutput)
+            return help.contains("--settings")
+        }
+        return probed ?? true
+    }
+
     private func failStartAfterTimeout() {
         guard let continuation = initContinuation else { return }
         initContinuation = nil
+        let exited = process?.isRunning == false
+        let tail = process?.errorTail ?? ""
+        let logTail = exited ? Self.logTail(at: logFileURL) : ""
+        logTailer?.shutDown()
+        logTailer = nil
+        logFileURL = nil
         process?.terminate()
-        let reason = launchError ?? AppText.localized("Antigravity did not answer. Is `agy` signed in? Run `agy` once in Terminal.")
-        continuation.resume(throwing: ProviderError.failed(authHint(in: reason) ?? reason))
+        if let launchError {
+            continuation.resume(throwing: ProviderError.failed(authHint(in: launchError) ?? launchError))
+            return
+        }
+        if exited, let hint = authHint(in: tail) ?? authHint(in: logTail) {
+            continuation.resume(throwing: ProviderError.failed(hint))
+            return
+        }
+        continuation.resume(throwing: ProviderError.failed(AppText.localized("Antigravity did not finish starting in time.")))
     }
 
     func send(_ input: TurnInput) async throws {
@@ -182,7 +351,13 @@ final class AntigravitySession: ProviderSession {
         cascadeErrorMessages.removeAll()
         completedAgentResponseIndex = nil
         replyAfterCascadeError = false
+        hasCompletedToolWork = false
+        let activeConversationID = conversationID ?? configuration.resumeID
+        priorConversationID = activeConversationID
+        priorConversationErrors = activeConversationID.flatMap { Self.knownConversationErrors[$0] } ?? []
         reportedErrors.removeAll()
+        emittedRetryAttempts.removeAll()
+        logTailer?.setTurnActive(true)
         onEvent?(.turnStarted(providerTurnID: nil))
         process.send(["event": "user", "message": ["content": .string(input.text)]])
     }
@@ -195,6 +370,8 @@ final class AntigravitySession: ProviderSession {
         // read "Antigravity stopped unexpectedly" every time the user stops one.
         // `start` clears the flag again for the next launch.
         isStopping = true
+        logTailer?.shutDown()
+        logTailer = nil
         // The stream has no interrupt request: stopping the process ends the
         // turn, and the conversation persists server-side for the next turn's
         // `--conversation` resume.
@@ -216,7 +393,73 @@ final class AntigravitySession: ProviderSession {
 
     func stop() {
         isStopping = true
+        logTailer?.shutDown()
+        logTailer = nil
         process?.terminate()
+    }
+
+    // MARK: - Retry log tailing
+
+    private static func makeLogFileURL() -> URL {
+        let logDirectory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".gemini/antigravity-cli/log", isDirectory: true)
+        try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        let timestamp = formatter.string(from: Date())
+        let suffix = String(UUID().uuidString.prefix(8)).lowercased()
+        return logDirectory.appendingPathComponent("cli-\(timestamp)-tivano-\(suffix).log", isDirectory: false)
+    }
+
+    nonisolated static func parseRetry(_ line: String) -> (attempt: Int, labelKey: String)? {
+        guard let retry = parseRetryDetails(line) else { return nil }
+        return (retry.attempt, retry.labelKey)
+    }
+
+    nonisolated private static func parseRetryDetails(_ line: String) -> (attempt: Int, reason: String, labelKey: String)? {
+        guard let match = line.firstMatch(of: #/run\.go:\d+\] Run: attempt (\d+) failed \(request failed: (.+)\), retrying in ([0-9.]+)(ms|s|m)/#),
+              let attempt = Int(match.output.1) else {
+            return nil
+        }
+        let reason = String(match.output.2)
+        return (attempt, reason, retryLabelKey(for: reason))
+    }
+
+    nonisolated static func retryLabelKey(for reason: String) -> String {
+        let lowered = reason.lowercased()
+        if lowered.contains("stream idle timeout") {
+            return "no response for 5 minutes"
+        }
+        if lowered.hasSuffix(": eof") || lowered.contains("unexpected eof") {
+            return "connection dropped"
+        }
+        if lowered.contains("no such host") || lowered.contains("i/o timeout") {
+            return "network/DNS error"
+        }
+        if lowered.contains("429") || lowered.contains("resource_exhausted") {
+            return "rate limited"
+        }
+        if lowered.contains("503") || lowered.contains("capacity") {
+            return "server busy"
+        }
+        return "request failed"
+    }
+
+    private func emitRetryNotice(attempt: Int, reason: String, labelKey: String) {
+        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedReason.isEmpty {
+            rememberConversationError("request failed: \(trimmedReason)")
+        }
+        guard turnActive, !isStopping else { return }
+        guard emittedRetryAttempts.insert(attempt).inserted else { return }
+        let localizedLabel = AppText.localized(labelKey)
+        let message = String(
+            format: AppText.localized("Antigravity: the model request failed (%@); agy is retrying, attempt %lld."),
+            localizedLabel,
+            Int64(attempt + 1)
+        )
+        onEvent?(.notice(Notice(level: .info, message: message)))
     }
 
     // MARK: - Stream
@@ -255,7 +498,8 @@ final class AntigravitySession: ProviderSession {
         case "tool":
             // A tool step after a reply means that reply was not the turn's last word.
             completedAgentResponseIndex = nil
-            guard let name = step["tool_name"]?.string ?? step["tool_info"]?["name"]?.string else { return }
+            guard let name = [step["tool_name"]?.string, step["tool_info"]?["name"]?.string]
+                .lazy.compactMap({ $0?.trimmed }).first(where: { !$0.isEmpty }) else { return }
             let id = "agy-\(launchID)-tool-\(index)"
             let info = step["tool_info"] ?? .null
             let parameters = info["parameters"] ?? .null
@@ -277,6 +521,7 @@ final class AntigravitySession: ProviderSession {
                 let status: ToolCall.Status = Self.isDenied(message) ? .declined : .failed
                 onEvent?(.toolUpdated(id: id, update: ToolUpdate(output: message, status: status, edits: finishEdit(id, parameters: parameters))))
             } else if state == "DONE" {
+                hasCompletedToolWork = true
                 var update = ToolUpdate(status: .completed)
                 if let output = info["output"]?.string, !output.isEmpty { update.output = output }
                 update.edits = finishEdit(id, parameters: parameters)
@@ -317,7 +562,7 @@ final class AntigravitySession: ProviderSession {
     /// The message of an error step. The stream does not document the error shape, so the
     /// fields it plausibly rides on are tried in turn; the free-text fields only count on
     /// a step that is an error itself, because ordinary steps put their reply there.
-    private static func errorMessage(in step: JSONValue) -> String? {
+    nonisolated private static func errorMessage(in step: JSONValue) -> String? {
         var candidates: [String?] = [step["error"]?["message"]?.string, step["error"]?.string, step["error_message"]?.string]
         if step["step_type"]?.string?.localizedCaseInsensitiveContains("error") == true || step["state"]?.string == "ERROR" {
             candidates += [step["text"]?.string, step["message"]?.string, step["text_delta"]?.string]
@@ -367,10 +612,11 @@ final class AntigravitySession: ProviderSession {
 
     /// agy's result status and error are conversation-sticky: an earlier error step is repeated
     /// on later results with finished_reason "error". The turn's own stream decides instead:
-    /// a completed agent_response must be the last model/tool step, with reply text, no denied
-    /// actions, and no cascade error after it. Without an error step this turn, the result error
-    /// must be one the conversation already reported; a new result-only error still fails.
-    static func turnOutcome(
+    /// when this turn had a cascade error, recovery requires a completed agent_response after
+    /// it, with reply text and no denied actions; without a cascade error in this turn, a reply
+    /// (streamed or in `result["response"]`) with no denied actions succeeds when the result
+    /// error matches one seen in an earlier turn or when the turn also completed tool work.
+    nonisolated static func turnOutcome(
         interruptRequested: Bool,
         status: String?,
         finishedReason: String?,
@@ -380,6 +626,8 @@ final class AntigravitySession: ProviderSession {
         latestCascadeErrorIndex: Int?,
         cascadeErrorMessages: Set<String>,
         knownConversationErrors: Set<String>,
+        hasCompletedToolWork: Bool = false,
+        replyOnlyInResult: Bool = false,
         resultError: String?
     ) -> TurnOutcome {
         if interruptRequested {
@@ -402,22 +650,45 @@ final class AntigravitySession: ProviderSession {
         case "WAITING":
             return TurnOutcome(status: hasDeniedActions ? .failed : .completed, recovered: false)
         default:
-            guard hasReply, !hasDeniedActions, let completedResponseIndex else {
+            guard hasReply, !hasDeniedActions else {
                 return TurnOutcome(status: .failed, recovered: false)
             }
             let resultError = resultError?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if let latestCascadeErrorIndex {
-                guard completedResponseIndex > latestCascadeErrorIndex,
-                      resultError.isEmpty || cascadeErrorMessages.contains(resultError) else {
+                guard let completedResponseIndex,
+                      completedResponseIndex > latestCascadeErrorIndex,
+                      resultError.isEmpty || matchesError(resultError, in: cascadeErrorMessages) else {
+                    return TurnOutcome(status: .failed, recovered: false)
+                }
+            } else if resultError.isEmpty {
+                guard completedResponseIndex != nil else {
                     return TurnOutcome(status: .failed, recovered: false)
                 }
             } else {
-                // No error step this turn: only an error the conversation already reported is stale.
-                guard resultError.isEmpty || knownConversationErrors.contains(resultError) else {
+                // No error step this turn: the result error is agy's sticky one only when an
+                // earlier turn of this conversation (or this session's retry log) already
+                // reported it. An unknown error stays a failure, whatever work came before it.
+                // A streamed reply still needs its closing agent_response (a tool after an
+                // interim reply clears it); only a reply agy handed over solely in the result
+                // stands without one.
+                guard matchesError(resultError, in: knownConversationErrors),
+                      completedResponseIndex != nil || replyOnlyInResult else {
                     return TurnOutcome(status: .failed, recovered: false)
                 }
             }
             return TurnOutcome(status: .completed, recovered: true)
+        }
+    }
+
+    nonisolated private static func matchesError(_ resultError: String, in knownErrors: Set<String>) -> Bool {
+        if knownErrors.contains(resultError) { return true }
+        return knownErrors.contains { known in
+            guard !known.isEmpty else { return false }
+            if resultError.contains(known) { return true }
+            if known.hasSuffix("…"), known.count > 1, resultError.hasPrefix(String(known.dropLast())) {
+                return true
+            }
+            return false
         }
     }
 
@@ -434,6 +705,8 @@ final class AntigravitySession: ProviderSession {
             "sign in", "sign-in", "log in", "log-in", "not logged into",
             "auth", "permission", "denied",
             "invalid model selection", "unknown flag", "not supported for model",
+            // agy already retries 503/capacity internally with backoff; Tivano retrying causes a storm.
+            "503", "unavailable", "no capacity",
         ]
         if permanent.contains(where: { lowered.contains($0) })
             || (lowered.contains("has no \"") && lowered.contains("effort")) {
@@ -443,8 +716,22 @@ final class AntigravitySession: ProviderSession {
             "unexpected eof", "tls handshake timeout", "no such host", "i/o timeout",
             "connection reset", "broken pipe", "network issue", "network is down",
             "stream idle timeout", "http2:", "timeout awaiting response headers",
-            "503", "502", "500 ", "unavailable", "internal", "deadline_exceeded",
+            "502", "500 ", "internal", "deadline_exceeded",
             "the stream was interrupted",
+            "antigravity did not finish starting in time",
+            "antigravity 未能及时完成启动",
+            "antigravity 未能及時完成啟動",
+            "antigravity n’a pas terminé son démarrage à temps",
+            "antigravity n'a pas terminé son démarrage à temps",
+            "antigravity が時間内に起動を完了できませんでした",
+            "antigravity가 제시간에 시작을 완료하지 못했습니다",
+            "antigravity did not start within 90 seconds",
+            "antigravity 在 90 秒内没有启动",
+            "antigravity 在 90 秒內未啟動",
+            "antigravity n’a pas démarré sous 90 secondes",
+            "antigravity n'a pas démarré sous 90 secondes",
+            "antigravity は 90 秒以内に開始しませんでした",
+            "antigravity 응답이 90초 이내에 시작되지 않았습니다",
         ]
         return transient.contains(where: { lowered.contains($0) })
     }
@@ -469,6 +756,8 @@ final class AntigravitySession: ProviderSession {
             return
         }
         turnActive = false
+        logTailer?.setTurnActive(false)
+        emittedRetryAttempts.removeAll()
         editSnapshots.removeAll()
         startedTools.removeAll()
         if let usage = result["usage"], !usage.isNull {
@@ -499,6 +788,7 @@ final class AntigravitySession: ProviderSession {
         }
         let response = result["response"]?.string
         let hasReply = streamedText || response?.trimmed.isEmpty == false
+        let replyOnlyInResult = !streamedText && response?.trimmed.isEmpty == false
         // A turn whose reply never streamed (resumed conversations can answer
         // in the result alone) still shows its text.
         if !streamedText, let response, !response.trimmed.isEmpty {
@@ -521,6 +811,12 @@ final class AntigravitySession: ProviderSession {
         let finishedReason = result["finished_reason"]?.string
         let resultError = result["error"]?.string
         let trimmedResultError = resultError?.trimmed ?? ""
+        let knownErrors: Set<String>
+        if let conversationID, conversationID == priorConversationID {
+            knownErrors = priorConversationErrors
+        } else {
+            knownErrors = conversationID.flatMap { Self.knownConversationErrors[$0] } ?? []
+        }
         let outcome = Self.turnOutcome(
             interruptRequested: interruptRequested,
             status: status,
@@ -531,7 +827,9 @@ final class AntigravitySession: ProviderSession {
             completedResponseIndex: completedAgentResponseIndex,
             latestCascadeErrorIndex: latestCascadeError?.index,
             cascadeErrorMessages: cascadeErrorMessages,
-            knownConversationErrors: conversationID.flatMap { Self.knownConversationErrors[$0] } ?? [],
+            knownConversationErrors: knownErrors,
+            hasCompletedToolWork: hasCompletedToolWork,
+            replyOnlyInResult: replyOnlyInResult,
             resultError: resultError
         )
         rememberConversationError(trimmedResultError)
@@ -563,6 +861,8 @@ final class AntigravitySession: ProviderSession {
     }
 
     private func didClose() {
+        logTailer?.shutDown()
+        logTailer = nil
         if let continuation = initContinuation {
             initContinuation = nil
             // The result's own error names the failure better than the stderr tail can.
@@ -593,11 +893,14 @@ final class AntigravitySession: ProviderSession {
             interruptRequested = false
         }
         onEvent?(.exited(error: TextCleanup.lastLines(process?.errorTail ?? "")))
+        logFileURL = nil
     }
 
     private func closeFailure() -> String {
         let tail = process?.errorTail ?? ""
         if let hint = authHint(in: tail) { return hint }
+        let logTail = Self.logTail(at: logFileURL)
+        if let hint = authHint(in: logTail) { return hint }
         var lines = [Self.agyError(in: tail) ?? TextCleanup.lastLines(tail)].compactMap { $0 }
         if let failure = process?.failureReason?.trimmed, !failure.isEmpty,
            lines.first?.contains(failure) != true {
@@ -631,10 +934,25 @@ final class AntigravitySession: ProviderSession {
         return nil
     }
 
+    private static func logTail(at url: URL?, maxBytes: Int = 8_192) -> String {
+        guard let url, let handle = try? FileHandle(forReadingFrom: url) else { return "" }
+        defer { try? handle.close() }
+        guard let end = try? handle.seekToEnd(), end > 0 else { return "" }
+        let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
+        try? handle.seek(toOffset: start)
+        guard let data = try? handle.readToEnd(), !data.isEmpty else { return "" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     private func authHint(in text: String) -> String? {
         let lowered = text.lowercased()
-        guard lowered.contains("authentication required") || lowered.contains("not signed in")
-            || lowered.contains("unauthenticated") || (lowered.contains("login") && lowered.contains("agy")) else { return nil }
+        guard lowered.contains("authentication required")
+            || lowered.contains("authentication failed")
+            || lowered.contains("failed to authenticate")
+            || lowered.contains("not signed in")
+            || lowered.contains("not logged in")
+            || lowered.contains("unauthenticated")
+            || (lowered.contains("login") && (lowered.contains("agy") || lowered.contains("required") || lowered.contains("failed"))) else { return nil }
         return AppText.localized("Antigravity is not signed in. Run `agy` once in Terminal to sign in.")
     }
 
@@ -667,11 +985,32 @@ final class AntigravitySession: ProviderSession {
         catalog + seed.filter { row in !catalog.contains { $0.id == row.id } }
     }
 
+    /// Exact effort-suffixed model IDs listed by `agy models` (verified on `agy 1.5.10`).
+    /// Passing `--model <base>-<effort>` without `--effort` resolves locally when `agy`'s
+    /// startup model fetch fails, whereas `--model <base> --effort <effort>` requires the
+    /// fetched catalog and fails when that fetch hits a DNS blip.
+    private static let suffixedModelEfforts: [String: Set<String>] = [
+        "gemini-4-carbon": ["low", "medium", "high"],
+        "gemini-4-argon": ["low", "medium", "high"],
+        "gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
+        "gemini-3.8-flash": ["low", "medium", "high"],
+        "gpt-oss-120b": ["medium"],
+    ]
+
+    private static func resolvedArguments(baseSlug: String, effort: String?) -> (model: String, effort: String?) {
+        if let effort, suffixedModelEfforts[baseSlug]?.contains(effort) == true {
+            return ("\(baseSlug)-\(effort)", nil)
+        }
+        return (baseSlug, effort)
+    }
+
     /// Normalizes model and effort flags for `agy`.
     /// Strips any legacy effort suffixes from model slugs and resolves the effort
     /// level against the model's catalog row: `--effort` only carries an effort the
     /// model declares (the CLI exits on one it does not), and an unknown model gets
-    /// only an explicitly requested effort, never an invented default.
+    /// only an explicitly requested effort, never an invented default. When the
+    /// resolved `(baseSlug, effort)` pair matches an exact effort-suffixed ID in
+    /// `agy models`, sends `--model <base>-<effort>` with no `--effort`.
     static func normalize(model: String?, effort: String?, catalog: [ModelOption]) -> (model: String?, effort: String?) {
         guard let model, !model.isEmpty else { return (nil, nil) }
         let parsed = parseModelRow(slug: model, name: "")
@@ -706,7 +1045,7 @@ final class AntigravitySession: ProviderSession {
             } else if baseSlug == "gpt-oss-120b" {
                 resolvedEffort = "medium"
             }
-            return (baseSlug, resolvedEffort)
+            return resolvedArguments(baseSlug: baseSlug, effort: resolvedEffort)
         }
 
         guard !row.efforts.isEmpty else { return (baseSlug, nil) }
@@ -727,7 +1066,7 @@ final class AntigravitySession: ProviderSession {
             resolvedEffort = "medium"
         }
 
-        return (baseSlug, resolvedEffort)
+        return resolvedArguments(baseSlug: baseSlug, effort: resolvedEffort)
     }
 
     // MARK: - Catalog
@@ -737,7 +1076,11 @@ final class AntigravitySession: ProviderSession {
     /// are collapsed into a single base model entry whose supported efforts are
     /// toggled via the reasoning effort slider.
     static func listModels(executable: URL, environment: [String: String]) async throws -> [ModelOption] {
-        async let modelsFetch: ShellResult = try Shell.run(executable, ["models"], environment: environment, timeout: 30)
+        try await listModels(executable: executable, environment: environment, force: false)
+    }
+
+    static func listModels(executable: URL, environment: [String: String], force: Bool) async throws -> [ModelOption] {
+        async let modelsFetch: ShellResult = try modelsResult(executable: executable, environment: environment, force: force)
         // The default model is a print-mode read too, so it is skipped offline like the limits.
         async let defaultFetch: ShellResult? = NetworkPath.isUsable() ? try? Shell.run(executable, ["-p", "/model", "--output-format", "json"], environment: environment, timeout: 30) : nil
         let models = try? await modelsFetch
@@ -810,10 +1153,17 @@ final class AntigravitySession: ProviderSession {
             && !text.contains(" ")
     }
 
+    private static func modelsResult(executable: URL, environment: [String: String], force: Bool = false) async throws -> ShellResult {
+        let key = AntigravityModelsProbeKey(executable: executable, environment: environment)
+        return try await modelsProbeCache.models(key: key, force: force) {
+            try await Shell.run(executable, ["models"], environment: environment, timeout: 30)
+        }
+    }
+
     /// Sign-in state without spending tokens: `agy models` needs the cached
     /// Google session (or `GEMINI_API_KEY`) and fails loudly without one.
     static func authStatus(executable: URL, environment: [String: String]) async -> ProviderStatus.Auth {
-        guard let result = try? await Shell.run(executable, ["models"], environment: environment, timeout: 20) else {
+        guard let result = try? await modelsResult(executable: executable, environment: environment) else {
             return .unknown
         }
         let text = TextCleanup.stripANSI(result.output + result.errorOutput)
@@ -1019,5 +1369,195 @@ final class AntigravitySession: ProviderSession {
         let words = name.split(separator: "_").map(String.init)
         guard let first = words.first else { return name }
         return ([first.capitalized] + words.dropFirst()).joined(separator: " ")
+    }
+}
+
+/// Tails `agy`'s `--log-file` on a utility queue while a turn is active so
+/// silent model-request retries surface in the thread without polling when idle.
+private final class AntigravityLogTailer: @unchecked Sendable {
+    private static let maxRemainderBytes = 1_048_576
+
+    private let url: URL
+    private let queue = DispatchQueue(label: "tivano.antigravity.logtailer", qos: .utility)
+    private let onLine: @Sendable (String) -> Void
+    private var timer: DispatchSourceTimer?
+    private var handle: FileHandle?
+    private var offset: UInt64 = 0
+    private var remainder = Data()
+    private var turnActive = false
+    private var closed = false
+
+    init(url: URL, onLine: @escaping @Sendable (String) -> Void) {
+        self.url = url
+        self.onLine = onLine
+    }
+
+    func setTurnActive(_ active: Bool) {
+        queue.async { [self] in
+            guard !closed, turnActive != active else { return }
+            turnActive = active
+            if active {
+                // Whatever was logged since the last turn's final tick belongs to that turn,
+                // which is over: skip it, so a late retry line never shows on this turn or
+                // suppresses this turn's own attempt with the same number.
+                skipBacklog()
+                let timer = DispatchSource.makeTimerSource(queue: queue)
+                timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
+                timer.setEventHandler { [weak self] in
+                    self?.poll()
+                }
+                self.timer = timer
+                timer.resume()
+            } else {
+                timer?.cancel()
+                timer = nil
+            }
+        }
+    }
+
+    func shutDown() {
+        queue.async { [self] in
+            guard !closed else { return }
+            closed = true
+            turnActive = false
+            timer?.cancel()
+            timer = nil
+            try? handle?.close()
+            handle = nil
+            remainder.removeAll(keepingCapacity: false)
+        }
+    }
+
+    deinit {
+        timer?.cancel()
+        try? handle?.close()
+    }
+
+    private func skipBacklog() {
+        if handle == nil { handle = try? FileHandle(forReadingFrom: url) }
+        guard let handle, let end = try? handle.seekToEnd() else { return }
+        offset = end
+        remainder.removeAll(keepingCapacity: false)
+    }
+
+    private func poll() {
+        guard !closed, turnActive else { return }
+        if handle == nil {
+            guard let opened = try? FileHandle(forReadingFrom: url) else { return }
+            handle = opened
+        }
+        guard let handle else { return }
+        do {
+            let endOffset = try handle.seekToEnd()
+            if endOffset < offset {
+                offset = 0
+                remainder.removeAll(keepingCapacity: false)
+            }
+            guard endOffset > offset else { return }
+            try handle.seek(toOffset: offset)
+            while !closed, turnActive {
+                guard let chunk = try handle.read(upToCount: 65_536), !chunk.isEmpty else { break }
+                offset += UInt64(chunk.count)
+                consume(chunk)
+            }
+        } catch {
+            try? handle.close()
+            self.handle = nil
+        }
+    }
+
+    private func consume(_ chunk: Data) {
+        remainder.append(chunk)
+        var cursor = remainder.startIndex
+        while let newline = remainder[cursor...].firstIndex(of: 0x0A) {
+            let slice = remainder[cursor..<newline]
+            cursor = remainder.index(after: newline)
+            guard !slice.isEmpty else { continue }
+            var line = String(decoding: slice, as: UTF8.self)
+            if line.hasSuffix("\r") { line.removeLast() }
+            if !line.isEmpty { onLine(line) }
+        }
+        if cursor > remainder.startIndex {
+            remainder = Data(remainder[cursor...])
+        }
+        if remainder.count > Self.maxRemainderBytes {
+            remainder.removeAll(keepingCapacity: false)
+        }
+    }
+}
+
+// One-shot review turns (TextGeneration.review) share the chat turn's recovery rules.
+extension AntigravitySession {
+    /// The reply of one headless stream-json turn (`agy -p --output-format stream-json`),
+    /// judged as a chat turn is: agy retries a failed model call inside the turn and may
+    /// still report the earlier `ERROR`, so a completed agent_response after the last error
+    /// step recovers the turn. Nil reply when the turn failed; `result` is the first result
+    /// event (a later one is agy's shutdown echo).
+    nonisolated static func oneShotReply(streamJSON output: String) -> (reply: String?, result: JSONValue?) {
+        var reply = ""
+        var replyIndex: Int?
+        var replyAfterError = false
+        var completedIndex: Int?
+        var latestError: (index: Int, message: String)?
+        var errorMessages: Set<String> = []
+        var completedToolWork = false
+        var result: JSONValue?
+        for line in output.split(whereSeparator: \.isNewline) {
+            guard let message = JSONValue.parse(String(line)) else { continue }
+            if message["event"]?.string == "result" {
+                result = message["result"]
+                break
+            }
+            guard message["event"]?.string == "step_update", let step = message["step_update"] else { continue }
+            let index = step["step_index"]?.int ?? 0
+            let stepType = step["step_type"]?.string
+            if stepType == "agent_response" {
+                if step["state"]?.string == "ERROR", let error = errorMessage(in: step) {
+                    latestError = (index, error)
+                    errorMessages.insert(error)
+                    completedIndex = nil
+                    replyAfterError = false
+                    reply = ""
+                    continue
+                }
+                if step["state"]?.string == "DONE" { completedIndex = index }
+                guard let text = step["text_delta"]?.string, !text.isEmpty else { continue }
+                // Deltas of one reply step append; a later reply step replaces an interim one.
+                if replyIndex == index { reply += text } else { reply = text; replyIndex = index }
+                if !text.trimmed.isEmpty { replyAfterError = true }
+            } else if stepType == "tool" {
+                completedIndex = nil
+                if step["state"]?.string == "DONE", step["error"] == nil { completedToolWork = true }
+            } else {
+                if let error = errorMessage(in: step) {
+                    latestError = (index, error)
+                    errorMessages.insert(error)
+                    completedIndex = nil
+                    replyAfterError = false
+                    reply = ""
+                }
+            }
+        }
+        guard let result else { return (nil, nil) }
+        let response = result["response"]?.string?.trimmed.nilIfEmpty
+        let streamed = reply.trimmed.nilIfEmpty
+        let denied = !(result["denied_actions"]?.array ?? []).isEmpty
+        let outcome = turnOutcome(
+            interruptRequested: false,
+            status: result["status"]?.string,
+            finishedReason: result["finished_reason"]?.string,
+            hasDeniedActions: denied,
+            hasReply: latestError == nil ? (streamed != nil || response != nil) : replyAfterError,
+            completedResponseIndex: completedIndex,
+            latestCascadeErrorIndex: latestError?.index,
+            cascadeErrorMessages: errorMessages,
+            knownConversationErrors: [],
+            hasCompletedToolWork: completedToolWork,
+            replyOnlyInResult: streamed == nil && response != nil,
+            resultError: result["error"]?.string
+        )
+        guard outcome.status == .completed else { return (nil, result) }
+        let text = result["status"]?.string == "SUCCESS" ? (response ?? streamed) : (streamed ?? response)
+        return (text, result)
     }
 }

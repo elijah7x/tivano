@@ -14,9 +14,8 @@ enum LibraryAccess {
             legacyLease = try SharedLibraryLease(at: support.appendingPathComponent(".tivano-library.lock"))
             let migration = try SharedLibraryLease(at: support.appendingPathComponent(".tivano-migration.lock"), wait: true)
             try withExtendedLifetime(migration) { try LegacyMigration.run() }
-            lease = try SharedLibraryLease(at: support.appendingPathComponent(AppInfo.isDevelopment ? ".tivano-dev-library.lock" : ".tivano-release-library.lock"))
+            lease = try SharedLibraryLease(at: support.appendingPathComponent(".tivano-\(AppInfo.edition.rawValue)-library.lock"))
             legacyLease = nil
-            LegacyMigration.removeSharedLibraryLeftovers()
         } catch {
             stop(String(format: Chrome.localized("The Tivano library could not be opened. Quit older Tivano builds and check permissions and available disk space.\n\n%@"), error.localizedDescription))
         }

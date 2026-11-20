@@ -85,8 +85,9 @@ Preview versions use `X.Y.Z-preview.N` (`N` is a positive integer), matching
 the GitHub title is `Tivano <full-version>`, and the installer is
 `Tivano-<full-version>.dmg`. These are GitHub prereleases, never marked latest.
 
-The long-lived local `preview` branch runs parallel to local `dev`; neither is
-pushed. Merge dev into preview with an ordinary merge commit when wanted. When
+The long-lived `preview` branch runs parallel to local `dev`; `dev` is never
+pushed, while `preview` may be fast-forward pushed to `origin/preview` on an
+explicit owner request. Merge dev into preview with an ordinary merge commit when wanted. When
 preview features ship stable, squash them into dev as one commit. On preview,
 set `config/release.xcconfig` with `scripts/set_version.py release X.Y.Z-preview.N`
 and write a `## [X.Y.Z-preview.N] - YYYY-MM-DD` CHANGELOG section.

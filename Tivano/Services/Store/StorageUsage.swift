@@ -24,6 +24,8 @@ struct WorktreeUsage: Equatable, Identifiable, Sendable {
     var changedFiles: Int?
     /// Git knows it as a worktree; otherwise it is a leftover folder.
     var isRegistered: Bool
+    var branch: String? = nil
+    var lastCommitDate: Date? = nil
 
     var id: String { path }
     var name: String { URL(fileURLWithPath: path).lastPathComponent }
@@ -62,8 +64,21 @@ extension Storage {
                 let values = try? $0.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                 return values?.isDirectory == true && values?.isSymbolicLink != true
             }
-        for folder in folders {
-            usage.worktrees.append(await measureWorktree(folder))
+        usage.worktrees = await withTaskGroup(of: WorktreeUsage.self) { group in
+            var iterator = folders.makeIterator()
+            for _ in 0..<4 {
+                guard let folder = iterator.next() else { break }
+                group.addTask { await measureWorktree(folder) }
+            }
+            var results: [WorktreeUsage] = []
+            results.reserveCapacity(folders.count)
+            for await item in group {
+                results.append(item)
+                if let folder = iterator.next() {
+                    group.addTask { await measureWorktree(folder) }
+                }
+            }
+            return results
         }
         usage.worktrees.sort { $0.size > $1.size }
         return usage
@@ -72,17 +87,53 @@ extension Storage {
     private nonisolated static func measureWorktree(_ folder: URL) async -> WorktreeUsage {
         let isRegistered = FileManager.default.fileExists(atPath: folder.appendingPathComponent(".git").path)
         var changedFiles: Int?
+        var branch: String?
+        var lastCommitDate: Date?
         var buildFiles: [String] = []
         if isRegistered {
             let git = Git(folder.path)
-            changedFiles = await git.status()?.changedFiles
+            let status = await git.status()
+            changedFiles = status?.changedFiles
+            branch = status?.branch
+            if let result = try? await git.run(["log", "-1", "--format=%ct", "HEAD"]),
+               result.succeeded,
+               let timestamp = TimeInterval(result.trimmedOutput) {
+                lastCommitDate = Date(timeIntervalSince1970: timestamp)
+            }
             buildFiles = await ignoredBuildFolders(in: folder, git: git)
         }
         return await Task.detached(priority: .utility) { [buildFiles] in
-            WorktreeUsage(path: folder.path, size: allocatedSize(of: folder), buildFiles: buildFiles,
-                          buildFilesSize: buildFiles.reduce(0) { $0 + allocatedSize(of: URL(fileURLWithPath: $1)) },
-                          changedFiles: changedFiles, isRegistered: isRegistered)
+            let sizes = worktreeSizes(in: folder, buildFiles: buildFiles)
+            return WorktreeUsage(path: folder.path, size: sizes.total, buildFiles: buildFiles,
+                                 buildFilesSize: sizes.buildFiles, changedFiles: changedFiles,
+                                 isRegistered: isRegistered, branch: branch, lastCommitDate: lastCommitDate)
         }.value
+    }
+
+    /// Measures build folders once each, then walks the remaining tree while skipping them.
+    private nonisolated static func worktreeSizes(
+        in folder: URL,
+        buildFiles: [String]
+    ) -> (total: Int64, buildFiles: Int64) {
+        let buildFilesSize = buildFiles.reduce(Int64(0)) {
+            $0 + allocatedSize(of: URL(fileURLWithPath: $1))
+        }
+        let buildFolderPaths = Set(buildFiles.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .isRegularFileKey]
+        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: keys) else {
+            return (buildFilesSize, buildFilesSize)
+        }
+        var walkedTotal: Int64 = 0
+        for case let file as URL in enumerator {
+            if !buildFolderPaths.isEmpty, buildFolderPaths.contains(file.standardizedFileURL.path) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard let values = try? file.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true else { continue }
+            walkedTotal += Int64(values.totalFileAllocatedSize ?? 0)
+        }
+        return (walkedTotal + buildFilesSize, buildFilesSize)
     }
 
     /// Git lists a wholly ignored folder once, as `!! path/`, so nested build folders

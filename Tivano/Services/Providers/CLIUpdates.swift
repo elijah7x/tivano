@@ -371,12 +371,6 @@ enum CLIUpdates {
         return comparePrerelease(candidate.prerelease, baseline.prerelease)
     }
 
-    /// True only when `latest` is strictly newer. An unreadable version is not newer and is not equal;
-    /// use `compare` to tell those apart.
-    static func isNewer(_ latest: String, than installed: String) -> Bool {
-        compare(latest, with: installed) == .newer
-    }
-
     // MARK: - Ownership
 
     /// Unix global installs live at `{prefix}/lib/node_modules`. The package directory has to be
@@ -397,8 +391,8 @@ enum CLIUpdates {
         guard components(prefix).count > 1 else { return nil }
         let bundled = (prefix as NSString).appendingPathComponent("bin/npm")
         let tool = probe.isExecutable(bundled) ? bundled : probe.which("npm", environment).map { probe.standardize($0) }
-        guard let tool else { return nil }
-        return .npm(tool: tool, package: package, prefix: prefix, tag: "latest")
+        guard let tool, let tag = packageTag(provider, environment: environment, probe: probe) else { return nil }
+        return .npm(tool: tool, package: package, prefix: prefix, tag: tag)
     }
 
     /// Default bun global layout only: `~/.bun/install/global/node_modules/<package>` and shims in
@@ -432,8 +426,8 @@ enum CLIUpdates {
         }
         let bundled = (probe.home() as NSString).appendingPathComponent(".bun/bin/bun")
         let tool = probe.isExecutable(bundled) ? bundled : probe.which("bun", environment).map { probe.standardize($0) }
-        guard let tool else { return nil }
-        return .bun(tool: tool, package: package, globalDir: globalDir, binDir: binDir, tag: "latest")
+        guard let tool, let tag = packageTag(provider, environment: environment, probe: probe) else { return nil }
+        return .bun(tool: tool, package: package, globalDir: globalDir, binDir: binDir, tag: tag)
     }
 
     /// pnpm 11 stores each global package at `{PNPM_HOME}/global/v11/<hash>/node_modules/<package>`
@@ -461,8 +455,19 @@ enum CLIUpdates {
         }
         let bundled = (binDir as NSString).appendingPathComponent("pnpm")
         let tool = probe.isExecutable(bundled) ? bundled : probe.which("pnpm", environment).map { probe.standardize($0) }
-        guard let tool else { return nil }
-        return .pnpm(tool: tool, package: package, globalDir: globalDir, binDir: binDir, pnpmHome: home, tag: "latest")
+        guard let tool, let tag = packageTag(provider, environment: environment, probe: probe) else { return nil }
+        return .pnpm(tool: tool, package: package, globalDir: globalDir, binDir: binDir, pnpmHome: home, tag: tag)
+    }
+
+    /// Claude publishes its `stable` channel as the npm dist-tag of the same name; an unreadable
+    /// channel setting leaves the install unowned rather than updating it on the wrong tag.
+    private static func packageTag(_ provider: ProviderKind, environment: [String: String], probe: CLIProbe) -> String? {
+        guard provider == .claude else { return "latest" }
+        switch claudeReleaseChannel(probe, environment: environment) {
+        case .latest: return "latest"
+        case .stable: return "stable"
+        case .unreadable: return nil
+        }
     }
 
     /// `Caskroom/<token>/<version>/…` and `Cellar/<token>/<version>/{bin,libexec}/…`.
@@ -768,6 +773,10 @@ enum CLIUpdates {
         return value
     }
 
+    private static let cursorDownloadVersionRegex = try! NSRegularExpression(
+        pattern: #"https://downloads\.cursor\.com/lab/([0-9]+\.[0-9]+\.[0-9]+-[0-9a-fA-F]+)/"#
+    )
+
     /// The install script pins its download URL to a date and commit hash.
     /// https://cursor.com/install
     private static func cursorVersion(probe: CLIProbe) async throws -> String {
@@ -775,8 +784,7 @@ enum CLIUpdates {
         guard let script = String(data: data, encoding: .utf8) else {
             throw ShellError(String(localized: "The release feed's version could not be read."))
         }
-        let expression = try NSRegularExpression(pattern: #"https://downloads\.cursor\.com/lab/([0-9]+\.[0-9]+\.[0-9]+-[0-9a-fA-F]+)/"#)
-        let matches = expression.matches(in: script, range: NSRange(script.startIndex..., in: script))
+        let matches = cursorDownloadVersionRegex.matches(in: script, range: NSRange(script.startIndex..., in: script))
         let versions = Set(matches.compactMap { match -> String? in
             guard let range = Range(match.range(at: 1), in: script) else { return nil }
             return String(script[range])
@@ -787,8 +795,8 @@ enum CLIUpdates {
         return version
     }
 
-    /// Version feeds do not grant update ownership. Claude's native `stable` to npm tag mapping
-    /// is not documented: https://code.claude.com/docs/en/setup#configure-release-channel
+    /// Version feeds do not grant update ownership. Claude's `stable` channel matches the npm
+    /// `stable` dist-tag and https://downloads.claude.ai/claude-code-releases/stable.
     /// Cursor uses its installer; Antigravity uses https://github.com/google-antigravity/antigravity-cli/releases.
     /// Native Codex and Pi feeds are selected by their self-update channels above. App-bundled dsh
     /// is handled before channel dispatch; only non-app dsh installs use the npm feed here.
@@ -797,7 +805,7 @@ enum CLIUpdates {
         case .claude:
             switch claudeReleaseChannel(probe, environment: environment) {
             case .latest: return try await registryVersion("@anthropic-ai/claude-code", tag: "latest", probe: probe)
-            case .stable: return nil
+            case .stable: return try await registryVersion("@anthropic-ai/claude-code", tag: "stable", probe: probe)
             case .unreadable: throw ShellError(String(localized: "Claude update settings could not be read."))
             }
         case .codex:

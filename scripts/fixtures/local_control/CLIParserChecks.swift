@@ -39,10 +39,25 @@ extension CLI {
         try rejects(["history", thread.uuidString, "--limit", "51"], "history page limit is bounded")
         try rejects(["settings", "set", "externalControlEnabled", "true"], "CLI cannot grant its own permission")
         try rejects(["settings", "set", "alphaEnabled", "true"], "CLI cannot enable Alpha")
-        try rejects(["settings", "set", "showsSkylight", "yes"], "boolean settings reject invalid values")
+        try rejects(["settings", "set", "performanceMode", "true"], "removed performanceMode key rejects")
+        try rejects(["settings", "set", "antiSlopEnabled", "false"], "removed antiSlopEnabled key rejects")
+        try rejects(["settings", "set", "showsSkylight", "false"], "renamed showsSkylight key rejects")
+        try rejects(["settings", "set", "weatherWindow", "yes"], "boolean settings reject invalid values")
         try rejects(["settings", "set", "textGeneration", "unknown"], "textGeneration rejects invalid enums")
-        guard case .settingsSet(let setting) = try parse(["settings", "set", "showsSkylight", "false"]) else { throw ControlFailure(code: .internalError) }
-        try check(setting.value == .bool(false), "allowlisted settings use typed values")
+        try rejects(["settings", "set", "textGeneration", "antigravity"], "textGeneration rejects unsupported provider")
+        for (raw, expected) in [
+            ("automatic", ControlTextGeneration.automatic),
+            ("claude", .claude),
+            ("codex", .codex),
+            ("grok", .grok),
+            ("pi", .pi),
+            ("off", .off),
+        ] {
+            guard case .settingsSet(let textGeneration) = try parse(["settings", "set", "textGeneration", raw]) else { throw ControlFailure(code: .internalError) }
+            try check(textGeneration.key == .textGeneration && textGeneration.value == .textGeneration(expected), "textGeneration accepts \(raw)")
+        }
+        guard case .settingsSet(let setting) = try parse(["settings", "set", "weatherWindow", "false"]) else { throw ControlFailure(code: .internalError) }
+        try check(setting.key == .weatherWindow && setting.value == .bool(false), "allowlisted settings use typed values")
         try rejects(["info", "--socket", "/tmp/arbitrary"], "CLI has no arbitrary socket override")
         try rejects(["info", "--stdin"], "stdin is accepted only for text submission")
         try rejects(["providers", "--login", "codex"], "CLI has no provider login surface")
@@ -52,7 +67,9 @@ extension CLI {
         try check(query == ticket, "operation query preserves old instance rather than rewriting ticket")
         guard case .threads(let threads) = try parse(["threads", "--archive", "archived", "--role", "head", "--affiliation", "missing_project", "--search", "metadata"]) else { throw ControlFailure(code: .internalError) }
         try check(threads.archive == .archived && threads.role == .head && threads.affiliation == .missing_project, "thread filters remain typed and explicit")
-        #if DEBUG
+        #if TIVANO_PREVIEW
+        try check(edition == .preview, "Preview CLI edition is compiled, not selected by an external flag")
+        #elseif DEBUG
         try check(edition == .dev, "Dev CLI edition is compiled, not selected by an external flag")
         #else
         try check(edition == .release, "Release CLI edition is compiled, not selected by an external flag")

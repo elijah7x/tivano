@@ -94,17 +94,20 @@ def main():
         'Stopped background tasks with the session: %@.',
         '%@ picked the work back up on its own.',
     )
+    languages = ('zh-Hans', 'zh-Hant', 'ja', 'ko', 'fr')
     for key in required_keys:
         entry = strings.get(key)
-        value = (
-            entry.get('localizations', {})
-            .get('zh-Hans', {})
-            .get('stringUnit', {})
-            .get('value')
-            if isinstance(entry, dict) else None
-        )
-        if not isinstance(value, str) or not value.strip():
-            failures.append(f'Localizable.xcstrings is missing a zh-Hans value for {key!r}')
+        localizations = entry.get('localizations', {}) if isinstance(entry, dict) else {}
+        for language in languages:
+            value = (
+                localizations
+                .get(language, {})
+                .get('stringUnit', {})
+                .get('value')
+                if isinstance(localizations, dict) else None
+            )
+            if not isinstance(value, str) or not value.strip():
+                failures.append(f'Localizable.xcstrings is missing a {language} value for {key!r}')
 
     if failures:
         for failure in failures:

@@ -5,16 +5,20 @@ import SwiftUI
 /// `AutoContinue`).
 struct UsageLimitTab: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.chatColumnVisibility) private var columnVisibility
     let threadID: UUID
     let offer: AutoContinue.Offer
 
     var body: some View {
         // Half a minute is fine enough for a countdown in minutes, and moves the tab from
         // "resets at" to "has reset" on its own when nobody chose.
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            ViewThatFits(in: .horizontal) {
-                row(at: context.date, showsDetail: true)
-                row(at: context.date, showsDetail: false)
+        Group {
+            if columnVisibility.isShown && FrontMonitor.shared.isVisible {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    content(at: context.date)
+                }
+            } else {
+                content(at: .now)
             }
         }
         .padding(.leading, 12)
@@ -23,6 +27,13 @@ struct UsageLimitTab: View {
         .padding(.bottom, 6 + ThreadChangesTab.overlap)
         .modifier(UsageLimitTabSurface())
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func content(at now: Date) -> some View {
+        ViewThatFits(in: .horizontal) {
+            row(at: now, showsDetail: true)
+            row(at: now, showsDetail: false)
+        }
     }
 
     private enum Phase {
@@ -134,13 +145,15 @@ struct UsageLimitTab: View {
 /// separate layer the box sits on, like a bookmark.
 private struct UsageLimitTabSurface: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.solidSurfaces) private var solid
 
     func body(content: Content) -> some View {
         let shape = UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12, style: .continuous)
         content
             // A shade darker than the box, so the box's top edge reads across it.
-            .background(shape.fill(Chrome.overlay(0.05)).background(shape.fill(Color(nsColor: .controlBackgroundColor))))
+            .background(shape.fill(Chrome.overlay(0.05)).background(shape.fill(solid?.elevated ?? Color(nsColor: .controlBackgroundColor))))
             .clipShape(shape)
-            .overlay { shape.strokeBorder(Chrome.floatingGlassRim(isDark: colorScheme == .dark), lineWidth: 1) }
+            .overlay { shape.strokeBorder(solid?.hairline ?? Chrome.floatingGlassRim(isDark: colorScheme == .dark), lineWidth: 1) }
+            .pointerStyle(.default)
     }
 }

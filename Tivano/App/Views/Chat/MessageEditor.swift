@@ -55,9 +55,9 @@ struct MessageEditor: View {
             }
         } actions: {
             Button("Cancel", role: .cancel, action: cancel)
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
             Button("Send", action: send)
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .disabled(!canSend)
         }
         .disabled(isSending)

@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+LINK_PARAGRAPH = "Tivano/UI/Markdown/LinkParagraphView.swift"
 
 
 def declaration(path: str, marker: str) -> str:
@@ -17,6 +18,11 @@ def declaration(path: str, marker: str) -> str:
         end += 1
     return source[start:end]
 
+
+link_paragraph_source = (ROOT / LINK_PARAGRAPH).read_text()
+for required in ("activeSelectionViews", "isClearingPreviousSelection"):
+    if required not in link_paragraph_source:
+        raise RuntimeError(f"{LINK_PARAGRAPH} missing {required}")
 
 swift = r'''
 import AppKit
@@ -33,13 +39,15 @@ class Base: NSTextView {
 
 @MainActor
 final class Probe: Base {
+    static let activeSelectionViews = NSMapTable<NSWindow, Probe>.weakToWeakObjects()
+    static var isClearingPreviousSelection = false
 '''
 for marker in (
     "    override func setNeedsDisplay(_ rect",
     "    override func setSelectedRanges(",
     "    override func resignFirstResponder()",
 ):
-    swift += "\n" + declaration("Tivano/UI/Markdown/LinkParagraphView.swift", marker) + "\n"
+    swift += "\n" + declaration(LINK_PARAGRAPH, marker) + "\n"
 swift += r'''
 }
 
@@ -60,6 +68,26 @@ swift += r'''
     // the redraw requests the view actually made.
     static func coversBounds(_ view: NSView) -> Bool {
         Base.rects.contains { $0.isInfinite || $0.contains(view.bounds) }
+    }
+
+    static func makeWindow() -> (NSWindow, NSView) {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        contentView.wantsLayer = true
+        window.contentView = contentView
+        return (window, contentView)
+    }
+
+    static func makePlainProbe(in container: NSView, text: String = "Plain text for selection checks.") -> Probe {
+        let probe = Probe(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        probe.isEditable = false
+        probe.isSelectable = true
+        probe.drawsBackground = false
+        probe.wantsLayer = true
+        probe.string = text
+        container.addSubview(probe)
+        return probe
     }
 
     static func main() {
@@ -135,7 +163,39 @@ swift += r'''
         check(probe.selectedRange() == NSRange(location: 0, length: 5),
               "resigning first responder preserves selection")
 
-        check(!window.isVisible, "checks never present a window")
+        let (selectionWindow, selectionContent) = makeWindow()
+        let viewA = makePlainProbe(in: selectionContent)
+        let viewB = makePlainProbe(in: selectionContent)
+
+        viewA.setSelectedRange(NSRange(location: 0, length: 3))
+        viewB.setSelectedRange(NSRange(location: 0, length: 3))
+        check(viewA.selectedRange().length == 0 && viewB.selectedRange().length == 3,
+              "selecting another view in the window clears the previous selection")
+
+        viewB.setSelectedRange(NSRange(location: 1, length: 3))
+        check(viewB.selectedRange() == NSRange(location: 1, length: 3),
+              "selecting again within the same view keeps it selected")
+
+        let (window1, content1) = makeWindow()
+        let (window2, content2) = makeWindow()
+        let viewA1 = makePlainProbe(in: content1)
+        let viewA2 = makePlainProbe(in: content1)
+        let viewC = makePlainProbe(in: content2)
+
+        viewA1.setSelectedRange(NSRange(location: 0, length: 3))
+        viewC.setSelectedRange(NSRange(location: 0, length: 3))
+        viewA2.setSelectedRange(NSRange(location: 0, length: 3))
+        check(viewA1.selectedRange().length == 0 && viewA2.selectedRange().length == 3
+              && viewC.selectedRange().length == 3,
+              "selection is tracked per window")
+
+        viewB.setSelectedRange(NSRange(location: 1, length: 0))
+        viewA.setSelectedRange(NSRange(location: 0, length: 3))
+        check(viewB.selectedRange().length == 0 && viewA.selectedRange().length == 3,
+              "clearing own selection then selecting another view leaves cleared view empty")
+
+        check(!window.isVisible && !selectionWindow.isVisible && !window1.isVisible && !window2.isVisible,
+              "checks never present a window")
         print("\(count) selection redraw checks passed.")
     }
 }

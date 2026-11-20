@@ -2,19 +2,17 @@
 
 Tivano ships a short, built-in block of guidance that asks the model for the shortest complete answer: leading with the result, skipping filler and hype, keeping comments only where they explain a non-obvious reason, and making focused edits instead of unrelated cleanup. The same block asks for product-fitting UI structure and for evidence to be reused rather than re-read.
 
-## Default on, and what the setting does
+## Built in to Tivano's own API harness
 
-The guidance is on by default. It is exposed in **Settings › General › Conversation** as **Concise AI replies**; when the switch is off, Tivano sends the matching "off" block instead, which tells the model to disregard the earlier app-provided guidance and to keep following user requests and project requirements.
-
-The setting takes effect on the next message. A message already in flight is not changed, and toggling the switch does not rewrite the current conversation or thread history.
-
-Providers with system-instruction support receive the guidance when their session starts or resumes. Other providers receive it with the first ordinary message of a session, and again after explicit compaction; slash commands defer delivery until that ordinary message. Automatic history changes inside those providers are not observable by the app.
+The guidance is always included in the system prompt of Tivano's own API harness (`OpenAICompatibleSession`, used by the DeepSeek, Meta and Z.ai providers), where Tivano itself manages the model session. There is no user-facing setting or toggle to turn it off.
 
 Nothing is promised about token savings. Shorter replies and fewer redundant reads usually use fewer tokens, but the model, the task and the provider's own behavior all vary, so no fixed saving is guaranteed and no such claim is made in the UI.
 
-## All providers, including Hydra heads
+## External agents and Hydra heads
 
-The guidance is attached to the provider request, so it reaches every provider Tivano runs, not just one. Delegated work — Hydra heads — is covered too: the block itself asks that the guidance apply to delegated work, and the intent is that a head answers under the same policy as its lead.
+Tivano does not send this guidance to external agent CLIs (such as Claude Code, Codex, Copilot, OMP and ACP-style agents). Mature external agents ship their own harness and already manage their own output style.
+
+Delegated work — Hydra heads — follows the same split: heads running on Tivano's API providers receive the guidance in their system prompt just like a main session, while heads backed by external agents rely on their own harness.
 
 ## A compact authored adaptation, not upstream tooling
 

@@ -3,7 +3,7 @@
 // Jakub Antalik's thinking-orbs (MIT). See THIRD_PARTY_NOTICES.md.
 //
 // Public types shared by the animation engine and the SwiftUI view: twelve hand-tuned states,
-// four size presets, the ink theme and the internal mode keys (one painter per key).
+// four size presets and the internal mode keys (one painter per key).
 
 import Foundation
 
@@ -112,16 +112,6 @@ enum OrbSize: CaseIterable, Hashable, Sendable {
         case .hero: "128 · hero"
         }
     }
-}
-
-/// Theme mode for monochrome ink on a transparent canvas.
-enum OrbTheme: Hashable, Sendable {
-    /// Resolve from the appearance.
-    case auto
-    /// Light ink for dark backgrounds.
-    case dark
-    /// Dark ink for light backgrounds.
-    case light
 }
 
 /// Internal mode keys, one painter per key.

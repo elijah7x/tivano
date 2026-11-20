@@ -154,7 +154,7 @@ struct HydraMergePopover: View {
                             }
                     }
                     Spacer(minLength: 8)
-                    Text(verbatim: note.heads.count == 1 ? Chrome.localized("1 head landed") : String(format: Chrome.localized("%d heads landed"), note.heads.count))
+                    Text(verbatim: note.heads.count == 1 ? Chrome.localized("1 sub-agent landed") : String(format: Chrome.localized("%d sub-agents landed"), note.heads.count))
                         .font(.ui(.subheadline))
                         .foregroundStyle(Chrome.secondaryText)
                 }
@@ -204,13 +204,13 @@ struct HydraMergePopover: View {
                             .contentTransition(.numericText())
                     }
                 }
-                .buttonStyle(.glass)
+                .chromeGlassButtonStyle()
                 Button {
                     NSWorkspace.shared.open(note.link.url)
                 } label: {
                     Label(openTitle, systemImage: "arrow.up.right")
                 }
-                .buttonStyle(.glassProminent)
+                .chromeGlassButtonStyle(prominent: true)
                 .keyboardShortcut(.defaultAction)
             }
         }

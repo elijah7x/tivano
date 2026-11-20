@@ -65,7 +65,7 @@ extension AppModel {
         for pin in settings.modelList where pin.provider == provider {
             protected.insert(pin.modelID)
         }
-        if let selection = settings.newThreadModelSelection, selection.provider == provider {
+        if let selection = settings.newThreadDefault?.modelSelection, selection.provider == provider {
             protected.insert(selection.modelID)
         }
         if let pin = settings.lastNewChatModel, pin.provider == provider {
@@ -75,6 +75,9 @@ extension AppModel {
             protected.insert(last)
         }
         protectPairModels(settings.hydraPairs, for: provider, into: &protected)
+        if let pair = settings.hydraPair(settings.newThreadDefault?.pairID) {
+            protectPairModels([pair], for: provider, into: &protected)
+        }
         if let pair = settings.lastNewChatPair {
             protectPairModels([pair], for: provider, into: &protected)
         }

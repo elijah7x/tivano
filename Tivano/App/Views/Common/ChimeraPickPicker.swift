@@ -3,12 +3,15 @@ import SwiftUI
 struct ChimeraPickPicker: View {
     @Environment(AppModel.self) private var model
     @Binding private var pick: ChimeraPick?
-    /// Off where the icon alone names the provider and room is short (the casting card).
+    /// Off by default: the icon names the provider, so the button shows the model itself.
     private let showsProvider: Bool
     private let width: CGFloat?
+    /// Off where a concrete model is required (the casting card).
+    private let allowsFollowLead: Bool
     @State private var isPresented = false
 
-    init(pick: Binding<ChimeraPick?>, showsProvider: Bool = true, width: CGFloat? = nil) {
+    init(pick: Binding<ChimeraPick?>, showsProvider: Bool = false, width: CGFloat? = nil, allowsFollowLead: Bool = true) {
+        self.allowsFollowLead = allowsFollowLead
         _pick = pick
         self.showsProvider = showsProvider
         self.width = width
@@ -34,12 +37,13 @@ struct ChimeraPickPicker: View {
         let title = pick.map {
             [showsProvider ? $0.provider.displayName : nil, option?.shortName ?? $0.model ?? Chrome.localized("Default model"), effortTitle]
                 .compactMap { $0 }.joined(separator: " · ")
-        } ?? Chrome.localized("Choose a model")
+        } ?? Chrome.localized("Follow the lead")
         let available = pick.map { model.chimeraCanRun($0) } ?? true
         let displayedTitle = available ? title : String(format: Chrome.localized("%@ (unavailable)"), title)
+        let helpTitle = showsProvider ? displayedTitle : (pick.map { "\($0.provider.displayName) · \(displayedTitle)" } ?? displayedTitle)
         ModelChoiceButton(
             title: displayedTitle,
-            help: displayedTitle,
+            help: helpTitle,
             iconName: pick?.provider.iconName,
             accessibilityLabel: "Model",
             width: width,
@@ -49,13 +53,18 @@ struct ChimeraPickPicker: View {
                 selection: selection,
                 selectedModelID: selection?.modelID,
                 initialProvider: pick?.provider ?? providers.first,
-                showsAutomaticChoice: false,
+                automaticTitle: "Follow the lead",
+                showsAutomaticChoice: allowsFollowLead,
                 allowedProviders: providers
             ) { selection in
-                pick = selection.map { ChimeraPick(provider: $0.provider, model: $0.modelID, effort: $0.effort) }
+                if let selection {
+                    pick = ChimeraPick(provider: selection.provider, model: selection.modelID, effort: selection.effort)
+                } else {
+                    pick = nil
+                    isPresented = false
+                }
             }
         }
-        .disabled(providers.isEmpty)
         .task(id: pick?.provider) {
             if let provider = pick?.provider { await registry.loadCatalog(provider) }
         }

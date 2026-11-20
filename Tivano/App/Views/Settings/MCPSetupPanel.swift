@@ -87,7 +87,7 @@ struct MCPSetupPanelView: View {
                             NSWorkspace.shared.open(url)
                         }
                     }
-                    .buttonStyle(.glass)
+                    .chromePillButton()
                     Spacer()
                     if state.isConnecting {
                         HStack(spacing: 6) {
@@ -101,7 +101,7 @@ struct MCPSetupPanelView: View {
                             checkedOnce = true
                             model.mcp.refresh(entry)
                         }
-                        .buttonStyle(.glassProminent)
+                        .chromePillButton(.regular, prominent: true)
                     }
                 }
                 if checkedOnce && !state.isConnecting {

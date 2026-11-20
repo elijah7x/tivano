@@ -69,6 +69,7 @@ struct TerminalPanel: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 38)
+            .pointerStyle(.default)
 
             if let selected {
                 TerminalHost(session: selected, runtime: runtime, isDark: colorScheme == .dark) { runtime.isTerminalVisible = false }
@@ -92,7 +93,7 @@ struct TerminalPanel: View {
                     Button("New shell") {
                         openTerminal()
                     }
-                    .buttonStyle(.glass)
+                    .chromeGlassButtonStyle()
                     .controlSize(.small)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

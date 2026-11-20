@@ -2,11 +2,12 @@
 # Install a previously verified edition without quitting or launching anything.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
-APP=${1:?Usage: install_app.sh <built.app> <dev|release>}
-EDITION=${2:?Usage: install_app.sh <built.app> <dev|release>}
+APP=${1:?Usage: install_app.sh <built.app> <dev|release|preview>}
+EDITION=${2:?Usage: install_app.sh <built.app> <dev|release|preview>}
 case "$EDITION" in
   dev) NAME='Tivano Dev'; IDENTIFIER='dev.tivano.Tivano.dev' ;;
   release) NAME='Tivano'; IDENTIFIER='dev.tivano.Tivano' ;;
+  preview) NAME='Tivano Preview'; IDENTIFIER='dev.tivano.Tivano.preview' ;;
   *) echo 'Invalid edition' >&2; exit 1 ;;
 esac
 COMMON_DIR=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)
@@ -54,6 +55,10 @@ fi
 codesign --verify --deep --strict -R="identifier \"$IDENTIFIER\"" "$APP"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
 [[ "$VERSION" = "$("$ROOT/scripts/version.sh" "$EDITION")" ]] || { echo 'Source app does not match the requested edition version' >&2; exit 1; }
+if [ "$EDITION" = preview ]; then
+  FULL_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :TivanoReleaseVersion' "$APP/Contents/Info.plist")
+  [[ "$FULL_VERSION" = "$("$ROOT/scripts/version.sh" preview full)" ]] || { echo 'Source app does not match the requested full Preview version' >&2; exit 1; }
+fi
 STAGE=$(mktemp -d '/Applications/.tivano-install.XXXXXX')
 trap 'if [ -e "$STAGE/previous.app" ]; then
   echo "Original app preserved at $STAGE/previous.app; rollback did not finish." >&2
@@ -72,6 +77,8 @@ if [ -e "$TARGET" ]; then
   mkdir -p "$(dirname "$BACKUP")"
   # The backup may be on another volume; keep the original for same-volume rollback.
   ditto "$TARGET" "$BACKUP"
+  rm -f "$BACKUP/Icon"$'\r'
+  xattr -d com.apple.FinderInfo "$BACKUP" 2>/dev/null || true
   codesign --verify --deep --strict "$BACKUP"
   if ps -axo command= | grep -F "$TARGET/Contents/MacOS/" | grep -v grep >/dev/null; then
     echo "$NAME was launched during backup; it was not replaced." >&2

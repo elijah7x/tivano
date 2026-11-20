@@ -17,7 +17,13 @@ struct ControlTurnUpdate {
 final class AppControlService {
     @ObservationIgnored private weak var app: AppModel?
     let instance = UUID()
-    let edition: ControlEdition = AppInfo.isDevelopment ? .dev : .release
+    let edition: ControlEdition = {
+        switch AppInfo.edition {
+        case .release: .release
+        case .dev: .dev
+        case .preview: .preview
+        }
+    }()
     private(set) var listening = false
     private(set) var listenFailure: ControlFailure?
     private(set) var isShuttingDown = false
@@ -313,14 +319,25 @@ final class AppControlService {
 
     private func settingsSnapshot(_ app: AppModel) -> [ControlSetting] {
         let settings = app.settings
-        let preference = ControlTextGeneration(rawValue: settings.textGeneration.rawValue) ?? .automatic
+        let preference: ControlTextGeneration = switch settings.textGeneration {
+        case .automatic: .automatic
+        case .claude: .claude
+        case .codex: .codex
+        case .grok: .grok
+        case .pi: .pi
+        case .off: .off
+        }
         let effective: ControlTextGeneration
-        switch app.textEngine(preferring: nil) { case .claude: effective = .claude; case .codex: effective = .codex; case nil: effective = .off }
+        switch app.textEngine(preferring: nil) {
+        case .claude: effective = .claude
+        case .codex: effective = .codex
+        case .grok: effective = .grok
+        case .pi: effective = .pi
+        case .antigravity, nil: effective = .off
+        }
         return [
             ControlSetting(key: .textGeneration, preference: .textGeneration(preference), effective: .textGeneration(effective)),
-            ControlSetting(key: .antiSlopEnabled, preference: .bool(settings.antiSlopEnabled), effective: .bool(settings.antiSlopEnabled)),
-            ControlSetting(key: .performanceMode, preference: .bool(settings.performanceMode), effective: .bool(settings.performanceMode)),
-            ControlSetting(key: .showsSkylight, preference: .bool(settings.showsSkylight), effective: .bool(settings.showsSkylightNow))
+            ControlSetting(key: .weatherWindow, preference: .bool(settings.weatherWindowEnabled), effective: .bool(settings.showsWeatherNow || settings.showsPortholeNow))
         ]
     }
 
@@ -328,11 +345,16 @@ final class AppControlService {
         // Validate the complete typed pair before invoking any application-level setter.
         switch (request.key, request.value) {
         case (.textGeneration, .textGeneration(let value)):
-            guard let choice = TextGenerationChoice(rawValue: value.rawValue) else { throw ControlFailure(code: .invalidRequest) }
+            let choice: TextGenerationChoice = switch value {
+            case .automatic: .automatic
+            case .claude: .claude
+            case .codex: .codex
+            case .grok: .grok
+            case .pi: .pi
+            case .off: .off
+            }
             app.settings.textGeneration = choice
-        case (.antiSlopEnabled, .bool(let value)): app.settings.antiSlopEnabled = value
-        case (.performanceMode, .bool(let value)): app.settings.performanceMode = value // also clears clearerBackdrop
-        case (.showsSkylight, .bool(let value)): app.settings.showsSkylight = value // preference survives performance mode
+        case (.weatherWindow, .bool(let value)): app.settings.weatherWindowEnabled = value
         default: throw ControlFailure(code: .invalidRequest)
         }
     }

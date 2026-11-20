@@ -4,14 +4,49 @@ struct QuickChatView: View {
     @Environment(AppModel.self) private var model
     @Bindable var state: QuickChatState
     let controller: QuickChatPanelController
+
+    var body: some View {
+        let preview = model.newThreadPreview(overridingModel: state.modelOverride)
+        let previewPair = preview.hydraPairID.flatMap { id in model.hydraPickerPairs.first { $0.id == id } }
+            ?? model.settings.hydraPair(preview.hydraPairID)
+        let modelName = model.providers.model(preview.model, for: preview.provider)?.chipName
+            ?? preview.model.map { ModelPin(provider: preview.provider, modelID: $0).displayName }
+            ?? preview.provider.displayName
+        let chipTitle = previewPair.map { HydraPairSummary.title($0, registry: model.providers) } ?? modelName
+
+        QuickChatInput(
+            state: state,
+            controller: controller,
+            preview: preview,
+            previewPair: previewPair,
+            chipTitle: chipTitle
+        )
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+        .environment(\.isOnGlassPanel, true)
+        .frame(width: 640)
+        .floatingGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .floatingGlassContainer()
+        .padding(24)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            controller.resize(to: height)
+        }
+    }
+}
+
+private struct QuickChatInput: View {
+    @Environment(AppModel.self) private var model
+    @Bindable var state: QuickChatState
+    let controller: QuickChatPanelController
+    let preview: ChatThread
+    let previewPair: HydraPair?
+    let chipTitle: String
     @FocusState private var isFocused: Bool
     @State private var showsModelPicker = false
 
     var body: some View {
-        let preview = model.newThreadPreview(overridingModel: state.modelOverride)
-        let modelName = model.providers.model(preview.model, for: preview.provider)?.chipName
-            ?? preview.model.map { ModelPin(provider: preview.provider, modelID: $0).displayName }
-            ?? preview.provider.displayName
         let isEmpty = state.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         VStack(alignment: .leading, spacing: 12) {
@@ -42,10 +77,19 @@ struct QuickChatView: View {
                 }
 
             HStack(spacing: 8) {
-                Button { showsModelPicker = true } label: {
+                Button { showsModelPicker.toggle() } label: {
                     HStack(spacing: 6) {
-                        ProviderIcon(provider: preview.provider, size: 14)
-                        Text(verbatim: modelName)
+                        if let previewPair {
+                            HydraFusedPairIcon(
+                                lead: previewPair.provider,
+                                heads: model.hydraHeadsProvider(of: previewPair),
+                                size: 14,
+                                animates: false
+                            )
+                        } else {
+                            ProviderIcon(provider: preview.provider, size: 14)
+                        }
+                        Text(verbatim: chipTitle)
                             .font(.ui(.subheadline))
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
@@ -56,31 +100,30 @@ struct QuickChatView: View {
                     .padding(.horizontal, Chrome.capsuleHorizontalPadding)
                     .frame(height: Chrome.capsuleContentHeight)
                     .padding(.vertical, Chrome.capsuleVerticalPadding)
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .chromeGlassCapsule()
                 .popover(isPresented: $showsModelPicker) {
-                    NewThreadModelPicker(
+                    NewThreadDefaultPicker(
                         selection: state.modelOverride,
                         selectedModelID: preview.model,
                         initialProvider: preview.provider
                     ) { selection in
                         state.modelOverride = selection
-                        if selection == nil { showsModelPicker = false }
+                        switch selection {
+                        case nil, .pair:
+                            showsModelPicker = false
+                        case .model:
+                            break
+                        }
                     }
-                    .frame(width: 360)
                     .presentedChrome()
                 }
                 Spacer()
-                Button { controller.expand(model: model) } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(Chrome.iconFont)
-                        .frame(width: 32, height: 32)
+                ChromeCircleButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open in Tivano") {
+                    controller.expand(model: model)
                 }
-                .buttonStyle(.plain)
-                .chromeGlassCircle()
-                .help(Text("Open in Tivano"))
-                .accessibilityLabel(Text("Open in Tivano"))
 
                 Button { controller.send(model: model, openAfter: false) } label: {
                     Image(systemName: "arrow.up")
@@ -88,24 +131,13 @@ struct QuickChatView: View {
                         .foregroundStyle(.white)
                         .frame(width: 32, height: 32)
                         .background(Chrome.accent, in: .circle)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(isEmpty)
                 .opacity(isEmpty ? 0.4 : 1)
                 .accessibilityLabel(Text("Send"))
             }
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
-        .environment(\.isOnGlassPanel, true)
-        .frame(width: 640)
-        .floatingGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .floatingGlassContainer()
-        .padding(24)
-        .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-            controller.resize(to: height)
         }
     }
 }

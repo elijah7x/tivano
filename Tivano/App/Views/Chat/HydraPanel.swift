@@ -15,7 +15,7 @@ struct HydraPanel: View {
     @Environment(AppModel.self) private var model
     @Environment(WindowLiveResize.self) private var liveResize
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
+    @Environment(\.solidSurfaces) private var solid
     let runtime: ThreadRuntime
     let heads: [ChatThread]
     let size: CGSize
@@ -68,15 +68,11 @@ struct HydraPanel: View {
                     onDrag: onDrag,
                     onDragEnd: onDragEnd
                 )
-                .id(selected.id)
-                // The next head fades in over the last rather than popping into place.
-                .transition(.opacity)
             }
         }
-        .animation(liveResize.isActive ? nil : Chrome.panelSlide, value: selected?.id)
         .overlay {
             // Done: one wave of the head's colour flows through the whole panel.
-            if !performanceMode, let hold, let head = heads.first(where: { $0.id == hold.id }) {
+            if let hold, let head = heads.first(where: { $0.id == hold.id }) {
                 DotFieldSweep(tint: NSColor((head.hydra?.persona ?? HydraRoster.persona(at: 0)).color))
                     .clipShape(shape)
                     .transition(.opacity)
@@ -112,20 +108,17 @@ struct HydraPanel: View {
             // The helper panel's recipe: one glass surface, a scrim for the text over
             // whatever the panel floats above, and the theme's tint.
             let isDark = colorScheme == .dark
-            if !performanceMode {
+            if let solid {
+                shape
+                    .fill(solid.elevated)
+                    .overlay { shape.strokeBorder(solid.hairline, lineWidth: 1) }
+            } else {
                 shape
                     .fill(.clear)
-                    .glassEffect(.regular, in: shape)
+                    .chromeGlassEffect(.regular, in: shape)
                     .overlay {
                         shape.fill(Chrome.glassTint.opacity(isDark ? 0.22 : 0.16))
                     }
-            } else {
-                // Without glass the panel has neither its edge nor its shadow, and the
-                // window's solid backdrop is the same colour: the floating surfaces' flat
-                // recipe (control fill and rim) keeps it apart from the chat under it.
-                shape
-                    .fill(Color(nsColor: .controlBackgroundColor))
-                    .overlay { shape.strokeBorder(Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1) }
             }
         }
         // Glass supplies the edge (as in `WindowBackdrop`): a hairline on top of it
@@ -138,7 +131,12 @@ struct HydraPanel: View {
             let isDark = colorScheme == .dark
             shape
                 .fill((isDark ? Color.black : Color.white).opacity(isDark ? 0.3 : 0.34))
-                .shadow(color: performanceMode ? .clear : .black.opacity(isDark ? 1 : 0.65), radius: performanceMode ? 0 : 28, y: performanceMode ? 0 : 10)
+                // A solid theme lifts the panel with a soft shadow rather than the glass's deep one.
+                .shadow(
+                    color: solid != nil ? .black.opacity(0.1) : .black.opacity(isDark ? 1 : 0.65),
+                    radius: solid != nil ? 18 : 28,
+                    y: solid != nil ? 6 : 10
+                )
         }
     }
 
@@ -220,19 +218,19 @@ struct HydraPanel: View {
                 .accessibilityLabel(Text("Drag to move"))
             HStack(spacing: 8) {
                 if isPoppedOut {
-                    ChromeCircleButton(symbol: "arrow.down.left", help: String(format: Chrome.localized("Put %@ back in the team panel"), selected?.hydra?.displayName ?? Chrome.localized("the head"))) {
+                    ChromeCircleButton(symbol: "arrow.down.left", help: String(format: Chrome.localized("Put %@ back in the team panel"), selected?.hydra?.displayName ?? Chrome.localized("the sub-agent"))) {
                         dismiss()
                     }
                 } else {
                     // The head on stage pops out into a second panel, as long as another
                     // head stays behind to keep this one.
                     if let selected, let popOut, heads.count > 1 {
-                        ChromeCircleButton(symbol: "arrow.up.right", help: String(format: Chrome.localized("Pop %@ out into its own panel"), selected.hydra?.displayName ?? Chrome.localized("this head"))) {
+                        ChromeCircleButton(symbol: "arrow.up.right", help: String(format: Chrome.localized("Pop %@ out into its own panel"), selected.hydra?.displayName ?? Chrome.localized("this sub-agent"))) {
                             popOut(selected.id)
                         }
                         .transition(.softAppear)
                     }
-                    ChromeCircleButton(symbol: "xmark", help: "Dismiss the panel; heads keep working") {
+                    ChromeCircleButton(symbol: "xmark", help: "Dismiss the panel; sub-agents keep working") {
                         dismiss()
                     }
                 }
@@ -242,6 +240,7 @@ struct HydraPanel: View {
         }
         .animation(liveResize.isActive ? nil : Chrome.panelSlide, value: selected?.id)
         .animation(liveResize.isActive ? nil : Chrome.panelSlide, value: heads.count > 1)
+        .pointerStyle(.default)
     }
 }
 
@@ -249,7 +248,7 @@ extension HydraPanel {
     /// The panel's menu: open or continue the head, then what the strip's buttons do.
     @ViewBuilder
     fileprivate func panelMenu(_ head: ChatThread) -> some View {
-        let name = head.hydra?.displayName ?? Chrome.localized("this head")
+        let name = head.hydra?.displayName ?? Chrome.localized("this sub-agent")
         Button(String(format: Chrome.localized("Open %@'s chat"), name)) {
             model.openThread(head.id)
         }
@@ -258,7 +257,7 @@ extension HydraPanel {
            info.hasOwnCopy, head.worktreePath != nil,
            !model.hydraCopiesReleasing.contains(head.id),
            model.hydraHeadIsInOpenJob(head) {
-            Button(Chrome.localized("Continue head")) {
+            Button(Chrome.localized("Continue sub-agent")) {
                 model.continueFailedHydraHead(head.id)
             }
         }
@@ -274,7 +273,7 @@ extension HydraPanel {
             if let popOut, heads.count > 1 {
                 Button(String(format: Chrome.localized("Pop %@ out into its own panel"), name)) { popOut(head.id) }
             }
-            Button(Chrome.localized("Dismiss the panel; heads keep working")) { dismiss() }
+            Button(Chrome.localized("Dismiss the panel; sub-agents keep working")) { dismiss() }
         }
     }
 }
@@ -327,18 +326,19 @@ private struct HydraHeadsButton: View {
         .contentShape(Capsule(style: .continuous))
         .fixedSize()
         .chromeGlassCapsule()
+        .pointerStyle(.default)
         .simultaneousGesture(TapGesture().onEnded { isPresented.toggle() })
         .onHover { hovering in
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
-        .help(Text(verbatim: heads.count == 1 ? Chrome.localized("1 head") : String(format: Chrome.localized("%d heads"), heads.count)))
+        .help(Text(verbatim: heads.count == 1 ? Chrome.localized("1 sub-agent") : String(format: Chrome.localized("%d sub-agents"), heads.count)))
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(Text(verbatim: heads.count == 1 ? Chrome.localized("1 head") : String(format: Chrome.localized("%d heads"), heads.count)))
+        .accessibilityLabel(Text(verbatim: heads.count == 1 ? Chrome.localized("1 sub-agent") : String(format: Chrome.localized("%d sub-agents"), heads.count)))
         .accessibilityAction { isPresented.toggle() }
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu {
                 let waiting = runtime.hydraWaitingCount
-                let header = running == 0 ? Chrome.localized("Heads") : (running == 1 ? Chrome.localized("1 head working") : String(format: Chrome.localized("%d heads working"), running))
+                let header = running == 0 ? Chrome.localized("Sub-agents") : (running == 1 ? Chrome.localized("1 sub-agent working") : String(format: Chrome.localized("%d sub-agents working"), running))
                 PopoverSectionHeader(waiting > 0 ? (waiting == 1 ? String(format: Chrome.localized("%@, 1 waiting"), header) : String(format: Chrome.localized("%@, %d waiting"), header, waiting)) : header)
                 ForEach(heads) { head in
                     HydraHeadRow(head: head, isOnStage: head.id == runtime.hydraSelectedHeadID) {
@@ -351,13 +351,13 @@ private struct HydraHeadsButton: View {
                     PopoverDivider()
                 }
                 if running > 1 {
-                    PopoverItem("Stop all heads", symbol: "stop.circle") {
+                    PopoverItem("Stop all sub-agents", symbol: "stop.circle") {
                         model.stopAllHydraHeads(of: runtime.threadID)
                         isPresented = false
                     }
                 }
                 if heads.contains(where: { $0.hydra?.isFinished == true }) {
-                    PopoverItem("Clear finished heads", symbol: "checkmark.circle") {
+                    PopoverItem("Clear finished sub-agents", symbol: "checkmark.circle") {
                         withAnimation(Chrome.panelSlide) {
                             model.clearFinishedHydraHeads(of: runtime.threadID)
                         }
@@ -499,6 +499,8 @@ private struct HydraHeadTranscript: View {
 
     @State private var scrollChrome = ChromeScrollModel()
     @State private var scrollState = TimelineScrollState()
+    @State private var settledHeadID: UUID?
+    @State private var settleTask: Task<Void, Never>?
 
     var body: some View {
         let runtime = model.runtime(for: head.id)
@@ -519,6 +521,9 @@ private struct HydraHeadTranscript: View {
                     showsMinimap: false
                 )
                 .equatable()
+                .id(head.id)
+                .environment(\.chatColumnInitialFrame, settledHeadID != head.id)
+                .environment(\.chatColumnInitialPaneHeight, height)
             } else {
                 // The task and the progress bar stand in for the steps, which the
                 // sidebar shows; the chat box below still steers the head.
@@ -526,6 +531,7 @@ private struct HydraHeadTranscript: View {
                 // it moves the panel, as the strip does. The full transcript scrolls and
                 // selects text instead, so it keeps the pointer.
                 HydraHeadProgress(head: head, runtime: runtime)
+                    .id(head.id)
                     .overlay {
                         PanelDragHandle(onDrag: onDrag, onDragEnd: onDragEnd)
                             .padding(.top, HydraPanel.stripHeight)
@@ -548,6 +554,23 @@ private struct HydraHeadTranscript: View {
             }
         }
         .chromeEdgeFade(scrollChrome)
+        .onChange(of: head.id, initial: true) { oldID, newID in
+            if oldID != nil, oldID != newID {
+                scrollChrome.update(travel: 0)
+                scrollState.reset()
+            }
+            settleTask?.cancel()
+            guard settledHeadID != newID else { return }
+            settleTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(90))
+                guard !Task.isCancelled else { return }
+                settledHeadID = newID
+            }
+        }
+        .onDisappear {
+            settleTask?.cancel()
+            settleTask = nil
+        }
     }
 }
 
@@ -584,6 +607,7 @@ private struct HydraHeadFooter: View {
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Chrome.panelControlFill(isDark: colorScheme == .dark)))
         .padding(.horizontal, 20)
         .padding(.bottom, 14)
+        .pointerStyle(.default)
     }
 }
 

@@ -308,6 +308,7 @@ private struct QuestionPage: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .pointerStyle(.default)
         .animation(Chrome.hover, value: isSelected)
     }
 
