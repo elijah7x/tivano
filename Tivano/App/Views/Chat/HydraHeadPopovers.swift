@@ -69,7 +69,7 @@ struct HydraHeadReportPopover: View {
                 caption: Self.caption(for: head),
                 captionColor: Self.captionColor(for: head.status),
                 title: head.task,
-                accessory: blocks.isEmpty ? nil : AnyView(CopyButton(text: head.summary ?? ""))
+                accessory: blocks.isEmpty ? nil : AnyView(CopyButton(text: head.summary ?? "").pointerStyle(.default))
             )
             Divider()
             // Every block, not a lazy stack: the body is laid out whole to size the panel
@@ -92,7 +92,6 @@ struct HydraHeadReportPopover: View {
                         .font(.ui(.callout))
                         .environment(\.markdownPointSize, TypeScale.shared.content(12))
                         .environment(\.markdownDimmed, false)
-                        .textSelection(.enabled)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -146,7 +145,7 @@ struct HydraBriefPopover: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HydraPopoverHeader(persona: persona, caption: "Brief", title: task, accessory: AnyView(CopyButton(text: text)))
+            HydraPopoverHeader(persona: persona, caption: "Brief", title: task, accessory: AnyView(CopyButton(text: text).pointerStyle(.default)))
             Divider()
             PopoverScroll(maxHeight: 460, width: Self.width) {
                 Group {
@@ -159,7 +158,6 @@ struct HydraBriefPopover: View {
                     .font(.ui(.callout))
                     .environment(\.markdownPointSize, TypeScale.shared.content(12))
                     .environment(\.markdownDimmed, false)
-                    .textSelection(.enabled)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)

@@ -27,7 +27,7 @@ enum LocalControl {
     }
 }
 
-enum ControlEdition: String, Codable, Sendable { case release, dev }
+enum ControlEdition: String, Codable, Sendable { case release, dev, preview }
 
 struct ControlHello: Codable, Sendable {
     var version = LocalControl.version
@@ -177,7 +177,7 @@ struct ControlInterrupt: Codable, Sendable {
 }
 
 enum ControlSettingKey: String, Codable, CaseIterable, Sendable {
-    case textGeneration, antiSlopEnabled, performanceMode, showsSkylight
+    case textGeneration, weatherWindow
 }
 
 enum ControlSettingValue: Codable, Equatable, Sendable {
@@ -185,7 +185,7 @@ enum ControlSettingValue: Codable, Equatable, Sendable {
     case textGeneration(ControlTextGeneration)
 }
 
-enum ControlTextGeneration: String, Codable, Sendable { case automatic, claude, codex, off }
+enum ControlTextGeneration: String, Codable, Sendable { case automatic, claude, codex, grok, pi, off }
 
 struct ControlSettingsWrite: Codable, Sendable {
     var ticket: ControlTicket

@@ -9,6 +9,8 @@ import OSLog
 @MainActor
 final class CodexSession: ProviderSession {
     private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "codex")
+    /// Overrides for one-shot Codex runs that need no plugins, apps or telemetry. Without them every cold start downloads the remote plugin catalog (35–65 MB on Codex 0.165).
+    nonisolated static let oneShotConfigArguments = ["-c", "features.plugins=false", "-c", "features.apps=false", "-c", "analytics.enabled=false", "-c", "otel.metrics_exporter=\"none\""]
     var onEvent: ((ProviderEvent) -> Void)?
 
     /// Whose transcript a notification belongs to.
@@ -227,7 +229,6 @@ final class CodexSession: ProviderSession {
         }
         defer { watchdog.cancel() }
         var cursor: String?
-        var count = 0
         var found = false
         var previousID: String?
         repeat {
@@ -239,9 +240,8 @@ final class CodexSession: ProviderSession {
                 throw ProviderError.failed(AppText.localized("Codex did not return its conversation history."))
             }
             for turn in turns {
-                guard let id = turn["id"]?.string else { throw ProviderError.failed("Codex returned a turn without an ID.") }
+                guard let id = turn["id"]?.string else { throw ProviderError.failed(AppText.localized("Codex returned a turn without an ID.")) }
                 if found { previousID = id; break }
-                count += 1
                 if id == targetID { found = true }
             }
             let next = page["nextCursor"]?.string
@@ -249,25 +249,27 @@ final class CodexSession: ProviderSession {
             cursor = next
         } while cursor != nil && previousID == nil
         guard found else { throw ProviderError.failed(AppText.localized("Codex could not find the selected turn. The conversation was kept.")) }
+        // app-server removed thread/rollback (0.165+); thread/revert replaces it for paginated
+        // threads and returns no turns. Threads it cannot revert fall back to a fork.
         let result: JSONValue
         do {
-            result = try await Self.deadlineRequest(connection, "thread/rollback", [
+            result = try await Self.deadlineRequest(connection, "thread/revert", [
                 "threadId": .string(threadID),
-                "numTurns": .int(count),
+                "beforeTurnId": .string(targetID),
             ], seconds: 60)
-        } catch let error as RPCError where error.message.contains("paginated threads do not support thread/rollback") {
+        } catch is RPCError {
             return try await forkHistory(before: targetID, keeping: previousID, connection: connection, originalID: threadID)
         }
-        guard result["thread"]?["id"]?.string == threadID,
-              let remaining = result["thread"]?["turns"]?.array,
-              !remaining.contains(where: { $0["id"]?.string == targetID }),
-              remaining.last?["id"]?.string == previousID else {
+        guard result["thread"]?["id"]?.string == threadID else {
             throw ProviderError.failed(AppText.localized("Codex did not confirm the requested conversation rollback."))
         }
         turnID = nil
         return threadID
     }
 
+    private static let ordinaryThreadInstructions = "Tivano's helper agents (heads) are off for this conversation. Disregard any earlier instructions about delegating work with a hydra block; do the work and answer directly."
+
+    // Every thread sends developer instructions so a resumed thread cannot keep an earlier Hydra or voice policy alive.
     private var threadParameters: [String: JSONValue] {
         let policy = policySettings(configuration.runtimeMode)
         var params: [String: JSONValue] = [
@@ -288,17 +290,10 @@ final class CodexSession: ProviderSession {
             // ran its heads inside its own session, out of the app's sight.
             config["features"] = ["multi_agent": .bool(false), "multi_agent_v2": .bool(false)]
             params["developerInstructions"] = .string(HydraPrompts.fallbackPolicy(hydra))
+        } else {
+            params["developerInstructions"] = .string(Self.ordinaryThreadInstructions)
         }
         if !config.isEmpty { params["config"] = .object(config) }
-        // Anti-slop guidance rides along for every thread, Hydra or not, and combines with
-        // whatever developer instructions are already set (nil for an ordinary chat). The
-        // off notice still goes out, so a resumed thread cannot keep earlier guidance alive.
-        let existingInstructions = params["developerInstructions"]?.string
-        params["developerInstructions"] = .string(
-            [existingInstructions, AntiSlopPolicy.instructions(enabled: configuration.antiSlopEnabled)]
-                .compactMap { $0 }
-                .joined(separator: "\n\n")
-        )
         // Connected MCP servers from Settings ride along at launch; no file means none.
         // Merged into whatever config is already there, never replacing it.
         if let servers = MCPProviderConfig.codexOverrides() {
@@ -447,7 +442,7 @@ final class CodexSession: ProviderSession {
         guard configuration.managesCodexHeadHistory, configuration.isHydraHead,
               let connection, !connection.isClosed, threadID == expectedID,
               turnID == nil, headThreads.isEmpty, !isStopping, !historyArchived,
-              stillEligible() else { throw ProviderError.failed(AppText.localized("The head is no longer eligible for archiving.")) }
+              stillEligible() else { throw ProviderError.failed(AppText.localized("The sub-agent is no longer eligible for archiving.")) }
         // Keep the local connection as the authority. No second process, auth lookup,
         // provider filesystem edits or account-wide history scan is needed.
         let watchdog = Task {
@@ -462,7 +457,7 @@ final class CodexSession: ProviderSession {
             ])
             guard let rows = descendants["data"]?.array, rows.isEmpty,
                   descendants["nextCursor"]?.string == nil else {
-                throw ProviderError.failed(AppText.localized("Codex history stays visible because this head has descendants or their state could not be confirmed."))
+                throw ProviderError.failed(AppText.localized("Codex history stays visible because this sub-agent has descendants or their state could not be confirmed."))
             }
         }
         let read = try await Self.deadlineRequest(connection, "thread/read", ["threadId": .string(expectedID), "includeTurns": false])
@@ -474,7 +469,7 @@ final class CodexSession: ProviderSession {
               read["thread"]?["status"]?["type"]?.string == "idle",
               threadID == expectedID, turnID == nil, headThreads.isEmpty,
               !isStopping, stillEligible() else {
-            throw ProviderError.failed(AppText.localized("Codex history stays visible because the head is active or its idle state could not be confirmed."))
+            throw ProviderError.failed(AppText.localized("Codex history stays visible because the sub-agent is active or its idle state could not be confirmed."))
         }
         // Save the need to reconcile BEFORE dispatch: a lost response or process exit
         // must not strand an archived session or silently start a replacement.
@@ -483,7 +478,7 @@ final class CodexSession: ProviderSession {
         // The save suspended: the head may have resumed, stopped or lost eligibility since.
         guard !Task.isCancelled, !connection.isClosed, threadID == expectedID,
               turnID == nil, headThreads.isEmpty, !isStopping, stillEligible() else {
-            throw ProviderError.failed(AppText.localized("The head is no longer eligible for archiving."))
+            throw ProviderError.failed(AppText.localized("The sub-agent is no longer eligible for archiving."))
         }
         historyArchived = true
         _ = try await Self.deadlineRequest(connection, "thread/archive", ["threadId": .string(expectedID)])
@@ -491,7 +486,7 @@ final class CodexSession: ProviderSession {
         // claim success just from a cascading request's empty result.
         _ = try await Self.deadlineRequest(connection, "thread/read", ["threadId": .string(expectedID), "includeTurns": false])
         guard archiveConfirmed else {
-            throw ProviderError.failed(AppText.localized("Codex did not confirm that this exact head was archived. Its state will be reconciled before a follow-up."))
+            throw ProviderError.failed(AppText.localized("Codex did not confirm that this exact sub-agent was archived. Its state will be reconciled before a follow-up."))
         }
     }
 
@@ -511,7 +506,7 @@ final class CodexSession: ProviderSession {
         params["excludeTurns"] = true
         let result = try await requestThread(connection, "thread/resume", params)
         guard result["thread"]?["id"]?.string == threadID else {
-            throw ProviderError.failed(AppText.localized("Codex could not restore the original head's history."))
+            throw ProviderError.failed(AppText.localized("Codex could not restore the original sub-agent's history."))
         }
         historyArchived = false
     }
@@ -533,12 +528,12 @@ final class CodexSession: ProviderSession {
             ])
             guard let rows = page["data"]?.array,
                   rows.allSatisfy({ $0["id"]?.string != nil }) else {
-                throw ProviderError.failed(AppText.localized("Codex did not report its archived sessions. The head's history was kept."))
+                throw ProviderError.failed(AppText.localized("Codex did not report its archived sessions. The sub-agent's history was kept."))
             }
             if rows.contains(where: { $0["id"]?.string == id }) {
                 let restored = try await Self.deadlineRequest(connection, "thread/unarchive", ["threadId": .string(id)])
                 guard restored["thread"]?["id"]?.string == id else {
-                    throw ProviderError.failed(AppText.localized("Codex did not confirm restoration of the original head."))
+                    throw ProviderError.failed(AppText.localized("Codex did not confirm restoration of the original sub-agent."))
                 }
                 return
             }
@@ -566,6 +561,7 @@ final class CodexSession: ProviderSession {
             executable: executable,
             directory: FileManager.default.temporaryDirectory,
             environment: environment,
+            oneShot: true,
             configure: { _ in }
         )
         defer { connection.close() }
@@ -599,6 +595,7 @@ final class CodexSession: ProviderSession {
             executable: executable,
             directory: FileManager.default.temporaryDirectory,
             environment: environment,
+            oneShot: true,
             configure: { _ in }
         )
         defer { connection.close() }
@@ -698,6 +695,7 @@ final class CodexSession: ProviderSession {
             executable: executable,
             directory: FileManager.default.temporaryDirectory,
             environment: environment,
+            oneShot: true,
             configure: { _ in }
         )
         defer { connection.close() }
@@ -723,9 +721,10 @@ final class CodexSession: ProviderSession {
         executable: URL,
         directory: URL,
         environment: [String: String],
+        oneShot: Bool = false,
         configure: (JSONRPCConnection) -> Void
     ) async throws -> JSONRPCConnection {
-        let process = StdioProcess(executable: executable, arguments: ["app-server"], directory: directory, environment: environment)
+        let process = StdioProcess(executable: executable, arguments: oneShot ? ["app-server"] + oneShotConfigArguments : ["app-server"], directory: directory, environment: environment)
         let connection = JSONRPCConnection(process: process, sendsVersion: false)
         configure(connection)
         try connection.start()
@@ -799,8 +798,12 @@ final class CodexSession: ProviderSession {
         case "item/agentMessage/delta":
             if let id = params["itemId"]?.string, let delta = params["delta"]?.string {
                 if case .lead = target {
-                    let text = lastAgentMessage?.id == id ? lastAgentMessage!.text : ""
-                    lastAgentMessage = (id, text + delta)
+                    if var current = lastAgentMessage.take(), current.id == id {
+                        current.text += delta
+                        lastAgentMessage = current
+                    } else {
+                        lastAgentMessage = (id, delta)
+                    }
                 }
                 sink(.messageDelta(id: id, text: delta))
             }
@@ -944,7 +947,7 @@ final class CodexSession: ProviderSession {
                 try await connection.request(method, params)
             }
         } catch let error as SessionDeadlineError {
-            if mutating || ["thread/compact/start", "thread/rollback", "thread/archive", "thread/fork", "thread/unarchive", "account/rateLimitResetCredit/consume"].contains(method) {
+            if mutating || ["thread/compact/start", "thread/revert", "thread/archive", "thread/fork", "thread/unarchive", "account/rateLimitResetCredit/consume"].contains(method) {
                 connection.close()
             }
             throw error
@@ -1059,7 +1062,7 @@ final class CodexSession: ProviderSession {
             for receiver in (item["receiverThreadIds"]?.array ?? []).compactMap(\.string) {
                 guard receiver != threadID else { continue }
                 if !headThreads.contains(receiver) { headThreads.insert(receiver) }
-                onEvent?(.agentStarted(AgentSpawn(id: receiver, taskID: nil, toolUseID: item["id"]?.string, description: prompt.isEmpty ? "Head" : TextCleanup.singleLine(prompt, limit: 80), prompt: prompt.nilIfEmpty, model: item["model"]?.string)))
+                onEvent?(.agentStarted(AgentSpawn(id: receiver, taskID: nil, toolUseID: item["id"]?.string, description: prompt.isEmpty ? AppText.localized("Sub-agent") : TextCleanup.singleLine(prompt, limit: 80), prompt: prompt.nilIfEmpty, model: item["model"]?.string)))
             }
         case "subAgentActivity":
             guard let agentThread = item["agentThreadId"]?.string,
@@ -1127,12 +1130,12 @@ final class CodexSession: ProviderSession {
             return ToolCall(kind: .web, title: item["query"]?.string ?? AppText.localized("Web search"))
         case "collabAgentToolCall":
             let verb = switch item["tool"]?.string {
-            case "spawnAgent": AppText.localized("Send out a head")
-            case "sendInput", "sendMessage", "followupTask": AppText.localized("Brief a head")
-            case "wait": AppText.localized("Wait for heads")
-            case "closeAgent", "interruptAgent": AppText.localized("Recall a head")
-            case "resumeAgent": AppText.localized("Resume a head")
-            case "listAgents": AppText.localized("List heads")
+            case "spawnAgent": AppText.localized("Send out a sub-agent")
+            case "sendInput", "sendMessage", "followupTask": AppText.localized("Brief a sub-agent")
+            case "wait": AppText.localized("Wait for sub-agents")
+            case "closeAgent", "interruptAgent": AppText.localized("Recall a sub-agent")
+            case "resumeAgent": AppText.localized("Resume a sub-agent")
+            case "listAgents": AppText.localized("List sub-agents")
             default: AppText.localized("Agent")
             }
             let brief = item["prompt"]?.string.map { TextCleanup.singleLine($0, limit: 90) }

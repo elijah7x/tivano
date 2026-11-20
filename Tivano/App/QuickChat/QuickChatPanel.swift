@@ -7,10 +7,15 @@ final class QuickChatNSPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+// A press on the non-key panel works the control instead of only keying the panel.
+final class QuickChatHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 @Observable
 final class QuickChatState {
     var text = ""
-    var modelOverride: NewThreadModelSelection?
+    var modelOverride: NewThreadDefault?
     var focusToken = 0
 }
 
@@ -30,7 +35,7 @@ final class QuickChatPanelController {
         }
         let panel = self.panel ?? makePanel()
         // Mounted only while shown: hidden, the view would keep observing the model.
-        let hosting = NSHostingView(rootView: QuickChatView(state: state, controller: self).environment(model))
+        let hosting = QuickChatHostingView(rootView: QuickChatView(state: state, controller: self).environment(model))
         panel.contentView = hosting
         resize(to: hosting.fittingSize.height)
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main {
@@ -78,13 +83,16 @@ final class QuickChatPanelController {
                 // Only the draft as handed over: once the chat is open, an edit or a send
                 // of its own belongs to the user, and the delayed send must not take it.
                 let untouched = runtime.turns.isEmpty && runtime.draft.text == trimmed
-                if model.thread(thread.id)?.controlWorkspace?.phase == .ready {
-                    if untouched { runtime.send() }
-                } else if model.thread(thread.id) != nil {
-                    // The draft stays in the chat, where the failure shows.
-                    model.openThread(thread.id)
-                    WindowManager.shared.showMain()
-                    NSApp.activate()
+                if let current = model.thread(thread.id) {
+                    let workspace = current.controlWorkspace
+                    if workspace == nil || workspace?.phase == .ready {
+                        if untouched { runtime.send() }
+                    } else {
+                        // The draft stays in the chat, where the failure shows.
+                        model.openThread(thread.id)
+                        NSApp.activate(ignoringOtherApps: true)
+                        WindowManager.shared.showMain()
+                    }
                 }
             }
         } else {
@@ -92,24 +100,40 @@ final class QuickChatPanelController {
         }
         if openAfter {
             model.openThread(thread.id)
+            NSApp.activate(ignoringOtherApps: true)
             WindowManager.shared.showMain()
-            NSApp.activate()
         }
     }
 
     func expand(model: AppModel) {
-        guard let thread = model.newThread(affiliation: .current, overridingModel: state.modelOverride) else { return }
+        guard panel?.isVisible == true else { return }
+        guard let thread = model.newThread(affiliation: .current, overridingModel: state.modelOverride) else {
+            // The failure is an alert on the main window; show it there and keep the text here.
+            NSApp.activate(ignoringOtherApps: true)
+            WindowManager.shared.showMain()
+            hide()
+            return
+        }
         model.runtime(for: thread.id).draft.text = state.text
-        clearAndHide()
-        model.openThread(thread.id)
+        // The panel never activates the app; take the foreground before it goes so the main window comes up at once.
+        NSApp.activate(ignoringOtherApps: true)
         WindowManager.shared.showMain()
-        NSApp.activate()
+        // Settings stays over the chat when nothing was selected before; the new chat is what was asked for.
+        WindowManager.shared.hideSettings()
+        clearAndHide()
     }
 
     private func clearAndHide() {
         state.text = ""
         state.modelOverride = nil
         hide()
+    }
+
+    /// Only the panel's own popovers, nested ones included, hang under it as child windows.
+    private static func hasVisiblePopover(under window: NSWindow) -> Bool {
+        (window.childWindows ?? []).contains { child in
+            (child.isVisible && child.className.contains("Popover")) || hasVisiblePopover(under: child)
+        }
     }
 
     private func makePanel() -> QuickChatNSPanel {
@@ -138,6 +162,8 @@ final class QuickChatPanelController {
                     if current === panel || current.className.contains("Popover") { return }
                     window = current.parent
                 }
+                // The model picker's popovers, including nested ones, can take key while the app is inactive and keyWindow is nil.
+                if Self.hasVisiblePopover(under: panel) { return }
                 self.hide()
             }
         }

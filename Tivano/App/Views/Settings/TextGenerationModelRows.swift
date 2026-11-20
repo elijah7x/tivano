@@ -9,10 +9,12 @@ struct TextGenerationModelRows: View {
         case automatic, choose, off
     }
 
+    private static let allowedProviders: [ProviderKind] = [.claude, .codex, .grok, .pi]
+
     private var mode: Mode {
         switch model.settings.textGeneration {
         case .automatic: .automatic
-        case .claude, .codex: .choose
+        case .claude, .codex, .grok, .pi: .choose
         case .off: .off
         }
     }
@@ -36,12 +38,18 @@ struct TextGenerationModelRows: View {
         let provider: ProviderKind? = switch settings.textGeneration {
         case .claude: .claude
         case .codex: .codex
+        case .grok: .grok
+        case .pi: .pi
         case .automatic, .off: nil
         }
         let selection = provider.map {
             NewThreadModelSelection(
                 provider: $0,
-                modelID: settings.textGenerationModelID ?? model.fastTextModel(for: $0)?.id ?? "",
+                // Grok and Pi without a saved model run the CLI's default, so nothing in
+                // the catalog shows as selected (see AppModel.textEngine).
+                modelID: settings.textGenerationModelID
+                    ?? ([.grok, .pi].contains($0) ? nil : model.fastTextModel(for: $0)?.id ?? registry.defaultModel(for: $0)?.id)
+                    ?? "",
                 effort: settings.textGenerationEffort
             )
         }
@@ -49,11 +57,19 @@ struct TextGenerationModelRows: View {
         let effortTitle = settings.textGenerationEffort.flatMap { effort in
             option?.efforts.contains(effort) == true ? Chrome.localized(ModelOption.effortTitle(effort)) : nil
         }
+        let fallbackModelName: (ProviderKind) -> String? = { provider in
+            switch provider {
+            case .claude: model.fastTextModel(for: .claude)?.shortName ?? "Haiku"
+            case .codex: model.fastTextModel(for: .codex)?.shortName ?? "Terra"
+            case .grok, .pi: Chrome.localized("Default")
+            default: registry.defaultModel(for: provider)?.shortName
+            }
+        }
         let title = provider.map {
             [$0.displayName,
              option?.shortName
                 ?? settings.textGenerationModelID.map { String(format: Chrome.localized("%@ (unavailable)"), $0) }
-                ?? model.fastTextModel(for: $0)?.shortName ?? ($0 == .claude ? "Haiku" : "Terra"),
+                ?? fallbackModelName($0),
              effortTitle].compactMap { $0 }.joined(separator: " · ")
         } ?? Chrome.localized(settings.textGeneration == .off ? "Off" : "Automatic")
 
@@ -68,9 +84,9 @@ struct TextGenerationModelRows: View {
                 NewThreadModelPicker(
                     selection: selection,
                     selectedModelID: selection?.modelID,
-                    initialProvider: provider ?? (registry.availableProviders.contains(.claude) ? .claude : .codex),
+                    initialProvider: provider ?? Self.allowedProviders.first { registry.availableProviders.contains($0) } ?? .claude,
                     automaticTitle: "Automatic",
-                    allowedProviders: [.claude, .codex],
+                    allowedProviders: Self.allowedProviders,
                     offSelected: settings.textGeneration == .off,
                     selectOff: {
                         settings.textGeneration = .off
@@ -78,7 +94,15 @@ struct TextGenerationModelRows: View {
                     }
                 ) { selection in
                     if let selection {
-                        settings.textGeneration = selection.provider == .claude ? .claude : .codex
+                        let choice: TextGenerationChoice
+                        switch selection.provider {
+                        case .claude: choice = .claude
+                        case .codex: choice = .codex
+                        case .grok: choice = .grok
+                        case .pi: choice = .pi
+                        default: return
+                        }
+                        settings.textGeneration = choice
                         settings.textGenerationModelID = selection.modelID
                         settings.textGenerationEffort = selection.effort
                     } else {

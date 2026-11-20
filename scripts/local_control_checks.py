@@ -38,7 +38,7 @@ def main():
     sources = [
         "Tivano/Core/Models/LocalControl.swift",
         "Tivano/Services/Control/ControlSocket.swift",
-        "Tivano/Services/Control/ControlClient.swift",
+        "TivanoCLI/ControlClient.swift",
         "Tivano/Services/Control/ControlLedger.swift",
         "Tivano/Services/Control/ControlCLIInstaller.swift",
         "Tivano/Services/Store/ControlHistoryReader.swift",
@@ -76,17 +76,38 @@ def main():
             return values
         catalog = json.loads((ROOT / "Tivano/Resources/Localizable.xcstrings").read_text(), object_pairs_hook=unique)
         usage = textwrap.dedent(cli.split('static let usage = """\n', 1)[1].split('\n    """', 1)[0])
-        assert catalog["strings"][usage]["localizations"]["zh-Hans"]["stringUnit"]["state"] == "translated"
+        assert usage == textwrap.dedent("""\
+            Tivano local control (the app must already be running and manually enabled in Settings › Connections).
+            Commands: info | providers | projects | threads | thread UUID | history UUID
+              create --workspace local|worktree --provider ID [--project UUID] [--model ID] [--hydra on|off]
+              send UUID --text TEXT [--continuation automatic|fresh|providerSession|transcript]
+              send UUID --stdin [--continuation MODE]
+              interrupt UUID --turn UUID
+              operation INSTANCE/UUID/TIMESTAMP
+              settings get | settings set textGeneration automatic|claude|codex|grok|pi|off
+              settings set weatherWindow true|false
+            List flags: --limit N --cursor TOKEN
+            Thread flags: --archive active|archived|all --role normal|helper|head|all
+              --affiliation all|standalone|project|missing_project [--project UUID] [--search TEXT]
+            Writes: --operation INSTANCE/UUID/TIMESTAMP reuses an existing ticket in that instance only.
+            Save the ticket printed before delivery. A disconnect is not failure; query the ticket instead of repeating the write.
+            JSON output reports acceptance, not task success. Expired/restarted outcomes are unknown. No automatic retries or app launch.""")
+        for locale in ("zh-Hans", "zh-Hant", "ja", "ko", "fr"):
+            unit = catalog["strings"][usage]["localizations"][locale]["stringUnit"]
+            assert unit["state"] == "translated" and unit["value"].strip(), locale
         core = (ROOT / "Tivano/Core/Models/LocalControl.swift").read_text()
         messages = re.findall(r'case \.[^:\n]+: "([^"]+)"', core)
         assert len(messages) == 24, "all protocol error message keys must be checked"
         for message in messages:
-            assert catalog["strings"][message]["localizations"]["zh-Hans"]["stringUnit"]["state"] == "translated", message
-        for edition in ["dev", "release"]:
+            for locale in ("zh-Hans", "zh-Hant", "ja", "ko", "fr"):
+                unit = catalog["strings"][message]["localizations"][locale]["stringUnit"]
+                assert unit["state"] == "translated" and unit["value"].strip(), (message, locale)
+        for edition in ["dev", "release", "preview"]:
             binary = output / ("cli-parser-" + edition)
             compile_cli = [swift, "-swift-version", "6", "-target", "arm64-apple-macosx26.0", "-sdk", sdk,
                            "-j", "4", "-module-cache-path", str(output / "ModuleCache"),
                            *(["-D", "DEBUG"] if edition == "dev" else []),
+                           *(["-D", "TIVANO_PREVIEW"] if edition == "preview" else []),
                            *[str(ROOT / item) for item in sources[:3]], str(generated), "-o", str(binary)]
             row = {"edition": edition, "compile_command": compile_cli}
             with (output / ("cli-" + edition + "-compile.log")).open("w") as log:

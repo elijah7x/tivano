@@ -29,7 +29,7 @@ final class ComposerController {
     var suggestionRefresh: Task<Void, Never>?
 
     var cursorLocation: Int {
-        textView?.selectedRange().location ?? 0
+        textView?.modelCursorLocation ?? 0
     }
 
     var hasFocus: Bool {
@@ -42,12 +42,37 @@ final class ComposerController {
         textView.window?.makeFirstResponder(textView)
     }
 
-    func replaceCharacters(in range: NSRange, with replacement: String) {
-        guard let textView, let storage = textView.textStorage, NSMaxRange(range) <= storage.length else { return }
-        guard textView.shouldChangeText(in: range, replacementString: replacement) else { return }
-        storage.replaceCharacters(in: range, with: replacement)
+    func mentionEnds(atModelOffset offset: Int) -> Bool {
+        guard let textView, textView.mentionResolver != nil else { return false }
+        return FileMentionText.mentionEnds(atModelOffset: offset, in: textView.attributedString())
+    }
+
+    func replaceCharacters(in modelRange: NSRange, with replacement: String) {
+        guard let textView, let storage = textView.textStorage else { return }
+        guard let resolver = textView.mentionResolver else {
+            guard NSMaxRange(modelRange) <= storage.length else { return }
+            guard textView.shouldChangeText(in: modelRange, replacementString: replacement) else { return }
+            storage.replaceCharacters(in: modelRange, with: replacement)
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: modelRange.location + (replacement as NSString).length, length: 0))
+            return
+        }
+        // A suggestion range from before the last keystroke may run past the text now.
+        guard NSMaxRange(modelRange) <= (textView.modelText as NSString).length else { return }
+        let viewRange = FileMentionText.viewRange(modelRange, in: storage)
+        guard NSMaxRange(viewRange) <= storage.length else { return }
+        let attributedReplacement = FileMentionText.attributed(
+            from: replacement,
+            attributes: textView.plainTypingAttributes,
+            font: textView.activeFont,
+            accent: Chrome.accentNSColor,
+            resolve: resolver
+        )
+        guard textView.shouldChangeText(in: viewRange, replacementString: attributedReplacement.string) else { return }
+        storage.replaceCharacters(in: viewRange, with: attributedReplacement)
         textView.didChangeText()
-        textView.setSelectedRange(NSRange(location: range.location + (replacement as NSString).length, length: 0))
+        textView.setSelectedRange(NSRange(location: viewRange.location + attributedReplacement.length, length: 0))
+        textView.stripMentionTypingAttributes()
     }
 
     /// Shows the slash/@ suggestions directly above the caret. A SwiftUI
@@ -131,7 +156,64 @@ final class ComposerNSTextView: NSTextView {
     var placeholderHint = "" { didSet { needsDisplay = true } }
     var onAttach: (([AttachmentSource]) -> Void)?
     var onWidthChange: (() -> Void)?
-    var onResign: (() -> Void)?
+    var onResign: (@MainActor () -> Void)?
+    var mentionResolver: ((String) -> Bool?)?
+    var mentionRoot: String?
+
+    fileprivate var activeFont: NSFont {
+        font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
+    }
+
+    fileprivate var modelText: String {
+        guard mentionResolver != nil else { return string }
+        return FileMentionText.serialized(attributedString())
+    }
+
+    fileprivate var modelCursorLocation: Int {
+        let viewOffset = selectedRange().location
+        guard mentionResolver != nil else { return viewOffset }
+        return FileMentionText.modelOffset(viewOffset, in: attributedString())
+    }
+
+    fileprivate func setModelText(_ text: String) {
+        guard let resolver = mentionResolver, let storage = textStorage else {
+            string = text
+            return
+        }
+        let baseFont = activeFont
+        let attributed = FileMentionText.attributed(
+            from: text,
+            attributes: [.font: baseFont, .foregroundColor: NSColor.labelColor],
+            font: baseFont,
+            accent: Chrome.accentNSColor,
+            resolve: resolver
+        )
+        storage.beginEditing()
+        storage.setAttributedString(attributed)
+        storage.endEditing()
+        stripMentionTypingAttributes()
+        if string.isEmpty != placeholderShown { needsDisplay = true }
+    }
+
+    fileprivate func stripMentionTypingAttributes() {
+        guard mentionResolver != nil else { return }
+        var attrs = typingAttributes
+        var changed = false
+        for key in FileMentionText.plainAttributesKeysToStrip {
+            if attrs.removeValue(forKey: key) != nil { changed = true }
+        }
+        if changed { typingAttributes = attrs }
+    }
+
+    fileprivate var plainTypingAttributes: [NSAttributedString.Key: Any] {
+        var attrs = typingAttributes
+        for key in FileMentionText.plainAttributesKeysToStrip {
+            attrs.removeValue(forKey: key)
+        }
+        if attrs[.font] == nil { attrs[.font] = activeFont }
+        if attrs[.foregroundColor] == nil { attrs[.foregroundColor] = NSColor.labelColor }
+        return attrs
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = abs(newSize.width - frame.width) > 0.5
@@ -172,6 +254,28 @@ final class ComposerNSTextView: NSTextView {
         return super.performKeyEquivalent(with: event)
     }
 
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        let range = selectedRange()
+        if mentionResolver != nil, range.length > 0 {
+            let attributed = attributedString()
+            if NSMaxRange(range) <= attributed.length {
+                var hasMention = false
+                attributed.enumerateAttribute(.attachment, in: range, options: []) { value, _, stop in
+                    if value is FileMentionAttachment {
+                        hasMention = true
+                        stop.pointee = true
+                    }
+                }
+                if hasMention {
+                    pboard.declareTypes([.string], owner: nil)
+                    pboard.setString(FileMentionText.serialized(attributed, range: range), forType: .string)
+                    return true
+                }
+            }
+        }
+        return super.writeSelection(to: pboard, types: types)
+    }
+
     override func paste(_ sender: Any?) {
         let pasteboard = NSPasteboard.general
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
@@ -185,6 +289,37 @@ final class ComposerNSTextView: NSTextView {
            let data = pasteboard.data(forType: available) {
             onAttach?([.image(data, type)])
             return
+        }
+        if let resolver = mentionResolver,
+           let pasted = pasteboard.string(forType: .string),
+           !FileMentions.tokens(in: pasted, resolve: resolver).isEmpty,
+           let storage = textStorage {
+            let range = selectedRange()
+            if NSMaxRange(range) <= storage.length {
+                // A paste lands inside a word as part of it, as the draft's text reads on reload:
+                // a non-space on either side is carried as a sentinel so no chip starts or ends there.
+                let text = storage.string as NSString
+                let isSpace: (unichar) -> Bool = { $0 == 0x20 || $0 == 0x0A || $0 == 0x09 }
+                let joinsBefore = range.location > 0 && !isSpace(text.character(at: range.location - 1))
+                let joinsAfter = NSMaxRange(range) < text.length && !isSpace(text.character(at: NSMaxRange(range)))
+                let wrapped = (joinsBefore ? "x" : "") + pasted + (joinsAfter ? "x" : "")
+                let built = FileMentionText.attributed(
+                    from: wrapped,
+                    attributes: plainTypingAttributes,
+                    font: activeFont,
+                    accent: Chrome.accentNSColor,
+                    resolve: resolver
+                )
+                let start = joinsBefore ? 1 : 0
+                let attributed = built.attributedSubstring(from: NSRange(location: start, length: built.length - start - (joinsAfter ? 1 : 0)))
+                if shouldChangeText(in: range, replacementString: attributed.string) {
+                    storage.replaceCharacters(in: range, with: attributed)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: range.location + attributed.length, length: 0))
+                    stripMentionTypingAttributes()
+                }
+                return
+            }
         }
         pasteAsPlainText(sender)
     }
@@ -211,7 +346,7 @@ final class ComposerNSTextView: NSTextView {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byWordWrapping
         return [
-            .font: font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14)),
+            .font: font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14)),
             .foregroundColor: NSColor.placeholderTextColor,
             .paragraphStyle: paragraphStyle,
         ]
@@ -220,8 +355,8 @@ final class ComposerNSTextView: NSTextView {
     private var attributedPlaceholder: NSAttributedString {
         let attributes = placeholderAttributes
         guard !placeholderHint.isEmpty else { return NSAttributedString(string: placeholder, attributes: attributes) }
-        let placeholderFont = font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14))
-        let hintFont = NSFont.systemFont(ofSize: placeholderFont.pointSize * 0.85)
+        let placeholderFont = font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
+        let hintFont = ThemeTypeface.nsFont(size: placeholderFont.pointSize * 0.85)
         let hint = placeholderHint as NSString
         let hintSize = hint.size(withAttributes: [.font: hintFont])
         let pillSize = NSSize(width: ceil(hintSize.width) + 14, height: ceil(hintSize.height) + 4)
@@ -264,7 +399,7 @@ final class ComposerNSTextView: NSTextView {
     }
 
     private var placeholderRect: NSRect {
-        let placeholderFont = font ?? NSFont.systemFont(ofSize: TypeScale.shared.content(14))
+        let placeholderFont = font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
         let padding = textContainer?.lineFragmentPadding ?? 0
         let width = min(textContainer?.size.width ?? bounds.width, bounds.width - textContainerInset.width * 2)
         return NSRect(
@@ -313,6 +448,9 @@ struct ComposerTextView: NSViewRepresentable {
     /// types in the chat leaves the caret where it is.
     var takesFocusOnAppear = true
     var pointSize: CGFloat = TypeScale.shared.content(14)
+    var serif: Bool = TypeScale.shared.serif
+    /// The thread's working directory: `@path` mentions resolving inside it show as chips.
+    var mentionRoot: String? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -332,7 +470,7 @@ struct ComposerTextView: NSViewRepresentable {
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: TypeScale.shared.content(14))
+        textView.font = ThemeTypeface.nsFont(size: pointSize)
         textView.textColor = .labelColor
         textView.insertionPointColor = Chrome.accentNSColor
         textView.textContainerInset = NSSize(width: 0, height: 2)
@@ -357,7 +495,9 @@ struct ComposerTextView: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 0
         textView.placeholder = placeholder
         textView.placeholderHint = placeholderHint
-        textView.string = text
+        textView.mentionRoot = mentionRoot
+        textView.mentionResolver = FileMentionText.resolver(root: mentionRoot)
+        textView.setModelText(text)
         textView.onAttach = onAttach
 
         scrollView.documentView = textView
@@ -368,6 +508,7 @@ struct ComposerTextView: NSViewRepresentable {
             Task { @MainActor in coordinator?.updateHeight() }
         }
         textView.onResign = { [weak coordinator] in
+            coordinator?.cancelPendingCursorChange()
             Task { @MainActor in coordinator?.parent.onBlur() }
         }
         Task { @MainActor in
@@ -390,9 +531,26 @@ struct ComposerTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
         textView.onAttach = onAttach
-        if textView.font?.pointSize != pointSize {
+        // A thread moved to another project resolves its mentions there: the chips are rebuilt
+        // from the same text, the caret kept at its place in it.
+        if textView.mentionRoot != mentionRoot {
+            let cursor = textView.modelCursorLocation
+            textView.mentionRoot = mentionRoot
+            textView.mentionResolver = FileMentionText.resolver(root: mentionRoot)
+            if !textView.hasMarkedText(), let storage = textView.textStorage {
+                textView.setModelText(text)
+                let location = textView.mentionResolver == nil ? min(cursor, storage.length) : FileMentionText.viewOffset(min(cursor, (text as NSString).length), in: storage)
+                textView.setSelectedRange(NSRange(location: location, length: 0))
+                Task { @MainActor in context.coordinator.updateHeight() }
+            }
+        }
+        let font = ThemeTypeface.nsFont(size: pointSize)
+        if textView.font?.fontName != font.fontName || textView.font?.pointSize != pointSize {
             let selection = textView.selectedRanges
-            textView.font = .systemFont(ofSize: pointSize)
+            textView.font = font
+            if textView.mentionResolver != nil, let storage = textView.textStorage {
+                FileMentionText.relabel(storage, font: font, accent: Chrome.accentNSColor)
+            }
             textView.setSelectedRanges(selection, affinity: textView.selectionAffinity, stillSelecting: false)
             textView.needsDisplay = true
             Task { @MainActor in context.coordinator.updateHeight() }
@@ -404,10 +562,18 @@ struct ComposerTextView: NSViewRepresentable {
         }
         // The caret follows the theme's accent; a theme change never rebuilds the view.
         let caret = Chrome.accentNSColor
-        if textView.insertionPointColor != caret { textView.insertionPointColor = caret }
-        if !textView.hasMarkedText(), textView.string != text {
-            textView.string = text
-            textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        if textView.insertionPointColor != caret {
+            textView.insertionPointColor = caret
+            if textView.mentionResolver != nil, let storage = textView.textStorage {
+                FileMentionText.relabel(storage, font: textView.activeFont, accent: caret)
+                textView.needsDisplay = true
+            }
+        }
+        if !textView.hasMarkedText(), textView.modelText != text {
+            textView.setModelText(text)
+            let end = textView.textStorage?.length ?? (textView.string as NSString).length
+            textView.setSelectedRange(NSRange(location: end, length: 0))
+            textView.stripMentionTypingAttributes()
             Task { @MainActor in context.coordinator.updateHeight() }
         }
     }
@@ -416,21 +582,44 @@ struct ComposerTextView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ComposerTextView
         weak var textView: ComposerNSTextView?
+        private var cursorNotifyPending = false
 
         init(parent: ComposerTextView) {
             self.parent = parent
         }
 
+        func cancelPendingCursorChange() {
+            cursorNotifyPending = false
+        }
+
+        private func scheduleCursorChange() {
+            guard !cursorNotifyPending else { return }
+            cursorNotifyPending = true
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.cursorNotifyPending, let textView = self.textView else { return }
+                    self.cursorNotifyPending = false
+                    self.parent.onCursorChange(textView.modelCursorLocation)
+                }
+            }
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            parent.text = textView.string
+            parent.text = textView.modelText
+            if textView.mentionResolver != nil,
+               let storage = textView.textStorage,
+               storage.string.utf16.contains(0xFFFC) {
+                FileMentionText.relabel(storage, font: textView.activeFont, accent: Chrome.accentNSColor)
+            }
             updateHeight()
-            parent.onCursorChange(textView.selectedRange().location)
+            scheduleCursorChange()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let textView else { return }
-            parent.onCursorChange(textView.selectedRange().location)
+            textView.stripMentionTypingAttributes()
+            scheduleCursorChange()
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {

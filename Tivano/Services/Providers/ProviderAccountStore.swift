@@ -54,16 +54,6 @@ enum ProviderAccountStore {
         return (path as NSString).expandingTildeInPath
     }
 
-    nonisolated static func writeClaudeIdentity(_ candidate: ClaudeSwapImportCandidate, into home: String) throws {
-        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
-        var identity: [String: String] = ["emailAddress": candidate.email]
-        identity["accountUuid"] = candidate.accountID
-        identity["organizationUuid"] = candidate.organizationID
-        identity["organizationName"] = candidate.organizationName
-        let data = try JSONSerialization.data(withJSONObject: ["oauthAccount": identity])
-        try writePrivate(data, to: URL(fileURLWithPath: home).appendingPathComponent(".claude.json"))
-    }
-
     nonisolated static func claudeIdentity(home: String, isDefault: Bool = false) -> JSONValue? {
         guard !CaptureRun.isEnabled else { return nil }
         let url = isDefault ? URL(fileURLWithPath: LoginEnvironment.homeDirectory).appendingPathComponent(".claude.json")
@@ -121,18 +111,6 @@ enum ProviderAccountStore {
         }
         do { try FileManager.default.removeItem(at: target) }
         catch CocoaError.fileNoSuchFile { return }
-    }
-
-    nonisolated static func replaceClaudeMetadata(_ data: Data?, home: String) throws {
-        guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
-        // Reuse the credential boundary before writing to a managed profile.
-        _ = try ClaudeAccountCredentials.snapshot(configDirectory: home)
-        let url = URL(fileURLWithPath: home).appendingPathComponent(".claude.json")
-        if let data { try writePrivate(data, to: url) }
-        else {
-            do { try FileManager.default.removeItem(at: url) }
-            catch CocoaError.fileNoSuchFile { return }
-        }
     }
 
     nonisolated static func codexIdentity(home: String) -> CodexIdentity? {

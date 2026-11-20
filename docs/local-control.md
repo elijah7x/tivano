@@ -1,8 +1,8 @@
 # Local-control CLI (protocol v1)
 
 Local control controls **an already-running Tivano**. It is off by default. In
-Settings → General, in the Local control section above Power, turn on Local control
-yourself; only its own switch needs to be on. Turning it off stops listening and
+Settings → Connections, turn on Local control yourself; only its own switch needs
+to be on. Turning it off stops listening and
 shuts down existing connections. It does not cancel
 already-accepted turns or worktree preparation. Approvals and questions remain in
 the App; clients can observe waiting but cannot approve, answer, log in or grant
@@ -19,7 +19,7 @@ serves the same commands to cloud agents over a loopback HTTP listener.
 
 The native `tivano-control` helper ships inside each signed App's
 `Contents/Helpers`, using the App's Developer ID team and hardened runtime.
-Settings → General → Local control (above Power) → Install or repair CLI creates
+Settings → Connections → Local control → Install or repair CLI creates
 a symlink in `~/.local/bin`:
 
 - Release: `tivano`
@@ -70,9 +70,7 @@ tivano-dev interrupt THREAD_UUID --turn TURN_UUID
 tivano-dev operation 'INSTANCE_UUID/OPERATION_UUID/ISSUED_MILLISECONDS'
 tivano-dev settings get
 tivano-dev settings set textGeneration automatic
-tivano-dev settings set antiSlopEnabled true
-tivano-dev settings set performanceMode true
-tivano-dev settings set showsSkylight false
+tivano-dev settings set weatherWindow false
 ```
 
 `info` reports protocol/instance/edition, methods, limits and retention.
@@ -206,19 +204,17 @@ identifiers help that reconciliation but are not a durable exactly-once ledger.
 
 ## Typed settings
 
-Only `textGeneration` (`automatic|claude|codex|off`), `antiSlopEnabled` (Bool),
-`performanceMode` (Bool) and `showsSkylight` (Bool) are exposed. Invalid key/type
-pairs are rejected before any setter runs. Writes use AppSettings setters, not
-arbitrary defaults or view-only onChange behavior. Reads/writes return stored
-preference and effective value separately where different.
+Only `textGeneration` (`automatic|claude|codex|grok|pi|off`) and `weatherWindow` (Bool)
+are exposed. Invalid key/type pairs are rejected before any setter runs. Writes
+use AppSettings setters, not arbitrary defaults or view-only onChange behavior.
+Reads/writes return stored preference and effective value separately where
+different.
 
-Performance mode clears `clearerBackdrop`, matching the existing App setter; it
-suppresses effective Skylight visibility without erasing `showsSkylight`.
-Turning performance mode off restores that preferred visibility, but does not
-restore the cleared backdrop setting. Text-generation effectiveness is the App's
-no-preferred-provider choice; individual threads can prefer a different engine.
-Anti-slop changes affect subsequent session signatures, not an accepted turn's
-already-delivered policy.
+Non-Liquid Glass theme styles and macOS Reduce Motion suppress effective weather
+window visibility (`showsWeatherNow`) without erasing `weatherWindowEnabled`.
+Returning to Liquid Glass with Reduce Motion off restores that preferred
+visibility. Text-generation effectiveness is the App's no-preferred-provider
+choice; individual threads can prefer a different engine.
 
 ## Transport and shutdown contract
 

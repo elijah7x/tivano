@@ -52,6 +52,26 @@ def constant(path, marker):
     return matches[0].replace("private ", "") + "\n"
 
 
+def app_info_property(source, name):
+    # Keep whole members, including switch expressions, closures and computed
+    # properties. AppInfo's sibling declarations share an indentation level.
+    pattern = re.compile(r"^([ \t]+)(?:nonisolated )?static (?:let|var) "
+                         + re.escape(name) + r"\b(?=\s*[:={])", re.MULTILINE)
+    matches = list(pattern.finditer(source))
+    if len(matches) != 1:
+        raise ValueError(f"Expected one AppInfo property: {name}")
+    start = matches[0]
+    boundary = re.compile(r"^(?:" + re.escape(start.group(1))
+                          + r"(?:nonisolated )?static\b|})", re.MULTILINE)
+    end = boundary.search(source, start.end())
+    if end is None:
+        raise ValueError(f"Missing AppInfo property boundary: {name}")
+    member = source[start.start():end.start()]
+    if member.count("{") != member.count("}"):
+        raise ValueError(f"Unbalanced AppInfo property: {name}")
+    return member
+
+
 COMMON = r'''
 import Foundation
 import CoreFoundation
@@ -301,13 +321,27 @@ def updater_source():
     swift += declaration(UPDATER, "enum AutoUpdateState:") + "\n"
     swift += declaration(UPDATER, "enum AutoUpdateFailure:") + "\n"
     # Version identity comes from production and the fixture bundle's Info.plist;
-    # only edition selection is synthetic so updater-dev keeps exercising its gate.
+    # only edition selection is synthetic so Dev and Preview exercise their gates.
     app_info = ROOT / "Tivano/Core/Support/Text.swift"
-    swift += "enum AppInfo {\n"
+    app_info_source = declaration(app_info, "enum AppInfo {")
+    swift += r'''
+enum AppEdition: String, Sendable { case release, dev, preview }
+enum AppInfo {
+    static let edition: AppEdition = {
+        guard let value = ProcessInfo.processInfo.environment["FIXTURE_EDITION"],
+              let edition = AppEdition(rawValue: value) else {
+            fatalError("Missing or invalid fixture edition")
+        }
+        return edition
+    }()
+    static let isDevelopment = edition == .dev
+    static let isPreview = edition == .preview
+    static let allowsAppUpdates = edition == .release
+'''
     for name in ("numericVersion", "releaseVersion", "version"):
-        swift += constant(app_info, "static let " + name)
+        swift += app_info_property(app_info_source, name)
     swift += declaration(app_info, "    nonisolated static func releaseVersion(in ") + "\n"
-    swift += '    static let isDevelopment = ProcessInfo.processInfo.environment["FIXTURE_DEV"] == "1"\n}\n'
+    swift += "}\n"
     swift += r'''
 // These stubs represent application state, not cleanup policy.
 enum CaptureRun {
@@ -700,11 +734,19 @@ func stage(_ version: String, installedVersion: String? = nil) throws -> URL {
             try require(chmod(folder.path, 0o000) == 0, "Cannot deny fixture permissions")
             try await expectAsyncError("permission failure must not become zero usage") { _ = try await updater.measureStorage() }
             try await expectAsyncError("permission failure must propagate from cleanup") { try await updater.clearObsoleteStorage() }
-        case "updater-capture", "updater-dev":
+        case "updater-capture", "updater-dev", "updater-preview":
             let folder = try stage("1.0.0")
+            if test == "updater-preview" {
+                try require(AppInfo.edition == .preview && AppInfo.isPreview && !AppInfo.isDevelopment && !AppInfo.allowsAppUpdates,
+                            "Preview fixture did not select the isolated edition")
+            }
             try require(try await updater.measureStorage() == RuntimeStorageUsage(), "Disabled updater scanned storage")
             try await updater.clearObsoleteStorage()
             try require(Fixture.exists(folder) && updater.scheduleCalls == 0, "Disabled updater touched storage")
+            updater.prepareInBackground(AvailableUpdate(version: "3.0.0"))
+            try require(updater.prepareTask == nil && updater.deferredPreparation == nil && updater.downloadCalls == 0
+                        && updater.scheduleCalls == 0 && updater.autoUpdate == .idle,
+                        "Disabled updater scheduled or prepared an update")
         default: throw CheckFailure("Unknown updater case \(test)")
         }
         print("PASS \(test) (signature/application-state fixtures)")
@@ -835,7 +877,7 @@ UPDATER_CASES = [
     "updater-versions", "updater-installer", "updater-busy", "updater-unknown",
     "updater-version-mismatch", "updater-signature", "updater-internal-link",
     "updater-external-link", "updater-hardlink", "updater-ancestor", "updater-package-root-link",
-    "updater-permissions", "updater-capture", "updater-dev",
+    "updater-permissions", "updater-capture", "updater-dev", "updater-preview",
     "updater-replay", "updater-no-replay", "updater-failed-cleanup-replay",
     "updater-partial-cleanup", "updater-busy-after-measure", "updater-late-hardlink",
     "updater-replaced-version", "updater-replaced-package", "updater-completed-installer",
@@ -896,7 +938,7 @@ def main():
                 environment_case = environment.copy()
                 environment_case.update(HOME=str(root), TMPDIR=str(root),
                                         TIVANO_STORAGE_FIXTURE=str(root),
-                                        FIXTURE_DEV="1" if case == "updater-dev" else "0",
+                                        FIXTURE_EDITION={"updater-dev": "dev", "updater-preview": "preview"}.get(case, "release"),
                                         FIXTURE_CAPTURE="1" if case == "updater-capture" else "0",
                                         FIXTURE_BAD_SIGNATURE="1" if case == "updater-signature" else "0")
                 command = [str(executable), case]

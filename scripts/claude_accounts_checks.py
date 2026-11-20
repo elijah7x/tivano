@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise production Claude credential/import code with synthetic files and Keychain.
+"""Exercise production Claude credential and account code with synthetic files and Keychain.
 
-Never reads the real login environment, Keychain, or CSWAP directory, starts a
-provider, or makes a network request. Security calls and account-service dependencies in the generated copy
-are replaced; credential parsing and ProviderAccounts transaction logic are unchanged.
+Never reads the real login environment, Keychain, starts a provider, or makes a
+network request. Security calls and account-service dependencies in the generated
+copy are replaced; credential parsing and ProviderAccounts transaction logic are unchanged.
 """
 import os
 from pathlib import Path
@@ -29,7 +29,7 @@ enum ProviderAccountStore {
     static var stored = ProviderAccountBook()
     static var saveCalls = 0
     static var failOnSave: Int?
-    static var failMetadata = false
+    static var orgNameByHome: [String: String] = [:]
     static func load() -> ProviderAccountBook { stored }
     @discardableResult static func save(_ book: ProviderAccountBook) -> Bool {
         do { try saveThrowing(book); return true } catch { return false }
@@ -40,6 +40,9 @@ enum ProviderAccountStore {
         stored = book
     }
     static func defaultCodexHome(environment: [String: String]) -> String { LoginEnvironment.homeDirectory + "/codex" }
+    static func claudeIdentity(home: String, isDefault: Bool = false) -> [String: String]? {
+        orgNameByHome[home].map { ["organizationName": $0] }
+    }
     static func makeHome(provider: ProviderKind, id: UUID, linkingFrom: String) throws -> String {
         let path = accountsRoot + "/" + provider.rawValue + "/" + id.uuidString
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
@@ -49,18 +52,15 @@ enum ProviderAccountStore {
     static func removeHomeThrowing(_ home: String) throws {
         if FileManager.default.fileExists(atPath: home) { try FileManager.default.removeItem(atPath: home) }
     }
-    static func writeClaudeIdentity(_ candidate: ClaudeSwapImportCandidate, into home: String) throws {
-        try replaceClaudeMetadata(Data("{}".utf8), home: home)
-    }
-    static func replaceClaudeMetadata(_ data: Data?, home: String) throws {
-        if failMetadata { throw CocoaError(.fileWriteUnknown) }
-        let url = URL(fileURLWithPath: home + "/.claude.json")
-        if let data { try data.write(to: url) }
-        else if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
-    }
     static func codexIdentity(home: String) -> CodexIdentity? { nil }
     static func codexImportCandidates(defaultHome: String) -> [CodexImportCandidate] { [] }
     static func importCodexCredential(_ candidate: CodexImportCandidate, into home: String) throws {}
+}
+extension Dictionary where Key == String, Value == String {
+    var string: String? { nil }
+}
+extension String {
+    var string: String? { self }
 }
 struct CodexImportCandidate { var id: String; var identity: CodexIdentity; var label: String? }
 
@@ -82,13 +82,18 @@ struct PlanLimits: Equatable, Sendable {
     static var reads = 0
     static var inFlight = 0
     static var peak = 0
+    static var delayNanoseconds: UInt64 = 0
     static var result = PlanLimits(problem: "fixture unavailable")
     static func read(_ provider: ProviderKind, executable: URL, environment: [String: String]) async -> PlanLimits? {
         reads += 1
         inFlight += 1
         peak = max(peak, inFlight)
         defer { inFlight -= 1 }
-        await Task.yield()
+        if delayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+        } else {
+            await Task.yield()
+        }
         return result
     }
     static func failure(_ message: String) -> PlanLimits { PlanLimits(problem: message) }
@@ -100,7 +105,7 @@ struct PlanLimits: Equatable, Sendable {
     // Storage for the production catalog rules extracted from ProviderRegistry.swift below.
     var catalogs: [ProviderKind: [ModelOption]] = [:]
     var catalogFetchedAt: [ProviderKind: Date] = [:]
-    static var loginIdentity = ClaudeAccountIdentity(accountID: "new-account", organizationID: "org", email: "new@example.test")
+    static var loginIdentity = ClaudeAccountIdentity(accountID: "acct-one", organizationID: "org-one", email: "one@example.test")
     func executable(for provider: ProviderKind) -> URL? { URL(fileURLWithPath: "/fixture-never-executed") }
     func baseEnvironment(for provider: ProviderKind) -> [String: String] { LoginEnvironment.current }
     func environment(for provider: ProviderKind, account: ProviderAccount) -> [String: String] {
@@ -136,63 +141,37 @@ enum TextCleanup { static func stripANSI(_ text: String) -> String { text } }
 extension String { var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) } }
 struct ShellResult { var status: Int32 = 0; var stdout = Data(); var stderr = Data(); var timedOut = false; var succeeded: Bool { status == 0 }; var output: String { String(decoding: stdout, as: UTF8.self) }; var errorOutput: String { String(decoding: stderr, as: UTF8.self) } }
 @MainActor enum Shell {
-    static var securityResult = ShellResult(status: 44)
+    static var securityFindResult = ShellResult(status: 44)
+    static var securityDeleteResult = ShellResult(status: 0)
     static var securityArguments: [[String]] = []
+    static var cliCommands: [(arguments: [String], configDir: String?)] = []
+    static var loginShouldFail = false
     static var calls = 0
     static func run(_ executable: URL, _ arguments: [String], in directory: URL? = nil, environment: [String: String], timeout: Double) async throws -> ShellResult {
         if executable.path == "/usr/bin/security" {
             securityArguments.append(arguments)
-            return securityResult
+            if arguments.first == "delete-generic-password" {
+                return securityDeleteResult
+            }
+            return securityFindResult
         }
         calls += 1
-        if let home = environment["CLAUDE_CONFIG_DIR"] {
-            try ClaudeAccountCredentials.write(Data(#"{"claudeAiOauth":{"accessToken":"new-fixture","refreshToken":"new-refresh"}}"#.utf8), configDirectory: home)
+        cliCommands.append((arguments, environment["CLAUDE_CONFIG_DIR"]))
+        if arguments == ["auth", "login"] {
+            if loginShouldFail { return ShellResult(status: 1) }
+            if let home = environment["CLAUDE_CONFIG_DIR"] {
+                ProviderAccountStore.orgNameByHome[home] = "Fixture Org"
+            }
         }
         return ShellResult()
     }
 }
 enum FixtureKeychain {
-    static var addGate: DispatchSemaphore?
-    static var copyGate: DispatchSemaphore?
-    static var addWaiting = false
-    static var copyWaiting = false
-    static var items: [String: Data] = [:]
-    static var reads = 0
-    static var denied = false
+    static var deleteCalls = 0
     static var deleteDenied = false
-    static var lastService = ""
-    static func key(_ query: CFDictionary) -> String {
-        let q = query as NSDictionary
-        return (q[kSecAttrService] as! String) + ":" + (q[kSecAttrAccount] as! String)
-    }
-    static func copy(_ query: CFDictionary, _ value: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
-        reads += 1
-        if let gate = copyGate {
-            copyWaiting = true
-            gate.wait()
-        }
-        lastService = (query as NSDictionary)[kSecAttrService] as! String
-        if denied { return errSecAuthFailed }
-        guard let data = items[key(query)] else { return errSecItemNotFound }
-        value?.pointee = data as CFData
-        return errSecSuccess
-    }
-    static func update(_ query: CFDictionary, _ values: CFDictionary) -> OSStatus {
-        guard items[key(query)] != nil else { return errSecItemNotFound }
-        items[key(query)] = (values as NSDictionary)[kSecValueData] as? Data
-        return errSecSuccess
-    }
-    static func add(_ query: CFDictionary, _ value: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
-        if let gate = addGate {
-            addWaiting = true
-            gate.wait()
-        }
-        items[key(query)] = (query as NSDictionary)[kSecValueData] as? Data
-        return errSecSuccess
-    }
     static func delete(_ query: CFDictionary) -> OSStatus {
-        if deleteDenied { return errSecAuthFailed }
-        return items.removeValue(forKey: key(query)) == nil ? errSecItemNotFound : errSecSuccess
+        deleteCalls += 1
+        return deleteDenied ? errSecAuthFailed : errSecSuccess
     }
 }
 func check(_ condition: Bool, _ label: String) { precondition(condition, label) }
@@ -211,7 +190,7 @@ CHECKS = r'''
         let home = LoginEnvironment.homeDirectory
         let profile = home + "/accounts/claude/a"
         let other = home + "/accounts/claude/b"
-        for path in [profile, other, home + "/.claude", home + "/.claude-swap-backup/credentials"] {
+        for path in [profile, other, home + "/.claude"] {
             try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
         }
         let payload = Data(#"{"claudeAiOauth":{"accessToken":"fixture-only","refreshToken":"fixture-refresh","expiresAt":1,"scopes":["user:inference"]},"trustedDeviceToken":"fixture-device"}"#.utf8)
@@ -219,206 +198,117 @@ CHECKS = r'''
         for bad in [#"{"claudeAiOauth":{"accessToken":""}}"#, #"{"claudeAiOauth":{"accessToken":"x","expiresAt":true}}"#, #"{"claudeAiOauth":{"accessToken":"x","refreshToken":4}}"#, "sk-ant-fixture"] {
             rejects("invalid credential") { _ = try ClaudeAccountCredentials.validated(Data(bad.utf8)) }
         }
-        try ClaudeAccountCredentials.write(payload, configDirectory: profile)
-        var env = LoginEnvironment.current
-        env["CLAUDE_CONFIG_DIR"] = profile
-        env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = profile
-        check(try ClaudeAccountCredentials.read(environment: env, isManaged: true) == payload, "managed roundtrip")
-        env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = other
-        rejects("mismatched selectors") { _ = try ClaudeAccountCredentials.read(environment: env, isManaged: true) }
-        env["CLAUDE_CONFIG_DIR"] = other
-        check(try ClaudeAccountCredentials.read(environment: env, isManaged: true) == nil, "no fallback to another account")
-        try payload.write(to: URL(fileURLWithPath: other + "/.credentials.json"))
-        FixtureKeychain.denied = true
-        rejects("denied Keychain cannot fall back to file") { _ = try ClaudeAccountCredentials.read(environment: env, isManaged: true) }
-        FixtureKeychain.denied = false
-        check(try ClaudeAccountCredentials.read(environment: env, isManaged: true) == payload, "missing Keychain permits own file")
-        env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = ""
-        _ = try ClaudeAccountCredentials.read(environment: env, isManaged: false)
-        check(FixtureKeychain.lastService == "Claude Code-credentials", "empty secure selector wins")
-        env.removeValue(forKey: "CLAUDE_SECURESTORAGE_CONFIG_DIR")
-        _ = try ClaudeAccountCredentials.read(environment: env, isManaged: false)
-        check(FixtureKeychain.lastService.hasPrefix("Claude Code-credentials-"), "custom default remains readable")
-        rejects("outside managed root") { try ClaudeAccountCredentials.write(payload, configDirectory: home + "/.claude") }
-        let link = home + "/accounts/claude/link"
-        try fm.createSymbolicLink(atPath: link, withDestinationPath: profile)
-        rejects("symlink profile") { try ClaudeAccountCredentials.write(payload, configDirectory: link) }
-        let indexURL = URL(fileURLWithPath: home + "/.claude-swap-backup/sequence.json")
-        let index = Data(#"{"sequence":[2,1],"accounts":{"1":{"email":"one@example.test","uuid":"one","organizationUuid":"org"},"2":{"email":"two@example.test","uuid":"two","organizationUuid":"org"}}}"#.utf8)
-        try index.write(to: indexURL)
-        let reads = FixtureKeychain.reads
-        let candidates = try ClaudeSwapImport.candidates()
-        check(candidates.map(\.slot) == ["2", "1"], "index order")
-        check(FixtureKeychain.reads == reads, "preview never reads credentials")
-        let selected = candidates[0]
-        let encodedURL = URL(fileURLWithPath: home + "/.claude-swap-backup/credentials/.creds-2-two@example.test.enc")
-        try Data(payload.base64EncodedString().utf8).write(to: encodedURL)
-        check(try ClaudeSwapImport.credential(for: selected) == ClaudeAccountCredentials.sanitizedImport(payload), "CSWAP import")
-        check(try Data(contentsOf: indexURL) == index, "source index unchanged")
-        try Data().write(to: encodedURL)
-        rejects("empty backup") { _ = try ClaudeSwapImport.credential(for: selected) }
-        check(FixtureKeychain.reads == reads, "empty backup never falls back")
-        try Data(String(decoding: index, as: UTF8.self).replacingOccurrences(of: "two@example.test", with: "new@example.test").utf8).write(to: indexURL)
-        rejects("stale candidate") { _ = try ClaudeSwapImport.credential(for: selected) }
-        try Data(#"{"sequence":[1],"accounts":{"1":{"email":"../escape"}}}"#.utf8).write(to: indexURL)
-        rejects("index path traversal") { _ = try ClaudeSwapImport.candidates() }
-        try ClaudeAccountCredentials.remove(configDirectory: profile)
-        check(FixtureKeychain.items.isEmpty, "local remove")
-        let identity = ClaudeAccountIdentity(accountID: "a", organizationID: "o", email: "one@example.test")
-        check(!identity.matches(.init(accountID: "a", organizationID: "other", email: identity.email)), "organization matters")
-        let oldAccount = Data(#"{"id":"00000000-0000-0000-0000-000000000001","provider":"codex","addedAt":0}"#.utf8)
-        let account = try JSONDecoder().decode(ProviderAccount.self, from: oldAccount)
-        check(account.claudeIdentity == nil && account.organizationID == nil, "old account decoding")
-        let extended = Data(#"{"claudeAiOauth":{"accessToken":"fixture-only","clientId":"fixture-client","refreshTokenExpiresAt":9},"trustedDeviceToken":"fixture-device","mcpOAuth":{"secret":"fixture-mcp"},"designOauth":{"refreshToken":"fixture-design"},"cloudSessionsOauth":{"refreshToken":"fixture-cloud"}}"#.utf8)
-        let sanitized = try ClaudeAccountCredentials.sanitizedImport(extended)
-        let clean = try JSONSerialization.jsonObject(with: sanitized) as! [String: Any]
-        check(Set(clean.keys) == ["claudeAiOauth", "trustedDeviceToken"], "only login grants cross profiles")
-        check((clean["claudeAiOauth"] as? [String: Any])?["clientId"] as? String == "fixture-client", "OAuth client retained")
-        check(try ClaudeAccountCredentials.validated(extended) == extended, "native storage preserves unrelated fields")
-        try ClaudeAccountCredentials.write(extended, configDirectory: profile)
-        let before = try ClaudeAccountCredentials.snapshot(configDirectory: profile)
-        try ClaudeAccountCredentials.restore(.init(keychain: sanitized, file: nil), configDirectory: profile)
-        try ClaudeAccountCredentials.restore(before, configDirectory: profile)
-        check(try ClaudeAccountCredentials.read(configDirectory: profile, isDefault: false) == extended, "rollback restores full native data")
-        FixtureKeychain.deleteDenied = true
-        rejects("cleanup denial surfaces") { try ClaudeAccountCredentials.remove(configDirectory: profile) }
-        check(try ClaudeAccountCredentials.read(configDirectory: profile, isDefault: false) == extended, "failed cleanup retains Keychain")
-        FixtureKeychain.deleteDenied = false
-        try ClaudeAccountCredentials.remove(configDirectory: profile)
-        check(!account.requiresClaudeActivation && !account.requiresClaudeCleanup, "legacy nil flags remain compatible")
-        var pending = ProviderAccount(id: UUID(), provider: .claude, home: profile, name: nil, email: nil, plan: nil, accountID: nil, addedAt: .now)
-        pending.claudeImportPending = true
-        pending.claudeCleanupRequired = true
-        let roundtrip = try JSONDecoder().decode(ProviderAccount.self, from: JSONEncoder().encode(pending))
-        check(roundtrip.requiresClaudeActivation && roundtrip.requiresClaudeCleanup, "pending and cleanup survive restart")
-        try index.write(to: indexURL)
-        try Data(payload.base64EncodedString().utf8).write(to: encodedURL)
-        let onMain = try await ClaudeAccountCredentials.offMain { Thread.isMainThread }
-        check(!onMain, "credential work leaves the main thread")
+
+        // Default and managed unattended reads both go through /usr/bin/security so CLI ACLs match.
         let plain = LoginEnvironment.current
-        Shell.securityResult = ShellResult(status: 0, stdout: payload)
-        let k = FixtureKeychain.reads
-        let defaultReadFromSecurity = try await ClaudeAccountCredentials.readUnattended(environment: plain, isManaged: false)
-        check(defaultReadFromSecurity == payload, "default account reads security output")
-        check(FixtureKeychain.reads == k, "default account never reads Keychain in-process")
+        Shell.securityFindResult = ShellResult(status: 0, stdout: payload)
+        check(try await ClaudeAccountCredentials.readUnattended(environment: plain, isManaged: false) == payload, "default account reads security output")
         check(Shell.securityArguments.last == ["find-generic-password", "-s", "Claude Code-credentials", "-a", "fixture", "-w"], "default security arguments")
-        Shell.securityResult = ShellResult(status: 0, stdout: Data(payload.map { String(format: "%02x", $0) }.joined().utf8))
+        Shell.securityFindResult = ShellResult(status: 0, stdout: Data(payload.map { String(format: "%02x", $0) }.joined().utf8))
         check(try await ClaudeAccountCredentials.readUnattended(environment: plain, isManaged: false) == payload, "hex output decoded")
-        Shell.securityResult = ShellResult(status: 44)
-        check(try await ClaudeAccountCredentials.readUnattended(environment: plain, isManaged: false) == nil, "missing item without file")
-        let defaultCredentialURL = URL(fileURLWithPath: home + "/.claude/.credentials.json")
-        try payload.write(to: defaultCredentialURL)
-        check(try await ClaudeAccountCredentials.readUnattended(environment: plain, isManaged: false) == payload, "missing item falls back to file")
-        Shell.securityResult = ShellResult(status: 51)
-        await rejectsAsync("denied Keychain never selects file") {
-            _ = try await ClaudeAccountCredentials.readUnattended(environment: plain, isManaged: false)
-        }
-        for status: Int32 in [0, 44] {
-            Shell.securityResult = ShellResult(status: status, timedOut: true)
-            await rejectsAsync("timed-out security result never selects file") {
-                _ = try await ClaudeAccountCredentials.readUnattended(environment: plain, isManaged: false)
-            }
-        }
-        Shell.securityResult = ShellResult(status: 44)
-        try fm.removeItem(at: defaultCredentialURL)
-        try ClaudeAccountCredentials.write(payload, configDirectory: profile)
+
         var managedEnv = LoginEnvironment.current
         managedEnv["CLAUDE_CONFIG_DIR"] = profile
         managedEnv["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = profile
-        let copyGate = DispatchSemaphore(value: 0)
-        FixtureKeychain.copyGate = copyGate
-        var ticks = 0
-        let ticker = Task { @MainActor in
-            while !Task.isCancelled {
-                ticks += 1
-                try? await Task.sleep(nanoseconds: 20_000_000)
+        Shell.securityFindResult = ShellResult(status: 0, stdout: payload)
+        check(try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true) == payload, "managed account reads via security tool")
+        check(Shell.securityArguments.last?[2].hasPrefix("Claude Code-credentials-") == true, "managed account uses hashed Keychain service")
+
+        managedEnv["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = other
+        await rejectsAsync("mismatched selectors rejected") {
+            _ = try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true)
+        }
+        managedEnv["CLAUDE_CONFIG_DIR"] = other
+        Shell.securityFindResult = ShellResult(status: 44)
+        check(try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true) == nil, "missing managed item without file")
+        try payload.write(to: URL(fileURLWithPath: other + "/.credentials.json"))
+        check(try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true) == payload, "missing managed item falls back to own file")
+        Shell.securityFindResult = ShellResult(status: 51)
+        await rejectsAsync("denied Keychain never selects file") {
+            _ = try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true)
+        }
+        for status: Int32 in [0, 44] {
+            Shell.securityFindResult = ShellResult(status: status, timedOut: true)
+            await rejectsAsync("timed-out security result never selects file") {
+                _ = try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true)
             }
         }
-        let started = Date()
-        await rejectsAsync("blocked managed read times out") {
-            _ = try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true, timeout: 0.3)
+        Shell.securityFindResult = ShellResult(status: 44)
+        var emptySecure = managedEnv
+        emptySecure["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = ""
+        _ = try await ClaudeAccountCredentials.readUnattended(environment: emptySecure, isManaged: false)
+        check(Shell.securityArguments.last?[2] == "Claude Code-credentials", "empty secure selector wins for default")
+        let link = home + "/accounts/claude/link"
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: profile)
+        await rejectsAsync("symlink profile rejected") {
+            try await ClaudeAccountCredentials.remove(configDirectory: link)
         }
-        check(Date().timeIntervalSince(started) < 3, "stuck prompt times out")
-        // The Keychain read is still blocked here; give the main-actor ticker up to 3 s to
-        // show it keeps running, instead of relying on the 0.3 s timeout window on a busy host.
-        let tickDeadline = Date().addingTimeInterval(3)
-        while ticks <= 2 && FixtureKeychain.copyWaiting && Date() < tickDeadline {
-            try? await Task.sleep(nanoseconds: 10_000_000)
+        await rejectsAsync("outside managed root rejected") {
+            try await ClaudeAccountCredentials.remove(configDirectory: home + "/.claude")
         }
-        check(ticks > 2, "main actor keeps running while Keychain waits")
-        check(FixtureKeychain.copyWaiting, "managed read reached blocked Keychain")
-        let stuckReads = FixtureKeychain.reads
-        let retryStarted = Date()
-        await rejectsAsync("second unattended read fails while one is stuck") {
-            _ = try await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true, timeout: 5)
+
+        // Remove uses /usr/bin/security first, then falls back to legacy Keychain delete for old Tivano items.
+        Shell.securityDeleteResult = ShellResult(status: 0)
+        let deleteBefore = FixtureKeychain.deleteCalls
+        try await ClaudeAccountCredentials.remove(configDirectory: other)
+        check(!fm.fileExists(atPath: other + "/.credentials.json"), "remove deletes .credentials.json")
+        check(Shell.securityArguments.last?.first == "delete-generic-password", "remove tries security tool first")
+        check(FixtureKeychain.deleteCalls == deleteBefore, "successful security delete skips legacy Keychain delete")
+
+        Shell.securityDeleteResult = ShellResult(status: 51)
+        FixtureKeychain.deleteDenied = false
+        try await ClaudeAccountCredentials.remove(configDirectory: profile)
+        check(FixtureKeychain.deleteCalls == deleteBefore + 1, "denied security delete falls back to legacy Keychain delete")
+
+        FixtureKeychain.deleteDenied = true
+        await rejectsAsync("both security and legacy Keychain delete denied surfaces error") {
+            try await ClaudeAccountCredentials.remove(configDirectory: profile)
         }
-        check(Date().timeIntervalSince(retryStarted) < 1 && FixtureKeychain.reads == stuckReads, "stuck read makes later unattended reads fail fast")
-        let serial = try await ClaudeAccountCredentials.offMain { 7 }
-        check(serial == 7, "interactive credential work is not held by a stuck unattended read")
-        FixtureKeychain.copyGate = nil
-        copyGate.signal()
-        var released = false
-        for _ in 0..<60 where !released {
-            released = (try? await ClaudeAccountCredentials.readUnattended(environment: managedEnv, isManaged: true, timeout: 1)) == payload
-            if !released { try await Task.sleep(nanoseconds: 50_000_000) }
-        }
-        check(released, "unattended slot frees once the prompt is answered")
-        FixtureKeychain.copyWaiting = false
-        ticker.cancel()
-        try ClaudeAccountCredentials.remove(configDirectory: profile)
-        check(FixtureKeychain.items.isEmpty, "credential checks leave import storage empty")
+        FixtureKeychain.deleteDenied = false
+        Shell.securityDeleteResult = ShellResult(status: 0)
+
+        // Legacy account decoding compatibility.
+        let identity = ClaudeAccountIdentity(accountID: "a", organizationID: "o", email: "one@example.test")
+        check(!identity.matches(.init(accountID: "a", organizationID: "other", email: identity.email)), "organization matters")
+        let oldAccount = Data(#"{"id":"00000000-0000-0000-0000-000000000001","provider":"codex","addedAt":0}"#.utf8)
+        let decodedOld = try JSONDecoder().decode(ProviderAccount.self, from: oldAccount)
+        check(decodedOld.claudeIdentity == nil && decodedOld.organizationID == nil && !decodedOld.requiresClaudeActivation && !decodedOld.requiresClaudeCleanup, "old account decoding")
+
+        // Native addAccount runs `claude auth login` directly in the account's own CLAUDE_CONFIG_DIR.
         let registry = ProviderRegistry()
         let accounts = ProviderAccounts(registry: registry)
-        let initialSelection = accounts.activeAccount(for: .claude)?.id
-        let imported = await accounts.importClaudeAccounts([selected])
-        check(imported.first?.contains("awaiting activation") == true, "saved does not claim verified")
+        Shell.cliCommands.removeAll()
+        ProviderRegistry.loginIdentity = ClaudeAccountIdentity(accountID: "acct-1", organizationID: "org-1", email: "one@example.test")
+        let addError = await accounts.addAccount(.claude)
+        check(addError == nil, "native addAccount succeeds")
         let saved = accounts.accounts(for: .claude).first { !$0.isDefault }!
-        check(saved.requiresClaudeActivation && !saved.requiresClaudeCleanup, "import remains pending")
-        check(Shell.calls == 0 && ProviderRegistry.authCalls == 0 && PlanLimitsReader.reads == 0, "import starts no provider or quota requests")
-        check(!ProviderAccounts.canStartProcess(saved.id), "pending cannot start a process")
-        accounts.use(saved)
-        check(accounts.activeAccount(for: .claude)?.id == initialSelection, "pending cannot be selected")
-        let pendingRead = await accounts.refreshClaudeAccount(saved.id)
-        check(pendingRead == nil && PlanLimitsReader.reads == 0, "pending never reads quota")
-        ProviderAccountStore.failOnSave = ProviderAccountStore.saveCalls + 1
-        let activationFailure = await accounts.activateClaudeAccount(saved)
-        check(activationFailure != nil && accounts.account(id: saved.id)!.requiresClaudeActivation, "failed activation remains pending")
-        check(accounts.activeAccount(for: .claude)?.id == initialSelection, "failed activation preserves selection")
-        ProviderAccountStore.failOnSave = nil
-        let activated = await accounts.activateClaudeAccount(saved)
-        check(activated == nil && accounts.activeAccount(for: .claude)?.id == saved.id, "activation commits selection")
-        let firstRead = PlanLimitsReader.reads
-        _ = await accounts.refreshClaudeAccount(saved.id, force: true)
-        check(PlanLimitsReader.reads == firstRead, "failure cached even under force")
-        check(accounts.states[saved.id]?.auth == .unknown, "quota read does not claim verified identity")
-        let originalLogin = try ClaudeAccountCredentials.read(configDirectory: saved.home!, isDefault: false)
+        check(!saved.requiresClaudeActivation && !saved.requiresClaudeCleanup, "added account is immediately ready")
+        check(saved.email == "one@example.test" && saved.organizationName == "Fixture Org", "metadata recorded from CLI")
+        check(Shell.cliCommands.count == 1 && Shell.cliCommands[0].arguments == ["auth", "login"] && Shell.cliCommands[0].configDir == saved.home,
+              "addAccount runs login directly in target CLAUDE_CONFIG_DIR without temporary credential copy")
+
+        // Adding the same account+org again is rejected and cleaned up automatically.
+        Shell.cliCommands.removeAll()
+        let dupError = await accounts.addAccount(.claude)
+        check(dupError != nil, "duplicate Claude account is rejected")
+        check(accounts.accounts(for: .claude).filter { !$0.isDefault }.count == 1, "duplicate staging account cleaned up")
+        check(Shell.cliCommands.map(\.arguments) == [["auth", "login"], ["auth", "logout"]], "duplicate cleanup runs official auth logout")
+
+        // Re-sign-in with wrong account refuses and locks the profile until original account signs back in.
+        ProviderRegistry.loginIdentity = ClaudeAccountIdentity(accountID: "acct-other", organizationID: "org-other", email: "other@example.test")
         let mismatch = await accounts.signIn(accounts.account(id: saved.id)!)
-        check(mismatch != nil, "wrong-account login refused")
-        check(try ClaudeAccountCredentials.read(configDirectory: saved.home!, isDefault: false) == originalLogin, "wrong-account login leaves original bytes unchanged")
-        check(accounts.accounts(for: .claude).filter { !$0.isDefault }.count == 1, "temporary profile cleaned locally")
-        ProviderRegistry.loginIdentity = ClaudeAccountIdentity(accountID: saved.accountID!, organizationID: saved.organizationID!, email: saved.email!)
-        ProviderAccountStore.failOnSave = ProviderAccountStore.saveCalls + 3
-        let failedCommit = await accounts.signIn(accounts.account(id: saved.id)!)
-        check(failedCommit != nil, "login commit failure surfaces")
-        check(try ClaudeAccountCredentials.read(configDirectory: saved.home!, isDefault: false) == originalLogin, "failed login commit restores old credential")
-        check(!accounts.account(id: saved.id)!.requiresClaudeCleanup, "successful rollback restores original flags")
-        ProviderAccountStore.failOnSave = nil
-        let loggedIn = await accounts.signIn(accounts.account(id: saved.id)!)
-        check(loggedIn == nil, "verified managed login commits")
-        let persisted = ProviderAccountStore.stored
-        var interrupted = persisted
-        let savedIndex = interrupted.accounts.firstIndex { $0.id == saved.id }!
-        interrupted.accounts[savedIndex].claudeCleanupRequired = true
-        ProviderAccountStore.stored = interrupted
-        let recovering = ProviderAccounts(registry: registry)
-        let repaired = await recovering.signIn(recovering.account(id: saved.id)!)
-        check(repaired == nil && !recovering.account(id: saved.id)!.requiresClaudeCleanup, "interrupted replacement can recover without deleting bound chats")
-        ProviderAccountStore.stored = persisted
+        check(mismatch != nil && accounts.account(id: saved.id)!.requiresClaudeCleanup, "wrong-account login locks profile")
+        ProviderRegistry.loginIdentity = ClaudeAccountIdentity(accountID: "acct-1", organizationID: "org-1", email: "one@example.test")
+        let recovered = await accounts.signIn(accounts.account(id: saved.id)!)
+        check(recovered == nil && !accounts.account(id: saved.id)!.requiresClaudeCleanup, "re-signing with original account recovers profile")
+
+        // Coalescing and serialization of usage reads.
         let beforeCoalescing = PlanLimitsReader.reads
         async let left = accounts.refreshClaudeAccount(saved.id, force: true)
         async let right = accounts.refreshClaudeAccount(saved.id, force: true)
         let pair = await (left, right)
         check(pair.0 == pair.1 && PlanLimitsReader.reads == beforeCoalescing + 1, "concurrent readers share one request")
+
         let otherReader = ProviderAccounts(registry: registry)
         let defaultID = otherReader.accounts(for: .claude).first { $0.isDefault }!.id
         PlanLimitsReader.peak = 0
@@ -427,44 +317,40 @@ CHECKS = r'''
         async let defaultRead = otherReader.refreshClaudeAccount(defaultID)
         _ = await (accountRead, defaultRead)
         check(PlanLimitsReader.peak == 1 && PlanLimitsReader.reads == previousReads + 2, "different account reads are serialized")
+
+        // Removal waits for an in-flight usage check rather than failing with busy.
+        let waitingAccounts = ProviderAccounts(registry: registry)
+        PlanLimitsReader.delayNanoseconds = 60_000_000
+        let slowRead = Task { await waitingAccounts.refreshClaudeAccount(saved.id, force: true) }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        Shell.cliCommands.removeAll()
+        Shell.securityDeleteResult = ShellResult(status: 51)
         FixtureKeychain.deleteDenied = true
-        let removeFailure = await accounts.remove(saved, hasDependentChats: false)
-        check(removeFailure != nil && accounts.account(id: saved.id)!.requiresClaudeCleanup, "cleanup failure retains retryable record")
-        check(fm.fileExists(atPath: saved.home!), "cleanup failure retains profile directory")
+        let removeFailure = await waitingAccounts.remove(saved)
+        _ = await slowRead.value
+        PlanLimitsReader.delayNanoseconds = 0
+        check(removeFailure != nil && waitingAccounts.account(id: saved.id)!.requiresClaudeCleanup, "cleanup failure retains retryable record")
+        check(Shell.cliCommands.last?.arguments == ["auth", "logout"], "remove calls official claude auth logout")
+
+        // Force-remove escape hatch removes stuck record even when Keychain denies deletion.
+        let forced = await waitingAccounts.remove(saved, forceRemoveLocal: true)
+        check(forced == nil && waitingAccounts.account(id: saved.id) == nil, "forceRemoveLocal unblocks stuck account")
+        check(ProviderRegistry.forgotten.contains(saved.id), "cleanup forgets cached identity")
+
+        // Re-add and test normal removal + post-delete save retry.
+        let freshAccounts = ProviderAccounts(registry: registry)
+        Shell.securityDeleteResult = ShellResult(status: 0)
         FixtureKeychain.deleteDenied = false
+        check(await freshAccounts.addAccount(.claude) == nil, "re-add after removal succeeds")
+        let saved2 = freshAccounts.accounts(for: .claude).first { !$0.isDefault }!
         ProviderAccountStore.failOnSave = ProviderAccountStore.saveCalls + 2
-        let persistFailure = await accounts.remove(saved, hasDependentChats: false)
-        check(persistFailure != nil && accounts.account(id: saved.id)!.requiresClaudeCleanup, "post-delete persistence failure remains retryable")
+        let persistFailure = await freshAccounts.remove(saved2)
+        check(persistFailure != nil && freshAccounts.account(id: saved2.id)!.requiresClaudeCleanup, "post-delete persistence failure remains retryable")
         ProviderAccountStore.failOnSave = nil
-        let retried = await accounts.remove(saved, hasDependentChats: false)
-        check(retried == nil && accounts.account(id: saved.id) == nil, "cleanup retry tolerates absent local files: " + (retried ?? "record remains"))
-        check(ProviderRegistry.forgotten.contains(saved.id), "sign-in and cleanup forget cached identity")
-        ProviderAccountStore.failMetadata = true
-        FixtureKeychain.deleteDenied = true
-        _ = await accounts.importClaudeAccounts([selected])
-        let residue = accounts.accounts(for: .claude).first { !$0.isDefault }!
-        check(residue.requiresClaudeCleanup && fm.fileExists(atPath: residue.home!), "failed import cannot hide credential residue")
-        ProviderAccountStore.failMetadata = false
-        FixtureKeychain.deleteDenied = false
-        _ = await accounts.remove(residue, hasDependentChats: false)
-        FixtureKeychain.addGate = DispatchSemaphore(value: 0)
-        let gate = FixtureKeychain.addGate!
-        let importTask = Task { await accounts.importClaudeAccounts([selected]) }
-        let importDeadline = Date().addingTimeInterval(3)
-        while !FixtureKeychain.addWaiting {
-            if Date() >= importDeadline { fatalError("Import did not reach blocked credential write") }
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
-        let staged = accounts.accounts(for: .claude).first { !$0.isDefault }!
-        let busy = await accounts.remove(staged, hasDependentChats: false)
-        check(busy?.contains("busy") == true, "import holds the account while writing")
-        FixtureKeychain.addGate = nil
-        FixtureKeychain.addWaiting = false
-        gate.signal()
-        let result = await importTask.value
-        check(result.first?.contains("awaiting activation") == true, "import completes after concurrent refusal")
-        _ = await accounts.remove(accounts.accounts(for: .claude).first { !$0.isDefault }!, hasDependentChats: false)
-        check(!accounts.accounts(for: .claude).contains { !$0.isDefault }, "concurrent import cleanup removes staged account")
+        let retried = await freshAccounts.remove(saved2)
+        check(retried == nil && freshAccounts.account(id: saved2.id) == nil, "cleanup retry succeeds when directory already gone")
+
+        // Codex removal saves before signing out.
         let codexID = UUID()
         let codexHome = try ProviderAccountStore.makeHome(provider: .codex, id: codexID, linkingFrom: "")
         let codexAccount = ProviderAccount(id: codexID, provider: .codex, home: codexHome,
@@ -480,16 +366,20 @@ CHECKS = r'''
         _ = await codexAccounts.remove(codexAccount)
         check(codexAccounts.account(id: codexID) == nil && !fm.fileExists(atPath: codexHome)
             && Shell.calls == callsBeforeRemoval + 1, "Codex logout only follows saved removal")
-        let readsBeforeCapture = FixtureKeychain.reads
+
+        // Capture mode never touches credentials or CLI.
         let callsBeforeCapture = Shell.calls
+        let secBeforeCapture = Shell.securityArguments.count
         CaptureRun.isEnabled = true
-        _ = await accounts.importClaudeAccounts([selected])
-        _ = await accounts.addAccount(.claude)
-        _ = await accounts.signIn(saved)
-        _ = await accounts.remove(saved, hasDependentChats: false)
-        _ = await accounts.refreshClaudeAccount(saved.id)
-        check(FixtureKeychain.reads == readsBeforeCapture && Shell.calls == callsBeforeCapture, "capture entry points never touch credentials or CLI")
-        rejects("captures cannot read credentials") { _ = try ClaudeAccountCredentials.read(environment: env, isManaged: false) }
+        _ = await freshAccounts.addAccount(.claude)
+        _ = await freshAccounts.signIn(saved2)
+        _ = await freshAccounts.remove(saved2)
+        _ = await freshAccounts.refreshClaudeAccount(saved2.id)
+        check(Shell.calls == callsBeforeCapture && Shell.securityArguments.count == secBeforeCapture, "capture entry points never touch credentials or CLI")
+        await rejectsAsync("captures cannot read credentials") {
+            _ = try await ClaudeAccountCredentials.readUnattended(environment: plain, isManaged: false)
+        }
+
         // The production seed, stale-seed rule and reload predicate, sliced from ProviderRegistry.swift.
         let seedIDs = ProviderRegistry.claudeSeed.map(\.id)
         check(seedIDs.contains("claude-fable-5-2[1m]") && seedIDs.contains("claude-fable-5-1[1m]"), "Claude seed offers Fable 5.2 and keeps the 5.1 id")
@@ -507,7 +397,7 @@ CHECKS = r'''
         check(catalogRegistry.catalogReloaded(.codex, since: nil) && !catalogRegistry.catalogReloaded(.codex, since: stamp), "another provider reloads only when its fetch date changed")
         catalogRegistry.catalogs[.codex] = []
         check(!catalogRegistry.catalogReloaded(.codex, since: nil), "an empty list is never reloaded")
-        print("Claude account checks passed: isolated storage, selectors, permission failures, CSWAP parsing, legacy account decoding, off-main Keychain, security-tool default reads, import exclusivity and the Claude catalog seed and reload rules; synthetic data only.")
+        print("Claude account checks passed: native CLI login/logout, security-tool reads, legacy Keychain delete fallback, duplicate rejection, wrong-account lock/recovery, removal wait and force-remove escape hatch, and catalog seed rules; synthetic data only.")
     }
 }
 '''
@@ -517,12 +407,14 @@ def main():
     if sys.flags.optimize:
         raise SystemExit("run without -O or PYTHONOPTIMIZE; fixture assertions must remain enabled")
     credential = (ROOT / "Tivano/Services/Providers/ClaudeAccountCredentials.swift").read_text()
-    for api, stub in {"SecItemCopyMatching": "copy", "SecItemUpdate": "update",
-                      "SecItemAdd": "add", "SecItemDelete": "delete"}.items():
-        target = api + "("
-        if credential.count(target) == 0:
-            raise SystemExit(f"Security boundary changed: no {target!r} calls to replace; refusing to run against the real Keychain")
-        credential = credential.replace(target, "FixtureKeychain." + stub + "(")
+    for forbidden in ("SecItemAdd(", "SecItemUpdate(", "SecItemCopyMatching("):
+        if forbidden in credential:
+            raise SystemExit(f"Compliance guard: {forbidden} must not exist in ClaudeAccountCredentials.swift; official Claude CLI owns credential writes and reads")
+    if credential.count("SecItemDelete(") == 0:
+        raise SystemExit("Security boundary changed: no 'SecItemDelete(' call to replace; refusing to run against the real Keychain")
+    credential = credential.replace("SecItemDelete(", "FixtureKeychain.delete(")
+    if (ROOT / "Tivano/Services/Providers/ClaudeSwapImport.swift").exists():
+        raise SystemExit("ClaudeSwapImport.swift must remain removed")
     registry = (ROOT / "Tivano/Services/Providers/ProviderRegistry.swift").read_text()
     start = registry.index("    private static func claudeAccountAllowsProbe(")
     end = registry.index("\n    static func auth(", start)
@@ -551,7 +443,6 @@ def main():
     option = piece(models, "struct ModelOption: Codable", "\nextension Array where Element == ModelOption {", "ModelOption")
     variant = piece(models, "struct ModelVariant: Codable", "\nstruct SlashCommand: Hashable", "ModelVariant")
     source = "\nextension ProviderRegistry {\n" + probe + "\n}\n" + option + variant + catalog + credential
-    source += (ROOT / "Tivano/Services/Providers/ClaudeSwapImport.swift").read_text()
     source += (ROOT / "Tivano/Core/Models/ProviderAccount.swift").read_text()
     source += (ROOT / "Tivano/Services/Providers/ProviderAccounts.swift").read_text() + CHECKS
     # Scan before prepending SHIMS so fake definitions are excluded, not production

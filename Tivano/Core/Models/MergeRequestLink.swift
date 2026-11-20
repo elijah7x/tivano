@@ -55,7 +55,7 @@ struct MergeRequestLink: Equatable, Sendable {
     }
 
     /// The helper's title: the same words as the popover's row.
-    var title: String { "Merge \(label)" }
+    var title: String { String(format: AppText.localized("Merge %@"), label) }
 
     /// What the helper is asked to do: land the request with the forge's own CLI, then leave
     /// the checkout on the merged main. Complete on its own, since a native provider reads

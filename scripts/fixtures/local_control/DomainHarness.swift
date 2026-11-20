@@ -37,6 +37,21 @@ enum CaptureRun {
 }
 enum AppInfo { static let libraryName = "Synthetic Local Control" }
 enum Chrome { static func localized(_ key: String) -> String { key } }
+enum SyntheticTheme { case system }
+struct SyntheticThemeSpec: Sendable { var serif = false, handDrawnIcons = false }
+enum ThemeManager {
+    nonisolated(unsafe) static var style: ThemeStyle = .liquidGlass
+    static func apply(theme: SyntheticTheme, style: ThemeStyle) { self.style = style }
+    static var spec: SyntheticThemeSpec { .init(serif: style == .create, handDrawnIcons: style == .create) }
+}
+@MainActor final class TypeScale { static let shared = TypeScale(); var serif = false, handDrawnIcons = false }
+@MainActor final class SyntheticWorkspace { var accessibilityDisplayShouldReduceMotion = false }
+@MainActor enum NSWorkspace { static let shared = SyntheticWorkspace() }
+enum AppIconChoice { case automatic }
+@MainActor final class AppIconManager { static let shared = AppIconManager(); var applied: [ThemeStyle] = []
+    func apply(choice: AppIconChoice, style: ThemeStyle) { applied.append(style) }
+    func applyAfterThemeSwitch(choice: AppIconChoice, style: ThemeStyle) { applied.append(style) }
+}
 enum ProviderError: LocalizedError { case failed(String), notRunning, notInstalled(ProviderKind)
     var errorDescription: String? { if case .failed(let value) = self { return value }; return "synthetic_not_running" }
 }
@@ -52,20 +67,20 @@ enum ProviderError: LocalizedError { case failed(String), notRunning, notInstall
     enum Key {
         static let alphaEnabled = "alphaEnabled", externalControlEnabled = "externalControlEnabled"
         static let alphaChimeraEnabled = "alphaChimeraEnabled", hydraEnabled = "hydraEnabled"
-        static let performanceMode = "performanceMode", clearerBackdrop = "clearerBackdrop"
-        static let showsSkylight = "showsSkylight", antiSlopEnabled = "antiSlopEnabled", textGeneration = "textGeneration"
+        static let themeStyle = "themeStyle", weatherWindow = "weatherWindow", textGeneration = "textGeneration"
         static let cliInstallationTarget = "cliInstallationTarget"
     }
     let defaults = MemoryDefaults()
+    var appIconChoice: AppIconChoice = .automatic
     var onExternalControlChanged: (() -> Void)?
     var disabled: Set<ProviderKind> = []
     var hydraPairs: [HydraPair] = []
     func isEnabled(_ provider: ProviderKind) -> Bool { !disabled.contains(provider) }
     /* SETTINGS_PRODUCTION */
     init() {
-        alphaEnabled = false; externalControlEnabled = false; performanceMode = false
+        alphaEnabled = false; externalControlEnabled = false; themeStyle = .liquidGlass
         alphaChimeraEnabled = false; hydraEnabled = true
-        clearerBackdrop = true; showsSkylight = true; antiSlopEnabled = true; textGeneration = .automatic
+        weatherWindowEnabled = true; textGeneration = .automatic
         cliInstallationTarget = nil
     }
 }
@@ -88,6 +103,8 @@ struct ModelOption: Sendable { var id: String; var defaultEffort: String? }
 @MainActor enum Setup {
     static var isRepository = true
     static var failAdd = false
+    static var deletedBranches: [String] = []
+    static var afterAdd: (@MainActor () -> Void)?
     static var scriptStarted = false
     static var scriptContinuation: CheckedContinuation<ShellResult, Never>?
 }
@@ -100,7 +117,12 @@ struct Git: Sendable {
     @MainActor func addWorktree(at path: String, branch: String, base: String?) async throws {
         if Setup.failAdd { throw ProviderError.failed("synthetic_git_failure") }
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        Setup.afterAdd?()
     }
+    func removeWorktree(at path: String, force: Bool = false) async throws {
+        try FileManager.default.removeItem(atPath: path)
+    }
+    @MainActor func deleteBranch(_ branch: String) async throws { Setup.deletedBranches.append(branch) }
 }
 @MainActor enum Shell {
     static func run(_ executable: URL, _ args: [String], in directory: URL, timeout: TimeInterval, outputLimit: Int?) async throws -> ShellResult {
@@ -146,8 +168,16 @@ enum Storage {
     func updateThread(_ id: UUID, _ change: (inout ChatThread) -> Void) { if let index = threads.firstIndex(where: { $0.id == id }) { change(&threads[index]) } }
     func currentLibrary() -> Library { var library = Library(); library.projects = projects; library.threads = threads; return library }
     func commitLibrary(_ library: Library) -> Bool { if commitSucceeds { committed = library }; return commitSucceeds }
-    enum Engine { case claude, codex }
-    func textEngine(preferring: ProviderKind?) -> Engine? { switch settings.textGeneration { case .off: nil; case .codex: .codex; default: .claude } }
+    enum Engine { case claude, codex, grok, pi, antigravity }
+    func textEngine(preferring: ProviderKind?) -> Engine? {
+        switch settings.textGeneration {
+        case .off: nil
+        case .codex: .codex
+        case .grok: .grok
+        case .pi: .pi
+        case .claude, .automatic: .claude
+        }
+    }
     /* APPMODEL_PRODUCTION */
     /* HYDRA_PRODUCTION */
 }
@@ -188,7 +218,7 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
     /* RUNTIME_STATE_PRODUCTION */
     init(_ app: AppModel, _ threadID: UUID) { self.app = app; self.threadID = threadID }
     func ensureLoaded() async { await Task.yield(); beforeLoaded?() }
-    func startTurn(text: String, attachments: [Int], externalTurnID: UUID?) async { sent.append((text, externalTurnID)); currentTurnID = externalTurnID; phase = .starting }
+    func startTurn(text: String, attachments: [Int], externalTurnID: UUID?, userInitiated: Bool = false) async { sent.append((text, externalTurnID)); currentTurnID = externalTurnID; phase = .starting }
     func interrupt() { interruptRequested = true }
     func flushFollowUpsIfIdle() {}
     func snapshotForSave() -> Int { 1 }
@@ -289,26 +319,72 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
     }
 
     static func checkFailureClassification() async throws {
-        let messages: [(english: String, chinese: String, category: String)] = [
-            ("Sign in to continue.", "请登录后继续。", "authentication"),
-            ("Context window exceeded.", "上下文窗口已超出。", "continuation"),
-            ("Usage quota exceeded.", "用量配额已超出。", "usage_limit"),
-            ("CLI is not installed.", "尚未安装 CLI。", "not_installed"),
-            ("Permission denied.", "权限被拒绝。", "permission"),
-            ("Connection closed.", "连接已关闭。", "provider_or_transport")
+        let messages: [(category: String, samples: [String])] = [
+            ("authentication", [
+                "Sign in to continue.",
+                "请登录后继续。",
+                "請登入後繼續。",
+                "続行するにはサインインしてください。",
+                "계속하려면 로그인하세요.",
+                "Connectez-vous pour continuer.",
+                "Impossible de se connecter au compte Claude.",
+            ]),
+            ("continuation", [
+                "Context window exceeded.",
+                "上下文窗口已超出。",
+                "已超出上下文視窗。",
+                "コンテキストウィンドウの上限を超えました。",
+                "컨텍스트 창을 초과했습니다.",
+                "La fenêtre de contexte est dépassée.",
+                "Ce fil est introuvable.",
+            ]),
+            ("usage_limit", [
+                "Usage quota exceeded.",
+                "用量配额已超出。",
+                "已超出使用量配額。",
+                "使用量の上限を超えました。",
+                "사용량 할당량을 초과했습니다.",
+                "Le quota d'utilisation est dépassé.",
+            ]),
+            ("not_installed", [
+                "CLI is not installed.",
+                "尚未安装 CLI。",
+                "尚未安裝 CLI。",
+                "CLI がインストールされていません。",
+                "CLI가 설치되어 있지 않습니다.",
+                "La CLI n'est pas installée.",
+            ]),
+            ("permission", [
+                "Permission denied.",
+                "权限被拒绝。",
+                "權限被拒絕。",
+                "権限が拒否されました。",
+                "권한이 거부되었습니다.",
+                "Autorisation refusée.",
+            ]),
+            ("provider_or_transport", [
+                "Connection closed.",
+                "连接已关闭。",
+                "連線已關閉。",
+                "接続が閉じられました。",
+                "연결이 닫혔습니다.",
+                "Connexion fermée.",
+                "Configuration file not found.",
+                "Profil introuvable.",
+                "Impossible de se connecter au serveur.",
+            ]),
         ]
         let app = AppModel()
         let request = ControlCreate(ticket: ControlTicket(instance: app.localControl.instance), projectID: nil,
                                     workspace: .local, provider: "codex")
         let thread = try app.createExternalThread(request, provider: .codex)
         for message in messages {
-            let english = ControlFailureClassifier.classify(ProviderError.failed(message.english))
-            let chinese = ControlFailureClassifier.classify(ProviderError.failed(message.chinese))
             let expected = ControlFailure(code: message.category == "continuation" ? .continuationUnavailable : .providerFailure,
                                           detail: message.category)
-            try check(english == expected && chinese == expected,
-                      "English and Chinese provider messages retain the same \(message.category) failure")
-            for text in [message.english, message.chinese] {
+            for text in message.samples {
+                let classified = ControlFailureClassifier.classify(ProviderError.failed(text))
+                try check(classified == expected,
+                          "localized provider message retains \(message.category) failure: \(text)")
                 let runtime = ThreadRuntime(app, thread.id)
                 let turnID = UUID()
                 var completion: ControlTurnUpdate?
@@ -327,7 +403,7 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
             (ClaudeAccountValidationError.settingsConflict, "authentication"),
             (ClaudeAccountValidationError.identityChanged, "provider_or_transport"),
             (ResetCreditError.codexUnavailable, "not_installed"),
-            (ClaudeCredentialError.activationRequired, "authentication")
+            (ClaudeCredentialError.invalidCredential, "authentication")
         ]
         for value in typed {
             try check(ControlFailureClassifier.classify(value.error) == ControlFailure(code: .providerFailure, detail: value.category),
@@ -384,6 +460,15 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
         try check(app.thread(failed.id)?.controlWorkspace?.phase == .failed, "worktree creation failure is retained explicitly")
         try rejects(.workspaceFailed, "failed worktree never falls back to project directory") { _ = try app.executionDirectory(for: app.thread(failed.id)!) }
         Setup.failAdd = false
+        let archivedDuringAdd = try app.createExternalThread(request, provider: .codex)
+        Setup.afterAdd = { app.updateThread(archivedDuringAdd.id) { $0.isArchived = true } }
+        do { try await app.prepareExternalWorktree(archivedDuringAdd.id) } catch {}
+        Setup.afterAdd = nil
+        let orphanPath = Storage.worktreesDirectory.appendingPathComponent("control-\(archivedDuringAdd.id.uuidString.lowercased())").path
+        try check(!FileManager.default.fileExists(atPath: orphanPath) && app.thread(archivedDuringAdd.id)?.worktreePath == nil
+                  && Setup.deletedBranches.contains("tivano/control-\(archivedDuringAdd.id.uuidString.lowercased())"),
+                  "archiving while Git adds the worktree removes the unrecorded copy and its branch")
+        app.updateThread(archivedDuringAdd.id) { $0.isArchived = false }
         Setup.scriptStarted = false
         let setupFailure = try app.createExternalThread(request, provider: .codex)
         let unsuccessfulSetup = Task { try await app.prepareExternalWorktree(setupFailure.id) }
@@ -430,15 +515,37 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
         app.settings.alphaEnabled = true
         try check(!app.settings.isExternalControlEnabled && callbacks == 2, "Alpha alone cannot enable control permission")
         app.settings.externalControlEnabled = true
-        app.settings.clearerBackdrop = true
-        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .performanceMode, value: .bool(true)), app)
-        try check(app.settings.performanceMode && app.settings.clearerBackdrop, "performance setter keeps the clearer-glass preference")
-        let skylight = app.localControl.settings(app).first { $0.key == .showsSkylight }!
-        try check(skylight.preference == .bool(true) && skylight.effective == .bool(false), "Skylight preference survives effective suppression")
-        try rejects(.invalidRequest, "invalid typed setting pair rejects before changes") { try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .performanceMode, value: .textGeneration(.off)), app) }
-        try check(app.settings.performanceMode && app.settings.showsSkylight, "invalid settings have no partial effects")
-        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .performanceMode, value: .bool(false)), app)
-        try check(app.settings.showsSkylightNow, "performance off restores preferred Skylight visibility")
+        app.settings.themeStyle = .texture
+        try check(ThemeManager.style == .texture, "themeStyle setter mirrors into ThemeManager.style")
+        try check(AppIconManager.shared.applied.last == .texture, "themeStyle setter re-applies the app icon")
+        let weather = app.localControl.settings(app).first { $0.key == .weatherWindow }!
+        try check(weather.preference == .bool(true) && weather.effective == .bool(false), "weatherWindow preference survives non-Liquid Glass suppression")
+        try rejects(.invalidRequest, "invalid typed setting pair rejects before changes") { try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .textGeneration(.off)), app) }
+        try check(app.settings.weatherWindowEnabled && !app.settings.showsWeatherNow, "invalid settings have no partial effects")
+        app.settings.themeStyle = .liquidGlass
+        try check(app.settings.showsWeatherNow, "Liquid Glass restores preferred weatherWindow visibility")
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion = true
+        try check(app.settings.weatherWindowEnabled && !app.settings.showsWeatherNow, "Reduce Motion suppresses effective weatherWindow visibility")
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion = false
+        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .bool(false)), app)
+        try check(!app.settings.weatherWindowEnabled && !app.settings.showsWeatherNow, "weatherWindow setter updates stored preference and effective value")
+        try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .weatherWindow, value: .bool(true)), app)
+        try check(app.settings.weatherWindowEnabled && app.settings.showsWeatherNow, "weatherWindow setter restores visibility")
+        for (value, expectedChoice, expectedEffective) in [
+            (ControlTextGeneration.grok, TextGenerationChoice.grok, ControlTextGeneration.grok),
+            (.pi, .pi, .pi),
+            (.codex, .codex, .codex),
+            (.claude, .claude, .claude),
+            (.off, .off, .off),
+            (.automatic, .automatic, .claude),
+        ] {
+            try app.localControl.set(ControlSettingsWrite(ticket: ticket, key: .textGeneration, value: .textGeneration(value)), app)
+            let snapshot = app.localControl.settings(app).first { $0.key == .textGeneration }!
+            try check(app.settings.textGeneration == expectedChoice
+                      && snapshot.preference == .textGeneration(value)
+                      && snapshot.effective == .textGeneration(expectedEffective),
+                      "textGeneration \(value.rawValue) applies and reports preference/effective")
+        }
         app.providers.statuses[.codex] = ProviderStatus(auth: .unknown)
         let codex = app.localControl.summaries(app).first { $0.id == "codex" }!
         try check(codex.authentication == "unknown" && !codex.freshSubmission, "authentication unknown is not advertised authenticated")
@@ -535,5 +642,16 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
         let data = try JSONSerialization.data(withJSONObject: ["checks": passed, "count": passed.count, "scope": "extracted production domain declarations with synthetic framework/provider/storage dependencies; no provider execution or App end-to-end proof"], options: [.prettyPrinted, .sortedKeys])
         try data.write(to: root.appendingPathComponent("domain-results.json"))
         print("DOMAIN CHECKS COMPLETE: \(passed.count)")
+    }
+}
+
+extension Settings {
+    /// The real settings switch to the Creation theme here; the harness has no theme.
+    func syncCreationTheme(previousStyle: ThemeStyle) {}
+    func applyStockBackdropIfUnset() {}
+    var theme: SyntheticTheme { .system }
+    func syncTypeScaleWithTheme() {
+        TypeScale.shared.serif = ThemeManager.spec.serif
+        TypeScale.shared.handDrawnIcons = ThemeManager.spec.handDrawnIcons
     }
 }

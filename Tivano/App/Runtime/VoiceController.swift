@@ -193,7 +193,10 @@ final class VoiceController {
         let open = open && isLive
         guard stageOpen != open else { return }
         stageOpen = open
-        if open { WindowManager.shared.hideSettings() }
+        if open {
+            WindowManager.shared.hideSettings()
+            if phase == .active, let host { pollLevels(epoch: epoch, host: host) }
+        }
     }
 
     /// Forgets a failure once it has been seen.
@@ -372,12 +375,27 @@ final class VoiceController {
         }
     }
 
-    /// Microphone and speaker meters, ten times a second, for the orb.
+    private var hasVisibleOrb: Bool {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              NSApp.isActive,
+              !NSApp.isHidden,
+              NSApp.windows.contains(where: { $0.isVisible && $0.occlusionState.contains(.visible) && !$0.isMiniaturized }),
+              !SettingsNavigation.shared.isPresented else {
+            return false
+        }
+        if stageOpen { return true }
+        guard let app else { return false }
+        if app.sidebar.isVisible { return true }
+        return app.appSpace == .session && threadID != nil && app.selectedThreadID == threadID
+    }
+
+    /// Microphone and speaker meters, ten times a second while an orb is visible, once a second otherwise.
     private func pollLevels(epoch: Int, host: CodexVoiceHost) {
         levelsTask?.cancel()
         levelsTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(100))
+                let interval: Duration = (self?.hasVisibleOrb ?? false) ? .milliseconds(100) : .seconds(1)
+                try? await Task.sleep(for: interval)
                 guard !Task.isCancelled else { return }
                 do {
                     guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
@@ -385,8 +403,8 @@ final class VoiceController {
                     }
                     let levels = try await host.levels()
                     guard let self, epoch == self.epoch else { return }
-                    self.microphoneLevel = levels.microphone
-                    self.speakerLevel = levels.speaker
+                    if self.microphoneLevel != levels.microphone { self.microphoneLevel = levels.microphone }
+                    if self.speakerLevel != levels.speaker { self.speakerLevel = levels.speaker }
                     let playing = self.speakerActivity.update(peak: levels.speaker)
                     if self.playing != playing { self.playing = playing }
                 } catch {

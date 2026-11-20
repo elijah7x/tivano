@@ -75,7 +75,8 @@ enum ProductCaptures {
         // settled after the scene lands so nothing important is cropped.
         await capture(model, stage, recorder, name: "capture-welcome", backdrop: .welcome, size: NSSize(width: 1280, height: 800)) {
             if model.sidebar.isVisible { model.sidebar.toggle() }
-            model.settings.theme = .dark
+            model.settings.appearanceMode = .dark
+            model.settings.theme = .system
             model.selectedThreadID = WebsiteCaptures.composerThreadID
             await WebsiteCaptures.editingScene(model, stage, recorder)
             try? await Task.sleep(for: .milliseconds(900))
@@ -121,8 +122,7 @@ enum ProductCaptures {
                 supportsFast: option?.supportsFast ?? false,
                 effort: Binding(get: { model.thread(WebsiteCaptures.freshThreadID)?.effort }, set: { effort in model.updateThread(WebsiteCaptures.freshThreadID) { $0.effort = effort } }),
                 fastMode: Binding(get: { model.thread(WebsiteCaptures.freshThreadID)?.fastMode ?? false }, set: { on in model.updateThread(WebsiteCaptures.freshThreadID) { $0.fastMode = on } }),
-                onTitleTap: {},
-                onReset: {}
+                onTitleTap: {}
             )
             let popover = stage.presentPopover(card.environment(model), width: 330, chipOf: WebsiteCaptures.freshThreadID)
             await stage.holdPopover(popover, seconds: 2.0)
@@ -156,21 +156,28 @@ enum ProductCaptures {
         await ProductCaptures.panelsScene(model, stage, recorder)
         // 6. capture-theme-<rawValue>: four themes far apart, one of them light. Each shows
         // one quarter of a double-size gradient, so the four tile into one seamless image.
-        let quadrantThemes = [AppTheme.tokyoNight, .gruvbox, .catppuccinLatte, .rosePine]
-        for (index, theme) in quadrantThemes.enumerated() {
+        let quadrantThemes: [(theme: AppTheme, appearance: AppearanceMode)] = [
+            (.nightOwl, .dark),
+            (.claude, .dark),
+            (.catppuccin, .light),
+            (.rosePine, .dark),
+        ]
+        for (index, entry) in quadrantThemes.enumerated() {
             let quadrant = (x: index % 2, y: index / 2)
-            WebsiteCaptures.log("scene capture-theme-\(theme.rawValue)")
+            WebsiteCaptures.log("scene capture-theme-\(entry.theme.rawValue)")
             stage.setBackdrop(backdropView(.themes, quadrant: quadrant))
             stage.resize(to: NSSize(width: 960, height: 600))
             await stage.ensureActive()
             try? await Task.sleep(for: .milliseconds(1_100))
             if model.sidebar.isVisible { model.sidebar.toggle() }
             model.selectedThreadID = WebsiteCaptures.composerThreadID
-            model.settings.theme = theme
+            model.settings.appearanceMode = entry.appearance
+            model.settings.theme = entry.theme
             try? await Task.sleep(for: .milliseconds(900))
-            await recorder.still("capture-theme-\(theme.rawValue)", stage.productCaptureRect)
+            await recorder.still("capture-theme-\(entry.theme.rawValue)", stage.productCaptureRect)
         }
-        model.settings.theme = .dark
+        model.settings.appearanceMode = .dark
+        model.settings.theme = .system
 
         WebsiteCaptures.log("captures done")
         exit(0)

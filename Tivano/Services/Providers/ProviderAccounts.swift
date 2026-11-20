@@ -161,24 +161,6 @@ final class ProviderAccounts {
         }
     }
 
-    func activateClaudeAccount(_ account: ProviderAccount) async -> String? {
-        guard !CaptureRun.isEnabled else { return ClaudeCredentialError.capture.localizedDescription }
-        guard let index = book.accounts.firstIndex(where: { $0.id == account.id && $0.provider == .claude }) else {
-            return ClaudeAccountValidationError.authentication.localizedDescription
-        }
-        guard !book.accounts[index].requiresClaudeCleanup else { return ClaudeCredentialError.cleanupRequired.localizedDescription }
-        var next = book
-        next.accounts[index].claudeImportPending = false
-        next.active[ProviderKind.claude.rawValue] = account.id
-        do { try commit(next) }
-        catch { return Self.safeClaudeError(error) }
-        selectionRevision = UUID()
-        registry?.invalidateClaudeAccountViews()
-        registry?.resetPlanLimits(.claude)
-        _ = await refreshClaudeAccount(account.id)
-        return nil
-    }
-
     private func defaultHome() -> String {
         ProviderAccountStore.defaultCodexHome(environment: registry?.baseEnvironment(for: .codex) ?? LoginEnvironment.current)
     }
@@ -196,8 +178,10 @@ final class ProviderAccounts {
             await LoginEnvironment.load()
             do {
                 let account = try stageClaudeAccount(name: nil)
-                if let error = await signInManagedClaude(account, expectedIdentities: [], allowStaged: true) {
+                if let error = await signInManagedClaude(account, expectedIdentities: [], isNewAccount: true) {
                     if self.account(id: account.id)?.requiresClaudeActivation != true { return error }
+                    Self.exclusive.insert(account.id)
+                    defer { Self.exclusive.remove(account.id) }
                     do { try await cleanupClaudeAccount(account) }
                     catch { return Self.safeClaudeError(error) }
                     return error
@@ -275,22 +259,31 @@ final class ProviderAccounts {
         }
     }
 
-    func remove(_ account: ProviderAccount, hasDependentChats: Bool = true) async -> String? {
+    func remove(_ account: ProviderAccount, forceRemoveLocal: Bool = false) async -> String? {
         guard let stored = self.account(id: account.id), !stored.isDefault else { return nil }
         if stored.provider == .claude {
             guard !CaptureRun.isEnabled else { return ClaudeCredentialError.capture.localizedDescription }
-            guard !hasDependentChats else { return AppText.localized("This account is bound to saved chats. Delete those chats before removing the account.") }
-            guard !isBusy(stored) else { return AppText.localized("This account is busy. Wait for its sessions and account checks to finish.") }
-            Self.exclusive.insert(stored.id)
+            guard !removing.contains(stored.id), states[stored.id]?.isSigningIn != true else {
+                return AppText.localized("This account is busy. Wait for its sessions and account checks to finish.")
+            }
+            if let pendingRead = claudeReads[stored.id] {
+                _ = await pendingRead.value
+            }
+            guard let current = self.account(id: stored.id) else { return nil }
+            guard !isBusy(current) else {
+                return AppText.localized("This account is busy. Wait for its sessions and account checks to finish.")
+            }
+            Self.exclusive.insert(current.id)
+            removing.insert(current.id)
+            defer { removing.remove(current.id); Self.exclusive.remove(current.id) }
+            generations[current.id] = nil
+            do { try await cleanupClaudeAccount(current, forceRemoveLocal: forceRemoveLocal); return nil }
+            catch { return Self.safeClaudeError(error) }
         }
         guard states[stored.id]?.isSigningIn != true else { return nil }
         removing.insert(stored.id)
-        defer { removing.remove(stored.id); Self.exclusive.remove(stored.id) }
+        defer { removing.remove(stored.id) }
         generations[stored.id] = nil
-        if stored.provider == .claude {
-            do { try await cleanupClaudeAccount(stored); return nil }
-            catch { return Self.safeClaudeError(error) }
-        }
         await discard(stored, signingOut: true)
         return nil
     }
@@ -399,63 +392,6 @@ final class ProviderAccounts {
         await refresh(.codex, force: true)
     }
 
-    func importClaudeAccounts(_ candidates: [ClaudeSwapImportCandidate]) async -> [String] {
-        guard !CaptureRun.isEnabled else { return [ClaudeCredentialError.capture.localizedDescription] }
-        await LoginEnvironment.load()
-        var results: [String] = []
-        for candidate in candidates {
-            let duplicate = accounts(for: .claude).contains { account in
-                let sameAccount = candidate.accountID.map { $0 == account.accountID }
-                    ?? (candidate.email.lowercased() == account.email?.lowercased())
-                return sameAccount && candidate.organizationID == account.organizationID
-            }
-            if duplicate {
-                results.append(String(format: AppText.localized("%@ — already saved; skipped"), candidate.email))
-                continue
-            }
-            var created: ProviderAccount?
-            defer {
-                if let created { Self.exclusive.remove(created.id) }
-            }
-            do {
-                var account = try stageClaudeAccount(name: candidate.label)
-                created = account
-                Self.exclusive.insert(account.id)
-                account.email = candidate.email
-                account.accountID = candidate.accountID
-                account.organizationID = candidate.organizationID
-                var stagedBook = book
-                guard let stagedIndex = stagedBook.accounts.firstIndex(where: { $0.id == account.id }) else { throw ClaudeAccountValidationError.authentication }
-                stagedBook.accounts[stagedIndex] = account
-                try commit(stagedBook)
-                guard let home = account.home else { throw ClaudeCredentialError.invalidDirectory }
-                try await ClaudeAccountCredentials.offMain {
-                    let credential = try ClaudeSwapImport.credential(for: candidate)
-                    try ClaudeAccountCredentials.write(credential, configDirectory: home)
-                    try ProviderAccountStore.writeClaudeIdentity(candidate, into: home)
-                }
-                account.email = candidate.email
-                account.accountID = candidate.accountID
-                account.organizationID = candidate.organizationID
-                account.organizationName = candidate.organizationName
-                account.claudeCleanupRequired = false
-                var next = book
-                guard let index = next.accounts.firstIndex(where: { $0.id == account.id }) else { throw ClaudeAccountValidationError.authentication }
-                next.accounts[index] = account
-                try commit(next)
-                results.append(String(format: AppText.localized("%@ — saved; awaiting activation"), candidate.email))
-            } catch {
-                var failure = error
-                if let created {
-                    do { try await cleanupClaudeAccount(created) }
-                    catch { failure = error }
-                }
-                results.append(String(format: AppText.localized("%@ — import failed: %@"), candidate.email, Self.safeClaudeError(failure)))
-            }
-        }
-        return results
-    }
-
     func refreshClaudeAccount(_ id: UUID, force: Bool = false) async -> PlanLimits? {
         guard !CaptureRun.isEnabled, let account = account(id: id), account.provider == .claude,
               !account.requiresClaudeActivation, !account.requiresClaudeCleanup,
@@ -512,15 +448,30 @@ final class ProviderAccounts {
         return account
     }
 
-    private func cleanupClaudeAccount(_ account: ProviderAccount) async throws {
+    private func cleanupClaudeAccount(_ account: ProviderAccount, forceRemoveLocal: Bool = false) async throws {
         guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
         guard let index = book.accounts.firstIndex(where: { $0.id == account.id }), let home = book.accounts[index].home else { return }
-        var pending = book
-        pending.accounts[index].claudeCleanupRequired = true
-        try commit(pending)
-        try await ClaudeAccountCredentials.offMain {
-            try ClaudeAccountCredentials.remove(configDirectory: home)
-            try ProviderAccountStore.removeHomeThrowing(home)
+        if !forceRemoveLocal {
+            var pending = book
+            pending.accounts[index].claudeCleanupRequired = true
+            try commit(pending)
+        }
+        let environment = registry?.environment(for: .claude, account: book.accounts[index]) ?? LoginEnvironment.current
+        if let registry, let executable = registry.executable(for: .claude),
+           FileManager.default.fileExists(atPath: home) {
+            _ = try? await Shell.run(executable, ["auth", "logout"],
+                in: URL(fileURLWithPath: home), environment: environment, timeout: 20)
+        }
+        if forceRemoveLocal {
+            try? await ClaudeAccountCredentials.remove(configDirectory: home, environment: environment)
+            try? await ClaudeAccountCredentials.offMain {
+                try ProviderAccountStore.removeHomeThrowing(home)
+            }
+        } else {
+            try await ClaudeAccountCredentials.remove(configDirectory: home, environment: environment)
+            try await ClaudeAccountCredentials.offMain {
+                try ProviderAccountStore.removeHomeThrowing(home)
+            }
         }
         var next = book
         next.accounts.removeAll { $0.id == account.id }
@@ -536,11 +487,13 @@ final class ProviderAccounts {
         }
     }
 
-    private func signInManagedClaude(_ account: ProviderAccount, expectedIdentities: [ClaudeAccountIdentity], allowStaged: Bool = false) async -> String? {
+    /// Runs the official `claude auth login` directly inside this account's isolated
+    /// `CLAUDE_CONFIG_DIR` so the CLI itself owns Keychain ACLs and `.claude.json` metadata.
+    private func signInManagedClaude(_ account: ProviderAccount, expectedIdentities: [ClaudeAccountIdentity], isNewAccount: Bool = false) async -> String? {
         guard !isBusy(account), let registry, let home = account.home else {
             return AppText.localized("This account is busy. Wait for its sessions and account checks to finish.")
         }
-        if account.requiresClaudeCleanup && account.requiresClaudeActivation && !allowStaged {
+        if !isNewAccount, account.requiresClaudeCleanup && account.requiresClaudeActivation {
             return ClaudeCredentialError.cleanupRequired.localizedDescription
         }
         var expected = expectedIdentities
@@ -559,77 +512,51 @@ final class ProviderAccounts {
         guard let executable = registry.executable(for: .claude) else {
             return String(format: AppText.localized("%@ was not found on your PATH."), ProviderKind.claude.displayName)
         }
-        var temporary: ProviderAccount?
         do {
-            let staged = try stageClaudeAccount(name: AppText.localized("Claude sign-in cleanup"))
-            temporary = staged
-            Self.exclusive.insert(staged.id)
-            states[staged.id, default: State()].isSigningIn = true
-            defer { Self.exclusive.remove(staged.id); states[staged.id]?.isSigningIn = false }
-            let environment = registry.environment(for: .claude, account: staged)
-            let result = try await Shell.run(executable, ProviderKind.claude.loginCommand.split(whereSeparator: \.isWhitespace).dropFirst().map(String.init),
-                in: URL(fileURLWithPath: staged.home!), environment: environment, timeout: 300)
+            let environment = registry.environment(for: .claude, account: account)
+            let arguments = ProviderKind.claude.loginCommand.split(whereSeparator: \.isWhitespace).dropFirst().map(String.init)
+            let result = try await Shell.run(executable, arguments,
+                in: URL(fileURLWithPath: home), environment: environment, timeout: 300)
             guard result.succeeded else { throw ClaudeAccountValidationError.authentication }
-            let identity = try await ProviderRegistry.claudeIdentity(executable: executable, environment: environment, directory: URL(fileURLWithPath: staged.home!), signingInAccountID: staged.id)
-            guard expected.allSatisfy({ $0.matches(identity) }) else { throw ClaudeAccountValidationError.identityChanged }
-            let (login, snapshot, oldMetadata) = try await ClaudeAccountCredentials.offMain { () throws -> (Data?, ClaudeAccountCredentials.Snapshot, Data?) in
-                (try ClaudeAccountCredentials.read(environment: environment, isManaged: true),
-                 try ClaudeAccountCredentials.snapshot(configDirectory: home),
-                 try ClaudeAccountCredentials.readFile(directory: home, name: ".claude.json"))
-            }
-            guard let login else { throw ClaudeCredentialError.missingCredential }
-            var metadata = try oldMetadata.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-            metadata["oauthAccount"] = ["accountUuid": identity.accountID, "organizationUuid": identity.organizationID, "emailAddress": identity.email]
-            let newMetadata = try JSONSerialization.data(withJSONObject: metadata)
-            let replacement = try ClaudeAccountCredentials.replacingLogin(login, in: snapshot.credential)
-            guard let index = book.accounts.firstIndex(where: { $0.id == account.id }) else { throw ClaudeAccountValidationError.authentication }
-            let original = book.accounts[index]
-            var pending = book
-            pending.accounts[index].claudeCleanupRequired = true
-            try commit(pending)
-            do {
-                try await ClaudeAccountCredentials.offMain {
-                    try ClaudeAccountCredentials.restore(.init(keychain: replacement, file: nil), configDirectory: home)
-                    try ProviderAccountStore.replaceClaudeMetadata(newMetadata, home: home)
+            let identity = try await ProviderRegistry.claudeIdentity(executable: executable,
+                environment: environment, directory: URL(fileURLWithPath: home), signingInAccountID: account.id)
+            if !expected.allSatisfy({ $0.matches(identity) }) {
+                if !isNewAccount, let index = book.accounts.firstIndex(where: { $0.id == account.id }) {
+                    var flagged = book
+                    flagged.accounts[index].claudeImportPending = false
+                    flagged.accounts[index].claudeCleanupRequired = true
+                    try? commit(flagged)
                 }
-                var next = book
-                guard let index = next.accounts.firstIndex(where: { $0.id == account.id }) else { throw ClaudeAccountValidationError.authentication }
-                var updated = original
-                updated.claudeIdentity = identity
-                updated.email = identity.email
-                updated.accountID = identity.accountID
-                updated.organizationID = identity.organizationID
-                updated.claudeImportPending = false
-                updated.claudeCleanupRequired = false
-                next.accounts[index] = updated
-                try commit(next)
-            } catch {
-                let failure = error
-                // Keep the durable cleanup marker if either rollback operation fails.
-                try await ClaudeAccountCredentials.offMain {
-                    try ClaudeAccountCredentials.restore(snapshot, configDirectory: home)
-                    try ProviderAccountStore.replaceClaudeMetadata(oldMetadata, home: home)
-                }
-                var restored = book
-                guard let index = restored.accounts.firstIndex(where: { $0.id == account.id }) else { throw ClaudeAccountValidationError.authentication }
-                restored.accounts[index] = original
-                try commit(restored)
-                throw failure
+                throw ClaudeAccountValidationError.identityChanged
             }
+            let duplicate = book.accounts.contains { other in
+                guard other.id != account.id, other.provider == .claude, !other.isDefault else { return false }
+                if let existing = other.claudeIdentity { return existing.matches(identity) }
+                return other.accountID == identity.accountID && other.organizationID == identity.organizationID
+            }
+            guard !duplicate else { throw ClaudeCredentialError.duplicateAccount }
+            guard let index = book.accounts.firstIndex(where: { $0.id == account.id }) else {
+                throw ClaudeAccountValidationError.authentication
+            }
+            let organizationName = ProviderAccountStore.claudeIdentity(home: home, isDefault: false)?["organizationName"]?.string
+            var next = book
+            var updated = next.accounts[index]
+            updated.claudeIdentity = identity
+            updated.email = identity.email
+            updated.accountID = identity.accountID
+            updated.organizationID = identity.organizationID
+            if let organizationName, !organizationName.isEmpty { updated.organizationName = organizationName }
+            updated.claudeImportPending = false
+            updated.claudeCleanupRequired = false
+            next.accounts[index] = updated
+            try commit(next)
             states[account.id] = State(auth: .signedIn(identity.email))
-            try await cleanupClaudeAccount(staged)
-            temporary = nil
             registry.invalidateClaudeAccountViews()
             registry.resetPlanLimits(.claude)
             ProviderRegistry.forgetClaudeIdentity(account.id)
             return nil
         } catch {
-            var failure = error
-            if let temporary {
-                do { try await cleanupClaudeAccount(temporary) }
-                catch { failure = error }
-            }
-            let message = Self.safeClaudeError(failure)
+            let message = Self.safeClaudeError(error)
             states[account.id, default: State()].problem = message
             return message
         }

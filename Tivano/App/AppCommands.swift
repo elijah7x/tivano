@@ -5,7 +5,7 @@ struct AppCommands: Commands {
     private let shortcuts = ShortcutStore.shared
 
     private var chatIsCovered: Bool {
-        WindowManager.shared.usesFullWindowSettings && SettingsNavigation.shared.isPresented
+        SettingsNavigation.shared.isPresented
     }
 
     private var runtime: ThreadRuntime? {
@@ -19,7 +19,7 @@ struct AppCommands: Commands {
         }
 
         // File's stock Close sits before the Thread menu and would take ⌘W from Archive thread…,
-        // closing the main window instead. Secondary windows close on ⌘W themselves (SecondaryWindow).
+        // closing the main window instead.
         CommandGroup(replacing: .saveItem) {}
 
         CommandGroup(before: .windowArrangement) {

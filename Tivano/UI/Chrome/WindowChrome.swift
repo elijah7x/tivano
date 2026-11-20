@@ -1,33 +1,39 @@
 import AppKit
 import SwiftUI
 
+enum TrafficLightPlacement: Equatable {
+    case standard
+}
+
 /// Sets up the hosting window the way the settings window is built: a transparent title bar over
 /// a clear window, a SwiftUI glass pane underneath, and AppKit's own traffic lights pinned to the chrome,
 /// with the title bar kept reaching down to them so they take their clicks wherever they are pinned.
 struct WindowChromeConfigurator: NSViewRepresentable {
     var sidebarVisible = true
     var sidebarDragging = false
-    var performanceMode = false
+    var placement: TrafficLightPlacement = .standard
 
     func makeNSView(context: Context) -> WindowChromeProbeView {
         let view = WindowChromeProbeView()
-        view.performanceMode = performanceMode
+        view.sidebarVisible = sidebarVisible
+        view.sidebarDragging = sidebarDragging
+        view.placement = placement
         return view
     }
 
     func updateNSView(_ nsView: WindowChromeProbeView, context: Context) {
         if nsView.sidebarDragging != sidebarDragging { nsView.sidebarDragging = sidebarDragging }
         if nsView.sidebarVisible != sidebarVisible { nsView.sidebarVisible = sidebarVisible }
-        if nsView.performanceMode != performanceMode { nsView.performanceMode = performanceMode }
+        if nsView.placement != placement { nsView.placement = placement }
     }
 }
 
 final class WindowChromeProbeView: NSView {
     var sidebarDragging = false
-    var performanceMode = false {
+    var placement: TrafficLightPlacement = .standard {
         didSet {
-            guard performanceMode != oldValue, let window else { return }
-            WindowChrome.setPerformanceMode(performanceMode, on: window)
+            guard placement != oldValue, let window, !window.styleMask.contains(.fullScreen) else { return }
+            scheduleTrafficLightPlacement(animated: true)
         }
     }
     var sidebarVisible = true {
@@ -62,7 +68,6 @@ final class WindowChromeProbeView: NSView {
         }
         guard let window else { return }
         WindowChrome.configure(window)
-        WindowChrome.setPerformanceMode(performanceMode, on: window)
         if window.styleMask.contains(.fullScreen) {
             WindowChrome.resetTrafficLights(on: window)
         } else {
@@ -111,7 +116,8 @@ final class WindowChromeProbeView: NSView {
             WindowChrome.placeTrafficLights(
                 on: window,
                 sidebarVisible: sidebarVisible,
-                animated: pendingPlacementAnimated && !window.inLiveResize && !sidebarDragging
+                animated: pendingPlacementAnimated && !window.inLiveResize && !sidebarDragging,
+                placement: placement
             )
         }
     }
@@ -131,7 +137,7 @@ final class WindowChromeProbeView: NSView {
             guard let self else { return }
             titlebarFitPending = false
             if let currentWindow = self.window, !currentWindow.styleMask.contains(.fullScreen) {
-                WindowChrome.fitTitlebar(of: currentWindow)
+                WindowChrome.fitTitlebar(of: currentWindow, placement: placement)
             }
         }
     }
@@ -140,8 +146,8 @@ final class WindowChromeProbeView: NSView {
     /// correct after following the drag without animations.
     @objc private func windowDidEndLiveResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, !window.styleMask.contains(.fullScreen) else { return }
-        WindowChrome.placeTrafficLights(on: window, sidebarVisible: sidebarVisible, animated: false)
-        WindowChrome.fitTitlebar(of: window)
+        WindowChrome.placeTrafficLights(on: window, sidebarVisible: sidebarVisible, animated: false, placement: placement)
+        WindowChrome.fitTitlebar(of: window, placement: placement)
     }
 
     @objc private func windowWillEnterFullScreen(_ notification: Notification) {
@@ -156,8 +162,8 @@ final class WindowChromeProbeView: NSView {
 
     @objc private func windowDidExitFullScreen(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
-        WindowChrome.placeTrafficLights(on: window, sidebarVisible: sidebarVisible, animated: false)
-        WindowChrome.fitTitlebar(of: window)
+        WindowChrome.placeTrafficLights(on: window, sidebarVisible: sidebarVisible, animated: false, placement: placement)
+        WindowChrome.fitTitlebar(of: window, placement: placement)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -201,10 +207,12 @@ enum WindowChrome {
         window.autorecalculatesKeyViewLoop = true
     }
 
-    /// Keep AppKit's exterior corners and shadow; SwiftUI owns the backdrop fill.
-    /// Refresh the system shadow when performance mode changes the fill.
-    static func setPerformanceMode(_ performanceMode: Bool, on window: NSWindow) {
-        window.invalidateShadow()
+    static var collapsedTrafficLightLeading: CGFloat {
+        Chrome.sheetInset + Chrome.chromeHorizontalPadding
+    }
+
+    static var collapsedTrafficLightClearance: CGFloat {
+        collapsedTrafficLightLeading + Chrome.trafficLightsWidth + Chrome.trafficLightClearance
     }
 
     /// Where the buttons sit with the sidebar hidden: level with the chat's chrome capsules,
@@ -222,7 +230,10 @@ enum WindowChrome {
     /// content (and native controls refuse the drag on their own), so a press starting on the zoom
     /// slider or any button, menu or field works only that control and leaves the window in place.
     static var titlebarHeight: CGFloat {
-        Chrome.sheetInset + Chrome.chromeTopPadding + Chrome.capsuleHeight
+        max(
+            Chrome.sheetInset + Chrome.chromeTopPadding + Chrome.capsuleHeight,
+            Chrome.sidebarTrayInset + Chrome.trafficLightTop + Chrome.trafficLightDiameter
+        )
     }
 
     /// The view AppKit sizes the title bar with: the buttons' bar and its accessories together.
@@ -234,16 +245,17 @@ enum WindowChrome {
     /// buttons' bar fills the container, so it grows with it and the pinned buttons come inside.
     /// Never lays out synchronously: the fit lands on the frame and AppKit's own pass lays
     /// it out, so a notification fired mid-tiling costs one frame assignment.
-    static func fitTitlebar(of window: NSWindow) {
+    static func fitTitlebar(of window: NSWindow, placement: TrafficLightPlacement = .standard) {
         guard !window.styleMask.contains(.fullScreen) else { return }
         guard let container = titlebarContainer(of: window), let themeFrame = container.superview else { return }
         var fitted = container.frame
-        guard fitted.height < titlebarHeight else { return }
+        let height = titlebarHeight
+        guard fitted.height < height else { return }
         if themeFrame.isFlipped {
-            fitted.size.height = titlebarHeight
+            fitted.size.height = height
         } else {
-            fitted.origin.y = fitted.maxY - titlebarHeight
-            fitted.size.height = titlebarHeight
+            fitted.origin.y = fitted.maxY - height
+            fitted.size.height = height
         }
         container.frame = fitted
     }
@@ -274,12 +286,17 @@ enum WindowChrome {
     /// Pins the native buttons with constraints, since the title bar's own layout pass resets
     /// frames. Beside the sidebar they sit in its top corner; with it hidden they move over
     /// to the chat's chrome row and down to its centre line, with the slide the chrome makes.
-    static func placeTrafficLights(on window: NSWindow, sidebarVisible: Bool, animated: Bool) {
+    static func placeTrafficLights(on window: NSWindow, sidebarVisible: Bool, animated: Bool, placement: TrafficLightPlacement = .standard) {
         guard !window.styleMask.contains(.fullScreen) else { return }
-        let leading = sidebarVisible ? Chrome.trafficLightLeading : Chrome.sheetInset + Chrome.chromeHorizontalPadding
-        let top = sidebarVisible ? Chrome.trafficLightTop : collapsedTrafficLightTop
+        let leading: CGFloat
+        let top: CGFloat
+        switch placement {
+        case .standard:
+            leading = sidebarVisible ? Chrome.sidebarTrayInset + Chrome.trafficLightLeading : collapsedTrafficLightLeading
+            top = sidebarVisible ? Chrome.sidebarTrayInset + Chrome.trafficLightTop : collapsedTrafficLightTop
+        }
         guard let titlebar = window.standardWindowButton(.closeButton)?.superview else { return }
-        fitTitlebar(of: window)
+        fitTitlebar(of: window, placement: placement)
         var changed = false
         let types: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
         for (index, type) in types.enumerated() {
@@ -380,9 +397,14 @@ final class SidebarLayout {
     private(set) var slideDelta: CGFloat = 0
     private(set) var slideGeneration = 0
     private(set) var slideTargetWidth: CGFloat = 0
+    private static func occupiedWidth(for trayWidth: CGFloat) -> CGFloat {
+        trayWidth > 0 ? trayWidth + Chrome.sidebarTrayInset : 0
+    }
+
     /// A column restored partway through a slide needs only its remaining displacement.
     var remainingSlideDelta: CGFloat {
-        (lastLaidOutWidth >= 0 ? lastLaidOutWidth : renderedWidth) - slideTargetWidth
+        let current = lastLaidOutWidth >= 0 ? lastLaidOutWidth : renderedWidth
+        return Self.occupiedWidth(for: current) - Self.occupiedWidth(for: slideTargetWidth)
     }
     @ObservationIgnored private var slideTask: Task<Void, Never>?
 
@@ -488,7 +510,6 @@ final class SidebarLayout {
 
 /// The grab strip on the sidebar edge. AppKit gives it a real resize cursor and first-click tracking.
 struct SidebarResizeHandle: View {
-    @AppStorage("performanceMode", store: CaptureRun.defaults ?? .standard) private var performanceMode = false
     static let hitWidth: CGFloat = 9
 
     let isActive: Bool
@@ -503,7 +524,7 @@ struct SidebarResizeHandle: View {
                 restLength: 10,
                 shownLength: 22,
                 thickness: 2.5,
-                glowInset: performanceMode ? nil : Chrome.trafficLightTop + Chrome.trafficLightDiameter,
+                glowInset: Chrome.trafficLightTop + Chrome.trafficLightDiameter,
                 refreshesHoverOnLayout: true
             ),
             cursor: .columnResize,

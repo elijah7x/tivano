@@ -95,8 +95,8 @@ struct HydraReviewChoice: Codable, Equatable, Sendable {
     var model: String?
     var effort: String?
 
-    /// The providers whose CLIs can review read-only and headless.
-    static let providers: [ProviderKind] = [.codex, .claude]
+    /// The providers whose CLIs support headless, read-only one-shot review.
+    static let providers: [ProviderKind] = [.codex, .claude, .grok, .pi, .antigravity]
     static let defaultFirst = HydraReviewChoice(provider: .codex, model: nil, effort: "high")
     static let defaultSecond = HydraReviewChoice(provider: .claude, model: nil, effort: "high")
 

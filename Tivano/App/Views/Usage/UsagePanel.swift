@@ -45,7 +45,7 @@ struct UsagePanel: View {
             if let heads {
                 providerSection(provider, role: "Lead", needsDivider: showsContext)
                 // No leading divider when neither the context nor the lead showed anything.
-                providerSection(heads, role: "Heads", needsDivider: showsContext || showsLimits || showsCredits)
+                providerSection(heads, role: "Sub-agents", needsDivider: showsContext || showsLimits || showsCredits)
             } else {
                 if showsLimits {
                     if showsContext {
