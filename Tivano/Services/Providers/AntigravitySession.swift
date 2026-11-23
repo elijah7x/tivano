@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 private struct AntigravityModelsProbeKey: Hashable {
     let executable: String
@@ -55,352 +54,28 @@ private actor AntigravityModelsProbeCache {
     }
 }
 
-/// Caches whether an `agy` binary accepts `--settings`. The key carries the resolved
-/// binary's size and modification date, so an upgrade or downgrade in place probes
-/// again. Only a definite answer is cached; a failed probe (`nil`) is retried next launch.
-private actor AntigravitySettingsFlagCache {
-    private var cached: [String: Bool] = [:]
-    private var inFlight: [String: Task<Bool?, Never>] = [:]
-
-    func supportsSettings(
-        executable: URL,
-        operation: @escaping @Sendable () async -> Bool?
-    ) async -> Bool? {
-        let resolved = executable.resolvingSymlinksInPath().standardizedFileURL.path
-        let attributes = try? FileManager.default.attributesOfItem(atPath: resolved)
-        let size = (attributes?[.size] as? NSNumber)?.int64Value ?? -1
-        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
-        let key = "\(resolved)|\(size)|\(modified)"
-        if let value = cached[key] {
-            return value
-        }
-        if let task = inFlight[key] {
-            return await task.value
-        }
-        let task = Task { await operation() }
-        inFlight[key] = task
-        let result = await task.value
-        if inFlight[key] == task {
-            inFlight[key] = nil
-        }
-        if let result {
-            cached[key] = result
-        }
-        return result
-    }
-}
-
-/// Drives Google's Antigravity CLI (`agy`) in headless streaming mode.
+/// CLI helpers for Google's Antigravity CLI (`agy`): model catalog, model/effort
+/// normalization, auth status, plan limits, one-shot stream-json review parsing,
+/// transient-failure classification, and retry-log parsing.
 ///
-/// The CLI speaks newline-delimited JSON on stdio, much like Claude's
-/// stream-json: Tivano holds one persistent process per thread with
-/// `--input-format stream-json --output-format stream-json`, writes one
-/// `{"event":"user","message":{"content":"…"}}` object per turn on stdin,
-/// and reads `init` / `step_update` / `result` events on stdout.
+/// Interactive Antigravity chats run through `agy acp` in `ACPSession`.
 ///
 /// Protocol reference: https://antigravity.google/docs/cli/headless/
 /// Verified live against `agy 1.2.2` (models TSV, `/usage` and `/credits`
-/// headless envelopes, tool step shapes, `denied_actions`).
+/// headless envelopes).
 @MainActor
-final class AntigravitySession: ProviderSession {
-    private static let log = Logger(subsystem: "dev.tivano.Tivano", category: "antigravity")
-
-    var onEvent: ((ProviderEvent) -> Void)?
-
-    private let configuration: SessionConfiguration
-    private var process: StdioProcess?
-    private var readTask: Task<Void, Never>?
-    private var initContinuation: CheckedContinuation<String, Error>?
-    private var launchError: String?
-    private var conversationID: String?
-    private var runtimeMode: RuntimeMode
-    private var interactionMode: InteractionMode
-    private var model: String?
-    private var effort: String?
-    private var turnActive = false
-    private var interruptRequested = false
-    private var isStopping = false
-    /// Resolves the cumulative session token total into per-turn spend.
-    private var spendTracker = TokenSpendTracker()
-    /// Whether the cumulative total's baseline is known. A launch with
-    /// `--conversation` resumes a conversation whose token total carries its
-    /// history, and the protocol does not say how much that is, so the first
-    /// total is used as the baseline and nothing is charged for it.
-    private var spendBaselineKnown: Bool
-    /// Namespaces step ids per launch. `step_index` counts up within one
-    /// process but a resumed conversation starts over, and a repeated id
-    /// would stream a new turn's text into an old entry of the thread.
-    private let launchID = String(UUID().uuidString.prefix(8))
-    /// Whether any reply text streamed this turn; without it, the result's
-    /// `response` is the reply.
-    private var streamedText = false
-    private var latestCascadeError: (index: Int, message: String)?
-    private var cascadeErrorMessages: Set<String> = []
-    private var completedAgentResponseIndex: Int?
-    /// Reply text streamed after the latest cascade error: recovery needs a new reply,
-    /// not text the failed attempt had already produced.
-    private var replyAfterCascadeError = false
-    /// Errors each conversation has reported, kept across launches (heads relaunch per turn).
-    /// agy repeats a conversation's earlier error on every later result, so only a result
-    /// error already seen in an earlier turn may be treated as stale; a new one still fails the turn.
-    private static var knownConversationErrors: [String: Set<String>] = [:]
-    /// Snapshot of `knownConversationErrors` taken when the current turn started so an error
-    /// recorded mid-turn (e.g. from a retry log line) cannot treat this turn's own failure as stale.
-    private var priorConversationErrors: Set<String> = []
-    private var priorConversationID: String?
-    /// Whether at least one tool step completed cleanly (`DONE` with no error) during this turn.
-    private var hasCompletedToolWork = false
-    /// Files an edit step is about to change, captured when the step went
-    /// active. The stream never carries the edit itself, so the row's diff
-    /// is the file before against the file after.
-    private var editSnapshots = EditSnapshots()
-    /// Tool steps whose start was announced, so a step that surfaces only as
-    /// finished still gets its proper row rather than a bare "Tool".
-    private var startedTools: Set<String> = []
-    /// Error steps already surfaced this turn, so a step reported again as its state
-    /// changes does not repeat its notice.
-    private var reportedErrors: Set<String> = []
-    /// Retry attempt numbers already surfaced this turn from agy's log file.
-    private var emittedRetryAttempts: Set<Int> = []
-    private var logTailer: AntigravityLogTailer?
-    private var logFileURL: URL?
-
-    /// Matches `ThreadRuntime.providerStartTimeout` (`Services` cannot import `App`).
-    /// Silent auth at launch can take over 30 s before `agy` emits `init`.
-    private static let startTimeout: Duration = .seconds(90)
-
+enum AntigravitySession {
     /// Reasoning efforts `agy --effort` accepts.
     static let efforts = ["low", "medium", "high", "xhigh", "max"]
     private static let modelsProbeCache = AntigravityModelsProbeCache()
-    private static let settingsFlagCache = AntigravitySettingsFlagCache()
 
     static func beginCatalogProbeCycle(executable: URL, environment: [String: String]) async {
         await modelsProbeCache.reset(key: AntigravityModelsProbeKey(executable: executable, environment: environment))
     }
 
-    init(configuration: SessionConfiguration) {
-        self.configuration = configuration
-        runtimeMode = configuration.runtimeMode
-        interactionMode = configuration.interactionMode
-        model = configuration.model
-        effort = configuration.effort
-        spendBaselineKnown = configuration.resumeID?.isEmpty != false
-    }
-
-    isolated deinit {
-        logTailer?.shutDown()
-    }
-
-    var isRunning: Bool { !isStopping && (process?.isRunning ?? false) }
-    var lastOutputAt: Date? { process?.lastOutputAt }
-
-    private var workingDirectory: String { configuration.workingDirectory.path }
-
-    // MARK: - Lifecycle
-
-    func start() async throws -> String {
-        guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
-        // Cleared before the probe so a stop() arriving while it runs is still seen below.
-        isStopping = false
-        let supportsSettingsFlag: Bool
-        if configuration.interactionMode != .plan && configuration.runtimeMode == .supervised {
-            supportsSettingsFlag = await Self.supportsSettingsFlag(executable: executable, environment: configuration.environment)
-        } else {
-            supportsSettingsFlag = false
-        }
-        try Task.checkCancellation()
-        if isStopping { throw ProviderError.notRunning }
-        // `--add-dir` is what makes the thread's folder the workspace. The
-        // CLI does not adopt its cwd (verified live, git repo or not): without
-        // the flag the agent works in `~/.gemini/antigravity-cli/scratch` and
-        // spends its first steps hunting the home directory for the project.
-        let logFileURL = Self.makeLogFileURL()
-        var arguments = [
-            "--input-format", "stream-json",
-            "--output-format", "stream-json",
-            // agy's cap covers the whole turn and can end one still producing output.
-            // Tivano's watchdogs stop quiet turns: normal chats in ThreadRuntime, heads in HydraWatchdog.
-            "--print-timeout", "0",
-            "--add-dir", workingDirectory,
-            "--log-file", logFileURL.path,
-        ]
-        // `agy` 1.5.9 reads MCP servers only from the user's global
-        // `~/.gemini/config/mcp_config.json` and has no per-session MCP flag or
-        // environment variable, so Tivano's connected servers are not passed to
-        // Antigravity. `agy` also exits 2 with usage text on unknown flags.
-        let (resolvedModel, resolvedEffort) = Self.normalize(model: model, effort: effort, catalog: Self.addingSeedRows(configuration.modelCatalog, seed: ProviderRegistry.antigravitySeed))
-        if let resolvedModel, !resolvedModel.isEmpty { arguments += ["--model", resolvedModel] }
-        if let resolvedEffort, !resolvedEffort.isEmpty { arguments += ["--effort", resolvedEffort] }
-        arguments += modeArguments(
-            runtimeMode: configuration.runtimeMode,
-            interaction: configuration.interactionMode,
-            supportsSettingsFlag: supportsSettingsFlag
-        )
-        if let resumeID = configuration.resumeID, !resumeID.isEmpty {
-            arguments += ["--conversation", resumeID]
-        }
-
-        let process = StdioProcess(
-            executable: executable,
-            arguments: arguments,
-            directory: configuration.workingDirectory,
-            environment: configuration.environment
-        )
-        self.process = process
-        self.logFileURL = logFileURL
-        try process.start()
-        logTailer?.shutDown()
-        logTailer = AntigravityLogTailer(url: logFileURL) { [weak self] line in
-            guard let retry = Self.parseRetryDetails(line) else { return }
-            Task { @MainActor [weak self] in
-                self?.emitRetryNotice(attempt: retry.attempt, reason: retry.reason, labelKey: retry.labelKey)
-            }
-        }
-        let messages = process.messages
-        readTask = Task { [weak self] in
-            for await message in messages {
-                guard let self else { return }
-                self.handle(message)
-            }
-            self?.didClose()
-        }
-        return try await withCheckedThrowingContinuation { continuation in
-            initContinuation = continuation
-            Task { [weak self] in
-                try? await Task.sleep(for: Self.startTimeout)
-                self?.failStartAfterTimeout()
-            }
-        }
-    }
-
-    /// `agy --mode` only knows `accept-edits` and `plan`. Since `agy` 1.5.7 defaults
-    /// unsaved sessions to Auto, supervised mode pins Default via `--settings` (session-only,
-    /// never saved) when supported; older `agy` exits 2 on unknown flags. Full access
-    /// additionally approves every tool, since headless runs soft-deny unapproved actions
-    /// instead of prompting.
-    private func modeArguments(runtimeMode: RuntimeMode, interaction: InteractionMode, supportsSettingsFlag: Bool) -> [String] {
-        var arguments: [String] = []
-        if interaction == .plan {
-            arguments += ["--mode", "plan"]
-        } else {
-            switch runtimeMode {
-            case .supervised:
-                // agy 1.5.7+ defaults unsaved sessions to Auto; --settings is session-only and never saved, while older agy exits 2 on unknown flags.
-                if supportsSettingsFlag {
-                    arguments += ["--settings", "{\"agentMode\":\"\"}"]
-                }
-            case .autoAcceptEdits, .auto, .fullAccess:
-                arguments += ["--mode", "accept-edits"]
-            }
-        }
-        if runtimeMode == .fullAccess {
-            arguments += ["--dangerously-skip-permissions"]
-        }
-        return arguments
-    }
-
-    /// An unknown answer (the probe failed or timed out) counts as supported: passing the
-    /// flag to an old `agy` fails the launch visibly, while omitting it from a current one
-    /// would silently run a supervised chat in Auto.
-    private static func supportsSettingsFlag(executable: URL, environment: [String: String]) async -> Bool {
-        let probed = await settingsFlagCache.supportsSettings(executable: executable) { () -> Bool? in
-            guard let result = try? await Shell.run(executable, ["--help"], environment: environment, timeout: 10),
-                  !result.timedOut,
-                  result.succeeded else {
-                return nil
-            }
-            let help = TextCleanup.stripANSI(result.output + "\n" + result.errorOutput)
-            return help.contains("--settings")
-        }
-        return probed ?? true
-    }
-
-    private func failStartAfterTimeout() {
-        guard let continuation = initContinuation else { return }
-        initContinuation = nil
-        let exited = process?.isRunning == false
-        let tail = process?.errorTail ?? ""
-        let logTail = exited ? Self.logTail(at: logFileURL) : ""
-        logTailer?.shutDown()
-        logTailer = nil
-        logFileURL = nil
-        process?.terminate()
-        if let launchError {
-            continuation.resume(throwing: ProviderError.failed(authHint(in: launchError) ?? launchError))
-            return
-        }
-        if exited, let hint = authHint(in: tail) ?? authHint(in: logTail) {
-            continuation.resume(throwing: ProviderError.failed(hint))
-            return
-        }
-        continuation.resume(throwing: ProviderError.failed(AppText.localized("Antigravity did not finish starting in time.")))
-    }
-
-    func send(_ input: TurnInput) async throws {
-        guard !isStopping, let process, process.isRunning else { throw ProviderError.notRunning }
-        runtimeMode = input.runtimeMode
-        interactionMode = input.interactionMode
-        if let model = input.model, !model.isEmpty { self.model = model }
-        if let effort = input.effort, !effort.isEmpty { self.effort = effort }
-        // Stream-json only takes text blocks; anything else ends the session
-        // with an error, so images never go on the wire (see supportsImages).
-        turnActive = true
-        interruptRequested = false
-        streamedText = false
-        latestCascadeError = nil
-        cascadeErrorMessages.removeAll()
-        completedAgentResponseIndex = nil
-        replyAfterCascadeError = false
-        hasCompletedToolWork = false
-        let activeConversationID = conversationID ?? configuration.resumeID
-        priorConversationID = activeConversationID
-        priorConversationErrors = activeConversationID.flatMap { Self.knownConversationErrors[$0] } ?? []
-        reportedErrors.removeAll()
-        emittedRetryAttempts.removeAll()
-        logTailer?.setTurnActive(true)
-        onEvent?(.turnStarted(providerTurnID: nil))
-        process.send(["event": "user", "message": ["content": .string(input.text)]])
-    }
-
-    func interrupt() async {
-        guard turnActive else { return }
-        interruptRequested = true
-        // The process going is the stop, not a crash: without this `didClose`
-        // would follow the interrupted turn with `.exited` and the chat would
-        // read "Antigravity stopped unexpectedly" every time the user stops one.
-        // `start` clears the flag again for the next launch.
-        isStopping = true
-        logTailer?.shutDown()
-        logTailer = nil
-        // The stream has no interrupt request: stopping the process ends the
-        // turn, and the conversation persists server-side for the next turn's
-        // `--conversation` resume.
-        process?.terminate()
-    }
-
-    func compact() async throws {
-        throw ProviderError.failed(AppText.localized("Antigravity manages its own context."))
-    }
-
-    func resolveApproval(_ requestID: String, optionID: String) {}
-    func answerQuestion(_ requestID: String, answers: [String: [String]]) {}
-
-    func stopAndWait(timeout: TimeInterval) async {
-        let process = process
-        stop()
-        await process?.terminateAndWait(timeout: timeout)
-    }
-
-    func stop() {
-        isStopping = true
-        logTailer?.shutDown()
-        logTailer = nil
-        process?.terminate()
-    }
-
     // MARK: - Retry log tailing
 
-    private static func makeLogFileURL() -> URL {
+    static func makeLogFileURL() -> URL {
         let logDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".gemini/antigravity-cli/log", isDirectory: true)
         try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
@@ -417,8 +92,9 @@ final class AntigravitySession: ProviderSession {
         return (retry.attempt, retry.labelKey)
     }
 
-    nonisolated private static func parseRetryDetails(_ line: String) -> (attempt: Int, reason: String, labelKey: String)? {
-        guard let match = line.firstMatch(of: #/run\.go:\d+\] Run: attempt (\d+) failed \(request failed: (.+)\), retrying in ([0-9.]+)(ms|s|m)/#),
+    nonisolated static func parseRetryDetails(_ line: String) -> (attempt: Int, reason: String, labelKey: String)? {
+        // agy logs retries both with a "request failed: " prefix and with bare causes like "stream reading error: unexpected EOF".
+        guard let match = line.firstMatch(of: #/run\.go:\d+\] Run: attempt (\d+) failed \((?:request failed: )?(.+)\), retrying in ([0-9.]+)(ms|s|m)/#),
               let attempt = Int(match.output.1) else {
             return nil
         }
@@ -446,118 +122,29 @@ final class AntigravitySession: ProviderSession {
         return "request failed"
     }
 
-    private func emitRetryNotice(attempt: Int, reason: String, labelKey: String) {
-        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedReason.isEmpty {
-            rememberConversationError("request failed: \(trimmedReason)")
-        }
-        guard turnActive, !isStopping else { return }
-        guard emittedRetryAttempts.insert(attempt).inserted else { return }
+    static func retryNotice(attempt: Int, reason: String, labelKey: String) -> Notice {
         let localizedLabel = AppText.localized(labelKey)
         let message = String(
             format: AppText.localized("Antigravity: the model request failed (%@); agy is retrying, attempt %lld."),
             localizedLabel,
             Int64(attempt + 1)
         )
-        onEvent?(.notice(Notice(level: .info, message: message)))
+        return Notice(level: .info, message: message)
     }
 
-    // MARK: - Stream
-
-    private func handle(_ message: JSONValue) {
-        switch message["event"]?.string {
-        case "init":
-            guard let id = message["conversation_id"]?.string, !id.isEmpty else { return }
-            conversationID = id
-            if let continuation = initContinuation {
-                initContinuation = nil
-                continuation.resume(returning: id)
-            }
-            onEvent?(.sessionReady(sessionID: id))
-        case "step_update":
-            handleStep(message["step_update"] ?? .null)
-        case "result":
-            handleResult(message["result"] ?? .null)
-        default:
-            break
-        }
+    static func loginHint(in text: String) -> String? {
+        let lowered = text.lowercased()
+        guard lowered.contains("authentication required")
+            || lowered.contains("authentication failed")
+            || lowered.contains("failed to authenticate")
+            || lowered.contains("not signed in")
+            || lowered.contains("not logged in")
+            || lowered.contains("unauthenticated")
+            || (lowered.contains("login") && (lowered.contains("agy") || lowered.contains("required") || lowered.contains("failed"))) else { return nil }
+        return AppText.localized("Antigravity is not signed in. Run `agy` once in Terminal to sign in.")
     }
 
-    private func handleStep(_ step: JSONValue) {
-        let index = step["step_index"]?.int ?? 0
-        switch step["step_type"]?.string {
-        case "agent_response":
-            if let usage = Self.contextUsage(step["usage"]) { onEvent?(.usage(usage)) }
-            // A reply step in the `ERROR` state carries the failure, not a reply.
-            if step["state"]?.string == "ERROR", noticeError(in: step, index: index) { return }
-            if step["state"]?.string == "DONE" { completedAgentResponseIndex = index }
-            guard let text = step["text_delta"]?.string, !text.isEmpty else { return }
-            streamedText = true
-            if !text.trimmed.isEmpty { replyAfterCascadeError = true }
-            onEvent?(.messageDelta(id: "agy-\(launchID)-message-\(index)", text: text))
-        case "tool":
-            // A tool step after a reply means that reply was not the turn's last word.
-            completedAgentResponseIndex = nil
-            guard let name = [step["tool_name"]?.string, step["tool_info"]?["name"]?.string]
-                .lazy.compactMap({ $0?.trimmed }).first(where: { !$0.isEmpty }) else { return }
-            let id = "agy-\(launchID)-tool-\(index)"
-            let info = step["tool_info"] ?? .null
-            let parameters = info["parameters"] ?? .null
-            let error = info["error"]?["message"]?.string
-            let state = step["state"]?.string
-            if !startedTools.contains(id) {
-                startedTools.insert(id)
-                let call = makeToolCall(name: name, parameters: parameters)
-                if call.kind == .edit, state == "ACTIVE", let path = Self.path(in: parameters) {
-                    editSnapshots.capture(id, path: path)
-                }
-                onEvent?(.toolStarted(id: id, call: call))
-                if state == "ACTIVE" { return }
-            }
-            // Errors ride on the `error` field (the documented shape) as well
-            // as an `ERROR` state, so either ends the call as a failure.
-            if state == "ERROR" || (state == "DONE" && error != nil) {
-                let message = error ?? AppText.localized("The tool failed.")
-                let status: ToolCall.Status = Self.isDenied(message) ? .declined : .failed
-                onEvent?(.toolUpdated(id: id, update: ToolUpdate(output: message, status: status, edits: finishEdit(id, parameters: parameters))))
-            } else if state == "DONE" {
-                hasCompletedToolWork = true
-                var update = ToolUpdate(status: .completed)
-                if let output = info["output"]?.string, !output.isEmpty { update.output = output }
-                update.edits = finishEdit(id, parameters: parameters)
-                onEvent?(.toolUpdated(id: id, update: update))
-            }
-        case "user_input", "checkpoint":
-            // Acknowledgements and markers carry nothing Tivano renders.
-            break
-        default:
-            // Any other step is an error step when it says so: a model call that failed
-            // (`API error (attempt 1): ...`) is retried by the CLI on its own and otherwise
-            // leaves a stalled turn with nothing to read.
-            _ = noticeError(in: step, index: index)
-        }
-    }
-
-    /// Says an error step's message in the thread, as a warning because the CLI may
-    /// retry. False when the step carries none.
-    private func noticeError(in step: JSONValue, index: Int) -> Bool {
-        guard let message = Self.errorMessage(in: step) else { return false }
-        latestCascadeError = (index, message)
-        cascadeErrorMessages.insert(message.trimmingCharacters(in: .whitespacesAndNewlines))
-        rememberConversationError(message)
-        completedAgentResponseIndex = nil
-        replyAfterCascadeError = false
-        if reportedErrors.insert("\(index)|\(message)").inserted {
-            onEvent?(.notice(Notice(level: .warning, message: "Antigravity: " + message)))
-        }
-        return true
-    }
-
-    private func rememberConversationError(_ message: String) {
-        let message = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let conversationID, !message.isEmpty else { return }
-        Self.knownConversationErrors[conversationID, default: []].insert(message)
-    }
+    // MARK: - Turn outcome
 
     /// The message of an error step. The stream does not document the error shape, so the
     /// fields it plausibly rides on are tried in turn; the free-text fields only count on
@@ -570,34 +157,6 @@ final class AntigravitySession: ProviderSession {
         guard let message = candidates.lazy.compactMap({ $0?.trimmed }).first(where: { !$0.isEmpty }) else { return nil }
         return message.count > 500 ? String(message.prefix(499)) + "…" : message
     }
-
-    /// The finished edit as a diff of the file before against after, for the
-    /// row's inline diff and the turn's changed-files attribution. Nil for
-    /// non-edit steps, so the update leaves the call's edits alone.
-    private func finishEdit(_ id: String, parameters: JSONValue) -> [FileEdit]? {
-        guard let path = Self.path(in: parameters) else { return nil }
-        return editSnapshots.finish(id, path: path, relativeTo: workingDirectory)
-    }
-
-    /// The soft-deny wording headless runs use when a permission rule blocks
-    /// a tool: the agent asked, the user (or a rule) said no.
-    private static func isDenied(_ message: String) -> Bool {
-        let lowered = message.lowercased()
-        return lowered.contains("permission check failed") || lowered.contains("denied permission")
-            || lowered.contains("permission denied")
-    }
-
-    /// The context in use after a model call: the step's fresh input plus
-    /// what was served from cache, plus the reply. Result totals are the
-    /// session's cumulative spend and say nothing about the window.
-    private static func contextUsage(_ usage: JSONValue?) -> ContextUsage? {
-        guard let usage, !usage.isNull else { return nil }
-        let used = (usage["input_tokens"]?.int ?? 0) + (usage["cache_read_tokens"]?.int ?? 0) + (usage["output_tokens"]?.int ?? 0)
-        guard used > 0 else { return nil }
-        return ContextUsage(usedTokens: used, windowTokens: nil)
-    }
-
-    // MARK: - Turn outcome
 
     struct TurnOutcome: Equatable {
         enum Status: Equatable {
@@ -734,226 +293,6 @@ final class AntigravitySession: ProviderSession {
             "antigravity 응답이 90초 이내에 시작되지 않았습니다",
         ]
         return transient.contains(where: { lowered.contains($0) })
-    }
-
-    // MARK: - Result handling
-
-    private func handleResult(_ result: JSONValue) {
-        // Before the initialize is answered, a result is the launch's failure, not a turn's:
-        // start() throws it from didClose; nothing was sent that could end here.
-        guard initContinuation == nil else {
-            if let error = result["error"]?.string?.trimmed, !error.isEmpty {
-                launchError = error
-            }
-            return
-        }
-        // Terminating `agy` after a finished turn (a head's process stops after each turn)
-        // makes it emit a second result for the same turn: status ERROR, finished_reason
-        // "interrupted", error "stream input cancelled: context canceled" (seen live with
-        // agy 1.5.5). Only a result for a turn still running ends one.
-        guard turnActive else {
-            Self.log.info("Ignored agy result with no active turn: status=\(result["status"]?.string ?? "none", privacy: .public), finished_reason=\(result["finished_reason"]?.string ?? "none", privacy: .public)")
-            return
-        }
-        turnActive = false
-        logTailer?.setTurnActive(false)
-        emittedRetryAttempts.removeAll()
-        editSnapshots.removeAll()
-        startedTools.removeAll()
-        if let usage = result["usage"], !usage.isNull {
-            // Totals are cumulative over the session (per the headless docs), so the
-            // spend tracker resolves them into per-turn deltas — but only once its
-            // baseline is known. A conversation resumed with `--conversation` reports a
-            // total that already holds the history it resumed with, and the protocol
-            // does not say how much that is: the first total seeds the baseline and is
-            // left uncounted, rather than charged as new spend or reported as zero.
-            // The context meter is fed per step instead (see handleStep).
-            let used = usage["total_tokens"]?.int ?? ((usage["input_tokens"]?.int ?? 0) + (usage["output_tokens"]?.int ?? 0))
-            if used > 0 {
-                if spendBaselineKnown {
-                    let spend = spendTracker.spend(total: used)
-                    if spend > 0 {
-                        TokenLedger.shared.record(spend: spend)
-                        onEvent?(.tokenSpend(TokenSpend(
-                            provider: .antigravity,
-                            totalTokens: spend,
-                            model: model
-                        )))
-                    }
-                } else {
-                    spendTracker.seedBaseline(total: used)
-                    spendBaselineKnown = true
-                }
-            }
-        }
-        let response = result["response"]?.string
-        let hasReply = streamedText || response?.trimmed.isEmpty == false
-        let replyOnlyInResult = !streamedText && response?.trimmed.isEmpty == false
-        // A turn whose reply never streamed (resumed conversations can answer
-        // in the result alone) still shows its text.
-        if !streamedText, let response, !response.trimmed.isEmpty {
-            onEvent?(.messageCompleted(id: "agy-\(launchID)-result-\(UUID().uuidString.prefix(8))", text: response))
-        }
-        streamedText = false
-        let denied = (result["denied_actions"]?.array ?? []).compactMap { $0["display_name"]?.string ?? $0["action"]?.string }
-        if !denied.isEmpty {
-            let names = denied.joined(separator: ", ")
-            onEvent?(.notice(Notice(
-                level: .warning,
-                message: String(format: AppText.localized("Antigravity held back %@ without prompting. Use Full access or add an allow rule in the CLI's settings."), names)
-            )))
-        }
-        if let id = result["conversation_id"]?.string, !id.isEmpty {
-            conversationID = id
-            onEvent?(.sessionReady(sessionID: id))
-        }
-        let status = result["status"]?.string
-        let finishedReason = result["finished_reason"]?.string
-        let resultError = result["error"]?.string
-        let trimmedResultError = resultError?.trimmed ?? ""
-        let knownErrors: Set<String>
-        if let conversationID, conversationID == priorConversationID {
-            knownErrors = priorConversationErrors
-        } else {
-            knownErrors = conversationID.flatMap { Self.knownConversationErrors[$0] } ?? []
-        }
-        let outcome = Self.turnOutcome(
-            interruptRequested: interruptRequested,
-            status: status,
-            finishedReason: finishedReason,
-            hasDeniedActions: !denied.isEmpty,
-            // After a cascade error only a reply streamed since then proves recovery.
-            hasReply: latestCascadeError == nil ? hasReply : replyAfterCascadeError,
-            completedResponseIndex: completedAgentResponseIndex,
-            latestCascadeErrorIndex: latestCascadeError?.index,
-            cascadeErrorMessages: cascadeErrorMessages,
-            knownConversationErrors: knownErrors,
-            hasCompletedToolWork: hasCompletedToolWork,
-            replyOnlyInResult: replyOnlyInResult,
-            resultError: resultError
-        )
-        rememberConversationError(trimmedResultError)
-        switch outcome.status {
-        case .interrupted:
-            onEvent?(.turnCompleted(status: .interrupted, error: nil))
-        case .completed:
-            if outcome.recovered {
-                if latestCascadeError != nil, !trimmedResultError.isEmpty,
-                   reportedErrors.insert("result|\(trimmedResultError)").inserted {
-                    onEvent?(.notice(Notice(level: .warning, message: "Antigravity: " + trimmedResultError)))
-                }
-                Self.log.warning("Recovered agy result: status=\(status ?? "none", privacy: .public), finished_reason=\(finishedReason ?? "none", privacy: .public), cascade_error_step=\(self.latestCascadeError?.index ?? -1), completed_response_step=\(self.completedAgentResponseIndex ?? -1), stale=\(self.latestCascadeError == nil)")
-            }
-            onEvent?(.turnCompleted(status: .completed, error: nil))
-        case .failed:
-            if status == "WAITING", !denied.isEmpty {
-                // Stopped for a permission nobody could grant headless, with actions held
-                // back: reported as a failure so a head's lead hears it was starved of
-                // permissions rather than reading a clean completion.
-                onEvent?(.turnCompleted(status: .failed, error: String(format: AppText.localized("Antigravity held back %@ waiting for a permission it could not ask for. Use Full access for this chat."), denied.joined(separator: ", "))))
-            } else {
-                let fallback = AppText.localized("Antigravity stopped before finishing.")
-                let error = trimmedResultError.isEmpty ? fallback : (authHint(in: trimmedResultError) ?? trimmedResultError)
-                onEvent?(.turnCompleted(status: .failed, error: error))
-            }
-        }
-        interruptRequested = false
-    }
-
-    private func didClose() {
-        logTailer?.shutDown()
-        logTailer = nil
-        if let continuation = initContinuation {
-            initContinuation = nil
-            // The result's own error names the failure better than the stderr tail can.
-            let reason: String
-            if let launchError {
-                reason = authHint(in: launchError) ?? launchError
-            } else {
-                reason = closeFailure()
-            }
-            self.launchError = reason
-            continuation.resume(throwing: ProviderError.failed(reason))
-        }
-        if isStopping {
-            if turnActive {
-                turnActive = false
-                onEvent?(.turnCompleted(status: .interrupted, error: nil))
-            }
-            interruptRequested = false
-            return
-        }
-        if turnActive {
-            turnActive = false
-            if interruptRequested {
-                onEvent?(.turnCompleted(status: .interrupted, error: nil))
-            } else {
-                onEvent?(.turnCompleted(status: .failed, error: closeFailure()))
-            }
-            interruptRequested = false
-        }
-        onEvent?(.exited(error: TextCleanup.lastLines(process?.errorTail ?? "")))
-        logFileURL = nil
-    }
-
-    private func closeFailure() -> String {
-        let tail = process?.errorTail ?? ""
-        if let hint = authHint(in: tail) { return hint }
-        let logTail = Self.logTail(at: logFileURL)
-        if let hint = authHint(in: logTail) { return hint }
-        var lines = [Self.agyError(in: tail) ?? TextCleanup.lastLines(tail)].compactMap { $0 }
-        if let failure = process?.failureReason?.trimmed, !failure.isEmpty,
-           lines.first?.contains(failure) != true {
-            lines.append(failure)
-        }
-        if let status = process?.exitStatus {
-            lines.append(String(format: AppText.localized("The agent exited with status %d."), status))
-        }
-        let message = lines.joined(separator: "\n")
-        guard !message.isEmpty else { return AppText.localized("Antigravity exited.") }
-        return authHint(in: message) ?? message
-    }
-
-    private static func agyError(in tail: String) -> String? {
-        let prefix = "AGY_ERROR:"
-        for line in tail.components(separatedBy: .newlines).reversed() {
-            let line = line.trimmed
-            guard line.hasPrefix(prefix) else { continue }
-            let payload = line.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
-            guard let error = JSONValue.parse(payload),
-                  let shortError = error["short_error"]?.string?.trimmed, !shortError.isEmpty else { continue }
-            var details: [String] = []
-            if let status = error["status"]?.string?.trimmed, !status.isEmpty {
-                details.append("status: \(status)")
-            }
-            if let reason = error["reason"]?.string?.trimmed, !reason.isEmpty {
-                details.append("reason: \(reason)")
-            }
-            return details.isEmpty ? shortError : shortError + " (" + details.joined(separator: ", ") + ")"
-        }
-        return nil
-    }
-
-    private static func logTail(at url: URL?, maxBytes: Int = 8_192) -> String {
-        guard let url, let handle = try? FileHandle(forReadingFrom: url) else { return "" }
-        defer { try? handle.close() }
-        guard let end = try? handle.seekToEnd(), end > 0 else { return "" }
-        let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
-        try? handle.seek(toOffset: start)
-        guard let data = try? handle.readToEnd(), !data.isEmpty else { return "" }
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    private func authHint(in text: String) -> String? {
-        let lowered = text.lowercased()
-        guard lowered.contains("authentication required")
-            || lowered.contains("authentication failed")
-            || lowered.contains("failed to authenticate")
-            || lowered.contains("not signed in")
-            || lowered.contains("not logged in")
-            || lowered.contains("unauthenticated")
-            || (lowered.contains("login") && (lowered.contains("agy") || lowered.contains("required") || lowered.contains("failed"))) else { return nil }
-        return AppText.localized("Antigravity is not signed in. Run `agy` once in Terminal to sign in.")
     }
 
     // MARK: - Model and Effort Normalization
@@ -1268,113 +607,11 @@ final class AntigravitySession: ProviderSession {
         }
         return nil
     }
-
-    // MARK: - Tool mapping
-
-    /// Same row shapes as Claude's: the subject is the command, the path, the
-    /// pattern or the URL, and the detail is only what qualifies it (a search
-    /// folder, an MCP tool's input). The stream sends a display subset of the
-    /// parameters (`AbsolutePath`, `TargetFile`, `SearchDirectory`, ...), never
-    /// the edit content.
-    private func makeToolCall(name: String, parameters: JSONValue) -> ToolCall {
-        let kind = Self.kind(of: name)
-        let path = Self.path(in: parameters).map { ToolTitles.relativePath($0, to: workingDirectory) }
-        switch kind {
-        case .command:
-            let command = Self.string(in: parameters, keys: ["CommandLine", "command", "Command"]).map(ToolTitles.unwrapShell)
-            return ToolCall(kind: .command, title: command ?? Self.humanize(name))
-        case .read:
-            var call = ToolCall(kind: .read, title: path ?? Self.string(in: parameters, keys: ["Url", "URL", "url"]) ?? Self.humanize(name))
-            if path != nil, let range = Self.lineRange(in: parameters) { call.detail = range }
-            return call
-        case .edit:
-            var call = ToolCall(kind: .edit, title: path ?? Self.humanize(name))
-            if let path { call.edits = [FileEdit(path: path)] }
-            return call
-        case .search:
-            let pattern = Self.string(in: parameters, keys: ["Query", "query", "Pattern", "pattern"])
-            let folder = Self.string(in: parameters, keys: ["SearchPath", "SearchDirectory", "DirectoryPath", "Path", "path"])
-                .map { ToolTitles.relativePath($0, to: workingDirectory) }
-            if let pattern {
-                return ToolCall(kind: .search, title: pattern, detail: folder)
-            }
-            return ToolCall(kind: .search, title: folder ?? Self.humanize(name))
-        case .web:
-            let subject = Self.string(in: parameters, keys: ["Url", "URL", "url", "query", "Query"])
-            return ToolCall(kind: .web, title: subject ?? Self.humanize(name))
-        case .agent:
-            let task = Self.string(in: parameters, keys: ["Task", "task", "Prompt", "prompt", "Description", "description"])
-            return ToolCall(kind: .agent, title: task.map { TextCleanup.singleLine($0, limit: 96) } ?? Self.humanize(name))
-        case .mcp:
-            let server = Self.string(in: parameters, keys: ["ServerName", "server_name", "Server", "server"]) ?? "MCP"
-            let tool = Self.string(in: parameters, keys: ["ToolName", "tool_name", "Tool", "tool"]) ?? "tool"
-            let input = parameters["Arguments"] ?? parameters["arguments"] ?? parameters["Input"] ?? .null
-            return ToolCall(kind: .mcp, title: "\(server) · \(tool)", detail: input.isNull ? nil : input.compactString)
-        case .other:
-            var call = ToolCall(kind: .other, title: Self.humanize(name))
-            let detail = parameters.isNull ? nil : parameters.compactString
-            if let detail, !detail.isEmpty, detail != "{}", detail.count <= 300 { call.detail = detail }
-            return call
-        }
-    }
-
-    private static func kind(of name: String) -> ToolCall.Kind {
-        switch name {
-        case "run_command", "send_command_input", "command_status", "wait", "wait_5_seconds", "schedule":
-            .command
-        case "view_file", "view_file_outline", "view_code_item", "view_content_chunk", "read_resource",
-             "read_browser_page", "capture_browser_screenshot", "capture_browser_console_logs":
-            .read
-        case "write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file", "notebook_edit", "notebook_execution":
-            .edit
-        case "list_dir", "grep_search", "find_by_name", "list_resources", "list_browser_pages":
-            .search
-        case "search_web", "read_url_content", "open_browser_url", "browser_click_element", "browser_drag_pixel_to_pixel",
-             "browser_get_dom", "browser_get_network_request", "browser_input", "browser_list_network_requests",
-             "browser_mouse_down", "browser_mouse_up", "browser_move_mouse", "browser_press_key", "browser_refresh_page",
-             "browser_resize_window", "browser_scroll", "browser_scroll_dom", "browser_select_option", "click_browser_pixel",
-             "execute_browser_javascript":
-            .web
-        case "invoke_subagent", "browser_subagent", "define_subagent", "manage_subagents":
-            .agent
-        case "call_mcp_tool":
-            .mcp
-        default:
-            .other
-        }
-    }
-
-    private static func path(in parameters: JSONValue) -> String? {
-        string(in: parameters, keys: [
-            "AbsolutePath", "TargetFile", "NotebookPath", "FilePath", "File", "file", "path", "Path",
-            "DirectoryPath", "directory", "dir",
-        ])
-    }
-
-    private static func string(in parameters: JSONValue, keys: [String]) -> String? {
-        for key in keys {
-            if let value = parameters[key]?.string, !value.isEmpty { return value }
-        }
-        return nil
-    }
-
-    /// "L12–40" when a read names a line window, so partial reads read as such.
-    private static func lineRange(in parameters: JSONValue) -> String? {
-        guard let start = parameters["StartLine"]?.int else { return nil }
-        if let end = parameters["EndLine"]?.int, end > start { return "L\(start)–\(end)" }
-        return "L\(start)"
-    }
-
-    private static func humanize(_ name: String) -> String {
-        let words = name.split(separator: "_").map(String.init)
-        guard let first = words.first else { return name }
-        return ([first.capitalized] + words.dropFirst()).joined(separator: " ")
-    }
 }
 
 /// Tails `agy`'s `--log-file` on a utility queue while a turn is active so
 /// silent model-request retries surface in the thread without polling when idle.
-private final class AntigravityLogTailer: @unchecked Sendable {
+final class AntigravityLogTailer: @unchecked Sendable {
     private static let maxRemainderBytes = 1_048_576
 
     private let url: URL
@@ -1486,10 +723,10 @@ private final class AntigravityLogTailer: @unchecked Sendable {
     }
 }
 
-// One-shot review turns (TextGeneration.review) share the chat turn's recovery rules.
+// One-shot review turns (TextGeneration.review) still use headless stream-json.
 extension AntigravitySession {
     /// The reply of one headless stream-json turn (`agy -p --output-format stream-json`),
-    /// judged as a chat turn is: agy retries a failed model call inside the turn and may
+    /// judged by stream recovery rules: agy retries a failed model call inside the turn and may
     /// still report the earlier `ERROR`, so a completed agent_response after the last error
     /// step recovers the turn. Nil reply when the turn failed; `result` is the first result
     /// event (a later one is agy's shutdown echo).

@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import Synchronization
+import os
 
 private enum Checks {
     static let results = Mutex<[String]>([])
@@ -89,6 +90,7 @@ private final class RawClient {
         try historyAndInstallation(root)
         try ledgerAndPagination()
         try await transportConcurrencyAndResources(root)
+        try await streaming(root)
         let names = Checks.results.withLock { $0 }
         let report: [String: Any] = ["executed_checks": names, "count": names.count, "scope": "synthetic non-GUI only; no App launch, real library, account, install path or live updater", "owner_side_pending": ["GUI", "provider end-to-end", "signed build", "real performance regression"]]
         let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
@@ -394,5 +396,346 @@ private final class RawClient {
         let receipt = try client.request(.operation(dropped))
         guard case .operation(let outcome) = receipt.result else { throw Checks.CheckFailure(name: "disconnect query") }
         try Checks.check(outcome.state == .accepted, "disconnect preserves accepted synthetic operation outcome")
+    }
+
+    private struct StreamHarnessState: Sendable {
+        var threeFramesRequestID: UUID?
+        var largePromptLength: Int?
+        var interruptCancelCount = 0
+        var interruptHandlerDone = false
+        var extraByteCancelCount = 0
+        var extraByteHandlerDone = false
+        var quietCancelCount = 0
+    }
+
+    private struct StopCancelState: Sendable {
+        var cancelCount = 0
+        var handlerDone = false
+    }
+
+    private struct ClientStreamProgress: Sendable {
+        var gotFirstFrame = false
+        var finished = false
+        var failure: ControlFailure?
+    }
+
+    private struct ReceivedStreamFrame: Sendable {
+        var id: UUID?
+        var line: ControlAgentLine
+    }
+
+    private struct StreamRunResult: Sendable {
+        var frames: [ReceivedStreamFrame]
+        var closeFailure: ControlFailure?
+    }
+
+    private static func runBlocking<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    continuation.resume(returning: try work())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    static func streaming(_ root: URL) async throws {
+        print("ROUND 5: streaming agent transport")
+        // 5. ControlAgentEvent.line JSON round-trip and error raw values.
+        let toolInputValue: [String: Any] = ["path": "/tmp/note.md", "replace": true, "lines": [1, 2]]
+        let toolLine = ControlAgentEvent.toolStart(id: "call-1", name: "edit_file", input: toolInputValue).line
+        try Checks.check(toolLine.type == "tool_start" && !toolLine.json.contains("\n"), "toolStart line encodes single-line JSON")
+        let toolObject = try JSONSerialization.jsonObject(with: Data(toolLine.json.utf8)) as? [String: Any]
+        let toolInput = toolObject?["input"] as? [String: Any]
+        try Checks.check(
+            Set(toolObject?.keys.map { $0 } ?? []) == Set(["type", "id", "name", "input"])
+                && toolObject?["type"] as? String == "tool_start"
+                && toolObject?["id"] as? String == "call-1"
+                && toolObject?["name"] as? String == "edit_file"
+                && toolInput?["path"] as? String == "/tmp/note.md"
+                && toolInput?["replace"] as? Bool == true
+                && toolInput?["lines"] as? [Int] == [1, 2],
+            "toolStart with dictionary input round-trips type/id/name/input"
+        )
+        let internalLine = ControlAgentEvent.error(.internal, "unexpected failure").line
+        let internalObject = try JSONSerialization.jsonObject(with: Data(internalLine.json.utf8)) as? [String: Any]
+        try Checks.check(
+            internalLine.type == "error"
+                && internalObject?["type"] as? String == "error"
+                && internalObject?["code"] as? String == "internal"
+                && internalObject?["message"] as? String == "unexpected failure",
+            "error event encodes internal raw value"
+        )
+        let unavailableLine = ControlAgentEvent.error(.model_unavailable, "model missing").line
+        let unavailableObject = try JSONSerialization.jsonObject(with: Data(unavailableLine.json.utf8)) as? [String: Any]
+        try Checks.check(
+            unavailableLine.type == "error"
+                && unavailableObject?["type"] as? String == "error"
+                && unavailableObject?["code"] as? String == "model_unavailable"
+                && unavailableObject?["message"] as? String == "model missing",
+            "error event encodes model_unavailable raw value"
+        )
+
+        let directory = root.appendingPathComponent("a", isDirectory: true)
+        let instance = UUID()
+        let service = SyntheticService(instance: instance)
+        let state = OSAllocatedUnfairLock(initialState: StreamHarnessState())
+        let server = ControlSocketServer(
+            directory: directory,
+            welcome: ControlWelcome(edition: .dev, instance: instance),
+            handler: { await service.request($0) },
+            streamHandler: { request, stream in
+                guard case .agentRun(let run) = request.command else { return }
+                let requestID = stream.requestID
+                switch run.session {
+                case "three-frames":
+                    state.withLock { $0.threeFramesRequestID = requestID }
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.session("s-1").line)))
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.text("hello").line)))
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.done.line)))
+                case "large-prompt":
+                    let byteCount = run.prompt.utf8.count
+                    state.withLock { $0.largePromptLength = byteCount }
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.done.line)))
+                case "cancel-interrupt":
+                    stream.onCancel {
+                        state.withLock { $0.interruptCancelCount += 1 }
+                    }
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.session("c-1").line)))
+                    let deadline = ContinuousClock.now + .seconds(5)
+                    while state.withLock({ $0.interruptCancelCount }) == 0 && ContinuousClock.now < deadline {
+                        try? await Task.sleep(for: .milliseconds(20))
+                    }
+                    state.withLock { $0.interruptHandlerDone = true }
+                case "cancel-bytes":
+                    stream.onCancel {
+                        state.withLock { $0.extraByteCancelCount += 1 }
+                    }
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.session("b-1").line)))
+                    let deadline = ContinuousClock.now + .seconds(5)
+                    while state.withLock({ $0.extraByteCancelCount }) == 0 && ContinuousClock.now < deadline {
+                        try? await Task.sleep(for: .milliseconds(20))
+                    }
+                    state.withLock { $0.extraByteHandlerDone = true }
+                case "quiet-open":
+                    stream.onCancel {
+                        state.withLock { $0.quietCancelCount += 1 }
+                    }
+                    try? await Task.sleep(for: .milliseconds(1_150))
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.text("still-open").line)))
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.done.line)))
+                default:
+                    stream.send(ControlResponse(id: requestID, result: .agentEvent(ControlAgentEvent.error(.bad_request, "unknown mode").line)))
+                }
+            }
+        )
+        try server.start()
+        defer { server.stop() }
+
+        // 1. Ordered streaming frames with matching request IDs, followed by server close.
+        do {
+            let outcome = try await runBlocking {
+                var frames: [ReceivedStreamFrame] = []
+                var closeFailure: ControlFailure?
+                do {
+                    let client = try ControlClient(edition: .dev, directory: directory)
+                    try client.stream(.agentRun(ControlAgentRun(cwd: "/tmp", session: "three-frames", prompt: "hi"))) { response in
+                        guard response.error == nil, case .agentEvent(let line) = response.result else {
+                            throw Checks.CheckFailure(name: "unexpected stream frame")
+                        }
+                        frames.append(ReceivedStreamFrame(id: response.id, line: line))
+                        return true
+                    }
+                } catch let failure as ControlFailure {
+                    closeFailure = failure
+                }
+                return StreamRunResult(frames: frames, closeFailure: closeFailure)
+            }
+            let expectedID = state.withLock { $0.threeFramesRequestID }
+            try Checks.check(outcome.frames.map(\.line.type) == ["session", "text", "done"], "stream receives session, text, done in order")
+            try Checks.check(expectedID != nil && outcome.frames.allSatisfy { $0.id == expectedID }, "stream frames carry matching request ids")
+            try Checks.check(outcome.closeFailure?.code == .unavailable && outcome.closeFailure?.detail == "closed", "server closes stream connection after handler returns")
+        }
+
+        // 2. Large agentRun prompt (> maxRequest, <= maxAgentPrompt) accepted; oversized non-agent request rejected with .bounds.
+        do {
+            let largePrompt = String(repeating: "p", count: LocalControl.maxRequest + 16_384)
+            try Checks.check(largePrompt.utf8.count > LocalControl.maxRequest && largePrompt.utf8.count <= LocalControl.maxAgentPrompt, "large agent prompt sits between maxRequest and maxAgentPrompt")
+            let largeTypes = try await runBlocking {
+                var types: [String] = []
+                let client = try ControlClient(edition: .dev, directory: directory)
+                try client.stream(.agentRun(ControlAgentRun(cwd: "/tmp", session: "large-prompt", prompt: largePrompt))) { response in
+                    guard response.error == nil, case .agentEvent(let line) = response.result else {
+                        throw Checks.CheckFailure(name: "unexpected large-prompt frame")
+                    }
+                    types.append(line.type)
+                    return line.type != "done"
+                }
+                return types
+            }
+            try Checks.check(largeTypes == ["done"] && state.withLock { $0.largePromptLength } == largePrompt.utf8.count, "agentRun accepts prompt larger than maxRequest within maxAgentPrompt")
+            let oversizedSubmit = ControlCommand.submit(ControlSubmit(
+                ticket: ControlTicket(instance: instance),
+                threadID: UUID(),
+                text: String(repeating: "x", count: LocalControl.maxRequest + 1_024)
+            ))
+            try Checks.rejects(.bounds, "client rejects non-agent request larger than maxRequest") {
+                let client = try ControlClient(edition: .dev, directory: directory)
+                _ = try client.request(oversizedSubmit)
+            }
+            let raw = try RawClient(directory: directory)
+            _ = try raw.hello(ControlHello(edition: .dev))
+            let request = ControlRequest(instance: instance, command: oversizedSubmit)
+            let payload = try LocalControl.encoder().encode(request)
+            try Checks.check(payload.count > LocalControl.maxRequest && payload.count <= LocalControl.maxFrame, "oversized non-agent frame sits between maxRequest and maxFrame")
+            try raw.write(ControlSocket.frame(payload))
+            try Checks.check(try raw.response().error?.code == .bounds, "server rejects non-agent request larger than maxRequest with bounds")
+        }
+
+        // 3a. Client interrupt() cancels an active stream exactly once.
+        do {
+            let client = try ControlClient(edition: .dev, directory: directory)
+            let progress = OSAllocatedUnfairLock(initialState: ClientStreamProgress())
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try client.stream(.agentRun(ControlAgentRun(cwd: "/tmp", session: "cancel-interrupt", prompt: "wait"))) { response in
+                        if case .agentEvent(let line) = response.result, line.type == "session" {
+                            progress.withLock { $0.gotFirstFrame = true }
+                        }
+                        return true
+                    }
+                } catch let failure as ControlFailure {
+                    progress.withLock { $0.failure = failure }
+                } catch {}
+                progress.withLock { $0.finished = true }
+            }
+            let firstDeadline = ContinuousClock.now + .seconds(3)
+            while !progress.withLock({ $0.gotFirstFrame }) && ContinuousClock.now < firstDeadline {
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            try Checks.check(progress.withLock { $0.gotFirstFrame }, "cancel stream delivers initial frame")
+            client.interrupt()
+            let cancelDeadline = ContinuousClock.now + .seconds(3)
+            while (state.withLock({ $0.interruptCancelCount }) == 0
+                || !progress.withLock({ $0.finished })
+                || !state.withLock({ $0.interruptHandlerDone }))
+                && ContinuousClock.now < cancelDeadline {
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            let snapshot = progress.withLock { $0 }
+            try Checks.check(snapshot.finished, "client stream exits after interrupt")
+            try Checks.check(snapshot.failure?.code == .unavailable && snapshot.failure?.detail == "closed", "interrupted client stream reports closed")
+            try Checks.check(state.withLock { $0.interruptCancelCount } == 1, "client interrupt fires stream onCancel exactly once")
+        }
+
+        // 3b. Extra client bytes cancel an active stream exactly once.
+        do {
+            let raw = try RawClient(directory: directory)
+            _ = try raw.hello(ControlHello(edition: .dev))
+            let request = ControlRequest(
+                instance: instance,
+                command: .agentRun(ControlAgentRun(cwd: "/tmp", session: "cancel-bytes", prompt: "wait"))
+            )
+            try raw.write(ControlSocket.frame(LocalControl.encoder().encode(request)))
+            let first = try raw.response()
+            guard case .agentEvent(let line) = first.result, line.type == "session" else {
+                throw Checks.CheckFailure(name: "extra-bytes stream initial frame")
+            }
+            try raw.write(Data([0x21]))
+            try Checks.check(raw.eof(), "extra client bytes close streaming connection")
+            let deadline = ContinuousClock.now + .seconds(3)
+            while (state.withLock({ $0.extraByteCancelCount }) == 0 || !state.withLock({ $0.extraByteHandlerDone })) && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            try Checks.check(state.withLock { $0.extraByteCancelCount } == 1, "extra client bytes fire stream onCancel exactly once")
+        }
+
+        // 3c. server.stop() cancels an open stream exactly once.
+        do {
+            let stopDirectory = root.appendingPathComponent("b", isDirectory: true)
+            let stopInstance = UUID()
+            let stopService = SyntheticService(instance: stopInstance)
+            let stopState = OSAllocatedUnfairLock(initialState: StopCancelState())
+            let stopServer = ControlSocketServer(
+                directory: stopDirectory,
+                welcome: ControlWelcome(edition: .dev, instance: stopInstance),
+                handler: { await stopService.request($0) },
+                streamHandler: { _, stream in
+                    stream.onCancel {
+                        stopState.withLock { $0.cancelCount += 1 }
+                    }
+                    stream.send(ControlResponse(id: stream.requestID, result: .agentEvent(ControlAgentEvent.session("stop-1").line)))
+                    let deadline = ContinuousClock.now + .seconds(5)
+                    while stopState.withLock({ $0.cancelCount }) == 0 && ContinuousClock.now < deadline {
+                        try? await Task.sleep(for: .milliseconds(20))
+                    }
+                    stopState.withLock { $0.handlerDone = true }
+                }
+            )
+            try stopServer.start()
+            defer { stopServer.stop() }
+            let client = try ControlClient(edition: .dev, directory: stopDirectory)
+            let progress = OSAllocatedUnfairLock(initialState: ClientStreamProgress())
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try client.stream(.agentRun(ControlAgentRun(cwd: "/tmp", session: "stop", prompt: "wait"))) { response in
+                        if case .agentEvent(let line) = response.result, line.type == "session" {
+                            progress.withLock { $0.gotFirstFrame = true }
+                        }
+                        return true
+                    }
+                } catch let failure as ControlFailure {
+                    progress.withLock { $0.failure = failure }
+                } catch {}
+                progress.withLock { $0.finished = true }
+            }
+            let firstDeadline = ContinuousClock.now + .seconds(3)
+            while !progress.withLock({ $0.gotFirstFrame }) && ContinuousClock.now < firstDeadline {
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            try Checks.check(progress.withLock { $0.gotFirstFrame }, "stop-cancel stream delivers initial frame")
+            try Checks.check(stopState.withLock { $0.cancelCount } == 0, "open stream is not cancelled before stop")
+            stopServer.stop()
+            try Checks.check(stopState.withLock { $0.cancelCount } == 1, "server stop synchronously cancels open stream")
+            let doneDeadline = ContinuousClock.now + .seconds(3)
+            while (!progress.withLock({ $0.finished }) || !stopState.withLock({ $0.handlerDone })) && ContinuousClock.now < doneDeadline {
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            let snapshot = progress.withLock { $0 }
+            try Checks.check(snapshot.finished && snapshot.failure?.code == .unavailable && snapshot.failure?.detail == "closed", "server stop closes client stream")
+            try Checks.check(stopState.withLock { $0.cancelCount } == 1, "server stop fires stream onCancel exactly once")
+        }
+
+        // 4. Stream remains open ~1 s when handler sends nothing.
+        do {
+            let started = ContinuousClock.now
+            let outcome = try await runBlocking {
+                var frames: [ReceivedStreamFrame] = []
+                var closeFailure: ControlFailure?
+                do {
+                    let client = try ControlClient(edition: .dev, directory: directory)
+                    try client.stream(.agentRun(ControlAgentRun(cwd: "/tmp", session: "quiet-open", prompt: "silence"))) { response in
+                        guard response.error == nil, case .agentEvent(let line) = response.result else {
+                            throw Checks.CheckFailure(name: "unexpected quiet-open frame")
+                        }
+                        frames.append(ReceivedStreamFrame(id: response.id, line: line))
+                        return true
+                    }
+                } catch let failure as ControlFailure {
+                    closeFailure = failure
+                }
+                return StreamRunResult(frames: frames, closeFailure: closeFailure)
+            }
+            let elapsed = ContinuousClock.now - started
+            try Checks.check(elapsed >= .seconds(1), "quiet stream remains open past 1s with no server output")
+            try Checks.check(outcome.frames.map(\.line.type) == ["text", "done"], "quiet stream delivers frames after 1s silence")
+            try Checks.check(state.withLock { $0.quietCancelCount } == 0, "quiet stream is not cancelled during 1s silence")
+            try Checks.check(outcome.closeFailure?.code == .unavailable && outcome.closeFailure?.detail == "closed", "quiet stream closes cleanly after finish")
+        }
     }
 }

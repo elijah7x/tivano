@@ -45,3 +45,23 @@ enum MCPProviderConfig {
                  ["name": "broken", "command": "/not-executed", "args": [], "env": []]], [])
     }
 }
+// ACPSession's Antigravity hooks; no case here runs Antigravity, so they stay inert.
+@MainActor final class TokenLedger {
+    static let shared = TokenLedger()
+    func record(spend: Int, on date: Date = Date()) {}
+}
+enum ProviderRegistry { static let antigravitySeed: [ModelOption] = [] }
+final class AntigravityLogTailer {
+    init(url: URL, onLine: @escaping @Sendable (String) -> Void) {}
+    func setTurnActive(_ active: Bool) {}
+    func shutDown() {}
+}
+@MainActor enum AntigravitySession {
+    static let efforts = ["low", "medium", "high", "xhigh", "max"]
+    static func makeLogFileURL() -> URL { URL(fileURLWithPath: ProcessInfo.processInfo.environment["DSH_TEST_ROOT"]!).appendingPathComponent("antigravity.log") }
+    nonisolated static func parseRetryDetails(_ line: String) -> (attempt: Int, reason: String, labelKey: String)? { nil }
+    static func retryNotice(attempt: Int, reason: String, labelKey: String) -> Notice { Notice(level: .warning, message: reason) }
+    static func loginHint(in text: String) -> String? { nil }
+    static func addingSeedRows(_ catalog: [ModelOption], seed: [ModelOption]) -> [ModelOption] { catalog }
+    static func normalize(model: String?, effort: String?, catalog: [ModelOption]) -> (model: String?, effort: String?) { (model, effort) }
+}

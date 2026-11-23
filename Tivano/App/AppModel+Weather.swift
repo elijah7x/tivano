@@ -52,7 +52,7 @@ extension AppModel {
                         lastStatus: thread.unreadStatus ?? thread.lastStatus,
                         hasUnread: thread.hasUnread,
                         needsApproval: !(runtime?.approvals.isEmpty ?? true) || approvalParents.contains(thread.id),
-                        needsAnswer: !(runtime?.questions.isEmpty ?? true) || questionParents.contains(thread.id),
+                        needsAnswer: runtime?.needsUserAnswer == true || questionParents.contains(thread.id),
                         isWorking: runtime?.isRunning == true || runtime?.isHydraMerging == true
                             || workingParents.contains(thread.id)
                             || !(runtime?.backgroundTasks.isEmpty ?? true)

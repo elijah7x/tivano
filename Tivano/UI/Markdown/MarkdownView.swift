@@ -223,7 +223,7 @@ struct MarkdownView: View, Equatable {
 
     /// The lead's delegation card has faded out in place by the time its block leaves the
     /// reply (see `ThreadRuntime.holdSentDelegationBlock`), so it goes without a transition
-    /// of its own and only the text below animates closing up: a removal that glided the
+    /// of its own and the text below closes up without animation: a removal that glided the
     /// card over that text drew it as a ghost. Every other block comes and goes with the soft appear.
     private static func transition(for block: MarkdownBlock) -> AnyTransition {
         if case .code(let language, _) = block, let info = language?.lowercased(), Self.isDelegationInfo(info) {

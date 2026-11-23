@@ -23,6 +23,9 @@ struct SidebarView: View {
     /// The thread whose delete popover is open, by id: the popover's binding compares two
     /// UUIDs and never reaches into a thread snapshot that may since have changed hands.
     @State private var pendingProjectDeletionID: UUID?
+    /// Whether the removal was asked from the shelf popover: during a search a shelved
+    /// project has a row both there and in the results, and only one may hang the question.
+    @State private var pendingProjectDeletionInShelf = false
     @State private var confirmedProjectDeletion: ConfirmedProjectDeletion?
     @State private var isProjectDeletePopoverShown = false
     @State private var pendingDeletionID: UUID?
@@ -266,28 +269,11 @@ struct SidebarView: View {
             if ids.isEmpty { isShelfPresented = false }
         }
         .background { if !inPopover { WindowDragArea() } }
-        .popover(isPresented: Binding(
-            get: { pendingProjectDeletionID != nil },
-            set: { if !$0 { pendingProjectDeletionID = nil } }
-        ), arrowEdge: .trailing) {
-            if let id = pendingProjectDeletionID, let project = model.project(id) {
-                let removedIDs = Set(model.threadsRemovedWithProject(project).map(\.id))
-                RemoveProjectPopover(count: removedIDs.count, onRemove: {
-                    confirmedProjectDeletion = ConfirmedProjectDeletion(projectID: id, threadIDs: removedIDs)
-                    pendingProjectDeletionID = nil
-                    if !isProjectDeletePopoverShown { carryOutConfirmedProjectDeletion() }
-                }, onCancel: { pendingProjectDeletionID = nil })
-                .onAppear { isProjectDeletePopoverShown = true }
-                .onDisappear {
-                    isProjectDeletePopoverShown = false
-                    carryOutConfirmedProjectDeletion()
-                }
-            }
-        }
         .onChange(of: model.projectDeletionRequest) { _, id in
             guard let id else { return }
             model.projectDeletionRequest = nil
-            guard model.project(id) != nil else { return }
+            guard let project = model.project(id) else { return }
+            pendingProjectDeletionInShelf = isShelfPresented && project.isShelved
             pendingProjectDeletionID = id
         }
         // Read only in the popover: the list itself has no reason to re-render on selection.
@@ -341,6 +327,32 @@ struct SidebarView: View {
             .onDisappear {
                 isDeletePopoverShown = false
                 carryOutConfirmedDeletion()
+            }
+        }
+    }
+
+    /// The project removal question, asked on the project row itself; the confirmed removal
+    /// waits for the popover to close before removing the row it hangs on.
+    private func projectDeletePopover<Row: View>(for projectID: UUID, inShelf: Bool = false, on row: Row) -> some View {
+        row.popover(
+            isPresented: Binding(
+                get: { pendingProjectDeletionID == projectID && pendingProjectDeletionInShelf == inShelf },
+                set: { if !$0, pendingProjectDeletionID == projectID, pendingProjectDeletionInShelf == inShelf { pendingProjectDeletionID = nil } }
+            ),
+            arrowEdge: .trailing
+        ) {
+            if let project = model.project(projectID) {
+                let removedIDs = Set(model.threadsRemovedWithProject(project).map(\.id))
+                RemoveProjectPopover(count: removedIDs.count, onRemove: {
+                    confirmedProjectDeletion = ConfirmedProjectDeletion(projectID: projectID, threadIDs: removedIDs)
+                    pendingProjectDeletionID = nil
+                    if !isProjectDeletePopoverShown { carryOutConfirmedProjectDeletion() }
+                }, onCancel: { pendingProjectDeletionID = nil })
+                .onAppear { isProjectDeletePopoverShown = true }
+                .onDisappear {
+                    isProjectDeletePopoverShown = false
+                    carryOutConfirmedProjectDeletion()
+                }
             }
         }
     }
@@ -498,7 +510,7 @@ struct SidebarView: View {
                 .padding(.vertical, 4)
         case .project(let project, let count):
             let isDragged = projectDrag.id == project.id
-            ProjectRow(snapshot: project, count: count, isDragged: isDragged, isShelved: project.isShelved, magnifier: project.isShelved ? nil : magnifier)
+            projectDeletePopover(for: project.id, on: ProjectRow(snapshot: project, count: count, isDragged: isDragged, isShelved: project.isShelved, magnifier: project.isShelved ? nil : magnifier))
                 .padding(.leading, item.isNested ? ThreadRowMetrics.folderIndent : 0)
                 .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.listSpace)) }) { frame in
                     rowHeights.note(item.id, frame.height)
@@ -855,7 +867,7 @@ struct SidebarView: View {
         }
         .popover(isPresented: $isShelfPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .trailing) {
             ShelfPopover(maxHeight: max(240, sidebarHeight.value * 0.8), revealThreadID: $shelfRevealThreadID) { project, count in
-                ProjectRow(snapshot: project, count: count, isShelved: true)
+                projectDeletePopover(for: project.id, inShelf: true, on: ProjectRow(snapshot: project, count: count, isShelved: true))
             } threadRow: { thread in
                 threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: false, isNested: true)
             }
@@ -899,7 +911,7 @@ struct SidebarView: View {
 
     private func needsAttention(_ thread: ChatThread) -> Bool {
         guard let runtime = model.existingRuntime(for: thread.id) else { return false }
-        return !runtime.approvals.isEmpty || !runtime.questions.isEmpty
+        return runtime.needsUserAttention
     }
 
     private struct ActivityGroup {
@@ -969,7 +981,7 @@ struct SidebarView: View {
                     Color.clear.frame(height: Chrome.groupGap)
                 }
                 if let project = result.project {
-                    ProjectRow(snapshot: project, count: result.count, togglesExpansion: false)
+                    projectDeletePopover(for: project.id, on: ProjectRow(snapshot: project, count: result.count, togglesExpansion: false))
                     ForEach(result.threads, id: \.id) { thread in
                         threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !visibleHelpers(helpers[thread.id] ?? []).isEmpty, isNested: true)
                     }
@@ -2781,7 +2793,7 @@ func threadActivityStatus(_ thread: ChatThread, runtime: ThreadRuntime?) -> Thre
         lastStatus: thread.unreadStatus ?? thread.lastStatus,
         hasUnread: thread.hasUnread,
         needsApproval: !(runtime?.approvals.isEmpty ?? true),
-        needsAnswer: !(runtime?.questions.isEmpty ?? true),
+        needsAnswer: runtime?.needsUserAnswer == true,
         isWorking: runtime?.isRunning == true || runtime?.isHydraMerging == true || runtime?.hasWorkingHelpers == true || !(runtime?.backgroundTasks.isEmpty ?? true) || runtime?.isWaitingForLimit == true
     )
 }

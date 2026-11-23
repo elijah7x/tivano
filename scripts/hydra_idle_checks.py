@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Offline guard for agy's turn timeout and Hydra's silent-head backstop.
+"""Offline guard for agy ACP turn-timeout absence, output visibility, and Hydra's silent-head backstop.
 
-agy's 30-minute print timeout was a whole-turn cap that killed a working head.
-It must stay disabled, and Hydra's watchdog must stop a completely silent head
-even when edits or a running tool make the existing stalled-head branch skip it.
+agy's old headless print timeout was a whole-turn cap that killed a working head.
+Under `agy acp`, `ACPSession` must not add a whole-turn timeout flag to
+Antigravity's launch arguments or wrap `session/prompt` in a turn deadline, and
+it must expose `lastOutputAt` from the child process for `.antigravity` so
+HydraWatchdog can see liveness. Meanwhile, Hydra's watchdog must still stop a
+completely silent Antigravity head at `abandonedAfter` (1800 s) even when edits
+or a running tool make the stalled-head branch skip it.
 """
 from pathlib import Path
 import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-AGY = ROOT / 'Tivano/Services/Providers/AntigravitySession.swift'
+ACP = ROOT / 'Tivano/Services/Providers/ACPSession.swift'
 HYDRA = ROOT / 'Tivano/App/AppModel+Hydra.swift'
 
 
 def function_body(text, marker):
-    start = text.find(marker)
-    if start < 0:
+    if text.count(marker) != 1:
         return None
+    start = text.find(marker)
     opening = text.find('{', start + len(marker))
     if opening < 0:
         return None
@@ -34,13 +38,51 @@ def function_body(text, marker):
 
 def main():
     failures = []
-    agy = AGY.read_text(encoding='utf-8')
+    for path in (ACP, HYDRA):
+        if not path.is_file():
+            failures.append(f'{path.relative_to(ROOT)} is missing')
+    if failures:
+        for failure in failures:
+            print(f'FAIL: {failure}', file=sys.stderr)
+        return 1
+
+    acp = ACP.read_text(encoding='utf-8')
     hydra = HYDRA.read_text(encoding='utf-8')
 
-    if '"--print-timeout", "0"' not in agy:
-        failures.append('AntigravitySession must pass `--print-timeout` as `0`')
-    if '"--print-timeout", "30m"' in agy:
-        failures.append('AntigravitySession must not restore the 30m whole-turn cap')
+    launch_body = function_body(acp, 'private func launchArguments(logFileURL: URL?) -> [String]')
+    if launch_body is None:
+        failures.append('could not extract ACPSession.launchArguments(logFileURL:); update the extraction marker')
+    else:
+        if launch_body.count('case .antigravity:') != 1 or launch_body.count('case .cursor:') != 1:
+            failures.append('could not extract .antigravity branch in ACPSession.launchArguments(logFileURL:)')
+        else:
+            agy_branch = launch_body[launch_body.index('case .antigravity:'):launch_body.index('case .cursor:')]
+            agy_launch = function_body(acp, 'private func antigravityLaunchArguments(logFileURL: URL?) -> [String]') or ''
+            if 'antigravityLaunchArguments(logFileURL: logFileURL)' not in agy_branch or not agy_launch:
+                failures.append('ACPSession .antigravity launchArguments must delegate to antigravityLaunchArguments(logFileURL:)')
+            if '"acp"' not in agy_launch or '"--add-dir"' not in agy_launch:
+                failures.append('ACPSession .antigravity launchArguments must launch `acp --add-dir`')
+            if re.search(r'"--[a-z-]*timeout', agy_launch):
+                failures.append('ACPSession .antigravity launchArguments must not pass a whole-turn timeout flag')
+    if '"--print-timeout"' in acp:
+        failures.append('ACPSession must not pass `--print-timeout`')
+
+    last_output = function_body(acp, 'var lastOutputAt: Date?')
+    if last_output is None:
+        failures.append('could not extract ACPSession.lastOutputAt; update the extraction marker')
+    else:
+        if 'configuration.provider == .antigravity' not in last_output or 'process?.lastOutputAt' not in last_output:
+            failures.append('ACPSession.lastOutputAt must expose process?.lastOutputAt for .antigravity so HydraWatchdog sees output')
+
+    send_body = function_body(acp, 'func send(_ input: TurnInput) async throws')
+    if send_body is None:
+        failures.append('could not extract ACPSession.send(_:); update the extraction marker')
+    else:
+        if 'connection.request("session/prompt"' not in send_body:
+            failures.append('ACPSession.send(_:) must invoke connection.request("session/prompt", ...) directly without a whole-turn deadline')
+        if 'deadlineRequest(connection, "session/prompt"' in send_body:
+            failures.append('ACPSession.send(_:) must not wrap session/prompt in deadlineRequest')
+
     if not re.search(r'static\s+let\s+abandonedAfter\s*:\s*TimeInterval\s*=\s*1800\b', hydra):
         failures.append('HydraWatchdog must declare abandonedAfter as 1800 seconds')
 
@@ -68,7 +110,7 @@ def main():
         for failure in failures:
             print(f'FAIL: {failure}', file=sys.stderr)
         return 1
-    print('OK: agy has no whole-turn cap and Hydra stops silent heads before its running-tool/edit skips')
+    print('OK: agy ACP has no whole-turn cap, exposes lastOutputAt, and Hydra stops silent heads before its running-tool/edit skips')
     return 0
 
 

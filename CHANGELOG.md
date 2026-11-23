@@ -8,6 +8,52 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [3.0.15] - 2026-11-23
+
+### English
+
+### New features
+
+- The `tivano agent` command lets reader apps such as BeRead run one agent turn with the models configured in Tivano: `agent models` lists them, and `agent run` streams the reply, tool use and changed files as JSON lines. It works without the Local control switch, starts Tivano in the background when needed, edits files automatically but never runs shell commands (Codex may still run commands inside its sandbox), and leaves no chat in the sidebar.
+- New GLM models now show up on their own: ZCode uses the model list the ZCode app downloads, so GLM-5.4 is available, and Z.ai lists every GLM-5.3 or newer model your plan offers, picking the newest as the default.
+- Antigravity chats now run over agy's ACP mode: screenshots and images reach the model, approvals and questions appear in Tivano, stopping a turn keeps the session, model, thinking level and mode switch without restarting, and Tivano's MCP servers are available. Requires agy 1.5.0 or later.
+
+### Bug fixes
+
+- A reply that ends by sending out sub-agents no longer stays blank under its "Worked for" line until the sub-agent panel is collapsed; it draws itself again when it was laid out but not painted.
+- When adaptive sub-agents wait for you to assign models, the chat now shows the same attention state as a question: the sidebar dot, the Needs attention group, the window weather, and a notification with sound and a Dock bounce.
+- When Antigravity retries after its connection to the model drops mid-reply, the chat now says so, as it already did for other failed requests.
+- The "Remove this project?" confirmation now opens next to the project you chose instead of at the edge of the sidebar.
+- With adaptive sub-agents on, the sub-agent button at the top of the chat now shows the Chimera mark and the working count, and clicking it shows or hides the sub-agent panel instead of trying to switch the chat to Hydra.
+
+### Refinements
+
+- In the model and reasoning popover, the chevron now follows the model name, which is what it opens; the reasoning level sits right above its slider.
+
+### 简体中文
+
+### 新功能
+
+- 新增 `tivano agent` 命令，让 BeRead 等阅读器用 Tivano 里配置好的模型跑一轮 agent：`agent models` 列出可用模型，`agent run` 以 JSON 行流式返回回复、工具调用和改动的文件。无需打开「本地控制」开关，Tivano 未运行时会在后台启动；文件改动自动接受，但不执行 shell 命令（Codex 仍可在其沙箱内运行命令），侧边栏不会留下对话。
+- GLM 新模型会自动出现：ZCode 改用 ZCode 应用下载的最新模型清单，现在可以选 GLM-5.4；Z.ai 会列出套餐提供的所有 GLM-5.3 及更新的模型，并默认选最新的。
+- Antigravity 对话改用 agy 的 ACP 模式运行：截图和图片可以发送给模型，审批与提问直接出现在 Tivano 中，停止当前轮次时保留会话，切换模型、思考深度与模式不再重启进程，并可使用 Tivano 连接的 MCP 服务器。需要 agy 1.5.0 或更高版本。
+
+### 问题修复
+
+- 以派出子代理结尾的回复，不会再在“已工作”下方显示为空白、直到收起子代理面板才出现；排好版却没画出来时会自动重画。
+- 自适应子代理等待你分配模型时，对话会像有问题待回答一样提醒你：侧边栏指示点、“需要处理”分组、窗口天气，以及带提示音和 Dock 跳动的通知。
+- Antigravity 与模型的连接在回复中途断开并重试时，对话里现在也会显示提示，与其他请求失败时一致。
+- “移除这个项目？”确认框现在出现在所选项目旁边，而不是侧边栏边缘。
+- 开启自适应子代理时，对话顶部的子代理按钮现在显示 Chimera 标志和工作中的数量，点击它会显示或收起子代理面板，而不是尝试把对话切回 Hydra。
+
+### 优化改进
+
+- 模型与推理强度浮层中，箭头改为跟在模型名后面（点它切换模型），推理强度标题移到滑块正上方。
+
+### Thanks
+
+- No outside contributors.
+
 ## [3.0.0] - 2026-11-20
 
 ### English

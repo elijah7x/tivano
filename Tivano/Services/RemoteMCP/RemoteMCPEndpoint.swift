@@ -157,7 +157,7 @@ actor RemoteMCPEndpoint {
         case .info(let value), .welcome(let value):
             var object = try encode(value).object ?? [:]
             object.removeValue(forKey: "settings")
-            object["methods"] = .array(value.methods.filter { $0 != "settingsGet" && $0 != "settingsSet" }.map(JSONValue.string))
+            object["methods"] = .array(value.methods.filter { !["settingsGet", "settingsSet", "agentModels", "agentRun"].contains($0) }.map(JSONValue.string))
             return .object(object)
         case .providers(let value): return try encode(value)
         case .projects(let value): return try encode(value)
@@ -172,6 +172,8 @@ actor RemoteMCPEndpoint {
             return .object(object)
         case .settings:
             throw ArgumentError(detail: "Settings are not exposed through Remote MCP")
+        case .agentModels, .agentEvent:
+            throw ArgumentError(detail: "The agent bridge is not exposed through Remote MCP")
         }
     }
 

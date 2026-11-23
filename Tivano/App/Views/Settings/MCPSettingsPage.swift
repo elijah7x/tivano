@@ -137,9 +137,6 @@ struct MCPSettingsPage: View {
                 }
             }
             .disabled(!model.mcp.isConfigurationLoaded)
-            Text("Connected servers reach every provider except Antigravity when a thread starts: the CLIs at launch, the API models through Tivano itself. Antigravity's CLI only reads its own global MCP settings.")
-                .font(.ui(.subheadline))
-                .foregroundStyle(Chrome.secondaryText)
         }
         .onChange(of: model.mcp.states) { previous, current in
             for (id, state) in current {
@@ -262,13 +259,12 @@ private struct MCPLeadCard: View {
                     .truncationMode(.tail)
             }
             Spacer(minLength: 4)
-            // The three facts live behind the `i`: stacked in the card they took
+            // The facts live behind the `i`: stacked in the card they took
             // more room than the point they made.
             MCPHoverInfoButton(label: "About connected servers") {
                 VStack(alignment: .leading, spacing: 8) {
                     fact(symbol: "lock.fill", text: "Keys stay in your Keychain")
                     fact(symbol: "arrow.uturn.backward", text: "Disconnect to go back to your own setup")
-                    fact(symbol: "sparkles", text: "Every provider except Antigravity, whatever the model")
                 }
                 .padding(14)
             }

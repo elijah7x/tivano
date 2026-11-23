@@ -12,6 +12,8 @@ struct ControlTurnUpdate {
 
 /// The only bridge from external requests to the existing AppModel/runtime. Transport
 /// owns no App objects; query paths never ask AppModel for a new runtime or provider.
+/// The local socket listens whenever the library is loaded so agent bridge commands
+/// work by default; other local-control commands still require `isExternalControlEnabled`.
 @MainActor
 @Observable
 final class AppControlService {
@@ -29,6 +31,7 @@ final class AppControlService {
     private(set) var isShuttingDown = false
     @ObservationIgnored private var server: ControlSocketServer?
     @ObservationIgnored private var ledger: ControlLedger
+    @ObservationIgnored private let agentRunner: EphemeralAgentRunner
     @ObservationIgnored private var activeRequests = 0
     @ObservationIgnored private var cachedThreadIDs: (instance: UUID, membershipRevision: UInt64, projectsRevision: UInt64, scopeDigest: String, ids: [UUID])?
     @ObservationIgnored private var cachedProjectIDs: (revision: UInt64, ids: [UUID])?
@@ -36,6 +39,7 @@ final class AppControlService {
     init(app: AppModel) {
         self.app = app
         ledger = ControlLedger(instance: instance)
+        agentRunner = EphemeralAgentRunner(app: app)
     }
 
     deinit { server?.stop() }
@@ -44,20 +48,31 @@ final class AppControlService {
     var hasPendingMutations: Bool { ledger.hasPending }
 
     func refreshListening() {
-        guard let app, app.isLibraryLoaded, app.settings.isExternalControlEnabled,
-              !CaptureRun.isEnabled, !isShuttingDown else {
+        guard let app, app.isLibraryLoaded, !CaptureRun.isEnabled, !isShuttingDown else {
             server?.stop()
             server = nil
             listening = false
             cachedThreadIDs = nil
             cachedProjectIDs = nil
+            agentRunner.shutdown()
             return
         }
         guard server == nil else { return }
-        let socket = ControlSocketServer(directory: ControlSocket.directory(edition: edition), welcome: welcome) { [weak self] request in
-            guard let self else { return ControlResponse(id: request.id, error: ControlFailure(code: .unavailable)) }
-            return await self.handle(request)
-        }
+        let socket = ControlSocketServer(
+            directory: ControlSocket.directory(edition: edition),
+            welcome: welcome,
+            handler: { [weak self] request in
+                guard let self else { return ControlResponse(id: request.id, error: ControlFailure(code: .unavailable)) }
+                return await self.handle(request)
+            },
+            streamHandler: { [weak self] request, stream in
+                guard let self else {
+                    stream.send(ControlResponse(id: request.id, result: .agentEvent(ControlAgentEvent.error(.app_unavailable, "Tivano is unavailable.").line)))
+                    return
+                }
+                await self.handleStream(request, stream: stream)
+            }
+        )
         do {
             try socket.start()
             server = socket
@@ -73,6 +88,7 @@ final class AppControlService {
     func suspendForShutdown() {
         isShuttingDown = true
         refreshListening()
+        agentRunner.shutdown()
     }
 
     func restoreAfterFailedShutdown() {
@@ -85,9 +101,12 @@ final class AppControlService {
             guard let app else { throw ControlFailure(code: .disabled) }
             switch source {
             case .local:
-                guard app.settings.isExternalControlEnabled, listening else { throw ControlFailure(code: .disabled) }
+                guard listening, request.command.isAgent || app.settings.isExternalControlEnabled else {
+                    throw ControlFailure(code: .disabled)
+                }
             case .remote:
                 guard app.settings.isRemoteMCPEnabled, app.remoteMCP.listening else { throw ControlFailure(code: .disabled) }
+                if request.command.isAgent { throw ControlFailure(code: .permission) }
                 if case .settingsSet = request.command { throw ControlFailure(code: .permission) }
             }
             guard !isShuttingDown else { throw ControlFailure(code: .shutdown) }
@@ -111,11 +130,33 @@ final class AppControlService {
             case .settingsGet: result = .settings(settingsSnapshot(app))
             case .create, .submit, .interrupt, .settingsSet:
                 result = .operation(try performWrite(request.command, app: app, source: source))
+            case .agentModels: result = .agentModels(await agentRunner.models())
+            case .agentRun: throw ControlFailure(code: .invalidRequest, detail: "streaming_only")
             }
             return ControlResponse(id: request.id, result: result)
         } catch {
             return ControlResponse(id: request.id, error: error as? ControlFailure ?? ControlFailure(code: .internalError))
         }
+    }
+
+    func handleStream(_ request: ControlRequest, stream: ControlStream) async {
+        let requestID = request.id
+        let emit: @MainActor (ControlAgentEvent) -> Void = { event in
+            stream.send(ControlResponse(id: requestID, result: .agentEvent(event.line)))
+        }
+        guard app != nil, listening, !isShuttingDown, request.instance == instance else {
+            emit(.error(.app_unavailable, "Tivano is unavailable."))
+            return
+        }
+        guard case .agentRun(let run) = request.command else {
+            emit(.error(.bad_request, "Expected an agentRun command."))
+            return
+        }
+        let task = Task { @MainActor in
+            await agentRunner.run(run) { event in emit(event) }
+        }
+        stream.onCancel { task.cancel() }
+        await task.value
     }
 
     private func performWrite(_ command: ControlCommand, app: AppModel, source: ControlSource) throws -> ControlOutcome {
@@ -245,7 +286,7 @@ final class AppControlService {
         // These adapters reconstruct transcripts, or only start a process without an
         // acknowledged resume boundary. Do not advertise that as exact continuation.
         switch provider {
-        case .deepseek, .meta, .zai, .antigravity, .commandcode: false
+        case .deepseek, .meta, .zai, .commandcode: false
         default: true
         }
     }

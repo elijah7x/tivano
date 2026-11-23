@@ -827,7 +827,7 @@ final class AppModel {
         let tasks = standaloneTasks
         let attention = Set(tasks.filter { task in
             guard let runtime = existingRuntime(for: task.id) else { return false }
-            return !runtime.approvals.isEmpty || !runtime.questions.isEmpty
+            return runtime.needsUserAttention
         }.map(\.id))
         let rest = tasks.filter { !attention.contains($0.id) }
         let days = Dictionary(grouping: rest.filter { !$0.isPinned }) {
@@ -1129,7 +1129,7 @@ final class AppModel {
                 isBusy: projectThreads.contains { thread in
                     guard let runtime = existingRuntime(for: thread.id) else { return false }
                     return runtime.isRunning || runtime.isHydraMerging
-                        || !runtime.approvals.isEmpty || !runtime.questions.isEmpty
+                        || runtime.needsUserAttention
                         || !runtime.backgroundTasks.isEmpty || runtime.isWaitingForLimit
                 },
                 holdsSelection: selectedProjectID == project.id,

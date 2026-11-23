@@ -85,11 +85,24 @@ Preview versions use `X.Y.Z-preview.N` (`N` is a positive integer), matching
 the GitHub title is `Tivano <full-version>`, and the installer is
 `Tivano-<full-version>.dmg`. These are GitHub prereleases, never marked latest.
 
-The long-lived `preview` branch runs parallel to local `dev`; `dev` is never
-pushed, while `preview` may be fast-forward pushed to `origin/preview` on an
-explicit owner request. Merge dev into preview with an ordinary merge commit when wanted. When
-preview features ship stable, squash them into dev as one commit. On preview,
-set `config/release.xcconfig` with `scripts/set_version.py release X.Y.Z-preview.N`
+Preview branches are created on demand by the owner, not kept long-lived or
+limited to major versions: create `preview` from `dev` only on an explicit owner
+request, and never create, keep long-term, or restore a `preview` branch
+unprompted. While `preview` exists, it runs parallel to local `dev`; `dev` is
+never pushed, while `preview` may be fast-forward pushed to `origin/preview` on
+an explicit owner request. Merge dev into preview with an ordinary merge commit
+when wanted. When preview features ship stable, squash them into dev as one
+commit, then delete the local `preview` branch. Delete the remote `preview` only
+on a separate explicit owner instruction (a merge never authorizes it), after
+confirming the remote tip is contained in what landed (`git merge-base
+--is-ancestor <remote preview SHA> <landed local preview tip>`); pass
+`TIVANO_CLEANUP_REF=refs/heads/preview` and `TIVANO_CLEANUP_SHA=<that exact
+SHA>` through the pre-push guard.
+Current tooling (`scripts/ship_preview.sh`, `scripts/package_local.sh --preview`,
+the pre-push guard, and `scripts/verify.py` base auto-detection) assumes a single
+active branch named `preview` at a time; running multiple preview lines in
+parallel requires updating those tools first. On preview, set
+`config/release.xcconfig` with `scripts/set_version.py release X.Y.Z-preview.N`
 and write a `## [X.Y.Z-preview.N] - YYYY-MM-DD` CHANGELOG section.
 `MARKETING_VERSION` stays numeric; `TivanoReleaseVersion` carries the full identity.
 

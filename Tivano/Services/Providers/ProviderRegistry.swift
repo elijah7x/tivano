@@ -195,7 +195,7 @@ final class ProviderRegistry {
     }
     static let metaSeed = ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-spark-1.2", "muse-spark-1.2-contributor", "muse-spark-1.1"]
         .compactMap(MetaAPI.option(for:))
-    static let zaiSeed = ["glm-5.3", "glm-5.3-flash"].compactMap(ZaiAPI.option(for:))
+    static let zaiSeed = ZaiAPI.markDefault(["glm-5.3", "glm-5.3-flash"].compactMap(ZaiAPI.option(for:)))
 
     /// From `agy models`: base models with their supported effort levels.
     /// Effort is adjusted via the effort slider, not separate duplicate rows.

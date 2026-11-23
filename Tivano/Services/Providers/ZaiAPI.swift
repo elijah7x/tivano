@@ -22,26 +22,81 @@ enum ZaiAPI {
     }
 
     static func listModels(apiKey: String) async throws -> [ModelOption] {
-        try await OpenAICompatibleAPI.listModels(modelsURL: modelsURL, key: apiKey, option: Self.option(for:))
+        let options = try await OpenAICompatibleAPI.listModels(modelsURL: modelsURL, key: apiKey, option: Self.option(for:))
+        return markDefault(options)
     }
 
-    /// Only the two 5.3 Coding Plan models are offered. Older GLM ids are routed
-    /// to 5.3 by Z.ai, so they are not offered.
+    /// Parses lowercase `glm-<major>.<minor>` ids with an optional `-<suffix>`
+    /// (`glm-5.4`, `glm-5.4-flash`, `glm-5.3-v`). Anything else returns nil.
+    static func glmVersion(_ id: String) -> (major: Int, minor: Int, suffix: String)? {
+        guard id.hasPrefix("glm-") else { return nil }
+        let body = id.dropFirst(4)
+        let pieces = body.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let suffix = pieces.count == 2 ? String(pieces[1]) : ""
+        guard pieces.count == 1 || !suffix.isEmpty else { return nil }
+        let parts = pieces[0].split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              !parts[0].isEmpty, !parts[1].isEmpty,
+              parts[0].allSatisfy({ $0.isASCII && $0.isNumber }),
+              parts[1].allSatisfy({ $0.isASCII && $0.isNumber }),
+              let major = Int(parts[0]),
+              let minor = Int(parts[1]) else { return nil }
+        return (major, minor, suffix)
+    }
+
+    /// Coding Plan models from GLM-5.3 onward (full and Flash variants). Older GLM ids
+    /// are routed to newer models by Z.ai, so they are not offered.
+    ///
+    /// FlashX variants appear on the account's model list but are not in the Coding Plan,
+    /// so every request for them is turned down with 1311 before a single credit is spent,
+    /// so they are never offered. Other suffixed variants keep their raw id as the name.
     static func option(for id: String) -> ModelOption? {
-        switch id {
-        case "glm-5.3":
-            return ModelOption(id: id, name: "GLM-5.3", detail: "Best reasoning and coding · 1M context", efforts: zaiEfforts, defaultEffort: "max", isDefault: true)
-        case "glm-5.3-flash":
-            return ModelOption(id: id, name: "GLM-5.3 Flash", detail: "Fast, reads images · 1M context", efforts: zaiEfforts, defaultEffort: "max")
+        guard let version = glmVersion(id), (version.major, version.minor) >= (5, 3),
+              !version.suffix.lowercased().contains("flashx") else { return nil }
+        let base = "GLM-\(version.major).\(version.minor)"
+        switch version.suffix {
+        case "":
+            return ModelOption(id: id, name: base, detail: "Best reasoning and coding · 1M context", efforts: zaiEfforts, defaultEffort: "max", isDefault: false)
+        case "flash":
+            return ModelOption(id: id, name: "\(base) Flash", detail: "Fast, reads images · 1M context", efforts: zaiEfforts, defaultEffort: "max", isDefault: false)
         default:
-            // GLM-5.3-FlashX is on the account's model list but not in the Coding Plan
-            // ("GLM-5.3-FlashX is not yet available on the plan", docs.z.ai/guides/vlm/
-            // glm-5.3-flash), so every request for it is turned down with 1311 before a
-            // single credit is spent. It is never offered, or a pair can be pointed at a
-            // model that cannot answer.
-            guard id.hasPrefix("glm-5.3"), !id.lowercased().contains("flashx") else { return nil }
             return ModelOption(id: id, name: id, efforts: zaiEfforts, defaultEffort: "max")
         }
+    }
+
+    /// Marks the highest-version plain GLM model as default and orders the list with the
+    /// default first, then descending by version (plain before suffixed variants).
+    static func markDefault(_ options: [ModelOption]) -> [ModelOption] {
+        let bestIndex = options.indices
+            .compactMap { index -> (index: Int, major: Int, minor: Int)? in
+                guard let version = glmVersion(options[index].id), version.suffix.isEmpty else { return nil }
+                return (index, version.major, version.minor)
+            }
+            .max { ($0.major, $0.minor) < ($1.major, $1.minor) }?
+            .index
+        var marked = options.enumerated().map { index, option in
+            var copy = option
+            copy.isDefault = (index == bestIndex)
+            return copy
+        }
+        marked.sort { lhs, rhs in
+            if lhs.isDefault != rhs.isDefault { return lhs.isDefault }
+            switch (glmVersion(lhs.id), glmVersion(rhs.id)) {
+            case let (l?, r?):
+                if (l.major, l.minor) != (r.major, r.minor) {
+                    return (l.major, l.minor) > (r.major, r.minor)
+                }
+                if l.suffix.isEmpty != r.suffix.isEmpty { return l.suffix.isEmpty }
+                return lhs.id < rhs.id
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            case (nil, nil):
+                return lhs.id < rhs.id
+            }
+        }
+        return marked
     }
 
     /// Only Flash accepts images; the full model returns an error for them.

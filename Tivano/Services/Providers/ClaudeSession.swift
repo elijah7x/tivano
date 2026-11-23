@@ -116,6 +116,7 @@ final class ClaudeSession: ProviderSession {
         let options = await Self.knownOptions(of: executable, environment: environment)
         // Resumed chats must use the current setting, even with Hydra off.
         if options.contains("--system-prompt-snapshot") { arguments += ["--system-prompt-snapshot", "off"] }
+        var disallowedTools: [String] = []
         if let hydra = configuration.hydra {
             // The system prompt is rendered fresh rather than replayed from the
             // conversation's first request, so switching Hydra on for an existing chat
@@ -123,7 +124,15 @@ final class ClaudeSession: ProviderSession {
             // for them with the delegation block, and its own agent tool goes, since a
             // head it spawned itself would run inside this session instead of the app.
             arguments += ["--append-system-prompt", HydraPrompts.fallbackPolicy(hydra)]
-            arguments += ["--disallowedTools", "Agent", "Task"]
+            disallowedTools += ["Agent", "Task"]
+        }
+        if configuration.deniesShell {
+            // A subagent would get its own shell, so ephemeral sessions deny delegation too.
+            disallowedTools += ["Bash", "BashOutput", "KillShell"] + ["Agent", "Task"].filter { !disallowedTools.contains($0) }
+        }
+        if configuration.isEphemeral { arguments.append("--no-session-persistence") }
+        if !disallowedTools.isEmpty {
+            arguments += ["--disallowedTools"] + disallowedTools
         }
         if let resumeID = configuration.resumeID {
             arguments += ["--resume", resumeID]

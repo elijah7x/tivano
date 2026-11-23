@@ -706,6 +706,8 @@ final class LinkTextView: NSTextView {
         lastMeasuredHeight = 0
         measuredHeights.removeAll()
         measuredWidthOrder.removeAll()
+        contentGeneration &+= 1
+        paintHealAttempt = 0
         resetHeal()
         // resetHeal cancels any pending check; new text needs one of its own.
         scheduleHeightCheck()
@@ -803,6 +805,11 @@ final class LinkTextView: NSTextView {
         if (oldSize.width <= 0 || oldSize.height <= 0), newSize.width > 0, newSize.height > 0 {
             needsDisplay = true
         }
+        // A resized view must paint again before the paint heal trusts it.
+        if abs(newSize.width - oldSize.width) > 0.5 || abs(newSize.height - oldSize.height) > 0.5 {
+            paintedGeneration = -1
+            paintHealAttempt = 0
+        }
         // Avoid short-circuiting an in-flight backoff when AppKit reapplies the same size.
         if newSize != oldSize || healAttempt == 0 {
             scheduleHeightCheck()
@@ -824,7 +831,11 @@ final class LinkTextView: NSTextView {
         super.viewDidMoveToWindow()
         // A reply mounted while its turn folds (running block → finished block) can be
         // handed its text before it has a window; draw it once it is on screen.
-        if window != nil { needsDisplay = true }
+        if window != nil {
+            paintedGeneration = -1
+            paintHealAttempt = 0
+            needsDisplay = true
+        }
         resetHeal()
         if let window {
             NotificationCenter.default.addObserver(
@@ -838,8 +849,11 @@ final class LinkTextView: NSTextView {
     }
 
     @objc private func windowDidChangeOcclusionState(_ notification: Notification) {
-        if window?.occlusionState.contains(.visible) == true {
+        // Kept hidden columns share the window; they wake on their own unhide.
+        if !isHiddenOrHasHiddenAncestor, window?.occlusionState.contains(.visible) == true {
             needsDisplay = true
+            paintedGeneration = -1
+            paintHealAttempt = 0
             resetHeal()
             scheduleHeightCheck()
         }
@@ -848,8 +862,20 @@ final class LinkTextView: NSTextView {
     override func viewDidUnhide() {
         super.viewDidUnhide()
         needsDisplay = true
+        paintedGeneration = -1
+        paintHealAttempt = 0
         resetHeal()
         scheduleHeightCheck()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if !dirtyRect.isEmpty && bounds.width > 0 && bounds.height > 0 && window != nil {
+            paintedGeneration = contentGeneration
+            paintCheck?.cancel()
+            paintCheck = nil
+            paintHealAttempt = 0
+        }
     }
 
     override func layout() {
@@ -920,6 +946,8 @@ final class LinkTextView: NSTextView {
     /// moment cannot use up every attempt at once.
     private var healNotBefore: CFTimeInterval = 0
     private var healGeneration = 0
+    private var contentGeneration = 0
+    private var paintedGeneration = -1
     private var heightCheckQueued = false
     /// The height SwiftUI was last given per width (`ProseRunRepresentable.sizeThatFits`).
     /// The text view sizes its own frame to its text, so its bounds alone can look right
@@ -938,6 +966,53 @@ final class LinkTextView: NSTextView {
         healNotBefore = 0
         healGeneration &+= 1
         heightCheckQueued = false
+    }
+
+    // Paint heal: separate from the height heal's attempts and backoff.
+
+    private var paintHealAttempt = 0
+    /// At most one pending check per view; a draw cancels it.
+    private var paintCheck: DispatchWorkItem?
+
+    private func schedulePaintCheck(after delay: TimeInterval) {
+        paintCheck?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.paintCheck = nil
+            self.verifyPaint()
+        }
+        paintCheck = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func verifyPaint() {
+        #if DEBUG
+        if Self.debugHeightHealDisabled { return }
+        #endif
+        guard paintedGeneration != contentGeneration,
+              paintHealAttempt < 3,
+              let window,
+              window.occlusionState.contains(.visible),
+              !isHiddenOrHasHiddenAncestor,
+              !window.inLiveResize,
+              !visibleRect.isEmpty,
+              bounds.width > 0, bounds.height > 0,
+              let textStorage, textStorage.length > 0 else { return }
+        // Scrolling mounts and paints rows on its own; check again once it settles.
+        if ScrollActivity.shared.isScrolling {
+            schedulePaintCheck(after: 0.25)
+            return
+        }
+        if let container = textContainer, container.containerSize.width != bounds.width {
+            container.containerSize = NSSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
+        }
+        needsDisplay = true
+        paintHealAttempt += 1
+        let attempt = paintHealAttempt
+        let width = Double(bounds.width)
+        let height = Double(bounds.height)
+        Self.heightHealLog.info("paint heal attempt \(attempt): width \(width) height \(height)")
+        if paintHealAttempt < 3 { schedulePaintCheck(after: [1.0, 3.0][paintHealAttempt - 1]) }
     }
 
     func scheduleHeightCheck(after delay: TimeInterval = 0) {
@@ -986,6 +1061,11 @@ final class LinkTextView: NSTextView {
         let reported = reportedHeights[bounds.width]
         let staleSlot = reported.map { abs($0 - expected) > 0.5 } ?? false
         if abs(actual - expected) <= 0.5, !staleSlot {
+            // A right-sized view can still be unpainted after the fold, staying
+            // blank until something rebuilds the column; give it one display pass first.
+            if paintedGeneration != contentGeneration, paintCheck == nil {
+                schedulePaintCheck(after: 0.25)
+            }
             if healAttempt > 0 { resetHeal() }
             return
         }

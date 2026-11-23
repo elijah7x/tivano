@@ -128,7 +128,7 @@ access is on.
 - `fresh`: only an unsent thread with no prior conversation.
 - `providerSession`: the exact persisted session, with no start-new fallback.
   A changed resume identity or unsupported resume fails explicitly. Process-only
-  Antigravity/Command Code startup is not advertised as exact continuation.
+  Command Code startup is not advertised as exact continuation.
 - `transcript`: only native API providers. This is bounded user/assistant
   transcript reconstruction (not exact tool/session recovery).
 

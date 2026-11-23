@@ -50,7 +50,7 @@ final class ZaiSession: OpenAICompatibleSession {
         let lower = message.lowercased()
         // A context-length message also says "limit", so it is read before the plan window.
         if (lower.contains("context") && (lower.contains("length") || lower.contains("window") || lower.contains("token"))) || lower.contains("prompt too long") {
-            return AppText.localized("The conversation no longer fits GLM-5.3's context window. Start a new thread or compact first.")
+            return AppText.localized("The conversation no longer fits the model's context window. Start a new thread or compact first.")
         }
         if statusCode == 401 || lower.contains("token expired") || lower.contains("incorrect") || lower.contains("authentication") {
             return AppText.localized("Z.ai rejected the API key. Check your GLM Coding Plan key in Settings › Provider management › Z.ai. Your plan may have expired; a Standard API key will not work here.")
@@ -58,7 +58,7 @@ final class ZaiSession: OpenAICompatibleSession {
         // 1311: the plan does not carry the model asked for. Nothing was spent, no window
         // is involved, and the model is named back so the picker can be set right.
         if lower.contains("does not yet include access") {
-            return String(format: AppText.localized("Your Z.ai Coding Plan does not include %@. Pick GLM-5.3 or GLM-5.3 Flash for the model, or move up a plan tier."), Self.planRefusedModel(in: message))
+            return String(format: AppText.localized("Your Z.ai Coding Plan does not include %@. Pick another GLM model, or move up a plan tier."), Self.planRefusedModel(in: message))
         }
         // 1302 and 1305: the account's request rate, or Z.ai's own load. Both pass on their own.
         if lower.contains("rate limit reached") || lower.contains("too many requests") {
@@ -90,7 +90,7 @@ final class ZaiSession: OpenAICompatibleSession {
         }
         // 1211, and any other wording for a model Z.ai does not have.
         if lower.contains("unknown model") || (lower.contains("model") && lower.contains("not exist")) {
-            return AppText.localized("Z.ai does not offer that model. Pick GLM-5.3 or GLM-5.3 Flash in the model picker.")
+            return AppText.localized("Z.ai does not offer that model. Pick another GLM model in the model picker.")
         }
         // Anything else is Z.ai saying no for a reason this build does not know, and it is
         // passed on as Z.ai worded it rather than guessed at.

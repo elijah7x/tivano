@@ -95,6 +95,14 @@ def main():
         for locale in ("zh-Hans", "zh-Hant", "ja", "ko", "fr"):
             unit = catalog["strings"][usage]["localizations"][locale]["stringUnit"]
             assert unit["state"] == "translated" and unit["value"].strip(), locale
+        agent_usage = textwrap.dedent(cli.split('static let agentUsage = """\n', 1)[1].split('\n    """', 1)[0])
+        assert agent_usage == textwrap.dedent("""\
+            Agent bridge (no Local control switch needed; starts Tivano hidden if it is not running):
+              agent models [--json]
+              agent run [--json] --cwd DIR [--model ID] [--session SID]   (prompt from stdin, NDJSON events on stdout)""")
+        for locale in ("zh-Hans", "zh-Hant", "ja", "ko", "fr"):
+            unit = catalog["strings"][agent_usage]["localizations"][locale]["stringUnit"]
+            assert unit["state"] == "translated" and unit["value"].strip(), ("agentUsage", locale)
         core = (ROOT / "Tivano/Core/Models/LocalControl.swift").read_text()
         messages = re.findall(r'case \.[^:\n]+: "([^"]+)"', core)
         assert len(messages) == 24, "all protocol error message keys must be checked"

@@ -75,6 +75,17 @@ def check_working_indicator_toggle_unanimated(sources):
     require_absent(body, 'withAnimation(.snappy(duration: 0.24))', label)
 
 
+def check_delegation_strip_unanimated(sources):
+    label = 'delegation block strip is unanimated'
+    hold = block(
+        sources[RUNTIME],
+        '    private func holdSentDelegationBlock(_ entryID: String, castsRoles: Bool = false) {',
+        label,
+    )
+    require(hold, 'disablesAnimations = true', label)
+    require_absent(hold, 'withAnimation(Chrome.panelSlide)', label)
+
+
 def check_subagent_panel_top_fade(sources):
     label = '#56 SubagentPanel timeline fade'
     panel = block(sources[SUBAGENT_PANEL], 'struct SubagentPanel: View {', label)
@@ -209,6 +220,7 @@ def check_close_folds_without_stopping(sources):
 CHECKS = (
     ('working_indicator_max_width', check_working_indicator_max_width),
     ('working_indicator_toggle_unanimated', check_working_indicator_toggle_unanimated),
+    ('delegation_strip_unanimated', check_delegation_strip_unanimated),
     ('subagent_panel_top_fade', check_subagent_panel_top_fade),
     ('off_default_and_spawn', check_off_default_and_spawn),
     ('off_hides_without_stopping', check_off_hides_without_stopping),
