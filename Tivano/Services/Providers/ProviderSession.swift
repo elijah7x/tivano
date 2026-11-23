@@ -58,6 +58,12 @@ struct SessionConfiguration: Sendable {
     var dshFinalReport = false
     var claudeAccountID: UUID? = nil
     var claudeIdentity: ClaudeAccountIdentity? = nil
+    /// Denies shell execution tools at the provider launch/config layer where supported
+    /// (used by ephemeral agent sessions whose policy forbids shell commands).
+    var deniesShell: Bool = false
+    /// Asks the provider not to keep the conversation on disk where supported
+    /// (ephemeral agent sessions; context lives only in the running process).
+    var isEphemeral: Bool = false
 }
 
 /// One exchange of a conversation, for replaying it into a session that starts over.

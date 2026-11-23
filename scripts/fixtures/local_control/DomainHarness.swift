@@ -559,8 +559,10 @@ enum ProviderEvent { case turnStarted(providerTurnID: String?), turnCompleted(st
         resumed.provider = .deepseek
         try check(try app.localControl.continuation(.automatic, resumed) == .transcript, "API automatic continuation explicitly reconstructs transcript")
         try rejects(.continuationUnavailable, "API exact provider continuation fails explicitly") { _ = try app.localControl.continuation(.providerSession, resumed) }
-        resumed.provider = .antigravity; resumed.providerSessionID = "synthetic"
+        resumed.provider = .commandcode; resumed.providerSessionID = "synthetic"
         try rejects(.continuationUnavailable, "unacknowledged process-only resume is not exact capability") { _ = try app.localControl.continuation(.providerSession, resumed) }
+        resumed.provider = .antigravity
+        try check(try app.localControl.continuation(.providerSession, resumed) == .providerSession, "Antigravity resumes through ACP session/resume, an acknowledged boundary")
 
         var missing = standalone; missing.id = UUID(); missing.projectID = UUID(); missing.title = "Missing project"
         app.threads.append(missing)

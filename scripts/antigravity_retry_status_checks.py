@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Offline guard for live agy retry status visibility in AntigravitySession.
+"""Offline guard for live agy retry status visibility across AntigravitySession and ACPSession.
 
 agy writes silent model-request retries only to its glog file, not stdout/stderr.
-AntigravitySession passes `--log-file` inside agy's normal log directory, tails
-new lines while a turn is active, and surfaces each retry attempt once as an
-`.info` notice so HydraWatchdog, isTransientFailure, and providerLastWarning stay
-untouched.
+`AntigravitySession` provides the log path (`makeLogFileURL`), retry log parser
+(`parseRetryDetails` / `retryLabelKey`), `.info` notice formatter (`retryNotice`),
+and `AntigravityLogTailer`. `ACPSession` passes `--log-file` in `agy acp` launch
+arguments, starts `AntigravityLogTailer` after the process starts, toggles
+`setTurnActive(true)` at prompt start and `setTurnActive(false)` in `finishPrompt`,
+deduplicates retry notices per attempt, and shuts the tailer down on `stop`,
+`handleClose`, failed startup, and `deinit` so HydraWatchdog and isTransientFailure
+stay untouched, while ThreadRuntime records Antigravity .info notices in
+providerLastWarning for Hydra's stalled-head report.
 """
 import json
 from pathlib import Path
@@ -16,9 +21,11 @@ sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = ROOT / 'Tivano/Services/Providers/AntigravitySession.swift'
+ACP = ROOT / 'Tivano/Services/Providers/ACPSession.swift'
+RUNTIME = ROOT / 'Tivano/App/Runtime/ThreadRuntime.swift'
 CATALOG = ROOT / 'Tivano/Resources/Localizable.xcstrings'
 
-RETRY_REGEX_TEXT = r'run\.go:\d+\] Run: attempt (\d+) failed \(request failed: (.+)\), retrying in ([0-9.]+)(ms|s|m)'
+RETRY_REGEX_TEXT = r'run\.go:\d+\] Run: attempt (\d+) failed \((?:request failed: )?(.+)\), retrying in ([0-9.]+)(ms|s|m)'
 RETRY_REGEX = re.compile(RETRY_REGEX_TEXT)
 
 EXPECTED_ZH_HANS = {
@@ -82,54 +89,109 @@ def parse_retry_line(line):
 
 
 def check_sources():
-    if not SESSION.is_file():
-        fail(f'{SESSION.relative_to(ROOT)} is missing')
-    text = SESSION.read_text(encoding='utf-8')
+    for path in (SESSION, ACP):
+        if not path.is_file():
+            fail(f'{path.relative_to(ROOT)} is missing')
+    session = SESSION.read_text(encoding='utf-8')
+    acp = ACP.read_text(encoding='utf-8')
 
-    start_fn = between(text, 'func start() async throws -> String', 'private func modeArguments(', 'start()')
-    require(start_fn, ['"--log-file"', 'logFileURL.path', 'AntigravityLogTailer('], 'start()')
-
-    retry_section = between(text, '// MARK: - Retry log tailing', '// MARK: - Stream', 'retry section')
+    # Helpers and tailer in AntigravitySession.swift.
+    retry_section = between(session, '// MARK: - Retry log tailing', '// MARK: - Turn outcome', 'AntigravitySession retry section')
     require(
         retry_section,
         [
             'FileManager.default.homeDirectoryForCurrentUser',
             '.gemini/antigravity-cli/log',
             RETRY_REGEX_TEXT,
-            'emittedRetryAttempts.insert(attempt).inserted',
             'AppText.localized("Antigravity: the model request failed (%@); agy is retrying, attempt %lld.")',
             'Notice(level: .info,',
         ],
-        'retry section',
+        'AntigravitySession retry section',
     )
     if '/Users/' in retry_section:
-        fail('retry section must not hardcode a /Users/ path')
+        fail('AntigravitySession retry section must not hardcode a /Users/ path')
 
-    emit_fn = between(text, 'private func emitRetryNotice(', '// MARK: - Stream', 'emitRetryNotice')
+    notice_fn = between(retry_section, 'static func retryNotice(', 'static func loginHint(', 'retryNotice()')
     for forbidden in ('.error', '.warning'):
-        if forbidden in emit_fn:
-            fail(f'emitRetryNotice must emit .info only, found forbidden level {forbidden!r}')
+        if forbidden in notice_fn:
+            fail(f'retryNotice() must emit .info only, found forbidden level {forbidden!r}')
 
-    send_fn = between(text, 'func send(_ input: TurnInput)', 'func interrupt() async', 'send()')
-    require(send_fn, ['emittedRetryAttempts.removeAll()', 'logTailer?.setTurnActive(true)'], 'send()')
-
-    interrupt_fn = between(text, 'func interrupt() async', 'func compact() async throws', 'interrupt()')
-    require(interrupt_fn, ['logTailer?.shutDown()'], 'interrupt()')
-
-    activate_fn = between(text, 'func setTurnActive(_ active: Bool)', 'func shutDown()', 'setTurnActive()')
+    require(session, ['final class AntigravityLogTailer'], 'AntigravitySession.swift')
+    activate_fn = between(session, 'func setTurnActive(_ active: Bool)', 'func shutDown()', 'setTurnActive()')
     require(activate_fn, ['skipBacklog()'], 'setTurnActive() skips the previous turn backlog')
     if 'poll()\n                let timer' in activate_fn:
-        raise SystemExit('FAIL: setTurnActive() must not replay the previous turn backlog')
-    stop_fn = between(text, 'func stop()', '// MARK: - Retry log tailing', 'stop()')
-    require(stop_fn, ['logTailer?.shutDown()'], 'stop()')
+        fail('setTurnActive() must not replay the previous turn backlog')
 
-    result_fn = between(text, 'private func handleResult', 'private func didClose', 'handleResult()')
-    require(result_fn, ['logTailer?.setTurnActive(false)', 'emittedRetryAttempts.removeAll()'], 'handleResult()')
+    # Lifecycle and deduping in ACPSession.swift.
+    deinit_fn = between(acp, 'isolated deinit {', 'var isRunning: Bool', 'ACPSession deinit')
+    require(deinit_fn, ['antigravityLogTailer?.shutDown()'], 'ACPSession deinit')
 
-    close_fn = between(text, 'private func didClose', 'private func closeFailure', 'didClose()')
-    require(close_fn, ['logTailer?.shutDown()'], 'didClose()')
+    launch_fn = between(acp, 'private func launchArguments(logFileURL: URL?) -> [String]', 'func start() async throws -> String', 'ACPSession.launchArguments()')
+    agy_branch = between(launch_fn, 'case .antigravity:', 'case .cursor:', 'ACPSession.launchArguments() .antigravity')
+    require(agy_branch, ['antigravityLaunchArguments(logFileURL: logFileURL)'], 'ACPSession.launchArguments() .antigravity')
+    agy_launch = between(acp, 'private func antigravityLaunchArguments(logFileURL: URL?) -> [String]', 'func start() async throws -> String', 'ACPSession.antigravityLaunchArguments()')
+    require(agy_launch, ['"--log-file"', 'logFileURL.path'], 'ACPSession.antigravityLaunchArguments()')
 
-    require(text, ['isolated deinit', 'private final class AntigravityLogTailer'], 'AntigravitySession.swift')
+    start_fn = between(acp, 'private func start(applyingSelection: Bool) async throws -> String', 'private var clientCapabilities: JSONValue', 'ACPSession.start()')
+    require(
+        start_fn,
+        [
+            'AntigravitySession.makeLogFileURL()',
+            'launchArguments(logFileURL: logFileURL)',
+            'try connection.start()',
+            'AntigravityLogTailer(',
+            'AntigravitySession.parseRetryDetails(line)',
+            'emitAntigravityRetryNotice(',
+            'antigravityLogTailer?.shutDown()',
+        ],
+        'ACPSession.start()',
+    )
+    if start_fn.index('AntigravityLogTailer(') < start_fn.index('try connection.start()'):
+        fail('ACPSession.start() must create AntigravityLogTailer after connection.start() launches the process')
+
+    emit_fn = between(acp, 'private func emitAntigravityRetryNotice(', 'private static func antigravityErrorText(', 'emitAntigravityRetryNotice()')
+    require(
+        emit_fn,
+        [
+            'guard promptActive, !isStopping else { return }',
+            'antigravityEmittedRetryAttempts.insert(attempt).inserted',
+            'AntigravitySession.retryNotice(',
+        ],
+        'emitAntigravityRetryNotice()',
+    )
+    for forbidden in ('.error', '.warning'):
+        if forbidden in emit_fn:
+            fail(f'emitAntigravityRetryNotice() must emit .info only, found forbidden level {forbidden!r}')
+
+    send_fn = between(acp, 'func send(_ input: TurnInput) async throws', 'private func continuePromptPreparation(', 'ACPSession.send()')
+    require(send_fn, ['antigravityEmittedRetryAttempts.removeAll()', 'antigravityLogTailer?.setTurnActive(true)'], 'ACPSession.send()')
+
+    interrupt_fn = between(acp, 'func interrupt() async', 'func compact() async throws', 'ACPSession.interrupt()')
+    require(interrupt_fn, ['stop()', 'connection.notify("session/cancel"', 'self.connection?.close()'], 'ACPSession.interrupt()')
+
+    stop_fn = between(acp, 'func stop() {', 'private func emitAntigravityRetryNotice(', 'ACPSession.stop()')
+    require(stop_fn, ['antigravityLogTailer?.shutDown()', 'antigravityEmittedRetryAttempts.removeAll()'], 'ACPSession.stop()')
+
+    finish_fn = between(acp, 'private func finishPrompt(', 'private func handleClose(', 'ACPSession.finishPrompt()')
+    require(finish_fn, ['antigravityLogTailer?.setTurnActive(false)', 'antigravityEmittedRetryAttempts.removeAll()'], 'ACPSession.finishPrompt()')
+
+    close_fn = between(acp, 'private func handleClose(', '// MARK: - Mapping', 'ACPSession.handleClose()')
+    require(close_fn, ['antigravityLogTailer?.shutDown()'], 'ACPSession.handleClose()')
+
+    if not RUNTIME.is_file():
+        fail(f'{RUNTIME.relative_to(ROOT)} is missing')
+    runtime = RUNTIME.read_text(encoding='utf-8')
+    notice_branch = between(
+        runtime,
+        'case .notice(let notice):',
+        'case .usageLimit(let resetsAt):',
+        'ThreadRuntime.swift .notice branch',
+    )
+    require(
+        notice_branch,
+        ['notice.level != .info || sessionSignature?.provider == .antigravity', 'providerLastWarning = notice.message'],
+        'ThreadRuntime.swift .notice branch',
+    )
 
 
 def check_localizations():
@@ -164,6 +226,11 @@ def check_parser_mirror():
             'I1118 10:09:39.657907     771 run.go:317] Run: attempt 1 failed '
             '(request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF), '
             'retrying in 4s',
+            (1, 'connection dropped'),
+        ),
+        (
+            'I1122 10:52:03.471245   60994 run.go:308] Run: attempt 1 failed '
+            '(stream reading error: unexpected EOF), retrying in 4s',
             (1, 'connection dropped'),
         ),
         (
@@ -208,7 +275,7 @@ def main():
     check_sources()
     check_localizations()
     check_parser_mirror()
-    print('OK: agy retry status log tailing, .info notice guards, localizations, and parser mirror passed')
+    print('OK: agy ACP retry status log tailing, .info notice guards, localizations, and parser mirror passed')
     return 0
 
 

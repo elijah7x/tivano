@@ -11917,6 +11917,41 @@
         }
       }
     },
+    "Agent bridge (no Local control switch needed; starts Tivano hidden if it is not running):\n  agent models [--json]\n  agent run [--json] --cwd DIR [--model ID] [--session SID]   (prompt from stdin, NDJSON events on stdout)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passerelle agent (ne nécessite pas l’interrupteur Contrôle local ; lance Tivano masqué s’il n’est pas en cours d’exécution) :\n  agent models [--json]\n  agent run [--json] --cwd DIR [--model ID] [--session SID]   (prompt depuis stdin, événements NDJSON sur stdout)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントブリッジ（ローカル制御スイッチ不要。Tivano が未起動の場合は非表示で起動）：\n  agent models [--json]\n  agent run [--json] --cwd DIR [--model ID] [--session SID]   (stdin からプロンプト、stdout に NDJSON イベント)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "에이전트 브리지(로컬 제어 스위치 불필요; 실행 중이 아니면 Tivano를 숨김 상태로 시작):\n  agent models [--json]\n  agent run [--json] --cwd DIR [--model ID] [--session SID]   (stdin에서 프롬프트 입력, stdout으로 NDJSON 이벤트 출력)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 桥接（无需开启“本地控制”开关；若 Tivano 未运行则隐藏启动）：\n  agent models [--json]\n  agent run [--json] --cwd DIR [--model ID] [--session SID]   （从 stdin 读取提示词，stdout 输出 NDJSON 事件）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 橋接（無需開啟「本機控制」開關；若 Tivano 未執行則隱藏啟動）：\n  agent models [--json]\n  agent run [--json] --cwd DIR [--model ID] [--session SID]   （從 stdin 讀取提示詞，stdout 輸出 NDJSON 事件）"
+          }
+        }
+      }
+    },
     "Agent mode" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13803,6 +13838,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Antigravity 自行管理上下文。"
+          }
+        }
+      }
+    },
+    "Antigravity needs agy 1.5.0 or later for Tivano chats. Update the Antigravity CLI and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity nécessite agy 1.5.0 ou une version ultérieure pour les discussions Tivano. Mettez à jour Antigravity CLI et réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano のチャットには agy 1.5.0 以降が必要です。Antigravity CLI を更新して、もう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 대화를 사용하려면 agy 1.5.0 이상이 필요합니다. Antigravity CLI를 업데이트한 후 다시 시도하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 对话需要 agy 1.5.0 或更高版本。请更新 Antigravity CLI 后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tivano 對話需要 agy 1.5.0 或更新版本。請更新 Antigravity CLI 後再試一次。"
           }
         }
       }
@@ -47688,37 +47758,37 @@
         }
       }
     },
-    "Let a command-line client control this running edition of Tivano. Other processes in your account can use this access. Approvals stay in Tivano. No network listener or automatic app launch." : {
+    "Let a command-line client control this running edition of Tivano. Other processes in your account can use this access. Approvals stay in Tivano. No network listener. The agent command for apps like BeRead works without this switch and can start Tivano in the background." : {
       "extractionState" : "manual",
       "localizations" : {
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Autorise un client en ligne de commande à contrôler cette édition active de Tivano. Les autres processus de votre compte peuvent utiliser cet accès. Les approbations restent dans Tivano. Aucune écoute réseau ni lancement automatique."
+            "value" : "Autorise un client en ligne de commande à contrôler cette édition active de Tivano. Les autres processus de votre compte peuvent utiliser cet accès. Les approbations restent dans Tivano. Aucune écoute réseau. La commande agent pour les apps comme BeRead fonctionne sans cet interrupteur et peut lancer Tivano en arrière-plan."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "実行中のこの Tivano をコマンドラインクライアントから制御できるようにします。同じアカウント内の他のプロセスもこのアクセスを利用できます。承認は Tivano 内で行われ、ネットワークリスナーの待機やアプリの自動起動は行われません。"
+            "value" : "実行中のこの Tivano をコマンドラインクライアントから制御できるようにします。同じアカウント内の他のプロセスもこのアクセスを利用できます。承認は Tivano 内で行われ、ネットワークリスナーは使用しません。BeRead などのアプリ向けの agent コマンドはこのスイッチなしで動作し、Tivano をバックグラウンドで起動できます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "명령줄 클라이언트가 실행 중인 현재 버전의 Tivano를 제어할 수 있도록 허용합니다. 같은 계정의 다른 프로세스도 이 접근 권한을 사용할 수 있습니다. 승인은 Tivano 내부에서 처리되며, 네트워크 리스너나 앱 자동 실행은 사용하지 않습니다."
+            "value" : "명령줄 클라이언트가 실행 중인 현재 버전의 Tivano를 제어할 수 있도록 허용합니다. 같은 계정의 다른 프로세스도 이 접근 권한을 사용할 수 있습니다. 승인은 Tivano 내부에서 처리되며, 네트워크 리스너는 사용하지 않습니다. BeRead 같은 앱을 위한 agent 명령은 이 스위치 없이도 동작하며 Tivano를 백그라운드에서 시작할 수 있습니다."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允许命令行客户端控制当前运行的 Tivano 应用。当前 macOS 用户下的其他进程也能使用此权限。审批仍在 Tivano 中进行，不开放网络监听，也不会自动启动应用。"
+            "value" : "允许命令行客户端控制当前运行的 Tivano 应用。当前 macOS 用户下的其他进程也能使用此权限。审批仍在 Tivano 中进行，不开放网络监听。供 BeRead 等应用使用的 agent 命令无需此开关即可工作，并可在后台启动 Tivano。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允許命令列用戶端控制目前執行中的 Tivano 應用程式。目前 macOS 使用者下的其他處理程序也可使用此存取權限。核准作業仍會留在 Tivano 內進行，不啟用網路監聽，也不會自動啟動應用程式。"
+            "value" : "允許命令列用戶端控制目前執行中的 Tivano 應用程式。目前 macOS 使用者下的其他處理程序也可使用此存取權限。核准作業仍會留在 Tivano 內進行，不啟用網路監聽。供 BeRead 等應用程式使用的 agent 命令無需此開關即可運作，並可在背景啟動 Tivano。"
           }
         }
       }
@@ -57239,6 +57309,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "預設關閉：進行中的對話可能很快還會用到。"
+          }
+        }
+      }
+    },
+    "Off. Only the agent command is available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Désactivé. Seule la commande agent est disponible."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフ。agent コマンドのみ利用できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "끔. agent 명령만 사용할 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭。仅 agent 命令可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已關閉。僅 agent 命令可用。"
           }
         }
       }
@@ -83835,41 +83940,6 @@
         }
       }
     },
-    "The conversation no longer fits GLM-5.3's context window. Start a new thread or compact first." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "La conversation dépasse la fenêtre de contexte de GLM-5.3. Démarrez une nouvelle conversation ou compactez d’abord."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "会話が GLM-5.3 のコンテキストウィンドウに収まらなくなりました。新しいスレッドを開始するか、先に圧縮してください。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "대화가 GLM-5.3의 컨텍스트 창을 초과했습니다. 새 스레드를 시작하거나 먼저 압축하세요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这个对话已超出 GLM-5.3 的上下文窗口。请新建对话或先压缩上下文。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此對話已超出 GLM-5.3 的上下文視窗。請開新對話或先壓縮上下文。"
-          }
-        }
-      }
-    },
     "The conversation no longer fits Meta's 1M-token context window. Start a new thread or compact first." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -83901,6 +83971,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此對話已超出 Meta 的 100 萬 token 上下文視窗。請開新對話或先壓縮上下文。"
+          }
+        }
+      }
+    },
+    "The conversation no longer fits the model's context window. Start a new thread or compact first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La conversation dépasse la fenêtre de contexte du modèle. Démarrez une nouvelle conversation ou compactez d’abord."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会話がモデルのコンテキストウィンドウに収まらなくなりました。新しいスレッドを開始するか、先に圧縮してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대화가 모델의 컨텍스트 창을 초과했습니다. 새 스레드를 시작하거나 먼저 압축하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话已超出当前模型的上下文窗口。请新建对话或先压缩上下文。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此對話已超出目前模型的上下文視窗。請開新對話或先壓縮上下文。"
           }
         }
       }
@@ -101649,37 +101754,37 @@
         }
       }
     },
-    "Your Z.ai Coding Plan does not include %@. Pick GLM-5.3 or GLM-5.3 Flash for the model, or move up a plan tier." : {
+    "Your Z.ai Coding Plan does not include %@. Pick another GLM model, or move up a plan tier." : {
       "extractionState" : "manual",
       "localizations" : {
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Votre forfait Z.ai Coding Plan n’inclut pas %@. Choisissez GLM-5.3 ou GLM-5.3 Flash comme modèle, ou passez à un forfait supérieur."
+            "value" : "Votre forfait Z.ai Coding Plan n’inclut pas %@. Choisissez un autre modèle GLM, ou passez à un forfait supérieur."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ご利用中の Z.ai Coding Plan には %@ が含まれていません。モデルに GLM-5.3 または GLM-5.3 Flash を選択するか、上位プランへアップグレードしてください。"
+            "value" : "ご利用中の Z.ai Coding Plan には %@ が含まれていません。別の GLM モデルを選択するか、上位プランへアップグレードしてください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "사용 중인 Z.ai Coding Plan에는 %@ 모델이 포함되어 있지 않습니다. 모델로 GLM-5.3 또는 GLM-5.3 Flash를 선택하거나 상위 요금제로 업그레이드하세요."
+            "value" : "사용 중인 Z.ai Coding Plan에는 %@ 모델이 포함되어 있지 않습니다. 다른 GLM 모델을 선택하거나 상위 요금제로 업그레이드하세요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你的 Z.ai Coding Plan 不含 %@。请把模型换成 GLM-5.3 或 GLM-5.3 Flash，或升级套餐。"
+            "value" : "你的 Z.ai Coding Plan 不含 %@。请换成其他 GLM 模型，或升级套餐。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你的 Z.ai Coding Plan 未包含 %@。請將模型改選為 GLM-5.3 或 GLM-5.3 Flash，或升級方案等級。"
+            "value" : "你的 Z.ai Coding Plan 未包含 %@。請改選其他 GLM 模型，或升級方案等級。"
           }
         }
       }
@@ -101999,37 +102104,37 @@
         }
       }
     },
-    "Z.ai does not offer that model. Pick GLM-5.3 or GLM-5.3 Flash in the model picker." : {
+    "Z.ai does not offer that model. Pick another GLM model in the model picker." : {
       "extractionState" : "manual",
       "localizations" : {
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Z.ai ne propose pas ce modèle. Choisissez GLM-5.3 ou GLM-5.3 Flash dans le sélecteur de modèle."
+            "value" : "Z.ai ne propose pas ce modèle. Choisissez un autre modèle GLM dans le sélecteur de modèle."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Z.ai はそのモデルを提供していません。モデルピッカーで GLM-5.3 または GLM-5.3 Flash を選択してください。"
+            "value" : "Z.ai はそのモデルを提供していません。モデルピッカーで別の GLM モデルを選択してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Z.ai에서 해당 모델을 제공하지 않습니다. 모델 선택기에서 GLM-5.3 또는 GLM-5.3 Flash를 선택하세요."
+            "value" : "Z.ai에서 해당 모델을 제공하지 않습니다. 모델 선택기에서 다른 GLM 모델을 선택하세요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Z.ai 不提供该模型。请在模型选择器中选用 GLM-5.3 或 GLM-5.3 Flash。"
+            "value" : "Z.ai 不提供该模型。请在模型选择器中选用其他 GLM 模型。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Z.ai 未提供該模型。請在模型選擇器中選用 GLM-5.3 或 GLM-5.3 Flash。"
+            "value" : "Z.ai 未提供該模型。請在模型選擇器中選用其他 GLM 模型。"
           }
         }
       }
@@ -109910,6 +110015,181 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tivano 会退出此 Claude 账号，并删除其在这台 Mac 上的本地登录配置。%lld 个已保存的对话（含 %lld 个已归档）会保留历史记录，但无法继续发送新消息。"
+          }
+        }
+      }
+    },
+    "Antigravity asked a question in a form Tivano cannot display. The request was declined." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity a posé une question sous une forme que Tivano ne peut pas afficher. La demande a été refusée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity が Tivano で表示できない形式で質問しました。リクエストは拒否されました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity가 Tivano에서 표시할 수 없는 형식으로 질문했습니다. 요청이 거부되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 以 Tivano 无法显示的形式提问，已拒绝该请求。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 以 Tivano 無法顯示的形式提問，已拒絕該請求。"
+          }
+        }
+      }
+    },
+    "Antigravity does not offer %@ right now, so this turn uses %@. Refresh Antigravity's models in Settings and choose one again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity ne propose pas %@ pour le moment ; ce tour utilise donc %@. Actualisez les modèles d’Antigravity dans les Réglages et choisissez-en un autre."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity は現在 %@ を提供していないため、このターンでは %@ を使用します。設定で Antigravity のモデルを更新し、選び直してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity가 현재 %@을(를) 제공하지 않아 이번 턴은 %@을(를) 사용합니다. 설정에서 Antigravity 모델을 새로 고친 후 다시 선택하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 当前不提供 %@，本轮改用 %@。请在设置中刷新 Antigravity 的模型后重新选择。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 目前不提供 %@，本輪改用 %@。請在設定中重新整理 Antigravity 的模型後重新選擇。"
+          }
+        }
+      }
+    },
+    "its default model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "son modèle par défaut"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既定のモデル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기본 모델"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其默认模型"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其預設模型"
+          }
+        }
+      }
+    },
+    "Antigravity did not offer the requested permission or plan mode. Update the Antigravity CLI and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity ne propose pas le mode d’autorisation ou de plan demandé. Mettez à jour Antigravity CLI et réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity は要求された権限モードまたはプランモードを提供していません。Antigravity CLI を更新して、もう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity가 요청한 권한 모드 또는 계획 모드를 제공하지 않습니다. Antigravity CLI를 업데이트한 후 다시 시도하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 未提供所需的权限模式或计划模式。请更新 Antigravity CLI 后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 未提供所需的權限模式或計畫模式。請更新 Antigravity CLI 後再試一次。"
+          }
+        }
+      }
+    },
+    "Antigravity stopped at a limit before completing the turn." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity s’est arrêté à une limite avant de terminer ce tour."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity は上限に達したため、ターンを完了する前に停止しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity가 한도에 도달해 턴을 완료하기 전에 중지했습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 在完成本轮之前达到上限而停止。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 在完成本輪之前達到上限而停止。"
           }
         }
       }

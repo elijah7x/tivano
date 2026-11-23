@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Offline guard for agy's stale result status after a recovered model failure.
+"""Offline guard for Antigravity turn outcomes, transient classification, and ACP turn lifecycle.
 
-agy can report a transient model error, retry it, stream a successful reply, then
-end with status ERROR and the earlier attempt's error. Tivano used to fail those
-completed turns. agy also repeats any earlier conversation error on every later
-result with finished_reason "error", even when that turn's own steps completed
-normally. The terminal decision now requires stream evidence of recovery, honors
-finished_reason, preserves launch and intentional-stop errors, and exposes
-a conservative transient-failure classifier for automatic continuation. The
-production decision and classifier are extracted and compiled against fixtures so
-this check exercises their behavior rather than only matching source text.
+One-shot review turns (`AntigravitySession.oneShotReply`) still use headless
+stream-json, where `agy` can report a transient model error, retry it, stream a
+successful reply, then end with status ERROR and the earlier attempt's error.
+`turnOutcome` and `isTransientFailure` remain in `AntigravitySession` and are
+extracted and compiled against fixtures so this check exercises their behavior
+rather than only matching source text.
+
+Interactive Antigravity chats now run through `ACPSession`. This check also
+guards the ACP-era guarantees: 90 s deadlines for the four Antigravity startup
+methods (`initialize`, `authenticate`, `session/new`, `session/resume`),
+`oauth-personal` authentication retry with `loginHint`, `!isStopping` /
+`stopAndWait` / `handleClose` lifecycle handling, and per-turn token spend
+recorded once per finished prompt from `usage.totalTokens` without cumulative
+delta tracking or charging `usage_update` context occupancy.
 """
 from pathlib import Path
 import json
@@ -19,11 +24,12 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = ROOT / 'Tivano/Services/Providers/AntigravitySession.swift'
+ACP = ROOT / 'Tivano/Services/Providers/ACPSession.swift'
 TIMELINE_ROWS = ROOT / 'Tivano/App/Views/Chat/TimelineRows.swift'
 CATALOG = ROOT / 'Tivano/Resources/Localizable.xcstrings'
 
-START = '// MARK: - Turn outcome'
-END = '// MARK: - Result handling'
+START = 'struct TurnOutcome: Equatable {'
+END = '// MARK: - Model and Effort Normalization'
 TRANSIENT_SIGNATURE = 'nonisolated static func isTransientFailure(_ message: String) -> Bool'
 START_TIMEOUT_KEY = 'Antigravity did not finish starting in time.'
 START_TIMEOUT_ZH = 'Antigravity 未能及时完成启动。'
@@ -35,24 +41,32 @@ def fail(message):
     raise SystemExit(1)
 
 
-def source():
-    if not SESSION.is_file():
-        fail(f'{SESSION.relative_to(ROOT)} is missing')
-    return SESSION.read_text(encoding='utf-8')
+def source(path=SESSION):
+    if not path.is_file():
+        fail(f'{path.relative_to(ROOT)} is missing')
+    return path.read_text(encoding='utf-8')
 
 
-def section(text, start, end):
+def section(text, start, end, path=SESSION):
     for marker in (start, end):
         count = text.count(marker)
         if count != 1:
-            fail(f'{SESSION.relative_to(ROOT)}: marker {marker!r} found {count} times, expected 1')
-    return text[text.index(start):text.index(end)]
+            fail(f'{path.relative_to(ROOT)}: marker {marker!r} found {count} times, expected 1')
+    start_idx = text.index(start)
+    end_idx = text.index(end)
+    if end_idx <= start_idx:
+        fail(f'{path.relative_to(ROOT)}: marker {end!r} appears before {start!r}')
+    return text[start_idx:end_idx]
 
 
-def between(text, start, end):
+def between(text, start, end, path=SESSION):
     if text.count(start) != 1 or text.count(end) != 1:
-        fail(f'cannot extract source region {start!r} ... {end!r}')
-    return text[text.index(start):text.index(end)]
+        fail(f'{path.relative_to(ROOT)}: cannot extract source region {start!r} ... {end!r}')
+    start_idx = text.index(start)
+    end_idx = text.index(end)
+    if end_idx <= start_idx:
+        fail(f'{path.relative_to(ROOT)}: marker {end!r} appears before {start!r}')
+    return text[start_idx:end_idx]
 
 
 def require(text, markers, path=SESSION):
@@ -62,74 +76,117 @@ def require(text, markers, path=SESSION):
 
 
 def check_sources():
-    text = source()
-    section(text, START, END)
+    text = source(SESSION)
+    acp = source(ACP)
+
+    # AntigravitySession helpers: turnOutcome, isTransientFailure, loginHint, and oneShotReply.
+    section(text, '// MARK: - Turn outcome', END, path=SESSION)
+    section(text, START, END, path=SESSION)
     require(text, [
-        'guard turnActive else {',
-        'hasReply: latestCascadeError == nil ? hasReply : replyAfterCascadeError',
-        'replyAfterCascadeError = false',
         'static func turnOutcome(',
         TRANSIENT_SIGNATURE,
-        'latestCascadeError = (index, message)',
-        'cascadeErrorMessages.insert(',
-        'completedAgentResponseIndex = index',
-        'guard initContinuation == nil else',
-        'launchError = error',
-        'let hasReply = streamedText || response?.trimmed.isEmpty == false',
-        'latestCascadeErrorIndex: latestCascadeError?.index',
-        'cascadeErrorMessages: cascadeErrorMessages',
-        'reportedErrors.insert("result|\\(trimmedResultError)")',
-        'Self.log.warning(',
-        'Self.agyError(in: tail)',
-        'process?.failureReason',
-        'process?.exitStatus',
-        'authHint(in: trimmedResultError)',
-        'hasCompletedToolWork: hasCompletedToolWork',
-        'priorConversationErrors',
-        'rememberConversationError("request failed: \\(trimmedReason)")',
-    ])
+        'static func loginHint(in text: String) -> String?',
+    ], path=SESSION)
+    if 'Antigravity did not answer. Is `agy` signed in?' in text or 'Antigravity did not answer. Is `agy` signed in?' in acp:
+        fail('old signed-in timeout message must not reappear')
 
-    is_running = between(text, 'var isRunning: Bool', 'var lastOutputAt: Date?')
-    require(is_running, ['!isStopping', 'process?.isRunning'])
+    one_shot = text[text.index('nonisolated static func oneShotReply(streamJSON output: String)'):] \
+        if text.count('nonisolated static func oneShotReply(streamJSON output: String)') == 1 \
+        else fail(f'{SESSION.relative_to(ROOT)}: oneShotReply marker not found uniquely')
+    require(one_shot, [
+        'if message["event"]?.string == "result"',
+        'break',
+        'latestError = (index, error)',
+        'errorMessages.insert(error)',
+        'completedIndex = index',
+        'replyAfterError = false',
+        'hasReply: latestError == nil ? (streamed != nil || response != nil) : replyAfterError',
+        'latestCascadeErrorIndex: latestError?.index',
+        'cascadeErrorMessages: errorMessages',
+        'hasCompletedToolWork: completedToolWork',
+        'turnOutcome(',
+    ], path=SESSION)
+    tool_branch = between(one_shot, 'else if stepType == "tool"', 'if let error = errorMessage(in: step)', path=SESSION)
+    require(tool_branch, ['completedIndex = nil'], path=SESSION)
+    if 'latestError' in tool_branch or 'errorMessages' in tool_branch:
+        fail('oneShotReply tool steps must not be recorded as model/cascade failures')
 
-    send = between(text, 'func send(_ input: TurnInput)', 'func interrupt() async')
+    # ACPSession interactive Antigravity lifecycle, 90 s startup deadlines, auth, and per-turn spend.
+    is_running = between(acp, 'var isRunning: Bool', 'var lastOutputAt: Date?', path=ACP)
+    require(is_running, ['!isStopping', '!connection.isClosed'], path=ACP)
+
+    start_fn = between(
+        acp,
+        'private func start(applyingSelection: Bool) async throws -> String',
+        'private var clientCapabilities: JSONValue',
+        path=ACP,
+    )
+    require(start_fn, [
+        'deadlineRequest(connection, "initialize"',
+        '"oauth-personal"',
+        'deadlineRequest(connection, "authenticate"',
+        'AntigravitySession.loginHint(in: evidence)',
+        'Self.antigravityStartError(error, tail: process.errorTail)',
+    ], path=ACP)
+
+    deadline_fn = between(acp, 'private func deadlineRequest(', 'private static func miniMaxFailure(', path=ACP)
+    require(deadline_fn, [
+        'if configuration.provider == .antigravity',
+        '"initialize"',
+        '"authenticate"',
+        '"session/new"',
+        '"session/resume"',
+        'timeout = 90',
+        'withDeadline(seconds: timeout',
+    ], path=ACP)
+
+    send = between(acp, 'func send(_ input: TurnInput) async throws', 'private func continuePromptPreparation(', path=ACP)
     require(send, [
         '!isStopping',
         'ProviderError.notRunning',
-        'latestCascadeError = nil',
-        'cascadeErrorMessages.removeAll()',
-        'completedAgentResponseIndex = nil',
-        'hasCompletedToolWork = false',
-        'reportedErrors.removeAll()',
-    ])
-    if send.index('!isStopping') > send.index('turnActive = true'):
-        fail('send(_:) must guard against !isStopping before starting a turn')
+        'self.finishPrompt(result["stopReason"]?.string, error: nil, generation: generation, usage: result["usage"])',
+    ], path=ACP)
+    if send.index('!isStopping') > send.index('promptActive = true'):
+        fail('ACPSession.send(_:) must guard against !isStopping before starting a turn')
 
-    stop_and_wait = between(text, 'func stopAndWait(timeout: TimeInterval) async', 'func stop()')
-    require(stop_and_wait, [
-        'stop()',
-        'terminateAndWait(timeout: timeout)',
-    ])
-    result = between(text, 'private func handleResult', 'private func didClose')
-    require(result, ['latestCascadeError != nil', 'rememberConversationError(trimmedResultError)'])
-    if result.index('guard initContinuation == nil else') > result.index('turnActive = false'):
-        fail('a pre-init result is still allowed to finish a turn')
-    if result.index('let hasReply =') > result.index('streamedText = false'):
-        fail('reply evidence is captured after streamedText is cleared')
-    closed = between(text, 'private func didClose', 'private func closeFailure')
-    if closed.index('if isStopping') > closed.index('if turnActive'):
-        fail('didClose handles the generic active-turn failure before intentional stop')
-    tool = between(text, 'case "tool":', 'case "user_input", "checkpoint":')
-    require(tool, [
-        'completedAgentResponseIndex = nil',
-        'step["tool_name"]?.string, step["tool_info"]?["name"]?.string',
-        '.compactMap',
-        '!$0.isEmpty',
-    ])
-    if 'step["tool_name"]?.string ?? step["tool_info"]?["name"]?.string' in tool:
-        fail('agy tool step still accepts an empty tool_name before checking tool_info.name')
-    if 'latestCascadeError' in tool or 'cascadeErrorMessages' in tool:
-        fail('tool ERROR steps must not be recorded as model/cascade failures')
+    stop_and_wait = between(acp, 'func stopAndWait(timeout: TimeInterval) async', 'func stop() {', path=ACP)
+    require(stop_and_wait, ['stop()', 'closeAndWait(timeout: timeout)'], path=ACP)
+
+    stop_fn = between(acp, 'func stop() {', 'private func emitAntigravityRetryNotice(', path=ACP)
+    require(stop_fn, ['isStopping = true', 'promptActive = false'], path=ACP)
+
+    finish = between(acp, 'private func finishPrompt(', 'private func handleClose(', path=ACP)
+    require(finish, [
+        'guard promptActive, generation == nil || promptGeneration == generation else { return }',
+        'promptActive = false',
+        'if configuration.provider == .antigravity, let usage, !usage.isNull',
+        'usage["totalTokens"]?.int',
+        'TokenLedger.shared.record(spend: total)',
+        'onEvent?(.tokenSpend(TokenSpend(',
+        'provider: .antigravity',
+        'AntigravitySession.loginHint(in: evidence)',
+    ], path=ACP)
+    if finish.index('promptActive = false') > finish.index('TokenLedger.shared.record(spend: total)'):
+        fail('finishPrompt must clear promptActive before recording per-turn token spend')
+    for forbidden_delta in ('reportedSpend', 'spendBaseline', 'cumulativeSpend'):
+        if forbidden_delta in finish:
+            fail(f'ACPSession.finishPrompt must record per-turn usage.totalTokens directly, not {forbidden_delta!r}')
+
+    usage_update = between(acp, 'case "usage_update":', 'private func handleRequest(', path=ACP)
+    require(usage_update, ['onEvent?(.usage(ContextUsage(usedTokens: used, windowTokens: size)))'], path=ACP)
+    if 'TokenLedger' in usage_update or '.tokenSpend' in usage_update:
+        fail('usage_update reports context occupancy only and must not bill TokenLedger or emit .tokenSpend')
+
+    closed = between(acp, 'private func handleClose(', '// MARK: - Mapping', path=ACP)
+    require(closed, [
+        'if configuration.provider == .antigravity',
+        'AntigravitySession.loginHint(in: tail)',
+        'guard !isStopping else { return }',
+        'onEvent?(.exited(error: detail))',
+    ], path=ACP)
+    agy_close = closed[closed.rindex('if configuration.provider == .antigravity'):]
+    if agy_close.index('guard !isStopping else { return }') > agy_close.index('onEvent?(.exited(error: detail))'):
+        fail('handleClose must suppress .exited when isStopping is true')
 
     if not TIMELINE_ROWS.is_file():
         fail(f'{TIMELINE_ROWS.relative_to(ROOT)} is missing')
@@ -138,20 +195,9 @@ def check_sources():
         rows_text,
         'static func label(for call: ToolCall) -> String',
         'private static func countedFiles',
+        path=TIMELINE_ROWS,
     )
     require(label, ['call.kind == .other', '"Using tool"', '"Used tool"'], path=TIMELINE_ROWS)
-
-    start_fn = between(text, 'func start() async throws -> String', 'private func modeArguments(')
-    require(start_fn, ['Self.startTimeout'])
-    if '.seconds(30)' in start_fn:
-        fail('start() still uses the old 30s launch timeout')
-    if 'startTimeout: Duration = .seconds(90)' not in text:
-        fail('AntigravitySession.swift must set startTimeout to 90 seconds')
-
-    fail_start = between(text, 'private func failStartAfterTimeout', 'func send(_ input: TurnInput)')
-    require(fail_start, [f'AppText.localized("{START_TIMEOUT_KEY}")', 'process?.isRunning == false'])
-    if 'Antigravity did not answer. Is `agy` signed in?' in text:
-        fail('AntigravitySession.swift still falls back to the old signed-in timeout message')
 
     if not CATALOG.is_file():
         fail(f'{CATALOG.relative_to(ROOT)} is missing')
@@ -219,7 +265,7 @@ func expect(
     _ recovered: Bool = false
 ) {{
     precondition(actual.status == status && actual.recovered == recovered,
-                 "expected \(status), recovered=\(recovered); got \(actual)")
+                 "expected \\(status), recovered=\\(recovered); got \\(actual)")
 }}
 
 @main
@@ -349,14 +395,14 @@ struct Checks {{
         precondition(!AntigravityTurnOutcome.isTransientFailure("Please sign in before retrying"))
         precondition(!AntigravityTurnOutcome.isTransientFailure("unknown flag: --effort"))
         precondition(!AntigravityTurnOutcome.isTransientFailure("model has no \\"high\\" effort"))
-        print("PASS: recovered agy turns complete despite sticky result errors; fatal results, launch/stop handling and retry classification stay conservative.")
+        print("PASS: Antigravity turnOutcome, transient classification, and ACP turn lifecycle/spend guards passed.")
     }}
 }}
 '''
 
 
 def check_behaviour():
-    block = section(source(), START, END)
+    block = section(source(SESSION), START, END, path=SESSION)
     with tempfile.TemporaryDirectory(prefix='tivano-antigravity-result-') as temp:
         directory = Path(temp)
         swift, binary = directory / 'Checks.swift', directory / 'checks'

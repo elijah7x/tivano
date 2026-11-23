@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Offline guard: `agy --effort` only carries an effort the model declares.
+"""Offline guard: Antigravity model/effort normalization only emits declared efforts.
 
-Antigravity's CLI exits before the first turn with `invalid model selection`
-when `--effort` names a level the model does not take, and rejects the flag
-entirely for a model the account lists without effort levels (an account that
-lost access to `gemini-4-argon` got `--effort is not supported`). `normalize`
+Antigravity's CLI rejects undeclared effort levels (both in `agy acp` config
+options and in one-shot `agy --effort` runs). `AntigravitySession.normalize`
 used to resolve every unknown model to `"high"`, so launching one of those failed
-and looked like a crash. It now resolves the effort against the model's catalog row
-and passes only what that row declares; an unknown model gets an explicitly
-requested effort and nothing else. The source assertions below fail loudly if a
-caller drops the catalog, and the extracted production functions are compiled so
-the resolution itself is exercised, not just its shape.
+and looked like a crash. It now resolves the effort against the model's catalog
+row and passes only what that row declares; an unknown model gets an explicitly
+requested effort and nothing else. Interactive chats run through `ACPSession`,
+where `updateAntigravitySelection` merges `ProviderRegistry.antigravitySeed` into
+`configuration.modelCatalog`, normalizes model/effort, splits suffixed IDs back
+when the ACP model option advertises the base slug, and only sends advertised
+model/effort values. The source assertions below fail loudly if a caller drops
+the catalog, and the extracted production functions are compiled so the
+resolution itself is exercised, not just its shape.
 """
 from pathlib import Path
 import re
@@ -20,6 +22,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = ROOT / 'Tivano/Services/Providers/AntigravitySession.swift'
+ACP = ROOT / 'Tivano/Services/Providers/ACPSession.swift'
 RUNTIME = ROOT / 'Tivano/App/Runtime/ThreadRuntime.swift'
 REGISTRY = ROOT / 'Tivano/Services/Providers/ProviderRegistry.swift'
 
@@ -43,31 +46,64 @@ def source(path):
     return path.read_text(encoding='utf-8')
 
 
-def section(text, start, end):
+def section(text, start, end, path=SESSION):
     for marker in (start, end):
         count = text.count(marker)
         if count != 1:
-            fail(f'{SESSION.relative_to(ROOT)}: marker {marker!r} found {count} times, expected 1')
-    return text[text.index(start):text.index(end)]
+            fail(f'{path.relative_to(ROOT)}: marker {marker!r} found {count} times, expected 1')
+    start_idx = text.index(start)
+    end_idx = text.index(end)
+    if end_idx <= start_idx:
+        fail(f'{path.relative_to(ROOT)}: marker {end!r} appears before {start!r}')
+    return text[start_idx:end_idx]
 
 
 def check_sources():
     session = source(SESSION)
+    acp = source(ACP)
     if SIGNATURE not in session:
         fail(f'normalize does not take the catalog: expected {SIGNATURE!r}')
     if OLD_DEFAULT in session:
         fail('normalize still resolves every unknown model to an invented default '
              f'({OLD_DEFAULT!r}); unknown models must only send what was requested')
-    if 'catalog: Self.addingSeedRows(configuration.modelCatalog, seed: ProviderRegistry.antigravitySeed)' not in session:
-        fail('start() does not merge antigravitySeed into the restored catalog, so a cached '
-             'catalog without gemini-4-argon still sends its effort')
-    calls = [match.end() for match in re.finditer(r'(?<!func )normalize\(', session)]
-    if not calls:
-        fail('no normalize call site found; the caller guard would pass silently')
-    for start in calls:
-        line = session[session.rfind('\n', 0, start):session.find('\n', start)]
-        if 'catalog:' not in line:
-            fail(f'normalize call site does not pass the catalog: {line.strip()!r}')
+
+    selection = section(
+        acp,
+        'private func updateAntigravitySelection(',
+        'private func applyMiniMaxPermissions(',
+        path=ACP,
+    )
+    seed_merge = 'AntigravitySession.addingSeedRows(configuration.modelCatalog, seed: ProviderRegistry.antigravitySeed)'
+    if seed_merge not in selection:
+        fail('ACPSession.updateAntigravitySelection() does not merge antigravitySeed into the restored '
+             'catalog, so a cached catalog without gemini-4-argon still sends its effort')
+    for marker in (
+        'AntigravitySession.normalize(model: model, effort: effort, catalog: catalog)',
+        'AntigravitySession.efforts.sorted(by: { $0.count > $1.count })',
+        'antigravityModelValues.contains(targetModel)',
+        'let effortCandidates = [targetEffort, effort, modelRow?.defaultEffort]',
+        'effortCandidates.first(where: antigravityEffortValues.contains)',
+    ):
+        if marker not in selection:
+            fail(f'{ACP.relative_to(ROOT)}: updateAntigravitySelection() is missing {marker!r}')
+    # A default effort that normalizing leaves out must still reach a live session, or the
+    # previous model's level carries over (seen on agy 1.5.14: Flash low -> Sonnet stayed low).
+    effort_set = selection.find('setConfigOption(effortConfigID, value: wantedEffort)')
+    if effort_set < 0 or 'if targetEffort == nil' in selection[effort_set - 200:effort_set]:
+        fail(f'{ACP.relative_to(ROOT)}: updateAntigravitySelection() must send the model default effort when normalizing drops it')
+
+    total_calls = 0
+    for path, text in ((SESSION, session), (ACP, acp)):
+        for match in re.finditer(r'(?<!func )normalize\(', text):
+            total_calls += 1
+            start = match.end()
+            line = text[text.rfind('\n', 0, start):text.find('\n', start)]
+            if 'catalog:' not in line:
+                fail(f'{path.relative_to(ROOT)}: normalize call site does not pass the catalog: {line.strip()!r}')
+    if total_calls == 0:
+        fail('no normalize call site found in AntigravitySession.swift or ACPSession.swift; '
+             'the caller guard would pass silently')
+
     efforts_match = re.search(r'static\s+let\s+efforts\s*=\s*\[([^\]]+)\]', session)
     if not efforts_match:
         fail(f'{SESSION.relative_to(ROOT)}: static let efforts is missing')

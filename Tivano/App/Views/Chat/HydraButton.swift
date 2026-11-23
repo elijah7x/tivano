@@ -24,7 +24,9 @@ struct HydraButton: View {
     @State private var isIntroShown = false
 
     var body: some View {
-        let isOn = model.hydraModeIsOn(thread)
+        let isHydra = model.hydraModeIsOn(thread)
+        // On in either sub-agent mode: Hydra's team or Chimera's adaptive cast.
+        let isOn = model.hydraIsOn(thread)
         let isChimera = model.chimeraIsOn(thread)
         // This chat's own heads, read through its child cells: another lead's head
         // starting or finishing never re-renders this button.
@@ -35,11 +37,6 @@ struct HydraButton: View {
         // lead's own timeline, so the badge pulses as soon as delegation starts.
         let isDelegating = model.hydraIsOn(thread) && running == 0 && runtime.isRunning && Self.isLeadDelegating(runtime.entries)
         Button {
-            if model.chimeraIsOn(thread) {
-                model.settings.hydraEnabled = true
-                model.setHydra(true, for: thread.id)
-                return
-            }
             // Off for this chat, the mark opens its switch: the idle note describes a team that is on.
             if isDelegating && heads.isEmpty { isExplaining = true } else if !model.settings.hasSeenHydraIntro { isIntroShown = true } else if heads.isEmpty, !isOn { isHydraSwitchShown = true } else if heads.isEmpty { isExplaining = true } else { togglePanel() }
         } label: {
@@ -48,7 +45,7 @@ struct HydraButton: View {
                     HydraCharge(isWorking: running > 0 && columnVisibility.isShown)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
-                HydraMarkView(isOn: isOn, isHovering: isHovering)
+                HydraMarkView(isOn: isOn, isChimera: isChimera, isHovering: isHovering)
             }
             .frame(width: Chrome.capsuleHeight, height: Chrome.capsuleHeight)
             .contentShape(Circle())
@@ -57,7 +54,7 @@ struct HydraButton: View {
             // it over everything else in it, so a badge laid over the button after the
             // glass, as an overlay or a later sibling, came out underneath.
             .overlay(alignment: .topTrailing) {
-                if !isChimera, running > 0 || isSending || isDelegating {
+                if running > 0 || isSending || isDelegating {
                     HydraSendWorkingBadge(running: running, isSending: isSending || isDelegating)
                         .offset(x: 3, y: -3)
                         .transition(.scale.combined(with: .opacity))
@@ -91,14 +88,14 @@ struct HydraButton: View {
             HydraIdlePopover(thread: thread, isPreparing: isDelegating && heads.isEmpty)
         }
         .popover(isPresented: $isHydraSwitchShown, arrowEdge: .bottom) {
-            HydraSwitchPopover(thread: thread, isOn: isOn, isHydraSwitchShown: $isHydraSwitchShown)
+            HydraSwitchPopover(thread: thread, isOn: isHydra, isHydraSwitchShown: $isHydraSwitchShown)
         }
         .popover(isPresented: $isIntroShown, arrowEdge: .bottom) {
             HydraIntroPopover { model.settings.hasSeenHydraIntro = true; isIntroShown = false }
                 .interactiveDismissDisabled()
         }
         .preference(key: ChromePresentationPreference.self, value: isExplaining || isHydraSwitchShown || isIntroShown)
-        .onAppear { if !model.settings.hasSeenHydraIntro, isOn { isIntroShown = true } }
+        .onAppear { if !model.settings.hasSeenHydraIntro, isHydra { isIntroShown = true } }
         // The capture run hangs the intro's still from the mark, where the app shows it.
         #if DEBUG
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
@@ -106,7 +103,7 @@ struct HydraButton: View {
         }
         #endif
         .help(Text(verbatim: help(isOn: isOn, running: running, hasHeads: !heads.isEmpty)))
-        .accessibilityLabel(Text(verbatim: model.chimeraIsOn(thread) ? Chrome.localized("Turn sub-agents on for this chat") : panelHelp(running: running, hasHeads: !heads.isEmpty)))
+        .accessibilityLabel(Text(verbatim: panelHelp(running: running, hasHeads: !heads.isEmpty)))
         .accessibilityValue(Text(verbatim: isOn ? Chrome.localized("On") : Chrome.localized("Off")))
     }
 
@@ -205,14 +202,12 @@ struct HydraButton: View {
 
     private func help(isOn: Bool, running: Int, hasHeads: Bool) -> String {
         guard isOn else {
-            return Chrome.localized(
-                model.chimeraIsOn(thread)
-                    ? "Turn sub-agents on for this chat"
-                    : (model.settings.hydraEnabled ? "Sub-agents are off for this chat" : "Sub-agents are off in Settings")
-            )
+            return Chrome.localized(model.settings.hydraEnabled ? "Sub-agents are off for this chat" : "Sub-agents are off in Settings")
         }
         var parts = [Chrome.localized("Sub-agents are on")]
-        if let pair = model.hydraPair(for: thread) {
+        if model.chimeraIsOn(thread) {
+            parts.append(Chrome.localized("Adaptive sub-agents"))
+        } else if let pair = model.hydraPair(for: thread) {
             parts.append(HydraPairSummary.workers(pair, registry: model.providers))
         } else {
             parts.append(Chrome.localized("Sub-agents run on this chat's model"))
@@ -351,15 +346,22 @@ private struct HydraIdlePopover: View {
     }
 }
 
-/// The dragon-head mark: quiet when Hydra is off, full when it is on or under the pointer.
+/// The mode's mark, Hydra's dragon head or Chimera's: quiet when sub-agents are off,
+/// full when they are on or under the pointer. Sized in the panel header's proportions.
 private struct HydraMarkView: View {
     let isOn: Bool
+    let isChimera: Bool
     let isHovering: Bool
 
     var body: some View {
-        HydraMarkImage()
-            .foregroundStyle(Chrome.primaryText.opacity(isOn || isHovering ? 1 : 0.6))
-            .frame(width: 18, height: 18)
+        Group {
+            if isChimera {
+                ChimeraMarkImage().frame(width: 22, height: 18)
+            } else {
+                HydraMarkImage().frame(width: 18, height: 18)
+            }
+        }
+        .foregroundStyle(Chrome.primaryText.opacity(isOn || isHovering ? 1 : 0.6))
     }
 }
 

@@ -206,8 +206,8 @@ struct Attachment: Sendable {
 }
 enum RuntimeMode { case supervised, fullAccess }
 enum InteractionMode { case build, plan }
-enum ProviderKind { case acp, minimaxCode, dsh, kimi }
-struct SessionConfiguration { var provider = ProviderKind.acp; var dshFinalReport = false }
+enum ProviderKind { case acp, minimaxCode, dsh, kimi, antigravity }
+struct SessionConfiguration { var provider = ProviderKind.acp; var dshFinalReport = false; var model: String? }
 struct TurnInput {
     var text = "fixture"
     var images: [Attachment] = []
@@ -226,7 +226,12 @@ enum ProviderEvent {
     case modeChanged(InteractionMode)
     case messageCompleted(id: String, text: String)
     case notice(Notice)
+    case tokenSpend(TokenSpend)
 }
+struct TokenSpend { var provider: ProviderKind; var totalTokens: Int; var model: String? }
+@MainActor final class TokenLedger { static let shared = TokenLedger(); func record(spend: Int) {} }
+final class AntigravityLogTailer { func setTurnActive(_ active: Bool) {}; func shutDown() {} }
+@MainActor enum AntigravitySession { static func loginHint(in text: String) -> String? { nil } }
 struct Notice { enum Level { case warning }; var level: Level; var message: String }
 enum TextCleanup { static func stripANSI(_ value: String) -> String { value } }
 enum ProviderError: Error { case notRunning, failed(String) }
@@ -271,7 +276,7 @@ struct PendingReplies { mutating func resolveAll(_ value: JSONValue) {} }
         switch event {
         case .turnStarted: started += 1
         case .turnCompleted(let status, _): statuses.append(status)
-        case .requestResolved, .modeChanged, .messageCompleted, .notice: break
+        case .requestResolved, .modeChanged, .messageCompleted, .notice, .tokenSpend: break
         }
     }
 }
@@ -307,6 +312,10 @@ struct PendingReplies { mutating func resolveAll(_ value: JSONValue) {} }
     var todoToolCallIDs: Set<String> = []
     var toolKinds: [String: String] = [:]
     var toolInputs: [String: String] = [:]
+    var currentModel: String?
+    var antigravityLogTailer: AntigravityLogTailer?
+    var antigravityEmittedRetryAttempts: Set<Int> = []
+    static func antigravityErrorText(_ error: Error, tail: String = "") -> String { error.localizedDescription }
     func applySelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode, generation: UUID?) async throws {
         _ = try await connection?.request("fixture/selection", [:])
     }

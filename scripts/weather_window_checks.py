@@ -91,8 +91,10 @@ struct AppModel {{
         var isHydraMerging = false
         var approvals: [String] = []
         var questions: [String] = []
+        var hasChimeraCasting = false
         var backgroundTasks: [String] = []
         var isWaitingForLimit = false
+        var needsUserAnswer: Bool {{ !questions.isEmpty || hasChimeraCasting }}
     }}
     var projects: [SyntheticProject] = []
     var threads: [SyntheticThread] = []
@@ -305,6 +307,23 @@ struct WeatherWindowChecks {{
                 done: 2
             ),
             "once working helper finishes, parent thread's unread status must contribute again"
+        )
+
+        let waitingCastingThread = AppModel.SyntheticThread(projectID: activeProject.id)
+        let castingWeatherModel = AppModel(
+            projects: [activeProject],
+            threads: [waitingCastingThread],
+            runtimes: [waitingCastingThread.id: AppModel.SyntheticRuntime(hasChimeraCasting: true)]
+        )
+        expect(
+            castingWeatherModel.globalWeatherSnapshot == HeroWeatherSnapshot(
+                weather: .awaiting(1),
+                hasRunningWork: false,
+                failed: 0,
+                awaiting: 1,
+                done: 0
+            ),
+            "thread with no questions but a waiting adaptive casting must resolve to .awaiting(1)"
         )
 
         let waitingQuestion = ThreadActivityStatus.resolve(

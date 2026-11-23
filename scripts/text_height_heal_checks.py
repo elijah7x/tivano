@@ -63,14 +63,43 @@ masked_source = mask_comments_and_strings(link_paragraph_source)
 invalidate_decl = declaration(
     link_paragraph_source, masked_source, "    private func invalidateMeasuredText()"
 )
+if "contentGeneration &+= 1" not in invalidate_decl:
+    raise RuntimeError(f"{LINK_PARAGRAPH} invalidateMeasuredText() must bump contentGeneration")
 if "resetHeal()" not in invalidate_decl:
     raise RuntimeError(f"{LINK_PARAGRAPH} invalidateMeasuredText() must call resetHeal()")
 if "scheduleHeightCheck()" not in invalidate_decl:
     raise RuntimeError(f"{LINK_PARAGRAPH} invalidateMeasuredText() must schedule a height check after resetHeal()")
 
 layout_decl = declaration(link_paragraph_source, masked_source, "    override func layout()")
+# A full ensureLayout here would lay out long replies in hidden or offscreen views.
+if "ensureLayout" in layout_decl:
+    raise RuntimeError(f"{LINK_PARAGRAPH} layout() must not force a full ensureLayout")
 if "resetHeal()" not in layout_decl:
     raise RuntimeError(f"{LINK_PARAGRAPH} layout() must call resetHeal() on width change")
+
+move_decl = declaration(
+    link_paragraph_source, masked_source, "    override func viewDidMoveToWindow()"
+)
+if "paintedGeneration = -1" not in move_decl:
+    raise RuntimeError(f"{LINK_PARAGRAPH} viewDidMoveToWindow() must reset paintedGeneration when moved to a window")
+
+draw_decl = declaration(
+    link_paragraph_source, masked_source, "    override func draw(_ dirtyRect: NSRect)"
+)
+if "paintedGeneration = contentGeneration" not in draw_decl:
+    raise RuntimeError(f"{LINK_PARAGRAPH} draw(_:) must record paintedGeneration = contentGeneration")
+if "paintCheck?.cancel()" not in draw_decl:
+    raise RuntimeError(f"{LINK_PARAGRAPH} draw(_:) must cancel the pending paint check")
+
+verify_decl = declaration(
+    link_paragraph_source, masked_source, "    private func verifyHeight()"
+)
+if "paintedGeneration != contentGeneration" not in verify_decl:
+    raise RuntimeError(f"{LINK_PARAGRAPH} verifyHeight() must check paintedGeneration != contentGeneration")
+paint_decl = declaration(link_paragraph_source, masked_source, "    private func verifyPaint()")
+for required in ("paintHealAttempt < 3", "ScrollActivity.shared.isScrolling", "!isHiddenOrHasHiddenAncestor", "!visibleRect.isEmpty"):
+    if required not in paint_decl:
+        raise RuntimeError(f"{LINK_PARAGRAPH} verifyPaint() missing {required!r}")
 
 height_heal_section = extract_section(
     link_paragraph_source,
@@ -88,12 +117,18 @@ extracted_methods = [
         "    override func viewDidMoveToWindow()",
         "    @objc private func windowDidChangeOcclusionState(_ notification: Notification)",
         "    override func viewDidUnhide()",
+        "    override func draw(_ dirtyRect: NSRect)",
     )
 ]
 
 swift = r'''
 import AppKit
 import os
+
+final class ScrollActivity {
+    static let shared = ScrollActivity()
+    var isScrolling = false
+}
 
 @MainActor
 class Base: NSTextView {
@@ -414,6 +449,24 @@ swift += r'''
             check(probe.invalidationCount <= 3, "(i) attempts follow the backoff (got \(probe.invalidationCount))")
             probe.onInvalidate = nil
             check(!window.isVisible, "(i) window stays hidden")
+            probe.removeFromSuperview()
+        }
+
+        // (j) Right-sized unpainted probe in a hidden window stays quiet (occlusion guard).
+        do {
+            let (window, content) = makeWindow()
+            let probe = Probe()
+            probe.textStorage?.setAttributedString(sampleAttributedText())
+            let exactHeight = probe.height(forWidth: 300)
+            probe.frame = NSRect(x: 0, y: 0, width: 300, height: exactHeight)
+            probe.noteReportedHeight(exactHeight, forWidth: 300)
+            content.addSubview(probe)
+            probe.resetCounters()
+            probe.scheduleHeightCheck()
+            pump(0.05)
+            check(probe.invalidationCount == 0, "(j) right-sized unpainted probe in hidden window gets no invalidation")
+            check(!probe.markedNeedsDisplay, "(j) hidden window suppresses paint heal redraw")
+            check(!window.isVisible, "(j) window stays hidden")
             probe.removeFromSuperview()
         }
 

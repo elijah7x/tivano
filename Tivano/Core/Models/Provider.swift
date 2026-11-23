@@ -219,7 +219,8 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var isAPIKeyBased: Bool { self == .deepseek || self == .meta || self == .zai }
 
-    /// Driven over the Agent Client Protocol by `ACPSession`.
+    /// Driven over the Agent Client Protocol by `ACPSession` with the catalog its sessions
+    /// report. Antigravity also runs on `ACPSession` but keeps the `agy models` catalog.
     var usesACP: Bool { self == .cursor || self == .opencode || self == .grok || self == .devin || self == .kimi || self == .dsh || self == .minimaxCode }
 
     /// Providers with an API key field in Settings: the API-key providers, which need one,
@@ -272,9 +273,8 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Headless stream-json only carries text: the TUI pastes images, but a
-    /// streaming session rejects non-text blocks, so image attachments stay off.
-    var supportsImages: Bool { self != .grok && self != .antigravity && self != .dsh && self != .minimaxCode && self != .zcode }
+    /// Whether the provider's session accepts image attachments.
+    var supportsImages: Bool { self != .grok && self != .dsh && self != .minimaxCode && self != .zcode }
 
     func supports(_ mode: RuntimeMode) -> Bool {
         switch self {

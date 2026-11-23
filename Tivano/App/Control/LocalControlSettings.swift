@@ -5,13 +5,13 @@ struct LocalControlSettingsRows: View {
 
     var body: some View {
         @Bindable var settings = model.settings
-        ChromeRow(title: "Local control", detail: "Let a command-line client control this running edition of Tivano. Other processes in your account can use this access. Approvals stay in Tivano. No network listener or automatic app launch.") {
+        ChromeRow(title: "Local control", detail: "Let a command-line client control this running edition of Tivano. Other processes in your account can use this access. Approvals stay in Tivano. No network listener. The agent command for apps like BeRead works without this switch and can start Tivano in the background.") {
             SettingsSwitch(isOn: $settings.externalControlEnabled)
                 .accessibilityLabel(Text("Local control"))
         }
         ChromeRowDivider()
         ChromeRow(title: "Local control status", detail: status) {
-            if model.settings.isExternalControlEnabled && !model.localControl.listening {
+            if !model.localControl.listening {
                 Button {
                     model.localControl.refreshListening()
                 } label: {
@@ -25,8 +25,10 @@ struct LocalControlSettingsRows: View {
     }
 
     private var status: String {
-        if !model.settings.isExternalControlEnabled { return "Disabled" }
-        return model.localControl.listening ? "Listening for this account only" : "Local control could not start. Retry after resolving the socket or permission conflict."
+        if !model.localControl.listening {
+            return "Local control could not start. Retry after resolving the socket or permission conflict."
+        }
+        return model.settings.isExternalControlEnabled ? "Listening for this account only" : "Off. Only the agent command is available."
     }
 }
 

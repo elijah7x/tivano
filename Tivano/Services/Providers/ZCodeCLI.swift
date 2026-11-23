@@ -29,10 +29,46 @@ enum ZCodeCLI {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
+    // Native ZCode writes cloud hot-updated provider configs under ~/.zcode/v2/runtime/provider; prefer the newest revision for the installed version.
     nonisolated static func builtinConfig(entry: URL) -> URL? {
-        guard let url = appBundle(entry: entry)?.appendingPathComponent("Contents/Resources/config/provider/zcode-builtin.json"),
-              FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return url
+        let bundled = appBundle(entry: entry)?.appendingPathComponent("Contents/Resources/config/provider/zcode-builtin.json")
+        let fallback = bundled.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        var candidates = fallback.map { [$0] } ?? []
+        if let appVersion = version(entry: entry), !appVersion.isEmpty {
+            #if arch(arm64)
+            let arch = "darwin-aarch64"
+            #else
+            let arch = "darwin-x64"
+            #endif
+            let runtimeDirectory = URL(fileURLWithPath: "\(LoginEnvironment.homeDirectory)/.zcode/v2/runtime/provider/\(arch)/\(appVersion)")
+            for name in ((try? FileManager.default.contentsOfDirectory(atPath: runtimeDirectory.path)) ?? []).sorted()
+                where name.hasPrefix("endpoint-") {
+                let candidate = runtimeDirectory.appendingPathComponent(name).appendingPathComponent("zcode-builtin.json")
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    candidates.append(candidate)
+                }
+            }
+        }
+        var best: (url: URL, revision: Int)?
+        for candidate in candidates {
+            guard let revision = builtinConfigRevision(at: candidate) else { continue }
+            if let current = best, revision <= current.revision { continue }
+            best = (candidate, revision)
+        }
+        return best?.url ?? fallback
+    }
+
+    nonisolated static func builtinConfigRevision(at url: URL) -> Int? {
+        guard let json = readJSON(url),
+              case .int(let revision)? = json["revision"],
+              let rules = json["config"]?["providerConfigRules"]?["providerRules"]?.array else { return nil }
+        // A newer file is only usable when every region still has a model list.
+        for region in ZaiRegion.allCases {
+            guard let rule = rules.first(where: { $0["providerId"]?.string == accountProviderID(region) }),
+                  let models = rule["config"]?["builtinModelIds"]?.array, !models.isEmpty,
+                  models.allSatisfy({ $0.string != nil }) else { return nil }
+        }
+        return revision
     }
 
     nonisolated static var personalConfigPath: String {

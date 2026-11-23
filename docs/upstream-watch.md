@@ -41,9 +41,9 @@ Tivano 编排的外部 agent CLI 一旦重写或破坏性变更，会直接伤�
 - `--version` 输出解析（正则 `数字.数字[.数字]`）。
 - `ProviderRegistry.fallbackExecutables` 的 PATH / 常见安装位发现。
 - `Provider.loginCommand` 与 auth/status 输出文本及格式。已知格式约定：Codex `login status` 的登录判定需兼容 0.164.0 起 API-key 路径的 `API key configured - {key}` 文案（旧为 `Logged in using an API key`）；OpenCode `auth list` 已表格化，Tivano 兼容 legacy `●` 行与 V2 三列表行，长期更稳做法是读 `~/.local/share/opencode/auth.json`。
-- CLI 参数 / 子命令、ACP 会话与协议方法（Tivano 经 ACP 驱动 cursor-agent、opencode、grok、devin、kimi、dsh、mcode）。
+- CLI 参数 / 子命令、ACP 会话与协议方法（Tivano 经 ACP 驱动 cursor-agent、opencode、grok、devin、agy、kimi、dsh、mcode）。
 - **ZCode（脆弱私有路径）**：可执行发现指向 app 内 `ZCode.app/Contents/Resources/glm/zcode.cjs`（/Applications 与 ~/Applications）——桌面 app 更新若重组 Resources 即断，版本流里盯这条；无 `zcode login`，认证复用 `.zai` 的 GLM Coding Plan key（key 变更联动刷新 zcode 状态）；模型目录按区域（z.ai / open.bigmodel.cn）走 Coding Plan 端点；subagent 展示依赖其输出结构（dev-2.1.18 起）。Z.ai 端点与限额面由 P2 覆盖。
-- **Antigravity（per-session MCP 机制）**：目前 `agy` 仅读取全局 `~/.gemini/config/mcp_config.json`，无 per-session MCP flag 或配置路径环境变量（2026-11-15 实测 agy 1.5.9 确认）。盯住 `agy` 是否新增 per-session MCP 机制（如 `--mcp-config` 类参数或 MCP 配置路径环境变量）；一旦出现，将 Tivano 已连接的 MCP 服务器重新接入 Antigravity。
+- **Antigravity（已完成 `agy acp` 迁移，per-session MCP 观察项已关闭）**：对话已迁至 `agy acp`（需 `agy` 1.5.0+），Tivano 已连接的 MCP 服务器经 ACP `session/new` 传入（HTTP 经 `mcp-remote`），不再受限于全局 `~/.gemini/config/mcp_config.json`。模型列表、计划限额与一次性独立审查仍使用 `agy models`、`agy -p /usage` / `/credits` 与 headless stream-json，巡检需继续盯住这些子命令及 `agy acp` 协议变更。
 - config 路径（如 `~/.grok/auth.json`、`~/.commandcode/auth.json`、`~/.minimax/config.yaml`、`DSH_HOME`）。
 - 模型 id 与目录规则：live 模型列表是唯一可信源；Command Code 等目录随官方 catalog 漂移，解析需容忍未知 id。
 - 计划限额口径、运行时要求（Codex 含 app-server 会话、计划窗口与 banked resets）。
@@ -68,3 +68,4 @@ Tivano 编排的外部 agent CLI 一旦重写或破坏性变更，会直接伤�
 
 - 2026-10-16 建立；原文件曾随 tivano.dev 工作区丢失（未跟踪文件），2026-10-23 自创建会话历史还原并入库，同时更新：OpenCode 单一 provider（Zen/Go 已合并）、报告改落 `private-artifacts/upstream/`、Grok Build 开源渠道、新增 dsh 与 MiniMax Code 观察项、报告增加「上轮未关闭行动项复核」一节。
 - 2026-10-28 新增 ZCode 观察项（Tivano 新增 `.zcode` provider，agentCLI 组、共享 `.zai` key、无独立 CLI 分发）；同时补齐 dsh 与 MiniMax 的 npm/GitHub 渠道名（挂起两轮清账），Grok 渠道注记改为「镜像滞后以 x.ai changelog 为主」。
+- 2026-11-23 Antigravity 对话迁至 `agy acp`（需 1.5.0+），将 `agy` 加入 ACP 驱动列表，关闭 `agy acp` 迁移机会项及 per-session MCP 观察项（MCP 已通过 ACP 传入）。

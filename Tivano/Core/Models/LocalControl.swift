@@ -11,7 +11,10 @@ enum LocalControl {
     static let maxOperations = 256
     static let maxPendingOperations = 16
     static let retention: TimeInterval = 3_600
-    static let methods = ["info", "providers", "projects", "threads", "thread", "history", "create", "submit", "interrupt", "operation", "settingsGet", "settingsSet"]
+    static let methods = ["info", "providers", "projects", "threads", "thread", "history", "create", "submit", "interrupt", "operation", "settingsGet", "settingsSet", "agentModels", "agentRun"]
+    /// An agent run's prompt (BeRead block context included) may exceed `maxText`;
+    /// its request frame is bounded by `maxFrame` instead of `maxRequest`.
+    static let maxAgentPrompt = 900_000
 
     static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
@@ -97,6 +100,18 @@ enum ControlCommand: Codable, Sendable {
     case operation(ControlTicket)
     case settingsGet
     case settingsSet(ControlSettingsWrite)
+    /// Agent commands are answered without the Local control switch. agentRun is the
+    /// only streaming command: its connection carries agentEvent frames until a done or
+    /// error event, and a client disconnect cancels the run.
+    case agentModels
+    case agentRun(ControlAgentRun)
+
+    var isAgent: Bool {
+        switch self {
+        case .agentModels, .agentRun: true
+        default: false
+        }
+    }
 
     var ticket: ControlTicket? {
         switch self {
@@ -300,6 +315,87 @@ enum ControlResult: Codable, Sendable {
     case history(ControlHistoryPage)
     case operation(ControlOutcome)
     case settings([ControlSetting])
+    case agentModels(ControlAgentModels)
+    case agentEvent(ControlAgentLine)
+}
+
+// MARK: - Agent bridge (external readers such as BeRead)
+
+struct ControlAgentModel: Codable, Sendable {
+    /// Opaque to clients: `ControlAgentModel.encode(provider:model:)`.
+    var id: String
+    var label: String
+    var providerName: String
+    var isDefault: Bool
+
+    static func encode(provider: String, model: String?) -> String { model.map { provider + "/" + $0 } ?? provider }
+    static func decode(_ id: String) -> (provider: String, model: String?) {
+        guard let slash = id.firstIndex(of: "/") else { return (id, nil) }
+        let model = String(id[id.index(after: slash)...])
+        return (String(id[..<slash]), model.isEmpty ? nil : model)
+    }
+}
+
+struct ControlAgentModels: Codable, Sendable {
+    var version = 1
+    var models: [ControlAgentModel]
+}
+
+struct ControlAgentRun: Codable, Sendable {
+    /// Absolute working directory.
+    var cwd: String
+    /// A `ControlAgentModel.id`; nil uses Tivano's default model.
+    var model: String? = nil
+    /// An earlier `session` event's value; unknown or expired starts a new session.
+    var session: String? = nil
+    var prompt: String
+}
+
+/// One NDJSON event line, already encoded as a single-line JSON object (no newline),
+/// so tool inputs can carry arbitrary JSON. The CLI prints `json` verbatim.
+struct ControlAgentLine: Codable, Sendable {
+    var type: String
+    var json: String
+}
+
+enum ControlAgentErrorCode: String, Sendable { case app_unavailable, model_unavailable, bad_request, `internal` }
+
+enum ControlAgentEvent {
+    case session(String)
+    case text(String)
+    case thinking(String)
+    /// `input` must be a JSONSerialization-compatible value (dictionary, array, string, number, bool, NSNull).
+    case toolStart(id: String, name: String, input: Any?)
+    case toolEnd(id: String, ok: Bool)
+    case file(String)
+    case done
+    case error(ControlAgentErrorCode, String)
+
+    var line: ControlAgentLine {
+        var object: [String: Any]
+        switch self {
+        case .session(let id): object = ["type": "session", "session": id]
+        case .text(let delta): object = ["type": "text", "delta": delta]
+        case .thinking(let delta): object = ["type": "thinking", "delta": delta]
+        case .toolStart(let id, let name, let input):
+            object = ["type": "tool_start", "id": id, "name": name]
+            if let input, JSONSerialization.isValidJSONObject(["input": input]) { object["input"] = input }
+        case .toolEnd(let id, let ok): object = ["type": "tool_end", "id": id, "ok": ok]
+        case .file(let path): object = ["type": "file", "path": path]
+        case .done: object = ["type": "done"]
+        case .error(let code, let message): object = ["type": "error", "code": code.rawValue, "message": message]
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])) ?? Data(#"{"type":"error","code":"internal","message":"encoding"}"#.utf8)
+        return ControlAgentLine(type: object["type"] as? String ?? "error", json: String(decoding: data, as: UTF8.self))
+    }
+
+    /// done and error end the stream.
+    var isTerminal: Bool {
+        switch self {
+        case .done, .error: true
+        default: false
+        }
+    }
 }
 
 struct ControlFailure: Error, Codable, Hashable, Sendable, LocalizedError {

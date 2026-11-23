@@ -70,8 +70,17 @@ final class ACPSession: ProviderSession {
     var onEvent: ((ProviderEvent) -> Void)?
 
     private let configuration: SessionConfiguration
+    private var process: StdioProcess?
     private var connection: JSONRPCConnection?
     private var eventTask: Task<Void, Never>?
+    private var antigravityLogURL: URL?
+    private var antigravityLogTailer: AntigravityLogTailer?
+    private var antigravityEmittedRetryAttempts: Set<Int> = []
+    private var antigravityModelValues: Set<String> = []
+    /// Suffixed ids from session/new's `models` (`gemini-4-neon-high`), for session/set_model.
+    private var antigravityModelIDs: Set<String> = []
+    private var antigravityReportedModels: Set<String> = []
+    private var antigravityEffortValues: Set<String> = []
     private var sessionID: String?
     private var expectedSessionID: String?
     private var isStarting = false
@@ -144,15 +153,25 @@ final class ACPSession: ProviderSession {
         models = configuration.modelCatalog
     }
 
+    isolated deinit {
+        antigravityLogTailer?.shutDown()
+    }
+
     var isRunning: Bool {
         guard let connection else { return false }
         return !isStopping && !connection.isClosed
     }
 
+    var lastOutputAt: Date? {
+        configuration.provider == .antigravity ? process?.lastOutputAt : nil
+    }
+
     private var workingDirectory: String { configuration.workingDirectory.path }
 
-    private var launchArguments: [String] {
+    private func launchArguments(logFileURL: URL?) -> [String] {
         switch configuration.provider {
+        case .antigravity:
+            antigravityLaunchArguments(logFileURL: logFileURL)
         case .cursor:
             switch configuration.runtimeMode {
             case .auto: ["--auto-review", "acp"]
@@ -162,7 +181,10 @@ final class ACPSession: ProviderSession {
         case .grok:
             switch configuration.runtimeMode {
             case .supervised: ["--permission-mode", "default", "agent", "stdio"]
-            case .autoAcceptEdits: ["--permission-mode", "acceptEdits", "agent", "stdio"]
+            case .autoAcceptEdits:
+                configuration.deniesShell
+                    ? ["--permission-mode", "default", "agent", "stdio"]
+                    : ["--permission-mode", "acceptEdits", "agent", "stdio"]
             case .auto: ["--permission-mode", "auto", "agent", "stdio"]
             case .fullAccess: ["agent", "--always-approve", "stdio"]
             }
@@ -174,13 +196,29 @@ final class ACPSession: ProviderSession {
             // approves everything. Passed before the subcommand, like its CLI expects.
             switch configuration.runtimeMode {
             case .supervised: ["--permission-mode", "auto", "acp"]
-            case .autoAcceptEdits: ["--permission-mode", "accept-edits", "acp"]
+            case .autoAcceptEdits:
+                configuration.deniesShell
+                    ? ["--permission-mode", "auto", "acp"]
+                    : ["--permission-mode", "accept-edits", "acp"]
             case .auto: ["--permission-mode", "smart", "acp"]
             case .fullAccess: ["--permission-mode", "dangerous", "acp"]
             }
         default:
             ["acp"]
         }
+    }
+
+    /// `agy acp` ignores the launch directory without `--add-dir`; Full access is a
+    /// launch flag, every other mode is a session mode set after session/new.
+    private func antigravityLaunchArguments(logFileURL: URL?) -> [String] {
+        var arguments = ["acp", "--add-dir", workingDirectory]
+        if let logFileURL {
+            arguments += ["--log-file", logFileURL.path]
+        }
+        if configuration.runtimeMode == .fullAccess {
+            arguments.append("--dangerously-skip-permissions")
+        }
+        return arguments
     }
 
     func start() async throws -> String {
@@ -194,7 +232,9 @@ final class ACPSession: ProviderSession {
         defer { isStarting = false }
         appliesMiniMaxPermission = applyingSelection
         guard var executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
-        var arguments = launchArguments
+        let logFileURL = configuration.provider == .antigravity ? AntigravitySession.makeLogFileURL() : nil
+        antigravityLogURL = logFileURL
+        var arguments = launchArguments(logFileURL: logFileURL)
         var environment = configuration.environment
         var launchPlan: DshLaunchPlan?
         var processStarted = false
@@ -235,9 +275,12 @@ final class ACPSession: ProviderSession {
                 self?.handleClose(tail)
             }
         }
+        self.process = process
         self.connection = connection
         defer {
             if !isReady {
+                antigravityLogTailer?.shutDown()
+                antigravityLogTailer = nil
                 connection.onNotification = nil
                 connection.onRequest = nil
                 connection.onClose = nil
@@ -249,12 +292,29 @@ final class ACPSession: ProviderSession {
         try connection.start()
         processStarted = true
         launchPlan?.releaseAfterExit(of: process)
+        if configuration.provider == .antigravity, let logFileURL {
+            antigravityLogTailer?.shutDown()
+            antigravityLogTailer = AntigravityLogTailer(url: logFileURL) { [weak self] line in
+                guard let retry = AntigravitySession.parseRetryDetails(line) else { return }
+                Task { @MainActor [weak self] in
+                    self?.emitAntigravityRetryNotice(attempt: retry.attempt, reason: retry.reason, labelKey: retry.labelKey)
+                }
+            }
+        }
 
-        let initialized = try await deadlineRequest(connection, "initialize", [
-            "protocolVersion": 1,
-            "clientCapabilities": clientCapabilities,
-            "clientInfo": ["name": "tivano", "title": "Tivano", "version": .string(AppInfo.version)],
-        ])
+        let initialized: JSONValue
+        do {
+            initialized = try await deadlineRequest(connection, "initialize", [
+                "protocolVersion": 1,
+                "clientCapabilities": clientCapabilities,
+                "clientInfo": ["name": "tivano", "title": "Tivano", "version": .string(AppInfo.version)],
+            ])
+        } catch {
+            if configuration.provider == .antigravity, !(error is CancellationError) {
+                throw Self.antigravityStartError(error, tail: process.errorTail)
+            }
+            throw error
+        }
         if configuration.provider == .minimaxCode {
             guard initialized["protocolVersion"]?.int == 1,
                   initialized["agentInfo"]?["name"]?.string == "minimax-code" else {
@@ -287,8 +347,34 @@ final class ACPSession: ProviderSession {
             if configuration.provider == .cursor || configuration.provider == .grok {
                 throw Self.browserLoginRequired(configuration.provider)
             }
-            _ = try await deadlineRequest(connection, "authenticate", ["methodId": .string(authMethods[0])])
-            session = try await openSession(connection)
+            if configuration.provider == .antigravity {
+                let methodID = authMethods.contains("oauth-personal") ? "oauth-personal" : authMethods[0]
+                do {
+                    _ = try await deadlineRequest(connection, "authenticate", ["methodId": .string(methodID)])
+                } catch {
+                    if error is CancellationError { throw error }
+                    // Map startup deadlines to the retryable timeout message while keeping loginHint inline.
+                    if error is SessionDeadlineError {
+                        throw Self.antigravityStartError(error, tail: process.errorTail)
+                    }
+                    let evidence = Self.antigravityErrorText(error, tail: process.errorTail)
+                    throw ProviderError.failed(AntigravitySession.loginHint(in: evidence) ?? error.localizedDescription)
+                }
+                do {
+                    session = try await openSession(connection)
+                } catch {
+                    if error is CancellationError { throw error }
+                    throw Self.antigravityStartError(error, tail: process.errorTail)
+                }
+            } else {
+                _ = try await deadlineRequest(connection, "authenticate", ["methodId": .string(authMethods[0])])
+                session = try await openSession(connection)
+            }
+        } catch {
+            if configuration.provider == .antigravity, !(error is CancellationError) {
+                throw Self.antigravityStartError(error, tail: process.errorTail)
+            }
+            throw error
         }
         applySessionState(session)
         if configuration.provider == .minimaxCode {
@@ -327,7 +413,7 @@ final class ACPSession: ProviderSession {
         if usesParameterizedModels {
             capabilities["_meta"] = ["parameterizedModelPicker": true]
         }
-        if configuration.provider == .kimi || configuration.provider == .minimaxCode {
+        if configuration.provider == .kimi || configuration.provider == .minimaxCode || configuration.provider == .antigravity {
             capabilities["elicitation"] = ["form": [:]]
         }
         return .object(capabilities)
@@ -384,6 +470,8 @@ final class ACPSession: ProviderSession {
         thoughtID = nil
         promptProducedOutput = false
         promptPreparing = false
+        antigravityEmittedRetryAttempts.removeAll()
+        antigravityLogTailer?.setTurnActive(true)
         onEvent?(.turnStarted(providerTurnID: nil))
         Task { [weak self] in
             guard let self, self.promptGeneration == generation, self.promptActive, !self.isStopping else { return }
@@ -399,7 +487,7 @@ final class ACPSession: ProviderSession {
                 // Updates sent before the reply are still queued; drain them so the
                 // empty-turn check sees the turn's output.
                 await self.eventTask?.value
-                self.finishPrompt(result["stopReason"]?.string, error: nil, generation: generation)
+                self.finishPrompt(result["stopReason"]?.string, error: nil, generation: generation, usage: result["usage"])
             } catch {
                 self.finishPrompt(nil, error: error, generation: generation)
             }
@@ -520,6 +608,9 @@ final class ACPSession: ProviderSession {
         promptPreparing = false
         cancelDeadline?.cancel()
         cancelDeadline = nil
+        antigravityLogTailer?.shutDown()
+        antigravityLogTailer = nil
+        antigravityEmittedRetryAttempts.removeAll()
         if miniMaxPermissionGuarded {
             miniMaxPermissionGuarded = false
             if let original = MiniMaxPermissionGuard.end(self) {
@@ -538,6 +629,67 @@ final class ACPSession: ProviderSession {
         // An in-flight restore owns the close, so a repeated stop leaves it to finish.
         guard miniMaxRestoreTask == nil else { return }
         connection?.close()
+    }
+
+    private func emitAntigravityRetryNotice(attempt: Int, reason: String, labelKey: String) {
+        guard promptActive, !isStopping else { return }
+        guard antigravityEmittedRetryAttempts.insert(attempt).inserted else { return }
+        onEvent?(.notice(AntigravitySession.retryNotice(attempt: attempt, reason: reason, labelKey: labelKey)))
+    }
+
+    private static func antigravityErrorText(_ error: Error, tail: String = "") -> String {
+        var candidates: [String] = [error.localizedDescription]
+        if let rpc = error as? RPCError, let data = rpc.data {
+            candidates.append(contentsOf: [
+                data.string,
+                data["details"]?.string,
+                data["detail"]?.string,
+                data["message"]?.string,
+                data.compactString,
+            ].compactMap { $0 })
+        }
+        candidates.append(tail)
+        // RPCError.data fields often repeat error.localizedDescription; drop blanks and duplicates before joining.
+        var seen = Set<String>()
+        var parts: [String] = []
+        for raw in candidates {
+            let trimmed = raw.trimmed
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+            parts.append(trimmed)
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    private static func isUnsupportedOldAgy(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        if lowered.contains("unknown command") || lowered.contains("unknown subcommand") || lowered.contains("unrecognized command") {
+            return lowered.contains("acp") || lowered.contains("agy") || lowered.contains("usage")
+        }
+        if lowered.contains("invalid command") && lowered.contains("acp") {
+            return true
+        }
+        if lowered.contains("usage:") && (lowered.contains("agy") || lowered.contains("available commands") || lowered.contains("--input-format")) {
+            return true
+        }
+        if lowered.contains("run 'agy --help'") || lowered.contains("run \"agy --help\"") {
+            return true
+        }
+        return false
+    }
+
+    private static func antigravityStartError(_ error: Error, tail: String) -> Error {
+        // Reuse the localized timeout key recognized by isTransientFailure so slow starts retry.
+        if error is SessionDeadlineError {
+            return ProviderError.failed(AppText.localized("Antigravity did not finish starting in time."))
+        }
+        let evidence = antigravityErrorText(error, tail: tail)
+        if isUnsupportedOldAgy(evidence) {
+            return ProviderError.failed(AppText.localized("Antigravity needs agy 1.5.0 or later for Tivano chats. Update the Antigravity CLI and try again."))
+        }
+        if let hint = AntigravitySession.loginHint(in: evidence) {
+            return ProviderError.failed(hint)
+        }
+        return error
     }
 
     /// Best-effort write of the user's own mode before the session's process closes,
@@ -702,8 +854,15 @@ final class ACPSession: ProviderSession {
     // MARK: - Session state
 
     private func deadlineRequest(_ connection: JSONRPCConnection, _ method: String, _ params: JSONValue) async throws -> JSONValue {
+        let timeout: Int
+        if configuration.provider == .antigravity,
+           ["initialize", "authenticate", "session/new", "session/resume"].contains(method) {
+            timeout = 90
+        } else {
+            timeout = 45
+        }
         do {
-            return try await withDeadline(seconds: 45, provider: configuration.provider.displayName, operation: method) {
+            return try await withDeadline(seconds: timeout, provider: configuration.provider.displayName, operation: method) {
                 try await connection.request(method, params)
             }
         } catch let error as RPCError where configuration.provider == .minimaxCode {
@@ -753,7 +912,7 @@ final class ACPSession: ProviderSession {
             defer { expectedSessionID = nil }
             var params = base
             params["sessionId"] = .string(resumeID)
-            if configuration.provider == .dsh {
+            if configuration.provider == .dsh || configuration.provider == .antigravity {
                 guard canResumeSessions else {
                     throw ProviderError.failed(AppText.localized("This ACP agent cannot resume the original session."))
                 }
@@ -874,6 +1033,10 @@ final class ACPSession: ProviderSession {
     private func applyModels(_ state: JSONValue) {
         let current = state["currentModelId"]?.string.map { configuration.provider == .minimaxCode ? $0 : Self.baseModelID($0) }
         currentModel = current ?? currentModel
+        if configuration.provider == .antigravity {
+            antigravityModelIDs = Set((state["availableModels"]?.array ?? []).compactMap { $0["modelId"]?.string })
+            return
+        }
         let list = (state["availableModels"]?.array ?? []).compactMap { entry -> ModelOption? in
             guard let rawID = entry["modelId"]?.string else { return nil }
             let id = usesParameterizedModels ? Self.baseModelID(rawID) : rawID
@@ -907,6 +1070,10 @@ final class ACPSession: ProviderSession {
             currentMiniMaxPermission = nil
             miniMaxEffortValues = []
         }
+        if configuration.provider == .antigravity {
+            antigravityEffortValues = []
+            currentEffort = nil
+        }
         effortConfigID = nil
         fastConfigID = nil
         for option in options {
@@ -923,6 +1090,10 @@ final class ACPSession: ProviderSession {
             case "model":
                 modelConfigID = id
                 currentModel = current.map { usesParameterizedModels ? Self.baseModelID($0) : $0 } ?? currentModel
+                if configuration.provider == .antigravity {
+                    antigravityModelValues = Set(values.compactMap { $0["value"]?.string })
+                    break
+                }
                 // One lookup per value: the walk over OpenCode's four hundred models replies
                 // four hundred times, and a linear search per value on each reply stalled the
                 // main actor.
@@ -961,6 +1132,7 @@ final class ACPSession: ProviderSession {
                 currentEffort = configuration.provider == .minimaxCode
                     ? current.flatMap { scale.contains($0) ? $0 : nil } : current
                 if configuration.provider == .minimaxCode { miniMaxEffortValues = Set(scale) }
+                if configuration.provider == .antigravity { antigravityEffortValues = Set(scale) }
                 efforts = configuration.provider == .minimaxCode || id == "reasoning_effort" ? scale : ModelOption.orderedEfforts(scale)
             case "model_config":
                 if id == "fast" {
@@ -972,6 +1144,7 @@ final class ACPSession: ProviderSession {
                 break
             }
         }
+        guard configuration.provider != .antigravity else { return }
         models = models.map { model in
             var model = model
             let isCurrent = sameSelectedModel(model.id, currentModel)
@@ -1118,6 +1291,15 @@ final class ACPSession: ProviderSession {
     private func updateSelection(model: String?, effort: String?, fastMode: Bool, interaction: InteractionMode, generation: UUID? = nil) async throws {
         try checkSelectionActive(generation)
         guard let connection, let sessionID else { throw ProviderError.notRunning }
+        if configuration.provider == .antigravity {
+            try await updateAntigravitySelection(
+                model: model,
+                effort: effort,
+                interaction: interaction,
+                generation: generation
+            )
+            return
+        }
         if configuration.provider == .minimaxCode { try await applyMiniMaxPermissions() }
         try checkSelectionActive(generation)
         if let model, !model.isEmpty {
@@ -1196,6 +1378,91 @@ final class ACPSession: ProviderSession {
     private func checkSelectionActive(_ generation: UUID?) throws {
         try Task.checkCancellation()
         guard !isStopping, generation == nil || promptGeneration == generation else { throw CancellationError() }
+    }
+
+    private func updateAntigravitySelection(
+        model: String?,
+        effort: String?,
+        interaction: InteractionMode,
+        generation: UUID?
+    ) async throws {
+        guard let connection, let sessionID else { throw ProviderError.notRunning }
+        let catalog = AntigravitySession.addingSeedRows(configuration.modelCatalog, seed: ProviderRegistry.antigravitySeed)
+        let normalized = AntigravitySession.normalize(model: model, effort: effort, catalog: catalog)
+        var targetModel = normalized.model
+        var targetEffort = normalized.effort
+        if let resolved = targetModel {
+            // Longest suffix first so `-xhigh` is not matched as `-high`.
+            for knownEffort in AntigravitySession.efforts.sorted(by: { $0.count > $1.count }) {
+                let suffix = "-\(knownEffort)"
+                if resolved.hasSuffix(suffix) {
+                    let base = String(resolved.dropLast(suffix.count))
+                    if antigravityModelValues.contains(base) {
+                        targetModel = base
+                        if targetEffort == nil {
+                            targetEffort = knownEffort
+                        }
+                        break
+                    }
+                }
+            }
+        }
+        // Normalizing leaves out an effort equal to the model's default, which suits the
+        // CLI's `--effort` but not a live session: there the previous model's level would
+        // carry over. The session is always told a level, the model's default included.
+        let modelRow = catalog.first { $0.id == (targetModel ?? model) }
+        let effortCandidates = [targetEffort, effort, modelRow?.defaultEffort].compactMap { $0 }.filter { !$0.isEmpty }
+        if let targetModel, !targetModel.isEmpty, targetModel != currentModel {
+            let suffixed = effortCandidates.first.map { "\(targetModel)-\($0)" }
+            if let modelConfigID, antigravityModelValues.contains(targetModel) {
+                try await setConfigOption(modelConfigID, value: targetModel)
+                try checkSelectionActive(generation)
+                currentModel = targetModel
+            } else if let wireID = [suffixed, normalized.model, targetModel].compactMap({ $0 }).first(where: antigravityModelIDs.contains) {
+                // Agents that list models only through ACP's model API take the full variant id.
+                _ = try await deadlineRequest(connection, "session/set_model", ["sessionId": .string(sessionID), "modelId": .string(wireID)])
+                try checkSelectionActive(generation)
+                currentModel = wireID
+            } else if antigravityReportedModels.insert(targetModel).inserted {
+                // The catalog can name a model this agy no longer offers; say so instead of
+                // letting the turn run on another model unannounced.
+                onEvent?(.notice(Notice(level: .warning, message: String(
+                    format: AppText.localized("Antigravity does not offer %@ right now, so this turn uses %@. Refresh Antigravity's models in Settings and choose one again."),
+                    targetModel, currentModel ?? AppText.localized("its default model")))))
+            }
+        }
+        if let effortConfigID,
+           let wantedEffort = effortCandidates.first(where: antigravityEffortValues.contains),
+           wantedEffort != currentEffort {
+            try await setConfigOption(effortConfigID, value: wantedEffort)
+            try checkSelectionActive(generation)
+            currentEffort = wantedEffort
+        }
+        let wantedMode: String
+        if interaction == .plan {
+            wantedMode = "plan"
+        } else {
+            wantedMode = switch runtimeMode {
+            case .supervised: "default"
+            case .autoAcceptEdits: "accept-edits"
+            case .auto: "auto"
+            case .fullAccess: "default"
+            }
+        }
+        // A missing mode would leave the turn in whatever mode the session already has,
+        // which can be more permissive than the one asked for.
+        guard availableModeIDs.contains(wantedMode) else {
+            throw ProviderError.failed(AppText.localized("Antigravity did not offer the requested permission or plan mode. Update the Antigravity CLI and try again."))
+        }
+        if wantedMode != currentMode {
+            if let modeConfigID {
+                try await setConfigOption(modeConfigID, value: wantedMode)
+            } else if hasModeAPI {
+                _ = try await deadlineRequest(connection, "session/set_mode", ["sessionId": .string(sessionID), "modeId": .string(wantedMode)])
+            }
+            try checkSelectionActive(generation)
+            currentMode = wantedMode
+        }
     }
 
     private func applyMiniMaxPermissions() async throws {
@@ -1360,16 +1627,22 @@ final class ACPSession: ProviderSession {
 
     private func handleRequest(_ id: RPCID, _ method: String, _ params: JSONValue) {
         let key = Self.requestKey(id)
-        if method == "elicitation/create", configuration.provider == .kimi || configuration.provider == .minimaxCode {
+        if method == "elicitation/create",
+           configuration.provider == .kimi || configuration.provider == .minimaxCode || configuration.provider == .antigravity {
             guard !isStopping, sessionID != nil,
                   params["sessionId"] == nil || acceptsSession(params) else {
                 connection?.respond(to: id, result: ["action": "cancel"])
                 return
             }
             guard let form = ACPQuestionForm(params, usesOptionTitles: configuration.provider == .minimaxCode) else {
-                let message = configuration.provider == .minimaxCode
-                    ? "MiniMax Code asked a question in a form Tivano cannot display. The request was declined."
-                    : "Kimi Code asked a question in a form Tivano cannot display. The request was declined."
+                let message = switch configuration.provider {
+                case .minimaxCode:
+                    "MiniMax Code asked a question in a form Tivano cannot display. The request was declined."
+                case .antigravity:
+                    "Antigravity asked a question in a form Tivano cannot display. The request was declined."
+                default:
+                    "Kimi Code asked a question in a form Tivano cannot display. The request was declined."
+                }
                 onEvent?(.notice(Notice(level: .warning, message: AppText.localized(message))))
                 connection?.respond(to: id, errorCode: -32602, message: "Unsupported question form")
                 return
@@ -1449,6 +1722,7 @@ final class ACPSession: ProviderSession {
     }
 
     private func automaticOption(for kind: ToolCall.Kind, options: [JSONValue]) -> String? {
+        if configuration.deniesShell, kind == .command { return nil }
         let automatic = switch runtimeMode {
         case .fullAccess: true
         case .autoAcceptEdits: kind == .edit
@@ -1460,13 +1734,15 @@ final class ACPSession: ProviderSession {
         return (allowOnce ?? allowAlways)?["optionId"]?.string
     }
 
-    private func finishPrompt(_ stopReason: String?, error: Error?, generation: UUID? = nil) {
+    private func finishPrompt(_ stopReason: String?, error: Error?, generation: UUID? = nil, usage: JSONValue? = nil) {
         guard promptActive, generation == nil || promptGeneration == generation else { return }
         promptActive = false
         promptPreparing = false
         promptGeneration = nil
         cancelDeadline?.cancel()
         cancelDeadline = nil
+        antigravityLogTailer?.setTurnActive(false)
+        antigravityEmittedRetryAttempts.removeAll()
         todoToolCallIDs.removeAll()
         toolKinds.removeAll()
         toolInputs.removeAll()
@@ -1480,6 +1756,20 @@ final class ACPSession: ProviderSession {
         pendingPermissions.removeAll()
         pendingQuestions.removeAll()
         for key in resolved { onEvent?(.requestResolved(id: key)) }
+        if configuration.provider == .antigravity, let usage, !usage.isNull {
+            let reportedTotal = usage["totalTokens"]?.int
+            let total = (reportedTotal ?? 0) > 0
+                ? (reportedTotal ?? 0)
+                : ((usage["inputTokens"]?.int ?? 0) + (usage["outputTokens"]?.int ?? 0))
+            if total > 0 {
+                TokenLedger.shared.record(spend: total)
+                onEvent?(.tokenSpend(TokenSpend(
+                    provider: .antigravity,
+                    totalTokens: total,
+                    model: (currentModel?.isEmpty == false ? currentModel : nil) ?? configuration.model
+                )))
+            }
+        }
         if cancelRequested || stopReason == "cancelled" {
             onEvent?(.turnCompleted(status: .interrupted, error: nil))
         } else if let error {
@@ -1491,6 +1781,10 @@ final class ACPSession: ProviderSession {
             } else if configuration.provider == .kimi, let rpc = error as? RPCError,
                       rpc.code == -32000, rpc.message.localizedCaseInsensitiveContains("auth") {
                 detail = Self.kimiLoginRequired.localizedDescription
+            } else if configuration.provider == .antigravity {
+                let evidence = Self.antigravityErrorText(error)
+                // Keep RPCError.data details in the failure text so isTransientFailure can classify retryable turns.
+                detail = AntigravitySession.loginHint(in: evidence) ?? evidence
             } else {
                 detail = error.localizedDescription
             }
@@ -1502,6 +1796,8 @@ final class ACPSession: ProviderSession {
                 ? "MiniMax Code stopped at a limit before completing the turn."
                 : "MiniMax Code returned an invalid ACP result."
             onEvent?(.turnCompleted(status: .failed, error: AppText.localized(message)))
+        } else if configuration.provider == .antigravity, stopReason == "max_tokens" || stopReason == "max_turn_requests" {
+            onEvent?(.turnCompleted(status: .failed, error: AppText.localized("Antigravity stopped at a limit before completing the turn.")))
         } else if configuration.provider == .kimi, !promptProducedOutput {
             onEvent?(.turnCompleted(status: .failed, error: AppText.localized("Kimi Code ended the turn without a reply. This usually means a usage limit, an expired membership or a network error. Run `kimi` in a terminal to see the cause.")))
         } else {
@@ -1519,6 +1815,10 @@ final class ACPSession: ProviderSession {
     }
 
     private func handleClose(_ tail: String) {
+        if configuration.provider == .antigravity {
+            antigravityLogTailer?.shutDown()
+            antigravityLogTailer = nil
+        }
         if configuration.provider == .minimaxCode {
             connection?.close()
             if miniMaxPermissionGuarded {
@@ -1535,6 +1835,22 @@ final class ACPSession: ProviderSession {
             } else {
                 onEvent?(.exited(error: detail))
             }
+            return
+        }
+        if configuration.provider == .antigravity {
+            let detail: String?
+            if Self.isUnsupportedOldAgy(tail) {
+                detail = AppText.localized("Antigravity needs agy 1.5.0 or later for Tivano chats. Update the Antigravity CLI and try again.")
+            } else if let hint = AntigravitySession.loginHint(in: tail) {
+                detail = hint
+            } else {
+                detail = TextCleanup.lastLines(tail)
+            }
+            if promptActive {
+                finishPrompt(nil, error: ProviderError.failed(detail ?? AppText.localized("The agent exited.")))
+            }
+            guard !isStopping else { return }
+            onEvent?(.exited(error: detail))
             return
         }
         if promptActive {

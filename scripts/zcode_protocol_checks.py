@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline source guard for ZCode runtimePreferences, tool error isolation, and turn resultType."""
+"""Offline source guard for ZCode builtinConfig, runtimePreferences, tool error isolation, and turn resultType."""
 from pathlib import Path
 import re
 import sys
@@ -45,11 +45,15 @@ def main():
     session_code = strip_comments(ZCODE_SESSION.read_text(encoding='utf-8'))
 
     try:
+        builtin_config = block(cli_code, 'static func builtinConfig(', ZCODE_CLI.relative_to(ROOT))
         runtime_prefs = block(cli_code, 'static func runtimePreferences()', ZCODE_CLI.relative_to(ROOT))
         handle_notification = block(session_code, 'private func handleNotification(', ZCODE_SESSION.relative_to(ROOT))
     except ValueError as error:
         print(f'FAIL: {error}', file=sys.stderr)
         return 1
+
+    if '.zcode/v2/runtime/provider' not in builtin_config or 'revision' not in builtin_config:
+        failures.append('ZCodeCLI.swift: builtinConfig() must prefer the newest runtime zcode-builtin.json revision')
 
     mode_match = re.search(
         r'settings\?\["toolSearchMode"\]\?\.string,\s*\[([^\]]+)\]\.contains\(mode\)',
@@ -102,7 +106,7 @@ def main():
         for failure in failures:
             print(f'FAIL: {failure}', file=sys.stderr)
         return 1
-    print('PASS: ZCode runtimePreferences, tool.updated error isolation, and turn.completed resultType contracts hold.')
+    print('PASS: ZCode builtinConfig, runtimePreferences, tool.updated error isolation, and turn.completed resultType contracts hold.')
     return 0
 
 

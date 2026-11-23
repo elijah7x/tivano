@@ -46,7 +46,7 @@ enum ModelCatalog {
 
 // MARK: - Composer chip
 
-/// The composer's model chip. It opens the effort slider, and the slider's title opens the model list.
+/// The composer's model chip. It opens the effort slider, and the card's model line opens the model list.
 struct ModelEffortButton: View {
     @Environment(AppModel.self) private var model
     let thread: ChatThread
@@ -1993,7 +1993,7 @@ private struct ModelListRow: View {
 
 // MARK: - Slider card
 
-/// Fast mode, the effort title and model name, reset, and the effort slider.
+/// Fast mode, the model line (which opens the model list), the effort title and the effort slider.
 /// What the slider shows while the chat leads a pair: the pair in words, the colours its
 /// fusion runs between, and what the heads' effort is, for the line that says the slider
 /// sets the lead's.
@@ -2081,25 +2081,34 @@ struct EffortSliderCard: View {
                     }
                 }
                 VStack(spacing: 2) {
+                    // The model line opens the model list, so the chevron follows the model;
+                    // the effort title below names what the slider sets.
                     Button {
                         onTitleTap?()
                     } label: {
-                        HStack(spacing: 4) {
-                            Text(verbatim: title)
-                                .font(.ui(.title2, weight: .medium))
-                                .contentTransition(.numericText())
+                        HStack(spacing: 5) {
+                            // In a pair the line is the pair itself, behind the Hydra mark:
+                            // the slider is the lead's, and the lead is named first.
+                            if pair != nil {
+                                HydraMarkImage()
+                                    .foregroundStyle(Chrome.primaryText.opacity(0.75))
+                                    .frame(width: 12, height: 12)
+                            } else if let provider {
+                                ProviderIcon(provider: provider, size: 12)
+                            }
+                            Text(verbatim: pair?.title ?? modelName)
+                                .font(.ui(.body))
+                                .foregroundStyle(Chrome.primaryText.opacity(0.7))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .minimumScaleFactor(0.85)
                             if onTitleTap != nil {
                                 Image(systemName: "chevron.right")
-                                    .font(.ui(.callout, weight: .semibold))
+                                    .font(.ui(.caption, weight: .semibold))
                                     .foregroundStyle(Chrome.secondaryText)
+                                    .fixedSize()
                             }
                         }
-                        .foregroundStyle(titleStyle)
-                        .animation(.smooth(duration: 0.3), value: isMaxEffort)
-                        .animation(.smooth(duration: 0.3), value: isFast)
-                        // Picking Adaptive swaps the pair's gradient for a flat colour while the
-                        // popover shrinks; unanimated, that swap left the title blank until redrawn.
-                        .animation(.smooth(duration: 0.3), value: pair == nil)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
                         .background {
@@ -2115,23 +2124,15 @@ struct EffortSliderCard: View {
                     }
                     .help(Text(verbatim: onTitleTap == nil ? "" : Chrome.localized("Choose a model")))
 
-                    // In a pair the line under the effort is the pair itself, behind the
-                    // Hydra mark: the slider is the lead's, and the lead is named first.
-                    HStack(spacing: 5) {
-                        if pair != nil {
-                            HydraMarkImage()
-                                .foregroundStyle(Chrome.primaryText.opacity(0.75))
-                                .frame(width: 12, height: 12)
-                        } else if let provider {
-                            ProviderIcon(provider: provider, size: 12)
-                        }
-                        Text(verbatim: pair?.title ?? modelName)
-                            .font(.ui(.body))
-                            .foregroundStyle(Chrome.primaryText.opacity(0.7))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .minimumScaleFactor(0.85)
-                    }
+                    Text(verbatim: title)
+                        .font(.ui(.title2, weight: .medium))
+                        .contentTransition(.numericText())
+                        .foregroundStyle(titleStyle)
+                        .animation(.smooth(duration: 0.3), value: isMaxEffort)
+                        .animation(.smooth(duration: 0.3), value: isFast)
+                        // Picking Adaptive swaps the pair's gradient for a flat colour while the
+                        // popover shrinks; unanimated, that swap left the title blank until redrawn.
+                        .animation(.smooth(duration: 0.3), value: pair == nil)
                 }
                 .padding(.horizontal, supportsFast ? 38 : 0)
             }

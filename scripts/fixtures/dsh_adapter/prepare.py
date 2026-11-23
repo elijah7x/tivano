@@ -51,7 +51,7 @@ def prepare(root, kit):
         'compiled_sources': [str(p) for p in sources],
         'extracted_types': extracted,
         'sha256': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources + [root / p for p in extracted]},
-        'shims': ['CaptureRun: isolated storage and ephemeral defaults', 'HydraLaunch: unused empty context', 'LoginEnvironment: isolated HOME; no login shell', 'Shell: fail closed except canned provider-list and patch-warning fixtures; marketplace preflight is not executed', 'Storage: attachment import fails closed (no image fixtures)', 'MCPProviderConfig: static two-server fixture or empty list with no skipped commands; never reads user MCP configuration or launches MCP'],
+        'shims': ['CaptureRun: isolated storage and ephemeral defaults', 'HydraLaunch: unused empty context', 'LoginEnvironment: isolated HOME; no login shell', 'Shell: fail closed except canned provider-list and patch-warning fixtures; marketplace preflight is not executed', 'Storage: attachment import fails closed (no image fixtures)', 'MCPProviderConfig: static two-server fixture or empty list with no skipped commands; never reads user MCP configuration or launches MCP', 'Antigravity hooks (AntigravitySession, AntigravityLogTailer, TokenLedger, ProviderRegistry.antigravitySeed): inert; no case runs Antigravity'],
     }
     (kit / 'sources.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return [str(p) for p in sources]

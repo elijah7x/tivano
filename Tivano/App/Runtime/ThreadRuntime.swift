@@ -337,6 +337,8 @@ final class ThreadRuntime {
             }
         }
     }
+    var needsUserAnswer: Bool { !questions.isEmpty || chimeraCasting != nil }
+    var needsUserAttention: Bool { !approvals.isEmpty || needsUserAnswer }
     @ObservationIgnored private var questionDrafts: [String: QuestionDraft] = [:]
     private(set) var backgroundTasks: [String] = [] {
         didSet {
@@ -809,9 +811,6 @@ final class ThreadRuntime {
         var launchRuntimeMode: RuntimeMode?
         var launchEffort: String?
         var launchFast: Bool?
-        /// Antigravity pins model, effort, mode and plan state at launch
-        /// (`--model`, `--effort`, `--mode`), so any of them restarts it.
-        var launchModel: String?
         var launchInteraction: InteractionMode?
         var launchDshMode: DshAgentMode?
         var dshFinalReport = false
@@ -2382,10 +2381,9 @@ final class ThreadRuntime {
             claudeAccount: claudeAccount?.id,
             directory: directory,
             launchRuntimeMode: thread.provider == .cursor || thread.provider == .grok || thread.provider == .devin || thread.provider == .antigravity || thread.provider == .omp || thread.provider == .dsh ? thread.runtimeMode : copilotLaunchMode,
-            launchEffort: thread.provider == .claude || thread.provider == .antigravity ? thread.effort : nil,
+            launchEffort: thread.provider == .claude ? thread.effort : nil,
             launchFast: thread.provider == .claude ? thread.fastMode : nil,
-            launchModel: thread.provider == .antigravity ? thread.model : nil,
-            launchInteraction: thread.provider == .antigravity || thread.provider == .omp ? thread.interactionMode : nil,
+            launchInteraction: thread.provider == .omp ? thread.interactionMode : nil,
             launchDshMode: thread.provider == .dsh ? (thread.dshMode ?? .standard) : nil,
             dshFinalReport: thread.provider == .dsh && dshFinalReport,
             dshAuthenticationRevision: thread.provider == .dsh ? app.providers.dshAuthenticationRevision : nil,
@@ -2523,13 +2521,12 @@ final class ThreadRuntime {
             let created: any ProviderSession = switch thread.provider {
             case .codex: CodexSession(configuration: configuration)
             case .claude: ClaudeSession(configuration: configuration)
-            case .antigravity: AntigravitySession(configuration: configuration)
             case .copilot: CopilotSession(configuration: configuration)
             case .commandcode: CommandCodeSession(configuration: configuration)
             case .pi: PiSession(configuration: configuration)
             case .omp: OmpSession(configuration: configuration)
             case .zcode: ZCodeSession(configuration: configuration)
-            case .cursor, .opencode, .grok, .devin, .kimi, .dsh, .minimaxCode: ACPSession(configuration: configuration)
+            case .cursor, .opencode, .grok, .devin, .antigravity, .kimi, .dsh, .minimaxCode: ACPSession(configuration: configuration)
             case .deepseek: DeepSeekSession(configuration: configuration)
             case .meta: MetaSession(configuration: configuration)
             case .zai: ZaiSession(configuration: configuration)
@@ -3810,7 +3807,8 @@ final class ThreadRuntime {
         case .diff(let diff):
             if currentTurnID != nil { currentProviderDiff = diff }
         case .notice(let notice):
-            if notice.level != .info { providerLastWarning = notice.message }
+            // agy reports model retries only as .info notices; keep them for Hydra's stalled-head report.
+            if notice.level != .info || sessionSignature?.provider == .antigravity { providerLastWarning = notice.message }
             appendNotice(notice.level, notice.message)
         case .usageLimit(let resetsAt):
             if sessionSignature?.provider == .codex, let id = sessionSignature?.codexAccount {
@@ -4693,6 +4691,8 @@ final class ThreadRuntime {
                     })
                     autoDispatchOutcome = confirmCasting(picks)
                     autoDispatched = true
+                } else {
+                    app.threadNeedsAttention(threadID)
                 }
             }
             castsRoles = !rows.isEmpty && !autoDispatched
@@ -4772,8 +4772,8 @@ final class ThreadRuntime {
     /// The delegation card keeps its place for `HydraPrompts.delegationSentHold` once the
     /// heads are out, wearing its done wave. Then it fades where it stands, still holding
     /// its room (`hydra-leaving`), and only once it is gone from sight does the block leave
-    /// the reply and the text below close up: two steps, so the card never fades over
-    /// content that has already moved up under it.
+    /// the reply and the text below close up without animation: two steps, so the card never
+    /// fades over content that has already moved up under it.
     /// `castsRoles`: the block's roles wait on a Chimera casting, so no head is out yet.
     private func holdSentDelegationBlock(_ entryID: String, castsRoles: Bool = false) {
         Task { [weak self] in
@@ -4788,7 +4788,9 @@ final class ThreadRuntime {
                   HydraPrompts.hasSentDelegationBlock(in: faded.text) else { return }
             faded.text = HydraPrompts.withoutDelegationBlock(faded.text)
             if faded.text.isEmpty { faded.text = Chrome.localized(castsRoles ? "Proposed sub-agent roles." : "Sent out sub-agents.") }
-            withAnimation(Chrome.panelSlide) { entry.item.content = .assistant(faded) }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { entry.item.content = .assistant(faded) }
             self.saveRevision += 1
             self.scheduleSave()
         }

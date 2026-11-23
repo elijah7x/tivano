@@ -1,14 +1,89 @@
 import Foundation
 import Darwin
 
+/// Server side of one streaming request. All methods are safe from any thread.
+final class ControlStream: @unchecked Sendable {
+    let requestID: UUID
+    private weak var server: ControlSocketServer?
+    private let queue: DispatchQueue
+    private let connectionID: UUID
+    // Confined to `queue`.
+    private var cancelHandler: (@Sendable () -> Void)?
+    private var hasCancelHandler = false
+    private var finishRequested = false
+    private var completed = false
+    private var cancelled = false
+
+    fileprivate init(requestID: UUID, server: ControlSocketServer, queue: DispatchQueue, connectionID: UUID) {
+        self.requestID = requestID
+        self.server = server
+        self.queue = queue
+        self.connectionID = connectionID
+    }
+
+    /// Queues one response frame. No-op after finish() or cancellation.
+    func send(_ response: ControlResponse) {
+        queue.async {
+            guard !self.finishRequested, !self.cancelled else { return }
+            self.server?.streamSend(response, connectionID: self.connectionID)
+        }
+    }
+
+    /// Flushes queued frames, then closes the connection. Idempotent.
+    func finish() {
+        queue.async {
+            guard !self.finishRequested, !self.cancelled else { return }
+            self.finishRequested = true
+            self.server?.streamFinish(connectionID: self.connectionID)
+        }
+    }
+
+    /// Registers the cancellation handler. It runs once, on the server queue, if the client disconnects,
+    /// sends any further bytes, the output bound is exceeded, or the server stops before finish() completes.
+    /// If already cancelled it runs immediately. Only the first registered handler is kept.
+    func onCancel(_ handler: @escaping @Sendable () -> Void) {
+        queue.async {
+            guard !self.hasCancelHandler else { return }
+            self.hasCancelHandler = true
+            guard !self.completed else { return }
+            if self.cancelled || self.server == nil {
+                self.cancelled = true
+                handler()
+            } else {
+                self.cancelHandler = handler
+            }
+        }
+    }
+
+    fileprivate func markCompleted() {
+        completed = true
+        cancelHandler = nil
+    }
+
+    fileprivate func cancelIfIncomplete() {
+        guard !completed, !cancelled else { return }
+        cancelled = true
+        let handler = cancelHandler
+        cancelHandler = nil
+        handler?()
+    }
+}
+
 /// All server state is confined to `queue`. No thread, provider or library is owned here.
-/// A connection has one request in flight, bounded buffers and a 30-second deadline.
+/// A normal connection has one request in flight, bounded buffers and a 30-second deadline.
+/// An `.agentRun` request switches its connection into streaming mode: no deadline, up to
+/// `LocalControl.maxFrame` for the request, an append queue bounded at 16 MiB for responses,
+/// and cancellation on client disconnect, extra client bytes, output overflow or server stop.
 final class ControlSocketServer: @unchecked Sendable {
     typealias Handler = @Sendable (ControlRequest) async -> ControlResponse
+    typealias StreamHandler = @Sendable (ControlRequest, ControlStream) async -> Void
+    private static let maxStreamOutput = 16 * 1_048_576
+    private static let compactThreshold = 1_048_576
     private let queue = DispatchQueue(label: "dev.tivano.local-control", qos: .utility)
     private let directory: URL
     private let welcome: ControlWelcome
     private let handler: Handler
+    private let streamHandler: StreamHandler
     private var listener: DispatchSourceRead?
     private var lease: Int32 = -1
     private var socketIdentity: ino_t?
@@ -24,17 +99,35 @@ final class ControlSocketServer: @unchecked Sendable {
         var offset = 0
         var handshaken = false
         var inFlight = false
+        var streaming = false
         var closeAfterWrite = false
+        var stream: ControlStream?
         var reader: DispatchSourceRead?
         var writer: DispatchSourceWrite?
         var timer: DispatchSourceTimer?
         init(_ fd: Int32) { self.fd = fd }
     }
 
-    init(directory: URL, welcome: ControlWelcome, handler: @escaping Handler) {
+    init(directory: URL, welcome: ControlWelcome, handler: @escaping Handler, streamHandler: @escaping StreamHandler) {
         self.directory = directory
         self.welcome = welcome
         self.handler = handler
+        self.streamHandler = streamHandler
+    }
+
+    convenience init(directory: URL, welcome: ControlWelcome, handler: @escaping Handler) {
+        self.init(directory: directory, welcome: welcome, handler: handler) { request, stream in
+            stream.send(ControlResponse(id: request.id, error: ControlFailure(code: .unsupported)))
+        }
+    }
+
+    deinit {
+        let streams = connections.values.compactMap(\.stream)
+        if !streams.isEmpty {
+            queue.async {
+                for stream in streams { stream.cancelIfIncomplete() }
+            }
+        }
     }
 
     func start() throws {
@@ -90,8 +183,9 @@ final class ControlSocketServer: @unchecked Sendable {
         }
     }
 
-    /// Synchronous revocation: shuts down every accepted FD before returning. Already
-    /// accepted App operations are independent of their transport and are not cancelled.
+    /// Synchronous revocation: shuts down every accepted FD before returning. Active streaming
+    /// requests have their cancellation handlers invoked; already accepted non-streaming App
+    /// operations are independent of their transport and are not cancelled.
     func stop() {
         queue.sync {
             generation = UUID()
@@ -144,6 +238,19 @@ final class ControlSocketServer: @unchecked Sendable {
 
     private func read(_ connection: Connection) {
         guard connections[connection.id] != nil else { return }
+        if connection.streaming {
+            var byte: UInt8 = 0
+            while true {
+                let count = Darwin.recv(connection.fd, &byte, 1, 0)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    if errno == EAGAIN || errno == EWOULDBLOCK { return }
+                }
+                close(connection)
+                return
+            }
+        }
+        let inputLimit = connection.handshaken ? LocalControl.maxFrame : LocalControl.maxRequest
         var bytes = [UInt8](repeating: 0, count: 16_384)
         for _ in 0..<10 {
             let count = Darwin.recv(connection.fd, &bytes, bytes.count, 0)
@@ -155,13 +262,14 @@ final class ControlSocketServer: @unchecked Sendable {
             }
             guard !connection.inFlight, connection.output.isEmpty else { close(connection); return }
             connection.input.append(contentsOf: bytes.prefix(count))
-            guard connection.input.count <= LocalControl.maxRequest + 4 else { close(connection); return }
+            guard connection.input.count <= inputLimit + 4 else { close(connection); return }
         }
         do {
-            guard let payload = try ControlSocket.takeFrame(&connection.input, limit: LocalControl.maxRequest) else { return }
+            guard let payload = try ControlSocket.takeFrame(&connection.input, limit: inputLimit) else { return }
             // Pipelining is deliberately unsupported; reconnect is never an implicit retry.
             guard connection.input.isEmpty else { throw ControlFailure(code: .bounds) }
             if !connection.handshaken {
+                guard payload.count <= LocalControl.maxRequest else { throw ControlFailure(code: .bounds) }
                 let hello = try LocalControl.decoder().decode(ControlHello.self, from: payload)
                 guard hello.version == welcome.version else { throw ControlFailure(code: .protocolMismatch) }
                 guard hello.edition == welcome.edition else { throw ControlFailure(code: .editionMismatch) }
@@ -171,11 +279,34 @@ final class ControlSocketServer: @unchecked Sendable {
                 return
             }
             let request = try LocalControl.decoder().decode(ControlRequest.self, from: payload)
+            if case .agentRun = request.command {} else if payload.count > LocalControl.maxRequest {
+                throw ControlFailure(code: .bounds)
+            }
             guard request.instance == welcome.instance else { throw ControlFailure(code: .instanceMismatch) }
             guard pendingHandlers < LocalControl.maxConnections else { throw ControlFailure(code: .busy) }
             pendingHandlers += 1
             connection.inFlight = true
             let incarnation = generation
+            if case .agentRun = request.command {
+                connection.streaming = true
+                connection.input.removeAll(keepingCapacity: false)
+                connection.timer?.cancel()
+                connection.timer = nil
+                let stream = ControlStream(requestID: request.id, server: self, queue: queue, connectionID: connection.id)
+                connection.stream = stream
+                Task { [streamHandler, weak self] in
+                    await streamHandler(request, stream)
+                    stream.finish()
+                    guard let self else { return }
+                    self.queue.async { [weak self] in
+                        guard let self else { return }
+                        self.pendingHandlers -= 1
+                        guard self.generation == incarnation, let connection = self.connections[connection.id] else { return }
+                        connection.inFlight = false
+                    }
+                }
+                return
+            }
             Task { [handler, weak self] in
                 let response = await handler(request)
                 guard let self else { return }
@@ -193,16 +324,44 @@ final class ControlSocketServer: @unchecked Sendable {
         }
     }
 
+    private func encodeFrame(_ response: ControlResponse) throws -> Data {
+        var payload = try LocalControl.encoder().encode(response)
+        if payload.count > LocalControl.maxFrame {
+            payload = try LocalControl.encoder().encode(ControlResponse(id: response.id, error: ControlFailure(code: .bounds)))
+        }
+        return try ControlSocket.frame(payload)
+    }
+
     private func respond(_ response: ControlResponse, to connection: Connection) {
         do {
-            var payload = try LocalControl.encoder().encode(response)
-            if payload.count > LocalControl.maxFrame {
-                payload = try LocalControl.encoder().encode(ControlResponse(id: response.id, error: ControlFailure(code: .bounds)))
-            }
-            connection.output = try ControlSocket.frame(payload)
+            connection.output = try encodeFrame(response)
             connection.offset = 0
             write(connection)
         } catch { close(connection) }
+    }
+
+    fileprivate func streamSend(_ response: ControlResponse, connectionID: UUID) {
+        guard let connection = connections[connectionID], connection.streaming, !connection.closeAfterWrite else { return }
+        do {
+            let framed = try encodeFrame(response)
+            let pending = (connection.output.count - connection.offset) + framed.count
+            guard pending <= Self.maxStreamOutput else { close(connection); return }
+            if connection.offset > Self.compactThreshold {
+                connection.output = Data(connection.output.dropFirst(connection.offset))
+                connection.offset = 0
+            }
+            connection.output.append(framed)
+            write(connection)
+        } catch { close(connection) }
+    }
+
+    fileprivate func streamFinish(connectionID: UUID) {
+        guard let connection = connections[connectionID], connection.streaming else { return }
+        connection.closeAfterWrite = true
+        if connection.offset >= connection.output.count {
+            connection.stream?.markCompleted()
+            close(connection)
+        }
     }
 
     private func write(_ connection: Connection) {
@@ -214,6 +373,10 @@ final class ControlSocketServer: @unchecked Sendable {
             if count < 0 {
                 if errno == EINTR { continue }
                 if errno == EAGAIN || errno == EWOULDBLOCK {
+                    if connection.offset > Self.compactThreshold {
+                        connection.output = Data(connection.output.dropFirst(connection.offset))
+                        connection.offset = 0
+                    }
                     if connection.writer == nil {
                         let source = DispatchSource.makeWriteSource(fileDescriptor: connection.fd, queue: queue)
                         source.setEventHandler { [weak self, weak connection] in
@@ -233,7 +396,12 @@ final class ControlSocketServer: @unchecked Sendable {
         connection.writer = nil
         connection.output.removeAll(keepingCapacity: false)
         connection.offset = 0
-        if connection.closeAfterWrite { close(connection) } else { armDeadline(connection) }
+        if connection.closeAfterWrite {
+            if connection.streaming { connection.stream?.markCompleted() }
+            close(connection)
+        } else if !connection.streaming {
+            armDeadline(connection)
+        }
     }
 
     private func close(_ connection: Connection) {
@@ -245,6 +413,9 @@ final class ControlSocketServer: @unchecked Sendable {
         connection.writer = nil
         connection.reader = nil
         connection.timer = nil
+        let stream = connection.stream
+        connection.stream = nil
+        stream?.cancelIfIncomplete()
     }
 }
 

@@ -1,16 +1,18 @@
 import Foundation
 import Darwin
+import os
 
 private enum CLIText {
-    static let bundle: Bundle = {
+    static let appURL: URL? = {
         var size: UInt32 = 0
         _NSGetExecutablePath(nil, &size)
         var bytes = [CChar](repeating: 0, count: Int(size))
-        guard _NSGetExecutablePath(&bytes, &size) == 0 else { return .main }
+        guard _NSGetExecutablePath(&bytes, &size) == 0 else { return nil }
         let executable = URL(fileURLWithPath: String(cString: bytes)).resolvingSymlinksInPath()
         let app = executable.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        return Bundle(url: app) ?? .main
+        return app.pathExtension == "app" ? app : nil
     }()
+    static let bundle: Bundle = appURL.flatMap(Bundle.init(url:)) ?? .main
     static func localized(_ key: String) -> String { bundle.localizedString(forKey: key, value: key, table: "Localizable") }
     static let usage = """
     Tivano local control (the app must already be running and manually enabled in Settings › Connections).
@@ -28,6 +30,11 @@ private enum CLIText {
     Writes: --operation INSTANCE/UUID/TIMESTAMP reuses an existing ticket in that instance only.
     Save the ticket printed before delivery. A disconnect is not failure; query the ticket instead of repeating the write.
     JSON output reports acceptance, not task success. Expired/restarted outcomes are unknown. No automatic retries or app launch.
+    """
+    static let agentUsage = """
+    Agent bridge (no Local control switch needed; starts Tivano hidden if it is not running):
+      agent models [--json]
+      agent run [--json] --cwd DIR [--model ID] [--session SID]   (prompt from stdin, NDJSON events on stdout)
     """
 }
 
@@ -82,10 +89,14 @@ private enum CLI {
     }()
 
     static func run() -> Int32 {
+        let values = Array(CommandLine.arguments.dropFirst())
+        if values.first == "agent" {
+            return runAgent(Array(values.dropFirst()))
+        }
         do {
-            let values = Array(CommandLine.arguments.dropFirst())
             if values.isEmpty || values == ["--help"] || values == ["help"] {
                 print(CLIText.localized(CLIText.usage))
+                print(CLIText.localized(CLIText.agentUsage))
                 return 0
             }
             var arguments = try Arguments(values)
@@ -218,6 +229,311 @@ private enum CLI {
         }
         guard let text = String(data: data, encoding: .utf8) else { throw ControlFailure(code: .invalidRequest) }
         return text
+    }
+
+    private struct AgentCLIError: Error {
+        let code: ControlAgentErrorCode
+        let message: String
+    }
+
+    private struct AgentRunOptions {
+        let cwd: String
+        let model: String?
+        let session: String?
+    }
+
+    private struct AgentModelsErrorEnvelope: Encodable {
+        struct Payload: Encodable {
+            let code: String
+            let message: String
+        }
+        let version = 1
+        let models: [ControlAgentModel] = []
+        let error: Payload
+    }
+
+    private final class AgentSignalController: @unchecked Sendable {
+        private struct State: Sendable {
+            var client: ControlClient?
+            var receivedSignal: Int32 = 0
+        }
+
+        private let state = OSAllocatedUnfairLock(initialState: State())
+        private var sources: [DispatchSourceSignal] = []
+
+        func install() {
+            _ = signal(SIGINT, SIG_IGN)
+            _ = signal(SIGTERM, SIG_IGN)
+            let queue = DispatchQueue.global(qos: .userInitiated)
+            for sig in [SIGINT, SIGTERM] {
+                let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
+                source.setEventHandler { [weak self] in
+                    self?.handle(sig)
+                }
+                source.resume()
+                sources.append(source)
+            }
+        }
+
+        func attach(_ client: ControlClient) {
+            let pending: Int32 = state.withLock { current in
+                current.client = client
+                return current.receivedSignal
+            }
+            if pending != 0 {
+                client.interrupt()
+            }
+        }
+
+        var exitCodeIfSignaled: Int32? {
+            switch state.withLock({ $0.receivedSignal }) {
+            case SIGINT: 130
+            case SIGTERM: 143
+            default: nil
+            }
+        }
+
+        private func handle(_ sig: Int32) {
+            let client: ControlClient? = state.withLock { current in
+                if current.receivedSignal == 0 { current.receivedSignal = sig }
+                return current.client
+            }
+            if let client {
+                client.interrupt()
+            } else {
+                Darwin._exit(sig == SIGINT ? 130 : 143)
+            }
+        }
+
+        deinit {
+            for source in sources { source.cancel() }
+        }
+    }
+
+    private static func runAgent(_ args: [String]) -> Int32 {
+        guard let subcommand = args.first else {
+            writeAgentEvent(.error(.bad_request, "Missing agent subcommand. Expected 'models' or 'run'."))
+            return 1
+        }
+        let rest = Array(args.dropFirst())
+        switch subcommand {
+        case "models":
+            return runAgentModels(rest)
+        case "run":
+            return runAgentRun(rest)
+        default:
+            writeAgentEvent(.error(.bad_request, "Unknown agent subcommand '\(subcommand)'. Expected 'models' or 'run'."))
+            return 1
+        }
+    }
+
+    private static func runAgentModels(_ args: [String]) -> Int32 {
+        do {
+            var sawJSON = false
+            for token in args {
+                if token == "--json" {
+                    guard !sawJSON else { throw AgentCLIError(code: .bad_request, message: "Duplicate flag '--json'.") }
+                    sawJSON = true
+                } else {
+                    throw AgentCLIError(code: .bad_request, message: "Unexpected argument '\(token)'.")
+                }
+            }
+            let client = try ControlClient.connectLaunching(edition: edition, app: CLIText.appURL)
+            guard client.welcome.methods.contains("agentModels") else {
+                throw AgentCLIError(code: .app_unavailable, message: "This Tivano version has no agent bridge; update Tivano.")
+            }
+            let response = try client.request(.agentModels)
+            if let failure = response.error {
+                throw failure
+            }
+            guard case .agentModels(let models) = response.result else {
+                throw AgentCLIError(code: .internal, message: "Unexpected response from Tivano.")
+            }
+            let data = try LocalControl.encoder().encode(models) + Data([10])
+            writeStdoutData(data)
+            return 0
+        } catch {
+            let (code, message) = mapAgentError(error)
+            writeModelsError(code: code, message: message)
+            return 1
+        }
+    }
+
+    private static func runAgentRun(_ args: [String]) -> Int32 {
+        let signals = AgentSignalController()
+        do {
+            let options = try parseAgentRunOptions(args)
+            signals.install()
+            let prompt = try readAgentStdin()
+            let client = try ControlClient.connectLaunching(edition: edition, app: CLIText.appURL)
+            signals.attach(client)
+            guard client.welcome.methods.contains("agentRun") else {
+                throw AgentCLIError(code: .app_unavailable, message: "This Tivano version has no agent bridge; update Tivano.")
+            }
+            var terminalExit: Int32?
+            do {
+                try client.stream(.agentRun(ControlAgentRun(cwd: options.cwd, model: options.model, session: options.session, prompt: prompt))) { response in
+                    if let failure = response.error {
+                        let (code, message) = mapAgentError(failure)
+                        writeAgentEvent(.error(code, message))
+                        terminalExit = 1
+                        return false
+                    }
+                    guard case .agentEvent(let line) = response.result else {
+                        writeAgentEvent(.error(.internal, "Unexpected response from Tivano."))
+                        terminalExit = 1
+                        return false
+                    }
+                    writeStdoutLine(line.json)
+                    if line.type == "done" {
+                        terminalExit = 0
+                        return false
+                    }
+                    if line.type == "error" {
+                        terminalExit = 1
+                        return false
+                    }
+                    return true
+                }
+            } catch let failure as ControlFailure where failure.code == .unavailable && failure.detail == "closed" {
+                if let code = signals.exitCodeIfSignaled { return code }
+                writeAgentEvent(.error(.internal, "connection closed"))
+                return 1
+            }
+            if let exitCode = terminalExit { return exitCode }
+            if let code = signals.exitCodeIfSignaled { return code }
+            writeAgentEvent(.error(.internal, "connection closed"))
+            return 1
+        } catch {
+            if let code = signals.exitCodeIfSignaled { return code }
+            let (code, message) = mapAgentError(error)
+            writeAgentEvent(.error(code, message))
+            return 1
+        }
+    }
+
+    private static func parseAgentRunOptions(_ args: [String]) throws -> AgentRunOptions {
+        var sawJSON = false
+        var rawCwd: String?
+        var model: String?
+        var session: String?
+        var index = 0
+        while index < args.count {
+            let token = args[index]
+            switch token {
+            case "--json":
+                guard !sawJSON else { throw AgentCLIError(code: .bad_request, message: "Duplicate flag '--json'.") }
+                sawJSON = true
+                index += 1
+            case "--cwd":
+                guard rawCwd == nil else { throw AgentCLIError(code: .bad_request, message: "Duplicate flag '--cwd'.") }
+                guard index + 1 < args.count else { throw AgentCLIError(code: .bad_request, message: "Missing value for '--cwd'.") }
+                let value = args[index + 1]
+                guard !value.isEmpty, !value.hasPrefix("--") else { throw AgentCLIError(code: .bad_request, message: "Invalid value for '--cwd'.") }
+                rawCwd = value
+                index += 2
+            case "--model":
+                guard model == nil else { throw AgentCLIError(code: .bad_request, message: "Duplicate flag '--model'.") }
+                guard index + 1 < args.count else { throw AgentCLIError(code: .bad_request, message: "Missing value for '--model'.") }
+                let value = args[index + 1]
+                guard !value.isEmpty, !value.hasPrefix("--") else { throw AgentCLIError(code: .bad_request, message: "Invalid value for '--model'.") }
+                model = value
+                index += 2
+            case "--session":
+                guard session == nil else { throw AgentCLIError(code: .bad_request, message: "Duplicate flag '--session'.") }
+                guard index + 1 < args.count else { throw AgentCLIError(code: .bad_request, message: "Missing value for '--session'.") }
+                let value = args[index + 1]
+                guard !value.isEmpty, !value.hasPrefix("--") else { throw AgentCLIError(code: .bad_request, message: "Invalid value for '--session'.") }
+                session = value
+                index += 2
+            default:
+                throw AgentCLIError(code: .bad_request, message: "Unexpected argument '\(token)'.")
+            }
+        }
+        guard let rawCwd else {
+            throw AgentCLIError(code: .bad_request, message: "Missing required '--cwd' option.")
+        }
+        let base = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        let cwdURL = rawCwd.hasPrefix("/")
+            ? URL(fileURLWithPath: rawCwd).standardizedFileURL
+            : URL(fileURLWithPath: rawCwd, relativeTo: base).standardizedFileURL
+        return AgentRunOptions(cwd: cwdURL.path, model: model, session: session)
+    }
+
+    private static func readAgentStdin() throws -> String {
+        guard isatty(STDIN_FILENO) == 0 else {
+            throw AgentCLIError(code: .bad_request, message: "Prompt must be piped on stdin.")
+        }
+        // A blocking read: poll() does not report FIFOs as readable on macOS, and the
+        // caller (BeRead) closes stdin once the prompt is written.
+        var data = Data()
+        var bytes = [UInt8](repeating: 0, count: 16_384)
+        while true {
+            let count = Darwin.read(STDIN_FILENO, &bytes, bytes.count)
+            if count < 0, errno == EINTR { continue }
+            guard count >= 0 else {
+                throw AgentCLIError(code: .internal, message: "Failed to read prompt from stdin.")
+            }
+            if count == 0 { break }
+            guard data.count + count <= LocalControl.maxAgentPrompt else {
+                throw AgentCLIError(code: .bad_request, message: "Prompt exceeds the \(LocalControl.maxAgentPrompt)-byte limit.")
+            }
+            data.append(contentsOf: bytes.prefix(count))
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw AgentCLIError(code: .bad_request, message: "Prompt is not valid UTF-8.")
+        }
+        return text
+    }
+
+    private static func mapAgentError(_ error: Error) -> (ControlAgentErrorCode, String) {
+        if let cliError = error as? AgentCLIError {
+            return (cliError.code, cliError.message)
+        }
+        if let failure = error as? ControlFailure {
+            if failure.code == .unavailable {
+                if failure.detail == "launch_timeout" {
+                    return (.app_unavailable, "Tivano did not start within 15 seconds.")
+                }
+                if failure.detail == "launch_failed" {
+                    return (.app_unavailable, "Could not launch Tivano.")
+                }
+            }
+            let code: ControlAgentErrorCode
+            switch failure.code {
+            case .unavailable, .disabled, .shutdown, .permission, .editionMismatch, .protocolMismatch, .instanceMismatch:
+                code = .app_unavailable
+            case .bounds:
+                return (.bad_request, "The prompt is too large: the JSON-encoded request must fit in \(LocalControl.maxFrame) bytes.")
+            case .invalidRequest:
+                code = .bad_request
+            default:
+                code = .internal
+            }
+            return (code, failure.code.message)
+        }
+        return (.internal, "Unexpected internal error.")
+    }
+
+    private static func writeStdoutData(_ data: Data) {
+        try? FileHandle.standardOutput.write(contentsOf: data)
+    }
+
+    private static func writeStdoutLine(_ line: String) {
+        writeStdoutData(Data((line + "\n").utf8))
+    }
+
+    private static func writeAgentEvent(_ event: ControlAgentEvent) {
+        writeStdoutLine(event.line.json)
+    }
+
+    private static func writeModelsError(code: ControlAgentErrorCode, message: String) {
+        let envelope = AgentModelsErrorEnvelope(error: .init(code: code.rawValue, message: message))
+        if let data = try? LocalControl.encoder().encode(envelope) {
+            writeStdoutData(data + Data([10]))
+        } else {
+            writeStdoutLine(#"{"version":1,"models":[],"error":{"code":"internal","message":"encoding"}}"#)
+        }
     }
 }
 
