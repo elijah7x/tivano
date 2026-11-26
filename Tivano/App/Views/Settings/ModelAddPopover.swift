@@ -33,104 +33,63 @@ struct ModelAddPopover: View {
     }
 
     var body: some View {
-        let settings = model.settings
-        let registry = model.providers
-        let modelList = settings.modelList
-        let pinned = Set(modelList)
-        let isFull = modelList.count >= AppSettings.modelListLimit
-        let searchQuery = query.trimmed.lowercased(with: .current)
-        let availableProviders = sortedAvailableProviders()
-        let sections = displaySections(availableProviders: availableProviders, searchQuery: searchQuery)
-        let rows = buildRows(from: sections)
-        let allPins = sections.flatMap { section in
-            section.models.map { ModelPin(provider: section.provider, modelID: $0.id) }
+        let settings: AppSettings = model.settings
+        let registry: ProviderRegistry = model.providers
+        let modelList: [ModelPin] = settings.modelList
+        let pinned = Set<ModelPin>(modelList)
+        let isFull: Bool = modelList.count >= AppSettings.modelListLimit
+        let searchQuery: String = query.trimmed.lowercased(with: .current)
+        let availableProviders: [ProviderKind] = sortedAvailableProviders()
+        let sections: [(provider: ProviderKind, models: [ModelOption])] = displaySections(availableProviders: availableProviders, searchQuery: searchQuery)
+        let rows: [DisplayRow] = buildRows(from: sections)
+        let allPins: [ModelPin] = sections.flatMap { (section: (provider: ProviderKind, models: [ModelOption])) -> [ModelPin] in
+            section.models.map { (option: ModelOption) -> ModelPin in
+                ModelPin(provider: section.provider, modelID: option.id)
+            }
         }
-        let addablePins = isFull ? [] : allPins.filter { !pinned.contains($0) }
-        let rowHeight = TypeScale.shared.ui(32)
-        let firstHeaderHeight = TypeScale.shared.ui(24)
-        let headerHeight = TypeScale.shared.ui(30)
-        let emptyHeight = TypeScale.shared.ui(56)
-        let listHeight = estimatedListHeight(
+        let addablePins: [ModelPin] = isFull ? [] : allPins.filter { (pin: ModelPin) -> Bool in !pinned.contains(pin) }
+        let rowHeight: CGFloat = TypeScale.shared.ui(32)
+        let firstHeaderHeight: CGFloat = TypeScale.shared.ui(24)
+        let headerHeight: CGFloat = TypeScale.shared.ui(30)
+        let emptyHeight: CGFloat = TypeScale.shared.ui(56)
+        let listHeight: CGFloat = estimatedListHeight(
             rows: rows,
             rowHeight: rowHeight,
             firstHeaderHeight: firstHeaderHeight,
             headerHeight: headerHeight,
             emptyHeight: emptyHeight
         )
-        let headerTitle = if let sectionName, !sectionName.isEmpty {
+        let headerTitle: String = if let sectionName, !sectionName.isEmpty {
             String(format: Chrome.localized("Add to %@"), sectionName)
         } else {
             Chrome.localized("Add a model")
         }
 
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text(verbatim: headerTitle)
-                    .font(.ui(.body, weight: .semibold))
-                    .foregroundStyle(Chrome.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 8)
-                Text(verbatim: "\(modelList.count) / \(AppSettings.modelListLimit)")
-                    .font(.ui(size: 11).monospacedDigit())
-                    .foregroundStyle(Chrome.secondaryText)
-                    .fixedSize()
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+            headerRow(title: headerTitle, count: modelList.count)
 
             searchField
                 .padding(.horizontal, 10)
                 .padding(.bottom, 6)
 
             if rows.isEmpty {
-                let isLoading = searchQuery.isEmpty && availableProviders.contains { registry.loadingCatalogs.contains($0) }
-                Text(verbatim: Chrome.localized(isLoading ? "Loading models…" : "No matching models"))
-                    .font(.ui(.body))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, minHeight: emptyHeight, alignment: .leading)
+                emptyRowsView(
+                    searchQuery: searchQuery,
+                    availableProviders: availableProviders,
+                    registry: registry,
+                    emptyHeight: emptyHeight
+                )
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 1) {
-                            ForEach(rows) { row in
-                                switch row {
-                                case .providerHeader(let provider, let isFirst):
-                                    providerHeader(provider, isFirst: isFirst, height: isFirst ? firstHeaderHeight : headerHeight)
-                                case .model(let provider, let option, let label):
-                                    let pin = ModelPin(provider: provider, modelID: option.id)
-                                    let isAdded = pinned.contains(pin)
-                                    let showsEffortMenu = isAdded && addedPins.contains(pin) && !option.efforts.isEmpty
-                                    let currentEffort = showsEffortMenu
-                                        ? Self.resolvedEffort(for: option, preference: settings.preference(for: provider, model: option.id))
-                                        : nil
-                                    AddModelRow(
-                                        option: option,
-                                        displayName: label,
-                                        rowHeight: rowHeight,
-                                        isAdded: isAdded,
-                                        isFull: isFull,
-                                        isHighlighted: !isAdded && !isFull && highlightedPin == pin,
-                                        showsEffortMenu: showsEffortMenu,
-                                        currentEffort: currentEffort,
-                                        onAdd: { addModel(pin) },
-                                        onSelectEffort: { effort in setEffort(effort, for: pin) }
-                                    )
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                    }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .frame(height: listHeight)
-                    .onChange(of: scrollTarget) { _, target in
-                        guard let target else { return }
-                        proxy.scrollTo(target.id)
-                    }
-                }
+                rowsScrollView(
+                    rows: rows,
+                    settings: settings,
+                    pinned: pinned,
+                    isFull: isFull,
+                    rowHeight: rowHeight,
+                    firstHeaderHeight: firstHeaderHeight,
+                    headerHeight: headerHeight,
+                    listHeight: listHeight
+                )
             }
         }
         .padding(.bottom, 4)
@@ -140,19 +99,132 @@ struct ModelAddPopover: View {
             highlightedPin = addablePins.first
             searchIsFocused = true
         }
-        .onChange(of: query) { _, _ in
-            let first = currentAddablePins().first
+        .onChange(of: query) { (_: String, _: String) in
+            let first: ModelPin? = currentAddablePins().first
             highlightedPin = first
             scrollTarget = first
         }
-        .onChange(of: addablePins) { _, updated in
+        .onChange(of: addablePins) { (_: [ModelPin], updated: [ModelPin]) in
             if let current = highlightedPin, updated.contains(current) { return }
             highlightedPin = updated.first
         }
         .task {
-            for provider in availableProviders {
-                await model.providers.loadCatalog(provider)
+            await loadCatalogs(for: availableProviders)
+        }
+    }
+
+    private func headerRow(title: String, count: Int) -> some View {
+        let countText: String = "\(count) / \(AppSettings.modelListLimit)"
+        return HStack(spacing: 8) {
+            Text(verbatim: title)
+                .font(.ui(.body, weight: .semibold))
+                .foregroundStyle(Chrome.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            Text(verbatim: countText)
+                .font(.ui(size: 11).monospacedDigit())
+                .foregroundStyle(Chrome.secondaryText)
+                .fixedSize()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
+    private func emptyRowsView(
+        searchQuery: String,
+        availableProviders: [ProviderKind],
+        registry: ProviderRegistry,
+        emptyHeight: CGFloat
+    ) -> some View {
+        let isLoading: Bool = searchQuery.isEmpty && availableProviders.contains { (provider: ProviderKind) -> Bool in
+            registry.loadingCatalogs.contains(provider)
+        }
+        let message: String = Chrome.localized(isLoading ? "Loading models…" : "No matching models")
+        return Text(verbatim: message)
+            .font(.ui(.body))
+            .foregroundStyle(Chrome.secondaryText)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: emptyHeight, alignment: .leading)
+    }
+
+    private func rowsScrollView(
+        rows: [DisplayRow],
+        settings: AppSettings,
+        pinned: Set<ModelPin>,
+        isFull: Bool,
+        rowHeight: CGFloat,
+        firstHeaderHeight: CGFloat,
+        headerHeight: CGFloat,
+        listHeight: CGFloat
+    ) -> some View {
+        ScrollViewReader { (proxy: ScrollViewProxy) in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(rows) { (row: DisplayRow) in
+                        displayRowView(
+                            row: row,
+                            settings: settings,
+                            pinned: pinned,
+                            isFull: isFull,
+                            rowHeight: rowHeight,
+                            firstHeaderHeight: firstHeaderHeight,
+                            headerHeight: headerHeight
+                        )
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
             }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: listHeight)
+            .onChange(of: scrollTarget) { (_: ModelPin?, target: ModelPin?) in
+                guard let target else { return }
+                proxy.scrollTo(target.id)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func displayRowView(
+        row: DisplayRow,
+        settings: AppSettings,
+        pinned: Set<ModelPin>,
+        isFull: Bool,
+        rowHeight: CGFloat,
+        firstHeaderHeight: CGFloat,
+        headerHeight: CGFloat
+    ) -> some View {
+        switch row {
+        case .providerHeader(let provider, let isFirst):
+            providerHeader(provider, isFirst: isFirst, height: isFirst ? firstHeaderHeight : headerHeight)
+        case .model(let provider, let option, let label):
+            let pin = ModelPin(provider: provider, modelID: option.id)
+            let isAdded: Bool = pinned.contains(pin)
+            let showsEffortMenu: Bool = isAdded && addedPins.contains(pin) && !option.efforts.isEmpty
+            let currentEffort: String? = showsEffortMenu
+                ? Self.resolvedEffort(for: option, preference: settings.preference(for: provider, model: option.id))
+                : nil
+            AddModelRow(
+                option: option,
+                displayName: label,
+                rowHeight: rowHeight,
+                isAdded: isAdded,
+                isFull: isFull,
+                isHighlighted: !isAdded && !isFull && highlightedPin == pin,
+                showsEffortMenu: showsEffortMenu,
+                currentEffort: currentEffort,
+                onAdd: { addModel(pin) },
+                onSelectEffort: { (effort: String) in setEffort(effort, for: pin) }
+            )
+        }
+    }
+
+    private func loadCatalogs(for providers: [ProviderKind]) async {
+        let registry: ProviderRegistry = model.providers
+        for provider in providers {
+            await registry.loadCatalog(provider)
         }
     }
 

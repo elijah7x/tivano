@@ -31,6 +31,7 @@ enum ProviderAccountStore {
     static var failOnSave: Int?
     static var orgNameByHome: [String: String] = [:]
     static func load() -> ProviderAccountBook { stored }
+    static func loadAsync() async -> ProviderAccountBook { stored }
     @discardableResult static func save(_ book: ProviderAccountBook) -> Bool {
         do { try saveThrowing(book); return true } catch { return false }
     }
@@ -42,6 +43,9 @@ enum ProviderAccountStore {
     static func defaultCodexHome(environment: [String: String]) -> String { LoginEnvironment.homeDirectory + "/codex" }
     static func claudeIdentity(home: String, isDefault: Bool = false) -> [String: String]? {
         orgNameByHome[home].map { ["organizationName": $0] }
+    }
+    static func readClaudeIdentity(home: String, isDefault: Bool = false) async -> [String: String]? {
+        claudeIdentity(home: home, isDefault: isDefault)
     }
     static func makeHome(provider: ProviderKind, id: UUID, linkingFrom: String) throws -> String {
         let path = accountsRoot + "/" + provider.rawValue + "/" + id.uuidString
@@ -118,7 +122,7 @@ struct PlanLimits: Equatable, Sendable {
         return env
     }
     static func claudeIdentity(executable: URL, environment: [String: String], directory: URL, signingInAccountID: UUID? = nil) async throws -> ClaudeAccountIdentity {
-        guard claudeAccountAllowsProbe(environment: environment, signingInAccountID: signingInAccountID) else {
+        guard await claudeAccountAllowsProbe(environment: environment, signingInAccountID: signingInAccountID) else {
             throw ClaudeAccountValidationError.verificationFailed
         }
         return loginIdentity

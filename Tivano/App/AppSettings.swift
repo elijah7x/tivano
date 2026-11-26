@@ -299,6 +299,7 @@ final class AppSettings {
 
     @ObservationIgnored var onSleepPreventionChanged: (() -> Void)?
     @ObservationIgnored var onExternalControlChanged: (() -> Void)?
+    @ObservationIgnored var onKeychainLoaded: (() -> Void)?
     @ObservationIgnored var onHydraAutoOpensPanelsChanged: (() -> Void)?
 
     var taskSleepMode: TaskSleepMode {
@@ -878,6 +879,7 @@ final class AppSettings {
         zaiAPIKeyInput = resolved[.zai] ?? ""
         commandcodeAPIKeyInput = resolved[.commandcode] ?? ""
         isReadingKeychain = false
+        onKeychainLoaded?()
     }
 
     /// Failed writes keep the edited key in memory without creating a plaintext copy.
@@ -1103,7 +1105,9 @@ final class AppSettings {
         let storedAutoShelveDays = defaults.integer(forKey: Key.autoShelveDays)
         autoShelveDays = ProjectShelfPolicy.dayOptions.contains(storedAutoShelveDays) ? storedAutoShelveDays : 0
         // Auto-continue is now chosen per chat. Drop the old global setting.
-        defaults.removeObject(forKey: "autoContinueAfterLimit")
+        if defaults.object(forKey: "autoContinueAfterLimit") != nil {
+            defaults.removeObject(forKey: "autoContinueAfterLimit")
+        }
         showReasoning = defaults.object(forKey: Key.showReasoning) as? Bool ?? false
         autoUpdateEnabled = defaults.object(forKey: Key.autoUpdateEnabled) as? Bool ?? true
         showsWorkingCard = defaults.object(forKey: Key.showsWorkingCard) as? Bool ?? true
@@ -1228,7 +1232,7 @@ final class AppSettings {
             lastProjectID = nil
         }
         if let data = defaults.data(forKey: Key.lastThreadAffiliation) {
-            lastThreadAffiliation = try? JSONDecoder().decode(ThreadAffiliation.self, from: data)
+            lastThreadAffiliation = try? Self.decoder.decode(ThreadAffiliation.self, from: data)
         } else {
             lastThreadAffiliation = defaults.string(forKey: Key.lastProjectID)
                 .flatMap(UUID.init(uuidString:)).map(ThreadAffiliation.project)
@@ -1628,9 +1632,11 @@ final class AppSettings {
         if let data = try? JSONEncoder().encode(value) { defaults.set(data, forKey: key) }
     }
 
+    private static let decoder = JSONDecoder()
+
     private static func load<Value: Decodable>(_ type: Value.Type, forKey key: String) -> Value? {
         guard let data = (CaptureRun.defaults ?? .standard).data(forKey: key) else { return nil }
-        return try? JSONDecoder().decode(type, from: data)
+        return try? decoder.decode(type, from: data)
     }
 
     func binaryPath(for provider: ProviderKind) -> String {

@@ -148,7 +148,9 @@ def diagnostic_source():
                    "    private static func maintainReports()", "    private static func trimReports("):
         swift += declaration(WATCH, marker) + "\n"
     swift += "}\n"
-    swift += "enum Storage {}\n" + (ROOT / "Tivano/Services/Store/Storage+Diagnostics.swift").read_text()
+    storage = ROOT / "Tivano/Services/Store/Storage.swift"
+    swift += "enum Storage {\n" + "\n".join(declaration(storage, marker) for marker in (
+        "    nonisolated static func measureDiagnostics()", "    nonisolated static func clearDiagnostics()")) + "\n}\n"
     return swift + DIAGNOSTIC_CHECKS
 
 

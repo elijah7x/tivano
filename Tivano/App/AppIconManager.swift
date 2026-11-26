@@ -4,12 +4,13 @@ import Observation
 @MainActor
 @Observable
 final class AppIconManager {
-    private struct AppliedState: Hashable {
+    private struct AppliedState: Hashable, Sendable {
         let style: ThemeStyle
         let edition: AppEdition
     }
 
     static let shared = AppIconManager()
+    private static let writtenBundleIconKey = "appIcon_writtenBundleSignature"
 
     private(set) var image: NSImage
     @ObservationIgnored private var lastApplied: AppliedState?
@@ -78,32 +79,54 @@ final class AppIconManager {
         scheduleBundleIconWrite(state: state, image: rendered)
     }
 
+    private static func bundleIconSignature(state: AppliedState, bundlePath: String) -> String {
+        "\(bundlePath)|\(state.edition.rawValue)|\(state.style.rawValue)|\(AppInfo.version)|\(AppInfo.build)"
+    }
+
     private func scheduleBundleIconWrite(state: AppliedState, image: NSImage?) {
-        guard lastWrittenBundleState != state,
+        guard !CaptureRun.isEnabled,
+              lastWrittenBundleState != state,
               let bundlePath = Self.installedBundlePath() else { return }
 
-        let imageData: Data?
+        let signature = Self.bundleIconSignature(state: state, bundlePath: bundlePath)
+        // Skip re-encoding and rewriting the bundle icon when this bundle already has it.
+        if UserDefaults.standard.string(forKey: Self.writtenBundleIconKey) == signature {
+            lastWrittenBundleState = state
+            return
+        }
+
+        let cgImage: CGImage?
         if let image {
-            guard let tiff = image.tiffRepresentation else { return }
-            imageData = tiff
+            guard let resolved = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            cgImage = resolved
         } else {
-            imageData = nil
+            cgImage = nil
         }
 
         lastWrittenBundleState = state
         let previousWrite = pendingBundleWrite
         previousWrite?.cancel()
-        pendingBundleWrite = Task.detached(priority: .utility) {
+        let defaultsKey = Self.writtenBundleIconKey
+        pendingBundleWrite = Task.detached(priority: .utility) { [weak self] in
             await previousWrite?.value
             guard !Task.isCancelled else { return }
             let icon: NSImage?
-            if let imageData {
-                guard let decoded = NSImage(data: imageData) else { return }
+            if let cgImage {
+                let bitmap = NSBitmapImageRep(cgImage: cgImage)
+                guard let tiff = bitmap.tiffRepresentation, let decoded = NSImage(data: tiff) else { return }
                 icon = decoded
             } else {
                 icon = nil
             }
-            _ = NSWorkspace.shared.setIcon(icon, forFile: bundlePath, options: [])
+            let wrote = NSWorkspace.shared.setIcon(icon, forFile: bundlePath, options: [])
+            guard !Task.isCancelled else { return }
+            if wrote {
+                UserDefaults.standard.set(signature, forKey: defaultsKey)
+            } else {
+                await MainActor.run {
+                    if self?.lastWrittenBundleState == state { self?.lastWrittenBundleState = nil }
+                }
+            }
         }
     }
 

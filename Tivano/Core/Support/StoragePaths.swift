@@ -10,9 +10,12 @@ enum StoragePaths {
         return url
     }()
 
+    nonisolated static let taskWorkspacesRoot: URL = root.appendingPathComponent("task-workspaces", isDirectory: true)
+
+    nonisolated static let hydraBackupsRoot: URL = root.appendingPathComponent("hydra-backups", isDirectory: true)
+
     nonisolated static func taskWorkspace(_ threadID: UUID) -> URL {
-        root.appendingPathComponent("task-workspaces", isDirectory: true)
-            .appendingPathComponent(threadID.uuidString, isDirectory: true)
+        taskWorkspacesRoot.appendingPathComponent(threadID.uuidString, isDirectory: true)
     }
 
     @discardableResult

@@ -472,12 +472,5 @@ enum MCPCatalog {
         return entries.first { normalize($0.name) == want }
     }
 
-    static var byCategory: [(category: MCPCategory, entries: [MCPCatalogEntry])] {
-        MCPCategory.allCases.compactMap { category in
-            let group = entries.filter { $0.category == category }
-            return group.isEmpty ? nil : (category: category, entries: group)
-        }
-    }
-
     static let ids: [String] = entries.map(\.id)
 }

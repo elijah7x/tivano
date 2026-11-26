@@ -14,12 +14,8 @@ struct NativeFileTools: Sendable {
     }
     private static let skippedDirectories: Set<String> = [".git", "node_modules", ".build", "build", "dist", "DerivedData", "Pods", "target", ".venv", "venv"]
 
-    private func localized(_ key: String) -> String {
-        Bundle.main.localizedString(forKey: key, value: key, table: "Localizable")
-    }
-
     private func outsideProject() -> ProviderError {
-        .failed(String(format: localized("That path is outside the project. Stay inside %@."), workingDirectory))
+        .failed(String(format: AppText.localized("That path is outside the project. Stay inside %@."), workingDirectory))
     }
 
     private func systemError() -> NSError {
@@ -50,7 +46,7 @@ struct NativeFileTools: Sendable {
         let trimmed = path.trimmed
         guard !trimmed.isEmpty else { throw ProviderError.failed("A file path is required.") }
         guard !trimmed.utf8.contains(0) else {
-            throw ProviderError.failed(localized("A file path must not contain a null character."))
+            throw ProviderError.failed(AppText.localized("A file path must not contain a null character."))
         }
         let candidate = (trimmed.hasPrefix("/") || trimmed.hasPrefix("~")
             ? URL(fileURLWithPath: (trimmed as NSString).expandingTildeInPath)
@@ -126,7 +122,7 @@ struct NativeFileTools: Sendable {
         var info = stat()
         guard Darwin.fstat(fd, &info) == 0 else { throw systemError() }
         guard info.st_mode & S_IFMT == S_IFREG else {
-            throw ProviderError.failed(localized("That path is not a regular file."))
+            throw ProviderError.failed(AppText.localized("That path is not a regular file."))
         }
         return try body(fd)
     }
@@ -163,7 +159,7 @@ struct NativeFileTools: Sendable {
         let exists = Darwin.fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) == 0
         if !exists, errno != ENOENT { throw systemError() }
         if exists, info.st_mode & S_IFMT != S_IFREG {
-            throw ProviderError.failed(localized("That path is not a regular file."))
+            throw ProviderError.failed(AppText.localized("That path is not a regular file."))
         }
         let temporary = ".tivano-" + UUID().uuidString
         let fd = Darwin.openat(parent, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o666))
@@ -313,7 +309,7 @@ struct NativeFileTools: Sendable {
         let trimmed = pattern.trimmed
         guard !trimmed.isEmpty else { return "Error: a search pattern is required." }
         guard !trimmed.utf8.contains(0) else {
-            throw ProviderError.failed(localized("A search pattern must not contain a null character."))
+            throw ProviderError.failed(AppText.localized("A search pattern must not contain a null character."))
         }
         // Apple Libc regex(3): REG_EXTENDED retains grep -E's POSIX ERE dialect.
         // grep treats newline-separated patterns as alternatives, including -F.
@@ -327,7 +323,7 @@ struct NativeFileTools: Sendable {
                 var expression = regex_t()
                 let status = pattern.withCString { Darwin.regcomp(&expression, $0, REG_EXTENDED | REG_NOSUB) }
                 guard status == 0 else {
-                    throw ProviderError.failed(localized("That search regular expression is invalid."))
+                    throw ProviderError.failed(AppText.localized("That search regular expression is invalid."))
                 }
                 expressions.append(expression)
             }
@@ -345,7 +341,7 @@ struct NativeFileTools: Sendable {
         let deadline = Date().addingTimeInterval(30)
         func checkSearch() throws {
             try Task.checkCancellation()
-            guard Date() < deadline else { throw ProviderError.failed(localized("Search failed.")) }
+            guard Date() < deadline else { throw ProviderError.failed(AppText.localized("Search failed.")) }
         }
         return try withRoot { root, rootFD in
             let base = try resolveURL(path.trimmed.isEmpty ? "." : path, root: root)
@@ -382,7 +378,7 @@ struct NativeFileTools: Sendable {
                         let newline = chunk[start...].firstIndex(of: 10)
                         let end = newline ?? chunk.endIndex
                         guard pending.count + chunk.distance(from: start, to: end) <= 1_048_576 else {
-                            throw ProviderError.failed(localized("Search stopped because a line exceeds 1 MiB. Results are incomplete."))
+                            throw ProviderError.failed(AppText.localized("Search stopped because a line exceeds 1 MiB. Results are incomplete."))
                         }
                         pending.append(contentsOf: chunk[start..<end])
                         guard let newline else { break }

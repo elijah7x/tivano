@@ -122,7 +122,7 @@ enum KeepsakeStore {
         let temporary = directory.appendingPathComponent(".keepsakes-\(id).tmp")
         let backup = directory.appendingPathComponent("keepsakes-recovery-\(source)-\(id).json")
         defer { try? FileManager.default.removeItem(at: temporary) }
-        try data.write(to: temporary, options: .atomic)
+        try data.write(to: temporary, options: .withoutOverwriting)
         try FileManager.default.linkItem(at: temporary, to: backup)
     }
 

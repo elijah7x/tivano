@@ -50,15 +50,3 @@ struct AlphaSettingsPage: View {
         }
     }
 }
-
-/// A feature's controls while Alpha is off: shown, dimmed and out of reach.
-private struct AlphaGated: ViewModifier {
-    let isOn: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .disabled(!isOn)
-            .opacity(isOn ? 1 : 0.5)
-            .animation(.smooth(duration: 0.2), value: isOn)
-    }
-}

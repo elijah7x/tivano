@@ -258,7 +258,8 @@ struct TokenUsagePage: View {
                         snapshotNotices(snapshot)
                         if model.summary.hasRangeTokens {
                             TokenWatershedView(data: model.watershedData, metric: model.metric,
-                                               isAnimating: isAnimating,
+                                               // UI cannot see FrontMonitor (App); a hidden app animates nothing.
+                                               isAnimating: isAnimating && FrontMonitor.shared.isVisible,
                                                selection: Binding(get: { model.selection }, set: { model.selection = $0 }),
                                                refreshToken: model.refreshToken)
                                 .frame(minHeight: 340)
@@ -455,12 +456,6 @@ struct TokenUsagePage: View {
         }
     }
 
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter
-    }()
-
     private static let absoluteFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .full
@@ -470,7 +465,7 @@ struct TokenUsagePage: View {
 
     private func updateRelativeTime() {
         guard let fetchedAt = model.snapshot?.fetchedAt else { relativeUpdate = ""; return }
-        relativeUpdate = Self.relativeFormatter.localizedString(for: fetchedAt, relativeTo: Date())
+        relativeUpdate = AppFormatting.relativeDateTime.localizedString(for: fetchedAt, relativeTo: Date())
     }
 
     private func absoluteUpdate(_ snapshot: TokenUsageSnapshot) -> String {

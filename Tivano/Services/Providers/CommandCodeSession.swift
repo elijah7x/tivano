@@ -126,6 +126,9 @@ final class CommandCodeSession: ProviderSession {
     func send(_ input: TurnInput) async throws {
         guard isRunning, let executable = configuration.executable else { throw ProviderError.notRunning }
         guard !turnActive else { throw ProviderError.failed(AppText.localized("Command Code is still on the last turn.")) }
+        await MCPStore.waitUntilReady()
+        guard isRunning else { throw ProviderError.notRunning }
+        guard !turnActive else { throw ProviderError.failed(AppText.localized("Command Code is still on the last turn.")) }
         runtimeMode = input.runtimeMode
         interactionMode = input.interactionMode
         if let model = input.model, !model.isEmpty { self.model = model }
@@ -329,7 +332,6 @@ final class CommandCodeSession: ProviderSession {
             let used = input + output
             if used > 0 {
                 onEvent?(.usage(ContextUsage(usedTokens: used, windowTokens: CommandCodeAPI.contextWindow(for: activeModel ?? model))))
-                TokenLedger.shared.record(spend: used)
                 // One model request's own usage, so the amount needs no baseline.
                 onEvent?(.tokenSpend(TokenSpend(
                     provider: .commandcode,
@@ -702,13 +704,7 @@ final class CommandCodeSession: ProviderSession {
             ? ["decision": "allow"]
             : ["decision": "deny", "reason": "The user declined this in Tivano. Do not retry it; take another approach or explain what you would need."]
         let file = approvalDirectory.appendingPathComponent("\(id).reply.json")
-        let temporary = approvalDirectory.appendingPathComponent("\(id).reply.json.tmp")
-        do {
-            try reply.data().write(to: temporary, options: .atomic)
-            _ = try FileManager.default.replaceItemAt(file, withItemAt: temporary)
-        } catch {
-            try? reply.data().write(to: file, options: .atomic)
-        }
+        try? reply.data().write(to: file, options: .atomic)
     }
 
     /// Requests and replies a finished run left behind, so a stale one never answers a

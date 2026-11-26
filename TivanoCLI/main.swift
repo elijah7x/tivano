@@ -42,6 +42,7 @@ private struct Arguments {
     var positional: [String] = []
     var flags: [String: String] = [:]
     var stdin = false
+    var before = false
 
     init(_ values: [String]) throws {
         var index = 0
@@ -50,6 +51,10 @@ private struct Arguments {
             if value == "--stdin" {
                 guard !stdin else { throw ControlFailure(code: .invalidRequest) }
                 stdin = true
+                index += 1
+            } else if value == "--before" {
+                guard !before else { throw ControlFailure(code: .invalidRequest) }
+                before = true
                 index += 1
             } else if value.hasPrefix("--") {
                 guard index + 1 < values.count, flags[value] == nil, !values[index + 1].hasPrefix("--") else { throw ControlFailure(code: .invalidRequest) }
@@ -73,7 +78,7 @@ private struct Arguments {
         return ControlPage(limit: limit, cursor: take("--cursor"))
     }
     func finished() throws {
-        guard flags.isEmpty, !stdin else { throw ControlFailure(code: .invalidRequest) }
+        guard flags.isEmpty, !stdin, !before else { throw ControlFailure(code: .invalidRequest) }
     }
 }
 
@@ -172,6 +177,12 @@ private enum CLI {
             default: throw ControlFailure(code: .invalidRequest)
             }
             return .create(ControlCreate(ticket: ticket, projectID: try args.uuid("--project"), workspace: workspace, provider: provider, model: args.take("--model"), hydra: hydra))
+        case "branch":
+            let threadID = try id()
+            guard let turnID = try args.uuid("--turn") else { throw ControlFailure(code: .invalidRequest) }
+            let mode: ControlBranchMode = args.before ? .before : .through
+            args.before = false
+            return .branch(ControlBranch(ticket: ticket, threadID: threadID, turnID: turnID, mode: mode))
         case "send":
             let threadID = try id()
             guard let mode = ControlContinuation(rawValue: args.take("--continuation") ?? "automatic") else { throw ControlFailure(code: .invalidRequest) }

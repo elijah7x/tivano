@@ -17,12 +17,13 @@ extension AppModel {
         var undoneSessionLost: Bool?
         updateThread(threadID) { thread in
             if thread.pendingProviderSwitch == nil {
-                thread.pendingProviderSwitch = ProviderSwitchOrigin(provider: thread.provider, model: thread.model, effort: thread.effort, fastMode: thread.fastMode, dshMode: thread.dshMode, runtimeMode: thread.runtimeMode, interactionMode: thread.interactionMode, chimeraHydraSnapshot: thread.chimeraHydraSnapshot, chimeraEnabled: thread.chimeraEnabled, hydraEnabled: thread.hydraEnabled, hydraEnabledIsExplicit: thread.hydraEnabledIsExplicit, hydraPairID: thread.hydraPairID, temporaryHydraPair: thread.temporaryHydraPair, providerSessionID: thread.providerSessionID, providerResumeAt: thread.providerResumeAt)
+                thread.pendingProviderSwitch = ProviderSwitchOrigin(provider: thread.provider, model: thread.model, effort: thread.effort, fastMode: thread.fastMode, dshMode: thread.dshMode, runtimeMode: thread.runtimeMode, interactionMode: thread.interactionMode, chimeraHydraSnapshot: thread.chimeraHydraSnapshot, chimeraEnabled: thread.chimeraEnabled, hydraEnabled: thread.hydraEnabled, hydraEnabledIsExplicit: thread.hydraEnabledIsExplicit, hydraPairID: thread.hydraPairID, temporaryHydraPair: thread.temporaryHydraPair, providerSessionID: thread.providerSessionID, providerResumeAt: thread.providerResumeAt, providerForkPending: thread.providerForkPending)
             }
             guard let origin = thread.pendingProviderSwitch else { return }
             apply(&thread)
             thread.providerSessionID = nil
             thread.providerResumeAt = nil
+            thread.providerForkPending = false
             if thread.provider == origin.provider {
                 // Back on the old provider: its session returns and the new selection holds,
                 // including any Hydra pair, as an ordinary same-provider choice would.
@@ -62,6 +63,8 @@ extension AppModel {
         thread.temporaryHydraPair = origin.temporaryHydraPair
         thread.providerSessionID = origin.providerSessionID
         thread.providerResumeAt = origin.providerResumeAt
+        // A branch not yet sent still has to fork the source's session, not continue it.
+        thread.providerForkPending = origin.providerForkPending
         thread.pendingProviderSwitch = nil
     }
 

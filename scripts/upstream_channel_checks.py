@@ -8,10 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_UPDATES = ROOT / 'Tivano/Services/Providers/CLIUpdates.swift'
 ACP = ROOT / 'Tivano/Services/Providers/ACPSession.swift'
 PI = ROOT / 'Tivano/Services/Providers/PiSession.swift'
+PI_RPC = ROOT / 'Tivano/Services/Providers/PiRPCSession.swift'
 
 
 def main():
-    for path in (CLI_UPDATES, ACP, PI):
+    for path in (CLI_UPDATES, ACP, PI, PI_RPC):
         if not path.is_file():
             print(f'FAIL: {path.relative_to(ROOT)} is missing', file=sys.stderr)
             return 1
@@ -32,8 +33,9 @@ def main():
     elif '.modeChanged(' not in acp[start:end]:
         failures.append('ACPSession.swift: config_option_update must emit .modeChanged when the mode changes')
     # pi's --approve/--no-approve only decide project-local trust; tool approval is Tivano's gate.
-    if re.search(r'"--(no-)?approve"', PI.read_text(encoding='utf-8')):
-        failures.append('PiSession.swift must not pass --approve/--no-approve (they trust or ignore project files)')
+    for pi_path in (PI, PI_RPC):
+        if re.search(r'"--(no-)?approve"', pi_path.read_text(encoding='utf-8')):
+            failures.append(f'{pi_path.name} must not pass --approve/--no-approve (they trust or ignore project files)')
     if failures:
         for failure in failures:
             print(f'FAIL: {failure}', file=sys.stderr)

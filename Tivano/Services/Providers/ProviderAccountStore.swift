@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import Synchronization
 
 struct CodexImportCandidate: Identifiable, Equatable, Sendable {
     var id: String
@@ -10,14 +11,68 @@ struct CodexImportCandidate: Identifiable, Equatable, Sendable {
 }
 
 enum ProviderAccountStore {
+    private struct FileFingerprint: Equatable, Sendable {
+        var path: String
+        var size: Int64
+        var mtimeSeconds: Int
+        var mtimeNanoseconds: Int
+        var inode: UInt64
+    }
+
+    private struct CachedBook: Sendable {
+        var fingerprint: FileFingerprint
+        var book: ProviderAccountBook
+    }
+
+    private struct CachedClaudeIdentity: Sendable {
+        var fingerprint: FileFingerprint
+        var oauthAccount: JSONValue?
+    }
+
+    private nonisolated static let bookCache = Mutex<CachedBook?>(nil)
+    private nonisolated static let claudeIdentityCache = Mutex<[String: CachedClaudeIdentity]>([:])
+
+    private nonisolated static func fingerprint(at url: URL) -> FileFingerprint? {
+        var st = stat()
+        guard stat(url.path, &st) == 0 else { return nil }
+        return FileFingerprint(
+            path: url.path,
+            size: Int64(st.st_size),
+            mtimeSeconds: st.st_mtimespec.tv_sec,
+            mtimeNanoseconds: st.st_mtimespec.tv_nsec,
+            inode: UInt64(st.st_ino)
+        )
+    }
+
     nonisolated static var fileURL: URL {
         StoragePaths.root.appendingPathComponent("provider-accounts.json")
     }
 
     nonisolated static func load() -> ProviderAccountBook {
-        guard let data = try? Data(contentsOf: fileURL),
-              let book = try? JSONDecoder().decode(ProviderAccountBook.self, from: data) else { return ProviderAccountBook() }
+        let url = fileURL
+        guard let current = fingerprint(at: url) else {
+            bookCache.withLock { $0 = nil }
+            return ProviderAccountBook()
+        }
+        if let cached = bookCache.withLock({ $0 }), cached.fingerprint == current {
+            return cached.book
+        }
+        guard let data = try? Data(contentsOf: url),
+              let book = try? JSONDecoder().decode(ProviderAccountBook.self, from: data) else {
+            bookCache.withLock { $0 = nil }
+            return ProviderAccountBook()
+        }
+        if let after = fingerprint(at: url), after == current {
+            bookCache.withLock { $0 = CachedBook(fingerprint: current, book: book) }
+        } else {
+            bookCache.withLock { $0 = nil }
+        }
         return book
+    }
+
+    @concurrent
+    static func loadAsync() async -> ProviderAccountBook {
+        load()
     }
 
     @discardableResult
@@ -32,7 +87,18 @@ enum ProviderAccountStore {
     }
 
     nonisolated static func saveThrowing(_ book: ProviderAccountBook) throws {
-        try writePrivate(JSONEncoder().encode(book), to: fileURL)
+        let url = fileURL
+        do {
+            try writePrivate(JSONEncoder().encode(book), to: url)
+        } catch {
+            bookCache.withLock { $0 = nil }
+            throw error
+        }
+        if let current = fingerprint(at: url) {
+            bookCache.withLock { $0 = CachedBook(fingerprint: current, book: book) }
+        } else {
+            bookCache.withLock { $0 = nil }
+        }
     }
 
     nonisolated static var accountsRoot: String {
@@ -58,8 +124,32 @@ enum ProviderAccountStore {
         guard !CaptureRun.isEnabled else { return nil }
         let url = isDefault ? URL(fileURLWithPath: LoginEnvironment.homeDirectory).appendingPathComponent(".claude.json")
             : URL(fileURLWithPath: home).appendingPathComponent(".claude.json")
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return JSONValue.parse(data)?["oauthAccount"]
+        guard let current = fingerprint(at: url) else {
+            claudeIdentityCache.withLock { $0.removeValue(forKey: url.path) }
+            return nil
+        }
+        if let cached = claudeIdentityCache.withLock({ $0[url.path] }), cached.fingerprint == current {
+            return cached.oauthAccount
+        }
+        guard let data = try? Data(contentsOf: url), let parsed = JSONValue.parse(data) else {
+            claudeIdentityCache.withLock { $0.removeValue(forKey: url.path) }
+            return nil
+        }
+        let oauthAccount = parsed["oauthAccount"]
+        if let after = fingerprint(at: url), after == current {
+            claudeIdentityCache.withLock { cache in
+                if cache.count >= 16, cache[url.path] == nil { cache.removeAll() }
+                cache[url.path] = CachedClaudeIdentity(fingerprint: current, oauthAccount: oauthAccount)
+            }
+        } else {
+            claudeIdentityCache.withLock { $0.removeValue(forKey: url.path) }
+        }
+        return oauthAccount
+    }
+
+    @concurrent
+    static func readClaudeIdentity(home: String, isDefault: Bool = false) async -> JSONValue? {
+        claudeIdentity(home: home, isDefault: isDefault)
     }
 
     nonisolated static func claudeCredentials(environment: [String: String]) async throws -> Data? {

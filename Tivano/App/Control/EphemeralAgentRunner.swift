@@ -726,6 +726,7 @@ import Foundation
             apiKey = provider == .zcode ? app.settings.apiKey(for: .zai) : nil
         }
 
+        await app.mcp.ensureReady()
         let launchAccount = provider == .claude ? claudeAccount : app.providers.accounts.activeAccount(for: provider)
         let environment = app.providers.environment(for: provider, account: launchAccount)
         let needsCatalog = provider.namesModelVariants || provider == .dsh || provider == .minimaxCode || provider == .antigravity

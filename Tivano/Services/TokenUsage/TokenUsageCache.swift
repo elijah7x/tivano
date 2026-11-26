@@ -6,17 +6,17 @@ enum TokenUsageCache {
             .appendingPathComponent("snapshot.json")
     }
 
-    static func load() -> TokenUsageSnapshot? {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+    @concurrent
+    static func load() async -> TokenUsageSnapshot? {
         guard let data = try? Data(contentsOf: fileURL),
-              let snapshot = try? decoder.decode(TokenUsageSnapshot.self, from: data),
+              let snapshot = try? JSONDecoder.storage.decode(TokenUsageSnapshot.self, from: data),
               snapshot.schemaVersion == TokenUsageSnapshot.currentSchemaVersion,
               snapshot.source.id == TokenTakenSource.sourceID else { return nil }
         return snapshot
     }
 
-    static func save(_ snapshot: TokenUsageSnapshot) throws {
+    @concurrent
+    static func save(_ snapshot: TokenUsageSnapshot) async throws {
         let url = fileURL
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()

@@ -44,7 +44,12 @@ final class AutoContinue {
     /// The chats waiting for their limit, and when they go on. Only chats whose user chose
     /// to wait are here: this is what reads as work in progress and keeps the Mac awake.
     private(set) var resumesAt: [UUID: Date] = [:] {
-        didSet { app?.updateTaskSleepPrevention() }
+        didSet { notifySleepPrevention() }
+    }
+
+    private func notifySleepPrevention() {
+        let appModel: AppModel? = app
+        appModel?.updateTaskSleepPrevention()
     }
 
     @ObservationIgnored private weak var app: AppModel?

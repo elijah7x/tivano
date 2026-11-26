@@ -2,17 +2,13 @@ import Foundation
 
 enum RemoteMCPPages {
     static func waiting(clientName: String, code: String) -> String {
-        let title = localized("Approve on your Mac")
-        let body = String(format: localized("Tivano is waiting for you to approve %@ on your Mac. Check that Tivano shows this code:"), clientName)
-        return document(title: title, content: "<p>\(escape(body))</p><strong>\(escape(code))</strong><p>\(escape(localized("This page refreshes by itself. You can close it after your agent says it is connected.")))</p>", refresh: true)
+        let title = AppText.localized("Approve on your Mac")
+        let body = String(format: AppText.localized("Tivano is waiting for you to approve %@ on your Mac. Check that Tivano shows this code:"), clientName)
+        return document(title: title, content: "<p>\(escape(body))</p><strong>\(escape(code))</strong><p>\(escape(AppText.localized("This page refreshes by itself. You can close it after your agent says it is connected.")))</p>", refresh: true)
     }
 
     static func message(title: String, body: String) -> String {
-        document(title: localized(title), content: "<p>\(escape(localized(body)))</p>", refresh: false)
-    }
-
-    private static func localized(_ key: String) -> String {
-        Bundle.main.localizedString(forKey: key, value: key, table: "Localizable")
+        document(title: AppText.localized(title), content: "<p>\(escape(AppText.localized(body)))</p>", refresh: false)
     }
 
     private static func escape(_ value: String) -> String {

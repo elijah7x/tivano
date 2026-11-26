@@ -52,6 +52,11 @@ enum Storage {
         }
     }
 
+    @concurrent
+    static func hasStoredTurnsAsync(_ id: UUID) async throws -> Bool {
+        try hasStoredTurns(id)
+    }
+
     // Each directory is created on first use and its URL kept: the thread URL is taken on
     // every save, prefetch and delete, and a stat plus mkdir per call was pure waste.
     static let threadsDirectory: URL = directory("threads")
@@ -78,17 +83,6 @@ enum Storage {
 
     private static func directory(_ name: String) -> URL {
         StoragePaths.directory(name)
-    }
-
-    nonisolated static func loadLibrary() -> Result<Library, Error> {
-        do {
-            let data = try Data(contentsOf: libraryURL)
-            return .success(try JSONDecoder.storage.decode(Library.self, from: data))
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return .success(Library())
-        } catch {
-            return .failure(error)
-        }
     }
 
     nonisolated static func loadLibraryRecovering() -> LibraryLoad {
@@ -139,9 +133,7 @@ enum Storage {
                 if skippedCount > 0, skippedCount >= recovered.library.projects.count + recovered.library.threads.count {
                     return .failed(error)
                 }
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                let timestamp = formatter.string(from: .now).replacingOccurrences(of: ":", with: "-")
+                let timestamp = ISO8601.fractional.format(.now).replacingOccurrences(of: ":", with: "-")
                 let backup = root.appendingPathComponent("library-before-recovery-\(timestamp).json")
                 try FileManager.default.copyItem(at: libraryURL, to: backup)
                 var quarantine: URL?
@@ -273,7 +265,7 @@ enum Storage {
 
     /// Where unreadable thread files are kept: `Unreadable/<thread> <stamp>` under threads/.
     nonisolated static func unreadableFolder(for id: UUID) -> URL {
-        let stamp = ISO8601DateFormatter().string(from: .now).replacingOccurrences(of: ":", with: "-")
+        let stamp = ISO8601.string(from: .now).replacingOccurrences(of: ":", with: "-")
         return threadsDirectory.appendingPathComponent("Unreadable", isDirectory: true)
             .appendingPathComponent("\(id.uuidString) \(stamp)", isDirectory: true)
     }
@@ -347,13 +339,21 @@ enum Storage {
         let threads = threadsDirectory
         await DiskWriter.shared.performMaintenance { deleteIfUnchanged in
             let fileManager = FileManager.default
+            guard let names = try? fileManager.contentsOfDirectory(atPath: attachments.path), !names.isEmpty else { return }
+            let candidateCutoff = Date.now.addingTimeInterval(-24 * 60 * 60)
+            let hasDeletableCandidate = names.contains { name in
+                guard name.wholeMatch(of: #/[0-9A-Fa-f-]{36}\.[A-Za-z0-9]+/#) != nil else { return false }
+                let url = attachments.appendingPathComponent(name)
+                guard let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else { return false }
+                return modified < candidateCutoff
+            }
+            guard hasDeletableCandidate else { return }
             let incomplete = Mutex(false)
-            guard let names = try? fileManager.contentsOfDirectory(atPath: attachments.path), !names.isEmpty,
-                  let enumerator = fileManager.enumerator(at: threads, includingPropertiesForKeys: nil, errorHandler: { _, error in
-                      incomplete.withLock { $0 = true }
-                      NSLog("Attachment cleanup skipped: %@", error.localizedDescription)
-                      return false
-                  }), let documents = enumerator.allObjects as? [URL], !incomplete.withLock({ $0 }) else { return }
+            guard let enumerator = fileManager.enumerator(at: threads, includingPropertiesForKeys: nil, errorHandler: { _, error in
+                incomplete.withLock { $0 = true }
+                NSLog("Attachment cleanup skipped: %@", error.localizedDescription)
+                return false
+            }), let documents = enumerator.allObjects as? [URL], !incomplete.withLock({ $0 }) else { return }
             let quarantined = threads.appendingPathComponent("Unreadable").path + "/"
             guard !documents.contains(where: { $0.path.hasPrefix(quarantined) }) else { return }
             var referenced = Set<String>()
@@ -362,22 +362,32 @@ enum Storage {
             // Quarantine can contain undecodable references; an incomplete census
             // cannot authorize deletion, even when a text search finds no paths.
             for document in documents where document.pathExtension == "json" {
-                guard let data = try? Data(contentsOf: document),
-                      (try? JSONSerialization.jsonObject(with: data)) != nil else {
+                guard let data = try? Data(contentsOf: document) else {
                     NSLog("Attachment cleanup skipped: unreadable history %@", document.lastPathComponent)
                     return
                 }
                 if document.deletingLastPathComponent() == threads,
                    let id = UUID(uuidString: document.deletingPathExtension().lastPathComponent) {
-                    guard let history = try? JSONDecoder.storage.decode(ThreadDocument.self, from: data) else { return }
+                    guard let history = try? JSONDecoder.storage.decode(ThreadDocument.self, from: data) else {
+                        NSLog("Attachment cleanup skipped: unreadable history %@", document.lastPathComponent)
+                        return
+                    }
                     for reference in history.turnIndex ?? [] {
                         requiredTurns.insert(turnURL(id, reference.id).path + "#\(reference.revision)")
                     }
                 } else if document.deletingLastPathComponent().lastPathComponent.hasSuffix(".turns") {
-                    guard let file = try? JSONDecoder.storage.decode(StoredTurnFile.self, from: data) else { return }
+                    guard let file = try? JSONDecoder.storage.decode(StoredTurnFile.self, from: data) else {
+                        NSLog("Attachment cleanup skipped: unreadable history %@", document.lastPathComponent)
+                        return
+                    }
                     for (revision, stored) in file.revisions {
                         guard stored.turn.id == UUID(uuidString: document.deletingPathExtension().lastPathComponent) else { return }
                         availableTurns.insert(document.path + "#" + revision)
+                    }
+                } else {
+                    guard (try? JSONSerialization.jsonObject(with: data)) != nil else {
+                        NSLog("Attachment cleanup skipped: unreadable history %@", document.lastPathComponent)
+                        return
                     }
                 }
                 let text = String(decoding: data, as: UTF8.self)
@@ -473,6 +483,28 @@ enum Storage {
         CGImageDestinationAddImage(destination, image, encoding as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return data as Data
+    }
+
+    /// A query uses the writer's serialization lane but never its creation/repair APIs.
+    /// In particular, do not use threadsDirectory here: that getter creates a directory.
+    @concurrent
+    static func controlHistory(_ query: ControlHistoryQuery, scope: String, allowsMissing: Bool) async throws -> ControlHistoryPage {
+        try DiskWriter.shared.readSynchronously {
+            try ControlHistoryReader(threadsDirectory: root.appendingPathComponent("threads", isDirectory: true))
+                .page(threadID: query.threadID, request: query.page, scope: scope, allowsMissing: allowsMissing)
+        }
+    }
+
+    nonisolated static func measureDiagnostics() async throws -> RuntimeStorageUsage {
+        try await Task.detached(priority: .utility) {
+            try HangWatchdog.measureDiagnostics()
+        }.value
+    }
+
+    nonisolated static func clearDiagnostics() async throws {
+        try await Task.detached(priority: .utility) {
+            try HangWatchdog.clearDiagnostics()
+        }.value
     }
 }
 
@@ -613,7 +645,7 @@ final class DiskWriter: Sendable {
     /// by the next one for the same file, so a backlog never encodes and writes documents
     /// that are already stale when their turn comes.
     private struct PendingWrite: Sendable {
-        var value: any Encodable & Sendable
+        var library: Library
         var completions: [@Sendable (Bool) -> Void]
     }
     private let pending = Mutex<[URL: PendingWrite]>([:])
@@ -634,22 +666,18 @@ final class DiskWriter: Sendable {
         sizes.withLock { $0[url] }
     }
 
-    func encodeAndWrite<Value: Encodable & Sendable>(_ value: Value, to url: URL) {
-        encodeAndWrite(value, to: url, completion: { _ in })
-    }
-
-    func encodeAndWrite<Value: Encodable & Sendable>(_ value: Value, to url: URL, completion: @escaping @Sendable (Bool) -> Void) {
+    func encodeAndWrite(_ library: Library, to url: URL, completion: @escaping @Sendable (Bool) -> Void) {
         beginMutation()
         defer { endMutation() }
         let queued = pending.withLock { pending in
             let previous = pending[url]
-            pending[url] = PendingWrite(value: value, completions: (previous?.completions ?? []) + [completion])
+            pending[url] = PendingWrite(library: library, completions: (previous?.completions ?? []) + [completion])
             return previous != nil
         }
         guard !queued else { return }
         queue.async { [self] in
             guard let write = pending.withLock({ $0.removeValue(forKey: url) }) else { return }
-            let size = self.write(write.value, to: url)
+            let size = self.write(write.library, to: url)
             if let size { sizes.withLock { $0[url] = size } }
             for completion in write.completions { completion(size != nil) }
         }
@@ -773,12 +801,12 @@ final class DiskWriter: Sendable {
     }
 
     @discardableResult
-    func writeSynchronously<Value: Encodable & Sendable>(_ value: Value, to url: URL) -> Bool {
+    func writeSynchronously(_ library: Library, to url: URL) -> Bool {
         beginMutation()
         defer { endMutation() }
         let completions = pending.withLock { $0.removeValue(forKey: url)?.completions ?? [] }
         return queue.sync {
-            let size = write(value, to: url)
+            let size = write(library, to: url)
             if let size { sizes.withLock { $0[url] = size } }
             for completion in completions { completion(size != nil) }
             return size != nil
@@ -788,17 +816,15 @@ final class DiskWriter: Sendable {
     /// A provider-history action must not proceed if its recovery state cannot save.
     /// Awaited rather than run with `queue.sync`: the caller is the main actor, and a
     /// whole-library write queued behind other documents would hold the app still.
-    func writeOrThrow<Value: Encodable & Sendable>(_ value: Value, to url: URL) async throws {
+    func writeOrThrow(_ library: Library, to url: URL) async throws {
         beginMutation()
         defer { endMutation() }
         let completions = pending.withLock { $0.removeValue(forKey: url)?.completions ?? [] }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 do {
-                    if value is Library {
-                        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    }
-                    let data = try JSONEncoder.storage.encode(value)
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    let data = try JSONEncoder.storage.encode(library)
                     try data.write(to: url, options: .atomic)
                     sizes.withLock { $0[url] = data.count }
                     errors.withLock { $0[url] = nil }
@@ -900,12 +926,10 @@ final class DiskWriter: Sendable {
     }
 
     @discardableResult
-    private func write(_ value: any Encodable, to url: URL) -> Int? {
+    private func write(_ library: Library, to url: URL) -> Int? {
         do {
-            if value is Library {
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            }
-            let data = try JSONEncoder.storage.encode(value)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder.storage.encode(library)
             try data.write(to: url, options: .atomic)
             errors.withLock { $0[url] = nil }
             return data.count

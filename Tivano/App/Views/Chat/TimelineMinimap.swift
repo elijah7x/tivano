@@ -199,12 +199,32 @@ struct TimelineMinimapRail: View, Equatable {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(WindowLiveResize.self) private var liveResize
-    @Environment(AppModel.self) private var model
+
+    @MainActor
+    private final class EntryLookupCache {
+        private var sourceEntries: [TimelineMinimapEntry]?
+        private var byID: [String: (index: Int, entry: TimelineMinimapEntry)] = [:]
+
+        func match(for id: String, in entries: [TimelineMinimapEntry]) -> (index: Int, entry: TimelineMinimapEntry)? {
+            if sourceEntries != entries {
+                sourceEntries = entries
+                var map: [String: (index: Int, entry: TimelineMinimapEntry)] = [:]
+                map.reserveCapacity(entries.count)
+                for (index, entry) in entries.enumerated() where map[entry.id] == nil {
+                    map[entry.id] = (index, entry)
+                }
+                byID = map
+            }
+            return byID[id]
+        }
+    }
 
     /// Tick under the pointer, nil once the pointer leaves the rail.
     @State private var hoveredID: String?
     /// True while a press is down on the rail (tap or scrub).
     @State private var isPressing = false
+    /// Rebuilt only when `entries` changes, so hover and scrub lookups stay O(1).
+    @State private var entryLookupCache = EntryLookupCache()
 
     private var isExpanded: Bool { hoveredID != nil || isPressing }
     private var baseOpacity: Double { isExpanded ? 0.4 : 0.25 }
@@ -249,8 +269,8 @@ struct TimelineMinimapRail: View, Equatable {
                 ticks(metrics: metrics)
                     .allowsHitTesting(false)
 
-                if let hovered = hoveredEntry {
-                    previewCard(for: hovered, metrics: metrics, railHeight: proxy.size.height)
+                if let hovered = hoveredMatch {
+                    previewCard(for: hovered.entry, index: hovered.index, metrics: metrics, railHeight: proxy.size.height)
                         .allowsHitTesting(false)
                         .transition(.opacity.combined(with: .offset(x: reduceMotion ? 0 : -6)))
                 }
@@ -308,9 +328,9 @@ struct TimelineMinimapRail: View, Equatable {
         return isExpanded ? min(26, base + 2) : base
     }
 
-    private var hoveredEntry: TimelineMinimapEntry? {
+    private var hoveredMatch: (index: Int, entry: TimelineMinimapEntry)? {
         guard let hoveredID else { return nil }
-        return entries.first { $0.id == hoveredID }
+        return entryLookupCache.match(for: hoveredID, in: entries)
     }
 
     /// The card that follows the pointer: the same Liquid Glass surface, corner radius and type
@@ -318,10 +338,11 @@ struct TimelineMinimapRail: View, Equatable {
     @ViewBuilder
     private func previewCard(
         for entry: TimelineMinimapEntry,
+        index: Int,
         metrics: MinimapRailMetrics,
         railHeight: CGFloat
     ) -> some View {
-        let tickCenterY = metrics.centerY(for: indexOf(entry))
+        let tickCenterY = metrics.centerY(for: index)
         // Estimated half height keeps the card inside the chat area without a measurement
         // loop (measuring would re-lay-out on every hover change).
         let half = estimatedCardHeight(entry) / 2
@@ -367,10 +388,6 @@ struct TimelineMinimapRail: View, Equatable {
     }
 
     private static let cardWidth: CGFloat = 300
-
-    private func indexOf(_ entry: TimelineMinimapEntry) -> Int {
-        entries.firstIndex(of: entry) ?? 0
-    }
 
     private func scrubGesture(metrics: MinimapRailMetrics) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)

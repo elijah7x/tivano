@@ -24,55 +24,6 @@ final class GenieAnimator {
 
     private(set) var flights: [Flight] = []
 
-    /// A surface that changes shape on its way between two places: a rounded rectangle whose
-    /// frame and corner radius run from one to the other, as one geometry. The Hydra panel
-    /// grows out of its button this way and shrinks back into it.
-    struct Morph: Identifiable {
-        let id = UUID()
-        let from: CGRect
-        let fromRadius: CGFloat
-        let to: CGRect
-        let toRadius: CGFloat
-        /// How long the surface takes to fade in at the start, over what it is replacing.
-        let fadeIn: Double
-        /// How long the surface holds its first shape before it sets off, so a fade-in can
-        /// finish over the thing it stands in for.
-        let holdsFor: Double
-        /// The surface, drawn for the corner radius it has at that moment.
-        let surface: (CGFloat) -> AnyView
-    }
-
-    private(set) var morphs: [Morph] = []
-
-    /// How long a morph takes to change shape, not counting its hold at the start.
-    nonisolated static let morphDuration: Double = 0.5
-    /// The surface's crossfade at either end, with what it stands in for.
-    nonisolated static let morphCrossfade: Double = 0.12
-    static var morphAnimation: Animation { .smooth(duration: morphDuration) }
-
-    /// Morphs a surface from one frame and corner radius to another, both in the layer's
-    /// coordinates. Returns false when nothing moves (reduced motion, or nothing to draw),
-    /// so the caller can show the real thing instead.
-    @discardableResult
-    func morph<Surface: View>(
-        from: CGRect, radius fromRadius: CGFloat,
-        to: CGRect, radius toRadius: CGFloat,
-        fadeIn: Double = 0, holdsFor: Double = 0,
-        @ViewBuilder surface: @escaping (CGFloat) -> Surface
-    ) -> Bool {
-        guard from.width > 1, from.height > 1, to.width > 1, to.height > 1,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return false }
-        morphs.append(Morph(
-            from: from, fromRadius: fromRadius, to: to, toRadius: toRadius,
-            fadeIn: fadeIn, holdsFor: holdsFor, surface: { AnyView(surface($0)) }
-        ))
-        return true
-    }
-
-    func finishMorph(_ id: UUID) {
-        morphs.removeAll { $0.id == id }
-    }
-
     /// Flies a ghost of a row from `frame`. The ghost draws exactly what `ghost`
     /// returns, so pass the row as it looks — background included — and the row
     /// hands over to it without a visible change. Arriving, the ghost flies the other
@@ -115,9 +66,6 @@ struct GenieLayer: View {
             ZStack(alignment: .topLeading) {
                 ForEach(GenieAnimator.shared.flights) { flight in
                     GenieFlightView(flight: flight, canvas: proxy.size)
-                }
-                ForEach(GenieAnimator.shared.morphs) { morph in
-                    MorphView(morph: morph, canvas: proxy.size)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
@@ -171,44 +119,6 @@ private struct GenieFlightView: View {
                 // Removed just before the keyframes finish, so the flight never springs back.
                 try? await Task.sleep(for: .seconds(GenieAnimator.duration - 0.03))
                 GenieAnimator.shared.finish(flight.id)
-            }
-    }
-}
-
-/// One surface on its way between two shapes: its frame and corner radius animate as one,
-/// so it reads as a single thing growing or shrinking rather than two views swapped. It
-/// fades in over what it replaces, holds while that finishes, changes shape, and fades
-/// out over the last stretch so the real thing can take over underneath.
-private struct MorphView: View {
-    let morph: GenieAnimator.Morph
-    let canvas: CGSize
-
-    @State private var hasStarted = false
-    @State private var hasLanded = false
-    @State private var isFading = false
-
-    var body: some View {
-        let frame = hasLanded ? morph.to : morph.from
-        let radius = hasLanded ? morph.toRadius : morph.fromRadius
-        morph.surface(radius)
-            .frame(width: frame.width, height: frame.height)
-            .position(x: frame.midX, y: frame.midY)
-            .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
-            .animation(GenieAnimator.morphAnimation.delay(morph.holdsFor), value: hasLanded)
-            .opacity(isFading ? 0 : 1)
-            .animation(.easeOut(duration: GenieAnimator.morphCrossfade), value: isFading)
-            .opacity(hasStarted || morph.fadeIn <= 0 ? 1 : 0)
-            .animation(.easeOut(duration: morph.fadeIn), value: hasStarted)
-            .onAppear {
-                hasStarted = true
-                hasLanded = true
-            }
-            .task {
-                let lands = morph.holdsFor + GenieAnimator.morphDuration
-                try? await Task.sleep(for: .seconds(lands - GenieAnimator.morphCrossfade))
-                isFading = true
-                try? await Task.sleep(for: .seconds(GenieAnimator.morphCrossfade + 0.05))
-                GenieAnimator.shared.finishMorph(morph.id)
             }
     }
 }

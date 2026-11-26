@@ -107,6 +107,26 @@ enum WebsiteCaptures {
             defaults.set(true, forKey: "hydraEnabled")
         }
         let repos = output.appendingPathComponent("repos", isDirectory: true)
+        if CommandLine.arguments.contains("--cursor-repro") {
+            defaults.set(false, forKey: "sidebarActivityView")
+            defaults.synchronize()
+            var library = Library()
+            let primary = project(UUID(), "Cursor repro primary", repos, ["README.md": "# Cursor repro\n"])
+            let secondary = project(UUID(), "Cursor repro secondary", repos, ["README.md": "# Cursor repro\n"])
+            library.projects = [primary, secondary]
+            let now = Date.now
+            library.threads = [
+                thread(UUID(), primary.id, "Cursor repro streaming", .claude, "opus", "high", age: 120, status: .completed, now),
+                thread(UUID(), primary.id, "Cursor repro empty", .claude, "opus", "high", age: 180, status: nil, now),
+                thread(UUID(), primary.id, "Cursor repro notes", .claude, "opus", "high", age: 240, status: .completed, now),
+                thread(UUID(), primary.id, "Cursor repro layout", .claude, "opus", "high", age: 300, status: .completed, now),
+                thread(UUID(), primary.id, "Cursor repro review", .claude, "opus", "high", age: 360, status: .completed, now),
+                thread(UUID(), secondary.id, "Cursor repro secondary one", .claude, "opus", "high", age: 420, status: .completed, now),
+                thread(UUID(), secondary.id, "Cursor repro secondary two", .claude, "opus", "high", age: 480, status: .completed, now),
+            ]
+            write(library, to: root.appendingPathComponent("library.json"))
+            return
+        }
         if isMentionDemo {
             var library = Library()
             library.projects = [
@@ -835,6 +855,10 @@ enum WebsiteCaptures {
         }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--fold-repro") {
             await FoldReplyRepro.run(model: model)
+            return
+        }
+        if CaptureRun.isEnabled, CommandLine.arguments.contains("--cursor-repro") {
+            await CursorRepro.run(model: model)
             return
         }
         if CaptureRun.isEnabled, CommandLine.arguments.contains("--subagent-panel-loop") {

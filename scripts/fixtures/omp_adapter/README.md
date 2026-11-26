@@ -20,7 +20,7 @@
 
 真实 OMP 路径使用隔离 HOME 和项目目录，不继承用户凭证。native 场景的进程和模型服务器各自独立，避免前一轮 workpool 的异步请求进入后一轮计数。RPC 清理只终止本脚本创建的进程组。
 
-`prepare.py` 将源码路径和 SHA-256 写入 `sources.json`。Swift harness 使用真实 `OmpSession`、`OmpCLI`、stdio/RPC、权限、快照和限额解析代码；替身仅包括 CaptureRun 存储根、TokenLedger 持久化、Hydra 提示文本、MCP 安装和模型目录的 Shell 调用。没有验证持久化集成、实际 MCP、登录/模型列表、额度接口或 GUI。
+`prepare.py` 将源码路径和 SHA-256 写入 `sources.json`。Swift harness 使用真实 `OmpSession`、`OmpCLI`、stdio/RPC、权限、快照和限额解析代码；替身仅包括 CaptureRun 存储根、Hydra 提示文本、MCP 安装和模型目录的 Shell 调用。没有验证持久化集成、实际 MCP、登录/模型列表、额度接口或 GUI。
 
 直接拒绝、`Error: Declined:` 包装、带堆栈包装、普通错误中引用拒绝文字及成功结果包含拒绝文字，均有独立适配器断言。拒绝首行通过现有本地化 key 查询，后续堆栈保留。命令行 harness 不证明 App 的中文渲染和界面行为。
 

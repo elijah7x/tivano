@@ -11,8 +11,12 @@ enum DshPatchCheck: Equatable {
 enum DshCLI {
     static let packageName = "@deepseek-ai/dsh"
 
+    private static let modelRouteDecoder = JSONDecoder()
+
     static func modelRoute(for id: String) -> (route: String, model: String)? {
-        guard let pair = try? JSONDecoder().decode([String].self, from: Data(id.utf8)), pair.count == 2 else { return nil }
+        let trimmed = id.utf8.drop(while: { $0 == 0x20 || $0 == 0x09 || $0 == 0x0A || $0 == 0x0D })
+        guard trimmed.first == UInt8(ascii: "[") else { return nil }
+        guard let pair = try? modelRouteDecoder.decode([String].self, from: Data(id.utf8)), pair.count == 2 else { return nil }
         return (pair[0], pair[1])
     }
 
@@ -156,6 +160,16 @@ enum DshCLI {
         return hasAccountRecord(in: text)
     }
 
+    private static let versionOneRegex = try! NSRegularExpression(pattern: #"^version:\s*1\s*(?:#.*)?$"#)
+    private static let recordsRegex = try! NSRegularExpression(pattern: #"^records:\s*(?:#.*)?$"#)
+    private static let accountRecordRegex = try! NSRegularExpression(pattern: #"^["']?deepseek-account-platform/default["']?:\s*(?:#.*)?$"#)
+    private static let grantKindRegex = try! NSRegularExpression(pattern: #"^kind:\s*["']?grant["']?\s*(?:#.*)?$"#)
+    private static let payloadRegex = try! NSRegularExpression(pattern: #"^payload:\s*(?:#.*)?$"#)
+
+    private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
+        regex.firstMatch(in: text, range: NSRange(location: 0, length: text.utf16.count)) != nil
+    }
+
     // Recognizes the block layout written by dsh-credentials-local v1. Unknown YAML forms
     // are not evidence of sign-in; the CLI remains the authority when actually connecting.
     static func hasAccountRecord(in text: String) -> Bool {
@@ -173,20 +187,20 @@ enum DshCLI {
             let indent = line.prefix(while: { $0 == " " }).count
             if indent == 0 {
                 if recordIndent != nil { break }
-                if clean.range(of: #"^version:\s*1\s*(?:#.*)?$"#, options: .regularExpression) != nil { versionOne = true }
-                inRecords = clean.range(of: #"^records:\s*(?:#.*)?$"#, options: .regularExpression) != nil
+                if matches(versionOneRegex, clean) { versionOne = true }
+                inRecords = matches(recordsRegex, clean)
                 continue
             }
             guard inRecords else { continue }
             if recordIndent == nil {
-                if clean.range(of: #"^["']?deepseek-account-platform/default["']?:\s*(?:#.*)?$"#, options: .regularExpression) != nil {
+                if matches(accountRecordRegex, clean) {
                     recordIndent = indent
                 }
                 continue
             }
             guard let recordIndent, indent > recordIndent else { break }
             if let payloadIndent, indent > payloadIndent {
-                if clean.range(of: #"^version:\s*1\s*(?:#.*)?$"#, options: .regularExpression) != nil { hasPayloadVersion = true }
+                if matches(versionOneRegex, clean) { hasPayloadVersion = true }
                 if clean.hasPrefix("token:") {
                     let value = clean.dropFirst("token:".count).trimmingCharacters(in: .whitespaces)
                     hasToken = !["", "null", "~", "{}", "[]", "''", "\"\""].contains(value) && !value.hasPrefix("#")
@@ -199,8 +213,8 @@ enum DshCLI {
                 continue
             }
             payloadIndent = nil
-            if clean.range(of: #"^kind:\s*["']?grant["']?\s*(?:#.*)?$"#, options: .regularExpression) != nil { hasGrant = true }
-            if clean.range(of: #"^payload:\s*(?:#.*)?$"#, options: .regularExpression) != nil { payloadIndent = indent }
+            if matches(grantKindRegex, clean) { hasGrant = true }
+            if matches(payloadRegex, clean) { payloadIndent = indent }
         }
         return versionOne && hasGrant && hasPayloadVersion && hasToken && hasIssuer
     }

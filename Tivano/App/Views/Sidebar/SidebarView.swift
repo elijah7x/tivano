@@ -97,8 +97,15 @@ struct SidebarView: View {
     var body: some View {
         // Where every thread sits, worked out once per pass: the grouping and the list below
         // are rebuilt only when this changes, not on every field change of every thread.
-        let placements = threadPlacements
-        let helpers = helpersByParent(placements: placements)
+        let placements: [ThreadPlacement] = threadPlacements
+        let helpers: [UUID: [ChatThread]] = helpersByParent(placements: placements)
+        let shelved: [Project] = model.projects.filter(\.isShelved)
+        let trafficLightTopPadding: CGFloat = Chrome.trafficLightTop - (Chrome.capsuleHeight - Chrome.trafficLightDiameter) / 2
+        let headerLeadingPadding: CGFloat = inPopover ? Chrome.listInset : Chrome.listInset + Chrome.rowHorizontalPadding
+        let headerTrailingPadding: CGFloat = inPopover
+            ? Chrome.listInset
+            : Chrome.listInset + Chrome.rowHorizontalPadding - (Chrome.capsuleHeight - SidebarHeaderLayout.glyphWidth) / 2
+        let headerTopPadding: CGFloat = presentation == .tray ? 14 : (inPopover ? 12 : 14)
         VStack(alignment: .leading, spacing: 0) {
             if !inPopover, presentation == .standard {
                 HStack {
@@ -107,7 +114,7 @@ struct SidebarView: View {
                 }
                 .padding(.trailing, Chrome.chromeHorizontalPadding)
                 .frame(height: Chrome.capsuleHeight)
-                .padding(.top, Chrome.trafficLightTop - (Chrome.capsuleHeight - Chrome.trafficLightDiameter) / 2)
+                .padding(.top, trafficLightTopPadding)
             }
 
             if !inPopover && model.settings.showsPortholeNow {
@@ -127,26 +134,30 @@ struct SidebarView: View {
                                 model.openThread(first.id)
                             }
                         },
-                        onMove: { moveSearchSelection(by: $0, helpers: helpers) }
+                        onMove: { (delta: Int) in moveSearchSelection(by: delta, helpers: helpers) }
                     )
                 } else {
+                    let newThreadHelp: String = Chrome.localized("New thread") + ShortcutStore.hint(for: .newThread)
+                    let isActivityView: Bool = model.settings.sidebarActivityView
+                    let activityHelp: String = isActivityView ? "Show all threads" : "Focus on today"
+                    let activityValue: String = Chrome.localized(isActivityView ? "On" : "Off")
                     Text(verbatim: Chrome.localized("Thread list"))
                         .font(.ui(.body, weight: .semibold))
                         .foregroundStyle(Chrome.primaryText.opacity(0.85))
                     Spacer()
-                    SidebarHeaderButton(asset: "new-thread", help: Chrome.localized("New thread") + ShortcutStore.hint(for: .newThread)) {
+                    SidebarHeaderButton(asset: "new-thread", help: newThreadHelp) {
                         model.newThread()
                     }
                     ChromeIconButton(
                         symbol: "asset:today-ring",
-                        isActive: model.settings.sidebarActivityView,
+                        isActive: isActivityView,
                         prominent: true,
                         glyphSize: SidebarHeaderLayout.glyphWidth,
-                        help: model.settings.sidebarActivityView ? "Show all threads" : "Focus on today"
+                        help: activityHelp
                     ) {
                         withAnimation(Chrome.panelSlide) { model.settings.sidebarActivityView.toggle() }
                     }
-                    .accessibilityValue(Text(verbatim: Chrome.localized(model.settings.sidebarActivityView ? "On" : "Off")))
+                    .accessibilityValue(Text(verbatim: activityValue))
                     SidebarHeaderButton(symbol: "magnifyingglass", weight: .medium, help: "Search threads") {
                         model.isCommandPalettePresented = true
                     }
@@ -155,15 +166,16 @@ struct SidebarView: View {
                     }
                 }
             }
-            .padding(.leading, inPopover ? Chrome.listInset : Chrome.listInset + Chrome.rowHorizontalPadding)
-            .padding(.trailing, inPopover ? Chrome.listInset : Chrome.listInset + Chrome.rowHorizontalPadding - (Chrome.capsuleHeight - SidebarHeaderLayout.glyphWidth) / 2)
-            .padding(.top, presentation == .tray ? 14 : (inPopover ? 12 : 14))
+            .padding(.leading, headerLeadingPadding)
+            .padding(.trailing, headerTrailingPadding)
+            .padding(.top, headerTopPadding)
 
-            ScrollViewReader { proxy in
+            ScrollViewReader { (proxy: ScrollViewProxy) in
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         if query.isEmpty {
-                            ForEach(listItems(placements: placements, helpers: helpers)) { item in
+                            let items: [SidebarItem] = listItems(placements: placements, helpers: helpers)
+                            ForEach(items) { (item: SidebarItem) in
                                 itemView(item)
                                     .transition(rowTransition(item))
                             }
@@ -178,7 +190,7 @@ struct SidebarView: View {
                     .padding(.horizontal, Chrome.listInset)
                     .padding(.top, Self.listTopInset)
                     .padding(.bottom, 8)
-                    .onContinuousHover(coordinateSpace: .named(Self.listSpace)) { phase in
+                    .onContinuousHover(coordinateSpace: .named(Self.listSpace)) { (phase: HoverPhase) in
                         switch phase {
                         case .active(let location):
                             updateMagnifier(at: location)
@@ -194,7 +206,7 @@ struct SidebarView: View {
                     // plain click still reaches the row. Off while searching: nothing to reorder.
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.listSpace))
-                            .onChanged { value in
+                            .onChanged { (value: DragGesture.Value) in
                                 if let id = projectDrag.id {
                                     projectDragChanged(id, translation: value.translation.height)
                                 } else if drag.id == nil, rowFrames.row(at: value.startLocation) == nil,
@@ -205,7 +217,7 @@ struct SidebarView: View {
                                     dragChanged(id, translation: value.translation.height)
                                 }
                             }
-                            .onEnded { _ in
+                            .onEnded { (_: DragGesture.Value) in
                                 dragEnded()
                                 projectDragEnded()
                             },
@@ -213,7 +225,7 @@ struct SidebarView: View {
                     )
                 }
                 .scrollIndicators(.never)
-                .onScrollPhaseChange { _, phase in
+                .onScrollPhaseChange { (_: ScrollPhase, phase: ScrollPhase) in
                     if phase == .idle {
                         scrollSettle?.cancel()
                         isListScrolling = false
@@ -221,12 +233,12 @@ struct SidebarView: View {
                         noteListScroll()
                     }
                 }
-                .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { old, new in
+                .onScrollGeometryChange(for: CGFloat.self, of: { (geometry: ScrollGeometry) -> CGFloat in geometry.contentOffset.y }) { (old: CGFloat, new: CGFloat) in
                     if old != new { noteListScroll() }
                 }
                 // A thread that has just moved to another project is brought into view, so the
                 // list shows where it landed instead of only closing up where it was.
-                .onChange(of: model.sidebarRevealThreadID) { _, reveal in
+                .onChange(of: model.sidebarRevealThreadID) { (_: UUID?, reveal: UUID?) in
                     guard let reveal else { return }
                     model.sidebarRevealThreadID = nil
                     guard let thread = model.thread(reveal) else { return }
@@ -241,7 +253,7 @@ struct SidebarView: View {
                         proxy.scrollTo(SidebarItem.id(for: thread), anchor: .center)
                     }
                 }
-                .onChange(of: projectDrag.id) { old, new in
+                .onChange(of: projectDrag.id) { (old: UUID?, new: UUID?) in
                     guard let old, new == nil else { return }
                     withAnimation(Chrome.panelSlide) {
                         proxy.scrollTo("project-\(old)", anchor: .center)
@@ -249,7 +261,6 @@ struct SidebarView: View {
                 }
             }
 
-            let shelved = model.projects.filter(\.isShelved)
             if !shelved.isEmpty {
                 shelfRow(count: shelved.count)
                     .padding(.horizontal, Chrome.listInset)
@@ -258,18 +269,18 @@ struct SidebarView: View {
         }
         .animation(Chrome.panelSlide, value: model.settings.showsPortholeNow)
         .frame(maxHeight: .infinity, alignment: .top)
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { sidebarHeight.value = $0 }
-        .onChange(of: isMagnifierDisabled, initial: true) { _, disabled in
+        .onGeometryChange(for: CGFloat.self, of: { (proxy: GeometryProxy) -> CGFloat in proxy.size.height }) { (height: CGFloat) in sidebarHeight.value = height }
+        .onChange(of: isMagnifierDisabled, initial: true) { (_: Bool, disabled: Bool) in
             magnifier.setDisabled(disabled)
         }
-        .onChange(of: query.isEmpty) { _, isEmpty in
+        .onChange(of: query.isEmpty) { (_: Bool, isEmpty: Bool) in
             if !isEmpty { magnifier.reset() }
         }
-        .onChange(of: model.projects.filter(\.isShelved).map(\.id)) { _, ids in
-            if ids.isEmpty { isShelfPresented = false }
+        .onChange(of: shelved.isEmpty) { (_: Bool, isEmpty: Bool) in
+            if isEmpty { isShelfPresented = false }
         }
         .background { if !inPopover { WindowDragArea() } }
-        .onChange(of: model.projectDeletionRequest) { _, id in
+        .onChange(of: model.projectDeletionRequest) { (_: UUID?, id: UUID?) in
             guard let id else { return }
             model.projectDeletionRequest = nil
             guard let project = model.project(id) else { return }
@@ -278,13 +289,13 @@ struct SidebarView: View {
         }
         // Read only in the popover: the list itself has no reason to re-render on selection.
         .onChange(of: inPopover ? model.selectedThreadID : nil) { if inPopover && !isShelfPresented { dismiss?() } }
-        .onChange(of: menuRequests.rename) { _, thread in
+        .onChange(of: menuRequests.rename) { (_: ChatThread?, thread: ChatThread?) in
             guard let thread else { return }
             menuRequests.rename = nil
             renameText = thread.title
             renaming = thread
         }
-        .onChange(of: menuRequests.delete) { _, thread in
+        .onChange(of: menuRequests.delete) { (_: ChatThread?, thread: ChatThread?) in
             guard let thread else { return }
             menuRequests.delete = nil
             if model.settings.confirmBeforeDeleting {
@@ -294,7 +305,7 @@ struct SidebarView: View {
             }
         }
         // The shortcut's question lands on the thread's own row.
-        .onChange(of: model.archiveRequest) { _, request in
+        .onChange(of: model.archiveRequest) { (_: AppModel.ArchiveRequest?, request: AppModel.ArchiveRequest?) in
             guard let request, model.thread(request.threadID) != nil else { return }
             model.archiveRequest = nil
             pendingArchiveID = request.threadID
@@ -717,9 +728,17 @@ struct SidebarView: View {
     /// (see `SidebarThreadRow.thread`) without the list being built again.
     private func listItems(placements: [ThreadPlacement], helpers: [UUID: [ChatThread]]) -> [SidebarItem] {
         let todayFocus = model.settings.sidebarActivityView
-        let tasks = todayFocus ? [] : itemCache.tasks(for: placements) { model.standaloneTasks }
-        let parentsShowingHeads: Set<UUID> = todayFocus ? [] : Set(helpers.compactMap { parent, heads in hasRunningHead(heads) ? parent : nil })
-        let attention = Set(tasks.lazy.filter { needsAttention($0) }.map(\.id))
+        let (tasks, taskIDs): ([ChatThread], Set<UUID>) = todayFocus
+            ? ([], [])
+            : itemCache.tasks(for: placements) { model.standaloneTasks }
+        let parentsShowingHeads: Set<UUID> = todayFocus ? [] : model.parentsWithRunningHeads
+        let attention: Set<UUID>
+        if todayFocus {
+            attention = []
+        } else {
+            let modelAttention = model.attentionThreadIDs
+            attention = modelAttention.isEmpty ? [] : modelAttention.filter { taskIDs.contains($0) }
+        }
         let key = SidebarItemCache.Key(
             placements: placements,
             projects: model.projects,
@@ -752,14 +771,19 @@ struct SidebarView: View {
             }
             var items = [SidebarItem(id: "section-projects", kind: .section(.projects))]
             if !key.projectsCollapsed {
-                items.append(contentsOf: projectItems(helpers: helpers))
+                items.append(contentsOf: projectItems(helpers: helpers, parentsShowingHeads: parentsShowingHeads))
                 if model.projects.isEmpty {
                     items.append(SidebarItem(id: "empty-projects", kind: .empty("No projects yet")))
                 }
             }
             items.append(SidebarItem(id: "section-tasks", kind: .section(.tasks)))
             if !key.tasksCollapsed {
-                let taskItems = activityItems(tasks: tasks, helpers: helpers, attentionIDs: attention)
+                let taskItems = activityItems(
+                    tasks: tasks,
+                    helpers: helpers,
+                    attentionIDs: attention,
+                    parentsShowingHeads: parentsShowingHeads
+                )
                 if taskItems.isEmpty {
                     items.append(SidebarItem(id: "empty-tasks", kind: .empty("No tasks yet")))
                 } else {
@@ -770,22 +794,21 @@ struct SidebarView: View {
         }
     }
 
-    /// Whether any of these heads is still running. Read through the model rather than the
-    /// snapshot, so a head that has just finished is not counted by a stale copy.
-    private func hasRunningHead(_ heads: [ChatThread]) -> Bool {
-        heads.contains { (model.thread($0.id) ?? $0).hydra?.status == .running }
-    }
-
     /// Also decides the row's fold chevron, so a chat whose heads are all hidden has none.
-    private func visibleHelpers(_ helpers: [ChatThread]) -> [ChatThread] {
-        guard !hasRunningHead(helpers.filter(\.isHydraHead)) else { return helpers }
+    private func visibleHelpers(under parentID: UUID, _ helpers: [ChatThread], parentsShowingHeads: Set<UUID>) -> [ChatThread] {
+        guard !parentsShowingHeads.contains(parentID) else { return helpers }
         return helpers.filter { !$0.isHydraHead }
     }
 
     /// The helpers under a thread: one small row each, or a single line naming them while
     /// they are folded away.
-    private func helperItems(under thread: ChatThread, helpers: [ChatThread], isNested: Bool = false) -> [SidebarItem] {
-        let helpers = visibleHelpers(helpers)
+    private func helperItems(
+        under thread: ChatThread,
+        helpers: [ChatThread],
+        parentsShowingHeads: Set<UUID>,
+        isNested: Bool = false
+    ) -> [SidebarItem] {
+        let helpers = visibleHelpers(under: thread.id, helpers, parentsShowingHeads: parentsShowingHeads)
         guard !helpers.isEmpty else { return [] }
         if thread.foldsHelpers {
             return [SidebarItem(id: "helpers-\(thread.id)", kind: .helperStub(parent: thread, helpers: helpers), isNested: isNested)]
@@ -837,7 +860,7 @@ struct SidebarView: View {
 
     // MARK: Project layout
 
-    private func projectItems(helpers: [UUID: [ChatThread]]) -> [SidebarItem] {
+    private func projectItems(helpers: [UUID: [ChatThread]], parentsShowingHeads: Set<UUID>) -> [SidebarItem] {
         var items: [SidebarItem] = []
         let active = model.projects.filter { !$0.isShelved }
         for (index, project) in active.enumerated() {
@@ -852,10 +875,10 @@ struct SidebarView: View {
                 let own = helpers[thread.id] ?? []
                 items.append(SidebarItem(
                     id: SidebarItem.id(for: thread),
-                    kind: .thread(thread, projectName: nil, projectIcon: nil, peers: nil, hasHelpers: !visibleHelpers(own).isEmpty),
+                    kind: .thread(thread, projectName: nil, projectIcon: nil, peers: nil, hasHelpers: !visibleHelpers(under: thread.id, own, parentsShowingHeads: parentsShowingHeads).isEmpty),
                     isNested: true
                 ))
-                items.append(contentsOf: helperItems(under: thread, helpers: own, isNested: true))
+                items.append(contentsOf: helperItems(under: thread, helpers: own, parentsShowingHeads: parentsShowingHeads, isNested: true))
             }
         }
         return items
@@ -876,42 +899,50 @@ struct SidebarView: View {
 
     // MARK: Activity layout
 
-    private func activityItems(tasks: [ChatThread], helpers: [UUID: [ChatThread]], attentionIDs: Set<UUID>) -> [SidebarItem] {
+    private func activityItems(
+        tasks: [ChatThread],
+        helpers: [UUID: [ChatThread]],
+        attentionIDs: Set<UUID>,
+        parentsShowingHeads: Set<UUID>
+    ) -> [SidebarItem] {
         let attention = Self.placed(tasks.filter { attentionIDs.contains($0.id) })
         let rest = tasks.filter { !attentionIDs.contains($0.id) }
         var items: [SidebarItem] = []
         if !attention.isEmpty {
             items.append(SidebarItem(id: "attention", kind: .header("Needs attention", isFirst: true)))
-            items.append(contentsOf: activityThreadItems(attention, helpers: helpers))
+            items.append(contentsOf: activityThreadItems(attention, helpers: helpers, parentsShowingHeads: parentsShowingHeads))
         }
         // Pinned threads sit above the day groups, in the activity sort's order.
         let pinned = Self.placed(rest.filter(\.isPinned))
         if !pinned.isEmpty {
             items.append(SidebarItem(id: "day-Pinned", kind: .header("Pinned", isFirst: items.isEmpty)))
-            items.append(contentsOf: activityThreadItems(pinned, helpers: helpers))
+            items.append(contentsOf: activityThreadItems(pinned, helpers: helpers, parentsShowingHeads: parentsShowingHeads))
         }
         for group in Self.activityGroups(rest.filter { !$0.isPinned }) {
-            items.append(contentsOf: activityThreadItems(group.threads, helpers: helpers))
+            items.append(contentsOf: activityThreadItems(group.threads, helpers: helpers, parentsShowingHeads: parentsShowingHeads))
         }
         return items
     }
 
     /// Threads of one activity group, each with the helpers under it. A thread can be dragged
     /// to another place within its own group; its helpers follow it.
-    private func activityThreadItems(_ threads: [ChatThread], helpers: [UUID: [ChatThread]]) -> [SidebarItem] {
+    private func activityThreadItems(
+        _ threads: [ChatThread],
+        helpers: [UUID: [ChatThread]],
+        parentsShowingHeads: Set<UUID>
+    ) -> [SidebarItem] {
         let peers = threads.map(\.id)
         return threads.flatMap { thread in
             let own = helpers[thread.id] ?? []
             return [SidebarItem(
                 id: thread.id.uuidString,
-                kind: .thread(thread, projectName: nil, projectIcon: nil, peers: peers, hasHelpers: !visibleHelpers(own).isEmpty)
-            )] + helperItems(under: thread, helpers: own)
+                kind: .thread(thread, projectName: nil, projectIcon: nil, peers: peers, hasHelpers: !visibleHelpers(under: thread.id, own, parentsShowingHeads: parentsShowingHeads).isEmpty)
+            )] + helperItems(under: thread, helpers: own, parentsShowingHeads: parentsShowingHeads)
         }
     }
 
     private func needsAttention(_ thread: ChatThread) -> Bool {
-        guard let runtime = model.existingRuntime(for: thread.id) else { return false }
-        return runtime.needsUserAttention
+        model.attentionThreadIDs.contains(thread.id)
     }
 
     private struct ActivityGroup {
@@ -976,6 +1007,7 @@ struct SidebarView: View {
             .padding(.horizontal, 8)
             .padding(.top, 14)
         } else {
+            let parentsShowingHeads = model.parentsWithRunningHeads
             ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
                 if index > 0, result.project != nil {
                     Color.clear.frame(height: Chrome.groupGap)
@@ -983,7 +1015,7 @@ struct SidebarView: View {
                 if let project = result.project {
                     projectDeletePopover(for: project.id, on: ProjectRow(snapshot: project, count: result.count, togglesExpansion: false))
                     ForEach(result.threads, id: \.id) { thread in
-                        threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !visibleHelpers(helpers[thread.id] ?? []).isEmpty, isNested: true)
+                        threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !visibleHelpers(under: thread.id, helpers[thread.id] ?? [], parentsShowingHeads: parentsShowingHeads).isEmpty, isNested: true)
                     }
                 } else {
                     sectionHeader(.tasks, isFirstInList: index == 0)
@@ -991,8 +1023,8 @@ struct SidebarView: View {
                         let matchedIDs = Set(result.threads.map(\.id))
                         ForEach(result.threads.filter { !$0.isHelper && !$0.isHydraHead }, id: \.id) { thread in
                             let own = (helpers[thread.id] ?? []).filter { matchedIDs.contains($0.id) }
-                            threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !visibleHelpers(own).isEmpty)
-                            ForEach(helperItems(under: thread, helpers: own)) { item in
+                            threadRow(thread, projectName: nil, projectIcon: nil, hasHelpers: !visibleHelpers(under: thread.id, own, parentsShowingHeads: parentsShowingHeads).isEmpty)
+                            ForEach(helperItems(under: thread, helpers: own, parentsShowingHeads: parentsShowingHeads)) { item in
                                 itemView(item)
                             }
                         }
@@ -1198,10 +1230,11 @@ struct SidebarView: View {
     /// spacing after each.
     private func slotHeights(for order: [UUID]) -> [UUID: CGFloat] {
         let grouped = helpersByParent(placements: threadPlacements)
+        let parentsShowingHeads = model.parentsWithRunningHeads
         var heights: [UUID: CGFloat] = [:]
         for id in order {
             var height = (rowHeights.values[id.uuidString] ?? Chrome.rowHeight) + 1
-            let helpers = visibleHelpers(grouped[id] ?? [])
+            let helpers = visibleHelpers(under: id, grouped[id] ?? [], parentsShowingHeads: parentsShowingHeads)
             if !helpers.isEmpty {
                 if model.thread(id)?.foldsHelpers == true {
                     height += (rowHeights.values["helpers-\(id)"] ?? ThreadRowMetrics.helperHeight) + 1
@@ -1950,7 +1983,6 @@ private struct SidebarHelperInteraction<Label: View>: View {
 
     @State private var isHovering = false
     @State private var isMenuPresented = false
-    @State private var warmTask: Task<Void, Never>?
 
     var body: some View {
         let showsActions = isHovering || isMenuPresented
@@ -1977,24 +2009,7 @@ private struct SidebarHelperInteraction<Label: View>: View {
             }
             .padding(.trailing, 6)
         }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            withAnimation(Chrome.hover) { isHovering = hovering }
-            warmTask?.cancel()
-            if hovering {
-                let onWarm = onWarm
-                warmTask = Task { @MainActor in
-                    guard (try? await Task.sleep(for: .milliseconds(90))) != nil, !Task.isCancelled else { return }
-                    onWarm()
-                }
-            } else {
-                warmTask = nil
-            }
-        }
-        .onDisappear {
-            warmTask?.cancel()
-            warmTask = nil
-        }
+        .hoverWarm(isHovering: $isHovering, onWarm: onWarm)
     }
 }
 
@@ -2011,40 +2026,52 @@ private struct HeadCardsRow: View {
     @State private var showsAllHeads = false
 
     var body: some View {
-        let heads = SidebarView.orderedHeads(headSnapshots.map { model.thread($0.id) ?? $0 })
-        let capped = heads.count > 12
-        let visible = showsAllHeads ? heads : Array(heads.prefix(12))
+        let mappedHeads: [ChatThread] = headSnapshots.map { (snapshot: ChatThread) -> ChatThread in
+            model.thread(snapshot.id) ?? snapshot
+        }
+        let heads: [ChatThread] = SidebarView.orderedHeads(mappedHeads)
+        let capped: Bool = heads.count > 12
+        let visible: [ChatThread] = showsAllHeads ? heads : Array(heads.prefix(12))
         // The glyphs' room: the row's width less the connector's column and the card's
         // own padding, which is the same on both sides, less the room the last mark's
         // badge needs. The last glyph of a row needs its own 14 pt, not a whole 22 pt
         // pitch, so seven glyphs (7 x 14 + 6 x 8 = 146) and the badge's 3 pt fit the
         // 170 pt the card has at the sidebar's 210 pt minimum. Seven to a row until
         // the row has been measured.
-        let cardInner = width - ThreadRowMetrics.connectorWidth - 2 * ThreadRowMetrics.headCardPadding
-        let usable = cardInner - ThreadRowMetrics.headBadgeOverhang
-        let perRow = width == 0 ? 7 : max(1, Int((usable + ThreadRowMetrics.headGlyphPitch - ThreadRowMetrics.headGlyphSize) / ThreadRowMetrics.headGlyphPitch))
+        let cardInner: CGFloat = width - ThreadRowMetrics.connectorWidth - 2 * ThreadRowMetrics.headCardPadding
+        let usable: CGFloat = cardInner - ThreadRowMetrics.headBadgeOverhang
+        let perRow: Int = width == 0
+            ? 7
+            : max(1, Int((usable + ThreadRowMetrics.headGlyphPitch - ThreadRowMetrics.headGlyphSize) / ThreadRowMetrics.headGlyphPitch))
         // The marks share the card's inner width: a row stretches its gaps past the
         // tightest one until the last mark's badge sits on the card's padding, so the
         // room left of the first mark and right of the last one come out the same. A
         // short last row keeps the step of the rows above it.
-        let tightGap = ThreadRowMetrics.headGlyphPitch - ThreadRowMetrics.headGlyphSize
-        let rowGap = perRow > 1 && width > 0
+        let tightGap: CGFloat = ThreadRowMetrics.headGlyphPitch - ThreadRowMetrics.headGlyphSize
+        let rowGap: CGFloat = perRow > 1 && width > 0
             ? max(tightGap, (usable - CGFloat(perRow) * ThreadRowMetrics.headGlyphSize) / CGFloat(perRow - 1))
             : tightGap
-        let rows = Self.chunk(visible, by: perRow)
-        let cardRows = rows.count + (capped ? 1 : 0)
+        let rows: [[ChatThread]] = Self.chunk(visible, by: perRow)
+        let cardRows: Int = rows.count + (capped ? 1 : 0)
+        let cardHeight: CGFloat = ThreadRowMetrics.headCardHeight(rows: cardRows)
+        let cardShape = RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous)
+        let headIDs: [UUID] = heads.map(\.id)
         HStack(spacing: 0) {
             HelperConnector(endsHere: true, action: onFold)
                 .frame(
                     width: ThreadRowMetrics.connectorWidth,
-                    height: ThreadRowMetrics.headCardHeight(rows: cardRows)
+                    height: cardHeight
                 )
             VStack(alignment: .leading, spacing: ThreadRowMetrics.headRowGap) {
-                ForEach(rows, id: \.first?.id) { row in
+                ForEach(rows, id: \.first?.id) { (row: [ChatThread]) in
                     HStack(spacing: rowGap) {
-                        ForEach(row, id: \.id) { head in
+                        ForEach(row, id: \.id) { (head: ChatThread) in
                             if let info = head.hydra {
-                                let waiting = hydraWaitingStatus(info.status, runtime: model.existingRuntime(for: head.id))
+                                let waiting: ThreadActivityStatus? = hydraWaitingStatus(info.status, runtime: model.existingRuntime(for: head.id))
+                                let helpText: String = waiting.map { "\(info.displayName) · \(Chrome.localized($0.title))" }
+                                    ?? "\(info.persona.name) · \(info.task)"
+                                let accessibilityText: String = waiting.map { "\(info.displayName), \(Chrome.localized($0.title))" }
+                                    ?? "\(info.persona.name), \(info.task)"
                                 Button {
                                     model.openThread(head.id)
                                 } label: {
@@ -2056,28 +2083,28 @@ private struct HeadCardsRow: View {
                                             HydraGlyph(persona: info.persona, size: ThreadRowMetrics.headGlyphSize, isRunning: info.status == .running, status: info.status)
                                         }
                                     }
-                                        .background {
-                                            if model.isSelected(head.id) {
-                                                Circle().fill(Chrome.overlay(0.14)).padding(-3)
-                                            }
+                                    .background {
+                                        if model.isSelected(head.id) {
+                                            Circle().fill(Chrome.overlay(0.14)).padding(-3)
                                         }
+                                    }
                                 }
                                 .buttonStyle(.plain)
                                 .modifier(HeadGlyphHover(onWarm: { model.warmDocuments([head.id], urgent: true) }))
-                                .help(Text(verbatim: waiting.map { "\(info.displayName) · \(Chrome.localized($0.title))" } ?? "\(info.persona.name) · \(info.task)"))
+                                .help(Text(verbatim: helpText))
                                 // Snapshots only: the menu builder must not capture the row, so the AppKit menu
                                 // it builds cannot pin the row's state storage (and its responder with it).
                                 .contextMenu { [head, model, menuRequests] in
-                                    let threadSnapshot = head
-                                    let modelSnapshot = model
-                                    let requestsSnapshot = menuRequests
+                                    let threadSnapshot: ChatThread = head
+                                    let modelSnapshot: AppModel = model
+                                    let requestsSnapshot: SidebarMenuRequests = menuRequests
                                     RowActionMenuButtons(actions: ThreadActions.makeContextMenu(
                                         model: modelSnapshot,
                                         thread: threadSnapshot,
                                         requests: requestsSnapshot
                                     ))
                                 }
-                                .accessibilityLabel(Text(verbatim: waiting.map { "\(info.displayName), \(Chrome.localized($0.title))" } ?? "\(info.persona.name), \(info.task)"))
+                                .accessibilityLabel(Text(verbatim: accessibilityText))
                                 .accessibilityAddTraits(.isButton)
                             }
                         }
@@ -2087,6 +2114,9 @@ private struct HeadCardsRow: View {
                     .padding(.trailing, ThreadRowMetrics.headBadgeOverhang)
                 }
                 if capped {
+                    let toggleHelp: String = showsAllHeads
+                        ? Chrome.localized("Show fewer sub-agents")
+                        : String(format: Chrome.localized("Show all %d sub-agents"), heads.count)
                     Button {
                         withAnimation(.snappy(duration: 0.18)) { showsAllHeads.toggle() }
                     } label: {
@@ -2097,20 +2127,20 @@ private struct HeadCardsRow: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(Text(verbatim: showsAllHeads ? Chrome.localized("Show fewer sub-agents") : String(format: Chrome.localized("Show all %d sub-agents"), heads.count)))
+                    .help(Text(verbatim: toggleHelp))
                 }
             }
             .padding(ThreadRowMetrics.headCardPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: ThreadRowMetrics.headCardHeight(rows: cardRows), alignment: .top)
+            .frame(height: cardHeight, alignment: .top)
             .background {
-                RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous).fill(Chrome.overlay(0.04))
+                cardShape.fill(Chrome.overlay(0.04))
             }
-            .clipShape(RoundedRectangle(cornerRadius: Chrome.rowCornerRadius, style: .continuous))
+            .clipShape(cardShape)
             .animation(.snappy(duration: 0.18), value: cardRows)
         }
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
-        .animation(Chrome.panelSlide, value: heads.map(\.id))
+        .onGeometryChange(for: CGFloat.self, of: { (proxy: GeometryProxy) -> CGFloat in proxy.size.width }) { (newWidth: CGFloat) in width = newWidth }
+        .animation(Chrome.panelSlide, value: headIDs)
     }
 
     /// The heads in rows of `size`, in the order given; the last row takes the rest.
@@ -2122,12 +2152,22 @@ private struct HeadCardsRow: View {
 private struct HeadGlyphHover: ViewModifier {
     let onWarm: () -> Void
     @State private var isHovering = false
-    @State private var warmTask: Task<Void, Never>?
 
     func body(content: Content) -> some View {
         content
             .scaleEffect(isHovering ? 1.18 : 1)
             .animation(Chrome.hover, value: isHovering)
+            .hoverWarm(isHovering: $isHovering, onWarm: onWarm)
+    }
+}
+
+private struct HoverWarmModifier: ViewModifier {
+    @Binding var isHovering: Bool
+    let onWarm: () -> Void
+    @State private var warmTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
             .onHover { hovering in
                 guard isHovering != hovering else { return }
                 withAnimation(Chrome.hover) { isHovering = hovering }
@@ -2146,6 +2186,12 @@ private struct HeadGlyphHover: ViewModifier {
                 warmTask?.cancel()
                 warmTask = nil
             }
+    }
+}
+
+private extension View {
+    func hoverWarm(isHovering: Binding<Bool>, onWarm: @escaping () -> Void) -> some View {
+        modifier(HoverWarmModifier(isHovering: isHovering, onWarm: onWarm))
     }
 }
 
@@ -2169,19 +2215,24 @@ private struct HelperStubRow: View {
         // Each helper's live record, read once per render through its own cell.
         let helpers = helperSnapshots.map { model.thread($0.id) ?? $0 }
         let count = helpers.count
-        let working = helpers.contains { helper in
+        // A head counts by its Hydra status, as its icon does when unfolded: it stays running
+        // while it prepares a backup or waits to retry, even with an idle runtime.
+        let running = helpers.count { helper in
+            if helper.isHydraHead, helper.hydra?.status == .running { return true }
             let runtime = model.existingRuntime(for: helper.id)
             return runtime?.isRunning == true || runtime?.isHydraMerging == true || !(runtime?.backgroundTasks.isEmpty ?? true)
         }
         // A team of heads is called that; merges alone stay "helpers".
         let isHeads = helpers.allSatisfy(\.isHydraHead)
-        HelperStubFace(count: count, working: working, isHeads: isHeads, action: action)
+        HelperStubFace(count: count, running: running, isHeads: isHeads, action: action)
     }
 }
 
 private struct HelperStubFace: View {
     let count: Int
-    let working: Bool
+    /// How many of them are still working; folded, the line says so in words, since the
+    /// spinner alone cannot tell one at work from all of them.
+    let running: Int
     let isHeads: Bool
     let action: () -> Void
     @State private var isHovering = false
@@ -2196,10 +2247,10 @@ private struct HelperStubFace: View {
                 HStack(spacing: 5) {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 8, weight: .bold))
-                    Text(verbatim: count == 1 ? Chrome.localized(isHeads ? "1 sub-agent" : "1 helper") : String(format: Chrome.localized(isHeads ? "%d sub-agents" : "%d helpers"), count))
+                    Text(verbatim: label)
                         .font(.ui(.subheadline))
                     Spacer(minLength: 4)
-                    if working {
+                    if running > 0 {
                         MiniSpinner(cellSize: 2.4)
                             .padding(.trailing, 4)
                     }
@@ -2221,7 +2272,22 @@ private struct HelperStubFace: View {
             withAnimation(Chrome.hover) { isHovering = hovering }
         }
         .help(Text(verbatim: count == 1 ? Chrome.localized(isHeads ? "Show the sub-agent" : "Show the helper") : String(format: Chrome.localized(isHeads ? "Show %d sub-agents" : "Show %d helpers"), count)))
-        .accessibilityLabel(Text(verbatim: count == 1 ? Chrome.localized(isHeads ? "1 folded sub-agent" : "1 folded helper") : String(format: Chrome.localized(isHeads ? "%d folded sub-agents" : "%d folded helpers"), count)))
+        .accessibilityLabel(Text(verbatim: accessibilityText))
+    }
+}
+
+private extension HelperStubFace {
+    /// "3 sub-agents", or "3 sub-agents · 2 running" while some of several are at work.
+    var label: String {
+        if count == 1 { return Chrome.localized(isHeads ? "1 sub-agent" : "1 helper") }
+        if running > 0 { return String(format: Chrome.localized(isHeads ? "%d sub-agents · %d running" : "%d helpers · %d running"), count, running) }
+        return String(format: Chrome.localized(isHeads ? "%d sub-agents" : "%d helpers"), count)
+    }
+
+    var accessibilityText: String {
+        if count == 1 { return Chrome.localized(isHeads ? "1 folded sub-agent" : "1 folded helper") }
+        if running > 0 { return String(format: Chrome.localized(isHeads ? "%d folded sub-agents, %d running" : "%d folded helpers, %d running"), count, running) }
+        return String(format: Chrome.localized(isHeads ? "%d folded sub-agents" : "%d folded helpers"), count)
     }
 }
 
@@ -2444,7 +2510,6 @@ private struct SidebarThreadInteraction<Label: View>: View {
     @State private var isMenuPresented = false
     /// The tag's drawn width: the title runs up to the tag it has, not to the widest one could be.
     @State private var tagWidth = SidebarTagLabel.maxWidth
-    @State private var warmTask: Task<Void, Never>?
 
     var body: some View {
         let showsActions = (isHovering || isMenuPresented) && !isDragged
@@ -2507,25 +2572,8 @@ private struct SidebarThreadInteraction<Label: View>: View {
                 .accessibilityLabel(Text(verbatim: folded ? Chrome.localized("Show helpers") : Chrome.localized("Hide helpers")))
             }
         }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            withAnimation(Chrome.hover) { isHovering = hovering }
-            warmTask?.cancel()
-            if hovering {
-                // The pointer resting on a row usually means a click is coming: decode its history now.
-                let onWarm = onWarm
-                warmTask = Task { @MainActor in
-                    guard (try? await Task.sleep(for: .milliseconds(90))) != nil, !Task.isCancelled else { return }
-                    onWarm()
-                }
-            } else {
-                warmTask = nil
-            }
-        }
-        .onDisappear {
-            warmTask?.cancel()
-            warmTask = nil
-        }
+        // The pointer resting on a row usually means a click is coming: decode its history now.
+        .hoverWarm(isHovering: $isHovering, onWarm: onWarm)
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(GenieAnimator.coordinateSpace)) }) { frame in
             guard isDragged || isHovering else { return }
             windowFrame.note(frame)
@@ -2861,46 +2909,12 @@ private struct SidebarSearchResult: Identifiable {
     var id: String { project.map { "project-\($0.id)" } ?? "tasks" }
 }
 
-/// An unchanged thread revision skips the full fingerprint. On a metadata change the
-/// fingerprint still covers every placement field, preserving the narrower cache hit.
+/// An unchanged placement revision skips building placements altogether. On a placement
+/// revision bump, comparing the new `ThreadPlacement` array directly against the cache avoids
+/// allocating a second duplicate fingerprint array.
 private final class PlacementCache {
-    private struct Fingerprint: Equatable {
-        let id: UUID
-        let projectID: UUID?
-        let parentThreadID: UUID?
-        let isArchived: Bool
-        let isInPanel: Bool
-        let isPinned: Bool
-        let sortOrder: Double?
-        let activityOrder: Double?
-        let activityOrderDay: Date?
-        let createdAt: Date
-        let updatedAt: Date
-        let foldsHelpers: Bool
-        let isHydraHead: Bool
-        let hydraIndex: Int?
-
-        init(_ thread: ChatThread) {
-            id = thread.id
-            projectID = thread.projectID
-            parentThreadID = thread.parentThreadID
-            isArchived = thread.isArchived
-            isInPanel = thread.isInPanel
-            isPinned = thread.isPinned
-            sortOrder = thread.sortOrder
-            activityOrder = thread.activityOrder
-            activityOrderDay = thread.activityOrderDay
-            createdAt = thread.createdAt
-            updatedAt = thread.updatedAt
-            foldsHelpers = thread.foldsHelpers
-            isHydraHead = thread.isHydraHead
-            hydraIndex = thread.hydra?.index
-        }
-    }
-
     private weak var source: AppModel?
     private var revision: UInt64?
-    private var fingerprint: [Fingerprint]?
     private var cached: [ThreadPlacement] = []
 
     @MainActor
@@ -2909,11 +2923,9 @@ private final class PlacementCache {
         if source === model, revision == nextRevision { return cached }
         source = model
         revision = nextRevision
-        let threads = model.threadsUnobserved
-        let next = threads.map(Fingerprint.init)
-        if next == fingerprint { return cached }
-        fingerprint = next
-        cached = threads.map(ThreadPlacement.init)
+        let next = model.threadsUnobserved.map(ThreadPlacement.init)
+        if next == cached { return cached }
+        cached = next
         return cached
     }
 }
@@ -2990,6 +3002,7 @@ private final class SidebarItemCache {
     private var helpers: [UUID: [ChatThread]] = [:]
     private var tasksFor: [ThreadPlacement]?
     private var standaloneTasks: [ChatThread] = []
+    private var standaloneTaskIDs: Set<UUID> = []
     private var searchKey: SearchKey?
     private var found: [SidebarSearchResult] = []
     /// Each thread's title lowercased once, for the search to match against; a thread
@@ -3020,11 +3033,13 @@ private final class SidebarItemCache {
         return built
     }
 
-    func tasks(for placements: [ThreadPlacement], find: () -> [ChatThread]) -> [ChatThread] {
-        if placements == tasksFor { return standaloneTasks }
-        standaloneTasks = find()
+    func tasks(for placements: [ThreadPlacement], find: () -> [ChatThread]) -> ([ChatThread], Set<UUID>) {
+        if placements == tasksFor { return (standaloneTasks, standaloneTaskIDs) }
+        let found = find()
+        standaloneTasks = found
+        standaloneTaskIDs = Set(found.map(\.id))
         tasksFor = placements
-        return standaloneTasks
+        return (standaloneTasks, standaloneTaskIDs)
     }
 
     /// The helper grouping, kept while the placements stand; `group` runs only when they changed.
@@ -3073,18 +3088,60 @@ final class MinuteClock {
     private(set) var today = Calendar.current.startOfDay(for: .now)
 
     @ObservationIgnored private var tick: Task<Void, Never>?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     private init() {
+        let center = NotificationCenter.default
+        observers = [
+            center.addObserver(
+                forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pause() }
+            },
+            center.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.resume() }
+            },
+        ]
+        if NSApp?.isActive != false {
+            startLoop()
+        }
+    }
+
+    isolated deinit {
+        tick?.cancel()
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func refresh() {
+        let current = Date.now
+        now = current
+        let day = Calendar.current.startOfDay(for: current)
+        if day != today { today = day }
+    }
+
+    private func startLoop() {
+        guard tick == nil else { return }
         tick = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
-                guard let self else { return }
-                let now = Date.now
-                self.now = now
-                let day = Calendar.current.startOfDay(for: now)
-                if day != self.today { self.today = day }
+                guard !Task.isCancelled, let self else { return }
+                self.refresh()
             }
         }
+    }
+
+    private func pause() {
+        tick?.cancel()
+        tick = nil
+    }
+
+    private func resume() {
+        refresh()
+        startLoop()
     }
 }
 

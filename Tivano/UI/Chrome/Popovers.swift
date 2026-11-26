@@ -423,8 +423,8 @@ struct RowActionsButton: View {
         .buttonStyle(.plain)
         .help(Text(verbatim: Chrome.localized("More")))
         .accessibilityLabel(Text(verbatim: Chrome.localized("More")))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            PopoverMenu { RowActionItems(actions: actions) }
+        .anchoredPopover(isPresented: $isPresented, arrowEdge: .bottom) {
+            PopoverMenu(scrolls: false) { RowActionItems(actions: actions) }
         }
     }
 }

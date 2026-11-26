@@ -393,6 +393,9 @@ enum LoginEnvironment {
     }
 
     static func load(force: Bool = false) async {
+        if force {
+            whichCache.withLock { $0.removeAll() }
+        }
         let task = loading.withLock { state -> Task<Void, Never>? in
             if let task = state.task { return task }
             guard force || ((!isLoaded || state.diagnostic != nil) && Date.now >= state.retryAfter) else { return nil }
@@ -401,6 +404,9 @@ enum LoginEnvironment {
             return task
         }
         await task?.value
+        if force {
+            whichCache.withLock { $0.removeAll() }
+        }
     }
 
     @concurrent
@@ -463,6 +469,13 @@ enum LoginEnvironment {
         return candidate
     }
 
+    private struct WhichKey: Hashable, Sendable {
+        var name: String
+        var path: String
+    }
+
+    private static let whichCache = Mutex<[WhichKey: URL]>([:])
+
     static func which(_ name: String, in environment: [String: String]? = nil) -> URL? {
         let fileManager = FileManager.default
         if name.contains("/") {
@@ -470,9 +483,19 @@ enum LoginEnvironment {
             return fileManager.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
         }
         let path = (environment ?? current)["PATH"] ?? augmentedPath(nil)
+        let key = WhichKey(name: name, path: path)
+        if let cached = whichCache.withLock({ $0[key] }) {
+            return cached
+        }
         for directory in path.split(separator: ":") {
             let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name)
-            if fileManager.isExecutableFile(atPath: candidate.path) { return candidate }
+            if fileManager.isExecutableFile(atPath: candidate.path) {
+                whichCache.withLock { cache in
+                    if cache.count >= 256 { cache.removeAll() }
+                    cache[key] = candidate
+                }
+                return candidate
+            }
         }
         return nil
     }

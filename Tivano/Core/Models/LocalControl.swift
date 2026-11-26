@@ -11,7 +11,7 @@ enum LocalControl {
     static let maxOperations = 256
     static let maxPendingOperations = 16
     static let retention: TimeInterval = 3_600
-    static let methods = ["info", "providers", "projects", "threads", "thread", "history", "create", "submit", "interrupt", "operation", "settingsGet", "settingsSet", "agentModels", "agentRun"]
+    static let methods = ["info", "providers", "projects", "threads", "thread", "history", "create", "branch", "submit", "interrupt", "operation", "settingsGet", "settingsSet", "agentModels", "agentRun"]
     /// An agent run's prompt (BeRead block context included) may exceed `maxText`;
     /// its request frame is bounded by `maxFrame` instead of `maxRequest`.
     static let maxAgentPrompt = 900_000
@@ -95,6 +95,7 @@ enum ControlCommand: Codable, Sendable {
     case thread(UUID)
     case history(ControlHistoryQuery)
     case create(ControlCreate)
+    case branch(ControlBranch)
     case submit(ControlSubmit)
     case interrupt(ControlInterrupt)
     case operation(ControlTicket)
@@ -116,6 +117,7 @@ enum ControlCommand: Codable, Sendable {
     var ticket: ControlTicket? {
         switch self {
         case .create(let value): value.ticket
+        case .branch(let value): value.ticket
         case .submit(let value): value.ticket
         case .interrupt(let value): value.ticket
         case .settingsSet(let value): value.ticket
@@ -189,6 +191,15 @@ struct ControlInterrupt: Codable, Sendable {
     var ticket: ControlTicket
     var threadID: UUID
     var turnID: UUID
+}
+
+enum ControlBranchMode: String, Codable, Sendable { case before, through }
+
+struct ControlBranch: Codable, Sendable {
+    var ticket: ControlTicket
+    var threadID: UUID
+    var turnID: UUID
+    var mode: ControlBranchMode = .through
 }
 
 enum ControlSettingKey: String, Codable, CaseIterable, Sendable {

@@ -3,16 +3,20 @@ import Foundation
 extension AppModel {
     /// The only place that chooses the project and creates the call's home chat.
     func voiceHomeThread() -> ChatThread? {
-        let affiliation = currentAffiliation
-        if let id = affiliation.projectID, project(id) == nil { return nil }
-        let current = selectedThread?.provider == .codex ? selectedThread : nil
+        let affiliation: ThreadAffiliation = currentAffiliation
+        if let id: UUID = affiliation.projectID, project(id) == nil { return nil }
+        let current: ChatThread? = selectedThread?.provider == .codex ? selectedThread : nil
+        let modelID: String? = current?.model ?? providers.defaultModel(for: .codex)?.id
+        let effort: String? = current?.effort ?? settings.lastEffort(for: .codex)
+        let runtimeMode: RuntimeMode = settings.defaultRuntimeMode
+        let fastMode: Bool = current?.fastMode ?? false
         var thread = ChatThread(
             projectID: affiliation.projectID,
             provider: .codex,
-            model: current?.model ?? providers.defaultModel(for: .codex)?.id,
-            effort: current?.effort ?? settings.lastEffort(for: .codex),
-            runtimeMode: settings.defaultRuntimeMode,
-            fastMode: current?.fastMode ?? false
+            model: modelID,
+            effort: effort,
+            runtimeMode: runtimeMode,
+            fastMode: fastMode
         )
         thread.title = NSLocalizedString(VoiceCatalog.orchestratorTitle, comment: "")
         thread.isVoiceSession = true

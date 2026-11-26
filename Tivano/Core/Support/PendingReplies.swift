@@ -5,10 +5,10 @@ struct DuplicateReplyID: Error {}
 /// Replies waiting on a request id. The id is registered before `send` runs, so a fast
 /// reply can't arrive before anyone is waiting for it.
 @MainActor
-final class PendingReplies<Value: Sendable> {
+final class PendingReplies {
     private struct Entry {
         let token: UUID
-        let continuation: CheckedContinuation<Value, Error>
+        let continuation: CheckedContinuation<JSONValue, Error>
         var timeoutTask: Task<Void, Never>?
     }
 
@@ -18,9 +18,9 @@ final class PendingReplies<Value: Sendable> {
     func register(
         _ id: String,
         timeout: Duration? = nil,
-        timeoutValue: Value? = nil,
+        timeoutValue: JSONValue? = nil,
         send: () -> Void
-    ) async throws -> Value {
+    ) async throws -> JSONValue {
         let token = UUID()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
@@ -55,7 +55,7 @@ final class PendingReplies<Value: Sendable> {
     }
 
     @discardableResult
-    func resolve(_ id: String, _ value: Value) -> Bool {
+    func resolve(_ id: String, _ value: JSONValue) -> Bool {
         guard let entry = continuations.removeValue(forKey: id) else { return false }
         entry.timeoutTask?.cancel()
         entry.continuation.resume(returning: value)
@@ -70,7 +70,7 @@ final class PendingReplies<Value: Sendable> {
         return true
     }
 
-    func resolveAll(_ value: Value) {
+    func resolveAll(_ value: JSONValue) {
         let waiting = Array(continuations.values)
         continuations.removeAll()
         for entry in waiting {

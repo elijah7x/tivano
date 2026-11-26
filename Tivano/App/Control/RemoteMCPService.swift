@@ -8,38 +8,86 @@ final class RemoteMCPService {
     private(set) var listening = false
     private(set) var failure: String?
     private(set) var pendingApprovals: [RemoteMCPApprovalRequest] = []
-    private(set) var grants: [RemoteMCPGrant] = []
-    @ObservationIgnored private var authority: RemoteMCPAuthority!
+    private var storedGrants: [RemoteMCPGrant] = []
+    @ObservationIgnored private var authority: RemoteMCPAuthority?
     @ObservationIgnored private var server: RemoteMCPHTTPServer?
     @ObservationIgnored private var listeningBaseURL: String?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var portPickTask: Task<UInt16, Never>?
+    @ObservationIgnored private var didRequestGrantsLoad = false
+    @ObservationIgnored private var didReceiveGrantsUpdate = false
     @ObservationIgnored private var revision = UUID()
+
+    /// Lazily reads grants on first Settings or service access so disabled launches avoid disk I/O.
+    var grants: [RemoteMCPGrant] {
+        loadGrantsIfNeeded()
+        return storedGrants
+    }
 
     init(app: AppModel) {
         self.app = app
-        authority = RemoteMCPAuthority(
+    }
+
+    deinit { server?.stop() }
+
+    private func ensureAuthority() -> RemoteMCPAuthority {
+        if let authority { return authority }
+        let created = RemoteMCPAuthority(
             stateURL: Storage.root.appendingPathComponent("remote-mcp.json"),
             onPendingChanged: { [weak self] requests in
                 Task { @MainActor [weak self] in self?.pendingApprovals = requests }
             },
             onGrantsChanged: { [weak self] grants in
-                Task { @MainActor [weak self] in self?.grants = grants }
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.didReceiveGrantsUpdate = true
+                    self.storedGrants = grants
+                }
             }
         )
-        if app.settings.remoteMCPPort == 0 {
-            app.settings.remoteMCPPort = Int(RemoteMCPHTTPServer.pickFreePort())
-        }
-        let authority = authority!
-        refreshTask = Task { [weak self] in
-            let grants = await authority.grants()
-            self?.grants = grants
+        authority = created
+        return created
+    }
+
+    private func loadGrantsIfNeeded() {
+        guard !didRequestGrantsLoad else { return }
+        didRequestGrantsLoad = true
+        let authority = ensureAuthority()
+        Task { [weak self] in
+            let loaded = await authority.grants()
+            guard let self, !self.didReceiveGrantsUpdate else { return }
+            self.storedGrants = loaded
         }
     }
 
-    deinit { server?.stop() }
+    @discardableResult
+    private func pickAndStorePortIfNeeded() -> Task<UInt16, Never>? {
+        if let task = portPickTask { return task }
+        guard let app, app.settings.remoteMCPPort == 0 else { return nil }
+        let task = Task { [weak self] in
+            let picked = await Task.detached(priority: .userInitiated) {
+                RemoteMCPHTTPServer.pickFreePort()
+            }.value
+            guard let self else { return UInt16(0) }
+            self.portPickTask = nil
+            if let app = self.app, app.settings.remoteMCPPort == 0, picked != 0 {
+                app.settings.remoteMCPPort = Int(picked)
+            }
+            return picked
+        }
+        portPickTask = task
+        return task
+    }
 
-    /// Picked once in init and saved, so the tunnel's target stays put across launches.
-    var port: UInt16 { app.flatMap { UInt16(exactly: $0.settings.remoteMCPPort) } ?? 0 }
+    /// Picked lazily on first Settings view or enable and saved, so the tunnel's target stays put across launches.
+    var port: UInt16 {
+        guard let app else { return 0 }
+        if let existing = UInt16(exactly: app.settings.remoteMCPPort), existing != 0 {
+            return existing
+        }
+        pickAndStorePortIfNeeded()
+        return 0
+    }
 
     var baseURL: String {
         let publicURL = app?.settings.remoteMCPPublicURL ?? ""
@@ -58,22 +106,35 @@ final class RemoteMCPService {
         revision = UUID()
         let current = revision
         let enabled = shouldListen
-        if !enabled || listeningBaseURL != baseURL {
+        if !enabled {
+            server?.stop()
+            server = nil
+            listening = false
+            listeningBaseURL = nil
+            // When disabled and never initialized, avoid reading state or binding a port.
+            guard authority != nil || refreshTask != nil else { return }
+        } else if listeningBaseURL != baseURL {
             server?.stop()
             server = nil
             listening = false
             listeningBaseURL = nil
         }
         let previous = refreshTask
-        let authority = authority!
+        previous?.cancel()
+        let authority = enabled ? ensureAuthority() : self.authority
+        if enabled { loadGrantsIfNeeded() }
         refreshTask = Task { [weak self] in
             await previous?.value
             guard let self else { return }
             guard enabled else {
-                await authority.cancelPending()
+                await authority?.cancelPending()
                 return
             }
-            guard self.revision == current else { return }
+            guard let authority, self.revision == current else { return }
+            if let pickTask = self.pickAndStorePortIfNeeded() {
+                _ = await pickTask.value
+            }
+            guard self.shouldListen, self.revision == current else { return }
             guard self.server?.isRunning != true || self.listeningBaseURL != self.baseURL else { return }
             self.server?.stop()
             self.server = nil
@@ -103,7 +164,11 @@ final class RemoteMCPService {
                 let server = RemoteMCPHTTPServer(port: port) { request in await router.handle(request) }
                 do {
                     guard port != 0 else { throw ControlFailure(code: .unavailable) }
-                    try server.start()
+                    try await server.start()
+                    guard self.shouldListen, self.revision == current else {
+                        server.stop()
+                        return
+                    }
                     self.server = server
                     self.listening = true
                     self.listeningBaseURL = baseURL
@@ -111,8 +176,13 @@ final class RemoteMCPService {
                     return
                 } catch {
                     server.stop()
+                    guard self.shouldListen, self.revision == current else { return }
                     if attempt == 0 {
-                        app.settings.remoteMCPPort = Int(RemoteMCPHTTPServer.pickFreePort())
+                        let picked = await Task.detached(priority: .userInitiated) {
+                            RemoteMCPHTTPServer.pickFreePort()
+                        }.value
+                        guard self.shouldListen, self.revision == current else { return }
+                        app.settings.remoteMCPPort = Int(picked)
                     } else {
                         self.failure = "Remote MCP could not start. Retry after freeing the port."
                     }
@@ -122,17 +192,17 @@ final class RemoteMCPService {
     }
 
     func decide(_ request: RemoteMCPApprovalRequest, _ decision: RemoteMCPApprovalDecision) {
-        let authority = authority!
+        guard let authority else { return }
         Task { await authority.decide(request.id, decision) }
     }
 
     func revoke(_ grant: RemoteMCPGrant) {
-        let authority = authority!
+        let authority = ensureAuthority()
         Task { await authority.revoke(grantID: grant.id) }
     }
 
     func revokeAll() {
-        let authority = authority!
+        let authority = ensureAuthority()
         Task { await authority.revokeAll() }
     }
 }

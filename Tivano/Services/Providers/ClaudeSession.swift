@@ -33,7 +33,7 @@ final class ClaudeSession: ProviderSession {
     private var runtimeMode: RuntimeMode
     private var model: String?
     private var controlCounter = 0
-    private var pendingControl = PendingReplies<JSONValue>()
+    private var pendingControl = PendingReplies()
     private var pendingTools: [String: PendingTool] = [:]
     private var toolNames: [String: String] = [:]
     private var mainStream = StreamState()
@@ -89,17 +89,23 @@ final class ClaudeSession: ProviderSession {
         return options
     }
 
+    @concurrent
+    private nonisolated static func readClaudeMCPConfigPath() async -> String? {
+        MCPProviderConfig.claudeConfigPath()
+    }
+
     func start() async throws -> String {
         guard !CaptureRun.isEnabled else { throw ClaudeCredentialError.capture }
         guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
         let accountID = configuration.claudeAccountID
-        if let accountID, !ProviderAccounts.beginProcess(accountID) {
+        if let accountID, !(await ProviderAccounts.beginProcessAsync(accountID)) {
             throw ProviderError.failed(AppText.localized("This account is busy. Wait for its sessions and account checks to finish."))
         }
         var handedToReader = false
         defer { if !handedToReader, let accountID { ProviderAccounts.endProcess(accountID) } }
         try await validateAccountIdentity()
         let id = configuration.resumeID ?? UUID().uuidString.lowercased()
+        let isForking = configuration.resumeID != nil && configuration.forkSession
         var arguments = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--include-partial-messages", "--permission-prompt-tool", "stdio",
@@ -111,7 +117,7 @@ final class ClaudeSession: ProviderSession {
         if configuration.fastMode { arguments += ["--settings", #"{"fastMode":true}"#] }
         // Connected servers from Settings are the only MCP servers the session sees.
         // --strict-mcp-config leaves the user's own Claude config files alone but out of this session; with none connected, the flag is not passed and Claude reads its own config as usual.
-        if let mcpConfig = MCPProviderConfig.claudeConfigPath() { arguments += ["--mcp-config", mcpConfig, "--strict-mcp-config"] }
+        if let mcpConfig = await Self.readClaudeMCPConfigPath() { arguments += ["--mcp-config", mcpConfig, "--strict-mcp-config"] }
         let environment = configuration.environment
         let options = await Self.knownOptions(of: executable, environment: environment)
         // Resumed chats must use the current setting, even with Hydra off.
@@ -137,6 +143,7 @@ final class ClaudeSession: ProviderSession {
         if let resumeID = configuration.resumeID {
             arguments += ["--resume", resumeID]
             if let anchor = configuration.resumeAt { arguments += ["--resume-session-at", anchor] }
+            if configuration.forkSession { arguments += ["--fork-session"] }
         } else {
             arguments += ["--session-id", id]
         }
@@ -159,7 +166,7 @@ final class ClaudeSession: ProviderSession {
             self?.didClose()
         }
 
-        sessionID = id
+        sessionID = isForking ? nil : id
         let initialize: [String: JSONValue] = ["subtype": "initialize", "hooks": .null]
         let initialization = try await control(.object(initialize))
         isStarted = true
@@ -169,7 +176,7 @@ final class ClaudeSession: ProviderSession {
         if !commands.isEmpty { onEvent?(.commands(commands)) }
         invalidateContextUsage()
         refreshContextUsage()
-        return id
+        return sessionID ?? id
     }
 
     private static func models(in initialization: JSONValue) -> [ModelOption] {
@@ -187,12 +194,23 @@ final class ClaudeSession: ProviderSession {
     }
 
     private func validateAccountIdentity() async throws {
-        guard configuration.environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1" else { return }
-        guard let expected = configuration.claudeIdentity else { throw ClaudeAccountValidationError.identityUnavailable }
-        guard let executable = configuration.executable else { throw ProviderError.notInstalled(.claude) }
-        let actual = try await ProviderRegistry.claudeIdentity(executable: executable,
-            environment: configuration.environment, directory: configuration.workingDirectory,
-            reusingFor: configuration.claudeAccountID)
+        let managedFlag: String? = configuration.environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"]
+        guard managedFlag == "1" else { return }
+        guard let expected: ClaudeAccountIdentity = configuration.claudeIdentity else {
+            throw ClaudeAccountValidationError.identityUnavailable
+        }
+        guard let executable: URL = configuration.executable else {
+            throw ProviderError.notInstalled(.claude)
+        }
+        let environment: [String: String] = configuration.environment
+        let directory: URL = configuration.workingDirectory
+        let accountID: UUID? = configuration.claudeAccountID
+        let actual: ClaudeAccountIdentity = try await ProviderRegistry.claudeIdentity(
+            executable: executable,
+            environment: environment,
+            directory: directory,
+            reusingFor: accountID
+        )
         guard expected.matches(actual) else { throw ClaudeAccountValidationError.identityChanged }
     }
 
@@ -700,7 +718,6 @@ final class ClaudeSession: ProviderSession {
         // Spend and context occupancy have independent sources. A failed context
         // query must neither fabricate occupancy nor drop the turn's spend.
         if let spend = Self.turnSpendEvent(message, model: model) {
-            TokenLedger.shared.record(spend: spend.totalTokens)
             onEvent?(.tokenSpend(spend))
         }
         refreshContextUsage()

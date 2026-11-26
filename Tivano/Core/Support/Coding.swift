@@ -23,6 +23,13 @@ extension JSONEncoder {
         encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
+
+    static let storagePretty: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }()
 }
 
 extension JSONDecoder {

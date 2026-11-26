@@ -58,9 +58,25 @@ extension AppModel {
             let relative = (Array(repeating: "..", count: rootParts.count - shared) + parts.dropFirst(shared)).joined(separator: "/")
             return [worktree, relative].contains { path in
                 // Only entering or creating the worktree counts; reading a file in it does not.
-                let pattern = "(?:\\bcd\\s+|\\bgit\\s+-C\\s+|\\bworktree\\s+add\\s+(?:[^;&|\\n]*\\s)?)[\"']?"
-                    + NSRegularExpression.escapedPattern(for: path) + "(?=$|[/\\s\"'`;,)|&<>])"
-                return commands.contains { $0.range(of: pattern, options: .regularExpression) != nil }
+                var regex: NSRegularExpression?
+                for command in commands {
+                    guard command.contains(path) else { continue }
+                    let compiled: NSRegularExpression
+                    if let existing = regex {
+                        compiled = existing
+                    } else {
+                        let pattern = "(?:\\bcd\\s+|\\bgit\\s+-C\\s+|\\bworktree\\s+add\\s+(?:[^;&|\\n]*\\s)?)[\"']?"
+                            + NSRegularExpression.escapedPattern(for: path) + "(?=$|[/\\s\"'`;,)|&<>])"
+                        guard let created = try? NSRegularExpression(pattern: pattern) else { return false }
+                        regex = created
+                        compiled = created
+                    }
+                    let range = NSRange(location: 0, length: command.utf16.count)
+                    if compiled.firstMatch(in: command, range: range) != nil {
+                        return true
+                    }
+                }
+                return false
             }
         }
         return matches.count == 1 ? matches.first : nil

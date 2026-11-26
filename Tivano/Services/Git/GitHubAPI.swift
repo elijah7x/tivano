@@ -109,6 +109,11 @@ enum GitHubCredentials {
         CaptureRun.isEnabled ? nil : APIKeychain.read(account)
     }
 
+    @concurrent
+    static func readStoredToken() async -> String? {
+        storedToken()
+    }
+
     @discardableResult
     static func store(_ token: String) -> Bool {
         APIKeychain.set(token, account: account)

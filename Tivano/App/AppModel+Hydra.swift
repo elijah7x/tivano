@@ -363,9 +363,40 @@ extension AppModel {
         panelHeads(of: parentID)
     }
 
+    enum HydraHeadStatusFilter {
+        case running
+        case finished
+        case status(HydraHeadInfo.Status)
+
+        func matches(_ info: HydraHeadInfo) -> Bool {
+            switch self {
+            case .running: info.status == .running
+            case .finished: info.isFinished
+            case .status(let status): info.status == status
+            }
+        }
+    }
+
+    /// Heads of a lead's team matching the optional job, status and kind filters,
+    /// in the order they were sent out.
+    func hydraHeads(
+        of leadID: UUID,
+        jobID: UUID?,
+        status: HydraHeadStatusFilter? = nil,
+        kind: HydraHeadInfo.Kind? = nil
+    ) -> [ChatThread] {
+        hydraTeam(of: leadID).filter { head in
+            guard let info = head.hydra else { return false }
+            if let jobID, info.jobID != jobID { return false }
+            if let status, !status.matches(info) { return false }
+            if let kind, info.kind != kind { return false }
+            return true
+        }
+    }
+
     /// How many of a lead's Tivano-run heads are still at work.
     func runningTivanoHeads(of parentID: UUID) -> Int {
-        hydraTeam(of: parentID).count { $0.hydra?.kind == .tivano && $0.hydra?.status == .running }
+        hydraHeads(of: parentID, jobID: nil, status: .running, kind: .tivano).count
     }
 
     /// How many of a lead's heads are still at work, whatever their kind.
@@ -540,18 +571,11 @@ extension AppModel {
             return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: no project named %@ is in the sidebar, so %@ did not start."), reference, name))
         }
         var canonical = HydraPaths.canonical(expanded)
-        let taskWorkspaces = HydraPaths.canonical(StoragePaths.root.appendingPathComponent("task-workspaces", isDirectory: true).path)
-        let protectedRoots = Self.hydraProtectedRoots()
-        func contains(_ root: String) -> Bool {
-            canonical == root || canonical.hasPrefix(root + "/")
-        }
-        let systemRoots = ["/System", "/Library", "/usr", "/bin", "/sbin", "/private/etc", "/Applications"]
-        let home = HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
+        let protected = HydraProtectedPaths()
+        let home = protected.home
         // Home holds every protected folder, so it never matches the "contains" rule here;
         // it is judged one owned file at a time below.
-        if canonical == "/"
-            || systemRoots.contains(where: { contains(HydraPaths.canonical($0)) })
-            || (canonical != home && Self.hydraPathTouchesProtectedRoot(canonical, roots: protectedRoots, taskWorkspaces: taskWorkspaces)) {
+        if protected.isProtected(canonical, allowingHome: true, includeSystemRoots: true) {
             return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is a system folder, so %@ did not start."), reference, name))
         }
         if canonical == home {
@@ -562,8 +586,8 @@ extension AppModel {
             // Each owned path is checked on its own: two files can share home as their
             // folder while one sits in, or contains, a protected folder.
             for file in files {
-                let path = HydraPaths.canonical(URL(fileURLWithPath: home).appendingPathComponent(file).path)
-                if path == home || Self.hydraPathTouchesProtectedRoot(path, roots: protectedRoots, taskWorkspaces: taskWorkspaces) {
+                let path = URL(fileURLWithPath: home).appendingPathComponent(file).path
+                if protected.isProtected(path, allowingHome: false) {
                     return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is a system folder, so %@ did not start."), file, name))
                 }
             }
@@ -572,8 +596,7 @@ extension AppModel {
                 updateHydraHead(id) { $0.filesBase = home }
             }
         }
-        if canonical == "/" || systemRoots.contains(where: { contains(HydraPaths.canonical($0)) })
-            || (canonical != home && Self.hydraPathTouchesProtectedRoot(canonical, roots: protectedRoots, taskWorkspaces: taskWorkspaces)) {
+        if protected.isProtected(canonical, allowingHome: true, includeSystemRoots: true) {
             return failHydraRoute(id, String(format: Chrome.localized("Sub-agents: %@ is a system folder, so %@ did not start."), canonical, name))
         }
         let manager = FileManager.default
@@ -1409,7 +1432,7 @@ extension AppModel {
             repoLease = try await checkoutGit.repositoryWriteLease(wait: true)
             try Task.checkCancellation()
         } catch {
-            landing.patchPath = keepHydraPatch(patch.text, of: info, headID: head.id)
+            landing.patchPath = await keepHydraPatch(patch.text, of: info, headID: head.id)
             landing.error = error.localizedDescription
             noteHydraLanding(landing, of: info, to: parentID)
             return landing
@@ -1418,7 +1441,7 @@ extension AppModel {
         guard thread(id)?.worktreePath == head.worktreePath,
               thread(id)?.hydra?.baseTree == info.baseTree,
               thread(id)?.hydra?.targetCheckout == info.targetCheckout else {
-            landing.patchPath = keepHydraPatch(patch.text, of: info, headID: head.id)
+            landing.patchPath = await keepHydraPatch(patch.text, of: info, headID: head.id)
             landing.error = landing.patchPath == nil
                 ? AppText.localized("The sub-agent's recovery patch could not be saved; its copy was kept.")
                 : AppText.localized("The sub-agent changed while its landing was waiting; its patch was kept.")
@@ -1429,12 +1452,12 @@ extension AppModel {
         // would be impossible to tell from the operation's own conflicts, and resolving
         // either would lose the other. The work waits as a patch file instead.
         guard !(await checkoutGit.hasOperationInProgress()) else {
-            landing.patchPath = keepHydraPatch(patch.text, of: info, headID: head.id)
+            landing.patchPath = await keepHydraPatch(patch.text, of: info, headID: head.id)
             landing.error = AppText.localized("A rebase or merge is underway in the checkout, or its Git state could not be read.")
             noteHydraLanding(landing, of: info, to: parentID)
             return landing
         }
-        guard let recovery = keepHydraPatch(patch.text, of: info, headID: head.id) else {
+        guard let recovery = await keepHydraPatch(patch.text, of: info, headID: head.id) else {
             landing.error = AppText.localized("The sub-agent's recovery patch could not be saved; its copy was kept.")
             noteHydraLanding(landing, of: info, to: parentID)
             return landing
@@ -1465,9 +1488,15 @@ extension AppModel {
 
     /// Keeps a patch that could not be applied as a file beside the others, and hands back
     /// where it went; nil when even that failed.
-    private func keepHydraPatch(_ text: String, of info: HydraHeadInfo, headID: UUID) -> String? {
+    private func keepHydraPatch(_ text: String, of info: HydraHeadInfo, headID: UUID) async -> String? {
         let slug = info.persona.name.replacingOccurrences(of: " ", with: "-").lowercased()
-        let url = Storage.patchesDirectory.appendingPathComponent("\(slug)-\(headID.uuidString.lowercased().prefix(8))-\(UUID().uuidString.lowercased()).patch")
+        let filename = "\(slug)-\(headID.uuidString.lowercased().prefix(8))-\(UUID().uuidString.lowercased()).patch"
+        return await Self.writeHydraPatch(text, filename: filename)
+    }
+
+    @concurrent
+    private static func writeHydraPatch(_ text: String, filename: String) async -> String? {
+        let url = Storage.patchesDirectory.appendingPathComponent(filename)
         guard (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil else { return nil }
         return url.path
     }
@@ -1523,7 +1552,7 @@ extension AppModel {
     /// Stops every head of a lead's still at work.
     func stopAllHydraHeads(of parentID: UUID) {
         existingRuntime(for: parentID)?.clearQueuedHydraHeads()
-        for head in hydraTeam(of: parentID) where head.hydra?.status == .running {
+        for head in hydraHeads(of: parentID, jobID: nil, status: .running) {
             stopHydraHead(head.id)
         }
     }
@@ -1571,7 +1600,7 @@ extension AppModel {
     }
 
     func cancelTransientHydraRetries(of leadID: UUID, jobID: UUID) {
-        for head in hydraTeam(of: leadID) where head.hydra?.jobID == jobID {
+        for head in hydraHeads(of: leadID, jobID: jobID) {
             HydraWatchdog.transientRetryTasks.removeValue(forKey: head.id)?.cancel()
         }
     }
@@ -1639,14 +1668,32 @@ extension AppModel {
         if work.paths.isEmpty { return true }
         guard let patch = try? await copyGit.diff(from: base, to: after, binary: true, paths: work.paths), !patch.isEmpty else { return false }
         let slug = name.replacingOccurrences(of: " ", with: "-").lowercased()
-        let url = Storage.patchesDirectory.appendingPathComponent("\(slug)-\(id.uuidString.lowercased().prefix(8))-\(base)-\(after)-unlanded.patch")
-        if FileManager.default.fileExists(atPath: url.path) {
-            return (try? String(contentsOf: url, encoding: .utf8)) == patch
+        let filename = "\(slug)-\(id.uuidString.lowercased().prefix(8))-\(base)-\(after)-unlanded.patch"
+        switch await Self.keepHydraPatchFile(patch, filename: filename) {
+        case .matchedExisting:
+            return true
+        case .failed:
+            return false
+        case .wrote(let path):
+            guard let parentID = thread(id)?.parentThreadID, let leadRuntime = existingRuntime(for: parentID) else { return true }
+            leadRuntime.appendHydraNote(String(format: AppText.localized("%@'s unfinished work was kept as a recovery patch.\n%@\n\nIts copy is then removed. Review the patch against your checkout before applying it with `git apply --3way %@`."), name, path, path))
+            return true
         }
-        guard (try? patch.write(to: url, atomically: true, encoding: .utf8)) != nil else { return false }
-        guard let parentID = thread(id)?.parentThreadID, let leadRuntime = existingRuntime(for: parentID) else { return true }
-        leadRuntime.appendHydraNote(String(format: AppText.localized("%@'s unfinished work was kept as a recovery patch.\n%@\n\nIts copy is then removed. Review the patch against your checkout before applying it with `git apply --3way %@`."), name, url.path, url.path))
-        return true
+    }
+
+    private enum HydraPatchKeepResult: Sendable {
+        case wrote(String)
+        case matchedExisting
+        case failed
+    }
+
+    @concurrent
+    private static func keepHydraPatchFile(_ text: String, filename: String) async -> HydraPatchKeepResult {
+        let url = Storage.patchesDirectory.appendingPathComponent(filename)
+        if FileManager.default.fileExists(atPath: url.path) {
+            return (try? String(contentsOf: url, encoding: .utf8)) == text ? .matchedExisting : .failed
+        }
+        return (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil ? .wrote(url.path) : .failed
     }
 
     // MARK: - Watchdog
@@ -1752,23 +1799,42 @@ extension AppModel {
     /// to the project folder. Unclaimed copies remain in Storage.worktreesDirectory for
     /// recovery: missing chat metadata cannot prove that a copy's work landed, even when
     /// its working directory is clean.
-    func sweepHydraCopies() {
+    func sweepHydraCopies() async {
         // Copies deleted from disk still hold their names in the registry until pruned:
         // only the projects that ever had a copy, one git process at a time.
         let checkouts = Set(threads.filter { $0.hydra?.hasOwnCopy == true }.compactMap { head in
             head.hydra?.targetCheckout ?? project(head.projectID)?.path
         })
+        let candidates: [(id: UUID, copy: String)] = threads.compactMap { head in
+            guard head.hydra?.hasOwnCopy == true, let copy = head.worktreePath else { return nil }
+            return (head.id, copy)
+        }
         Task {
             for checkout in checkouts { await Git(checkout).pruneWorktrees() }
         }
-        for head in threads where head.hydra?.hasOwnCopy == true {
-            guard let copy = head.worktreePath, !FileManager.default.fileExists(atPath: copy) else { continue }
-            updateThread(head.id) {
-                $0.worktreePath = nil
-                $0.branch = nil
+        // Awaited by bootstrap, so stale copy paths are cleared before jobs are settled or resumed.
+        if !candidates.isEmpty {
+            let missing = await Self.missingHydraCopies(candidates)
+            let missingIDs = missing.compactMap { item -> UUID? in
+                guard !libraryWritesBlocked, let head = thread(item.id),
+                      head.hydra?.hasOwnCopy == true,
+                      head.worktreePath == item.copy else { return nil }
+                return item.id
             }
-            updateHydraHead(head.id) { $0.baseTree = nil }
+            if !missingIDs.isEmpty {
+                updateEachThread(missingIDs) {
+                    $0.worktreePath = nil
+                    $0.branch = nil
+                    $0.hydra?.baseTree = nil
+                }
+            }
         }
         startHydraWatchdog()
+    }
+
+    @concurrent
+    private static func missingHydraCopies(_ candidates: [(id: UUID, copy: String)]) async -> [(id: UUID, copy: String)] {
+        let manager = FileManager.default
+        return candidates.filter { !manager.fileExists(atPath: $0.copy) }
     }
 }

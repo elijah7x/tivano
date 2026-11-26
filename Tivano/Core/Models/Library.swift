@@ -164,6 +164,14 @@ struct ProviderSwitchOrigin: Codable, Hashable, Sendable {
     var temporaryHydraPair: HydraPair?
     var providerSessionID: String?
     var providerResumeAt: String?
+    var providerForkPending = false
+}
+
+/// Records where a branched chat split off from its source thread.
+struct ThreadBranchOrigin: Codable, Hashable, Sendable {
+    var sourceID: UUID
+    var sourceTitle: String
+    var lastCopiedTurnID: UUID? = nil
 }
 
 struct ChatThread: Codable, Identifiable, Hashable, Sendable {
@@ -199,6 +207,8 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var controlWorkspace: ControlWorkspace?
     var providerSessionID: String?
     var providerResumeAt: String?
+    var providerForkPending = false
+    var branchOrigin: ThreadBranchOrigin? = nil
     /// Nil on new chats until their first Claude process; legacy chats explicitly use the CLI default.
     var claudeAccountID: UUID? = nil
     var claudeUsesDefaultAccount: Bool? = nil
@@ -368,6 +378,8 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         }
         providerSessionID = container.value(.providerSessionID, default: nil)
         providerResumeAt = container.value(.providerResumeAt, default: nil)
+        providerForkPending = container.value(.providerForkPending, default: false)
+        branchOrigin = container.value(.branchOrigin, default: nil)
         claudeAccountID = try container.decodeIfPresent(UUID.self, forKey: .claudeAccountID)
         claudeUsesDefaultAccount = try container.decodeIfPresent(Bool.self, forKey: .claudeUsesDefaultAccount)
         claudeIdentity = try container.decodeIfPresent(ClaudeAccountIdentity.self, forKey: .claudeIdentity)
@@ -438,5 +450,6 @@ extension ProviderSwitchOrigin {
         temporaryHydraPair = try container.decodeIfPresent(HydraPair.self, forKey: .temporaryHydraPair)
         providerSessionID = try container.decodeIfPresent(String.self, forKey: .providerSessionID)
         providerResumeAt = try container.decodeIfPresent(String.self, forKey: .providerResumeAt)
+        providerForkPending = try container.decodeIfPresent(Bool.self, forKey: .providerForkPending) ?? false
     }
 }

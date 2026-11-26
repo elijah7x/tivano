@@ -7,12 +7,12 @@ struct TokenUsageSettingsPage: View {
     @Environment(\.locale) private var locale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var sourceStatus: TokenTakenStatus = TokenTakenSource.detect()
+    @State private var sourceStatus: TokenTakenStatus?
+    @State private var detectTask: Task<Void, Never>?
     @State private var shareDimension: ShareDimension = .tool
     @State private var isBreakdownExpanded = false
     @State private var areWarningsExpanded = false
-    @State private var hoveredDayIndex: Int?
-    @State private var hoveredSliceID: String?
+    @State private var rangeStatsCache = RangeStatsCache()
 
     private static let periodOptions: [(Int, String)] = [
         (7, "Last 7 days"),
@@ -21,18 +21,32 @@ struct TokenUsageSettingsPage: View {
         (365, "Last year"),
     ]
 
-    private static let dimensionOptions: [(ShareDimension, String)] = [
-        (.tool, "By tool"),
-        (.model, "By model"),
-    ]
+    private static let heroFormatTokenRegex = #/(?:%%|%([1-9][0-9]*)\$@|%@)/#
+    private static let partialWarningRegex = #/(?<name>.+?)\s*\([^()]+\):\s*partial,\s*last write\s+(?<stamp>\S+)/#
+
+    private static let warningDateFormatterFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let warningDateFormatterWhole: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private var effectiveStatus: TokenTakenStatus {
+        sourceStatus ?? model.tokenUsage.status
+    }
 
     private var isInstalled: Bool {
-        if case .installed = sourceStatus { return true }
+        if case .installed = effectiveStatus { return true }
         return false
     }
 
     private var installedVersion: String? {
-        guard case .installed(let version) = sourceStatus,
+        guard case .installed(let version) = effectiveStatus,
               let trimmed = version?.trimmed,
               !trimmed.isEmpty else {
             return nil
@@ -52,14 +66,12 @@ struct TokenUsageSettingsPage: View {
             }
         }
         .onAppear(perform: handleAppear)
+        .onDisappear {
+            detectTask?.cancel()
+            detectTask = nil
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             handleDidBecomeActive()
-        }
-        .onChange(of: model.tokenUsage.rangePreset) { _, _ in
-            hoveredDayIndex = nil
-        }
-        .onChange(of: shareDimension) { _, _ in
-            hoveredSliceID = nil
         }
     }
 
@@ -67,10 +79,17 @@ struct TokenUsageSettingsPage: View {
 
     @ViewBuilder
     private var storyBlock: some View {
-        if model.tokenUsage.snapshot != nil {
+        if let snapshot = model.tokenUsage.snapshot {
             let range = model.tokenUsage.resolvedBrush
-            let rangeDays = range.map { Array(model.tokenUsage.days[$0]) } ?? []
-            let stats = RangeStats(rows: model.tokenUsage.rangeRows)
+            let cached = rangeStatsCache.resolve(
+                snapshot: snapshot,
+                refreshToken: model.tokenUsage.refreshToken,
+                days: model.tokenUsage.days,
+                range: range,
+                rows: model.tokenUsage.rangeRows
+            )
+            let rangeDays = cached.rangeDays
+            let stats = cached.stats
 
             VStack(alignment: .leading, spacing: 24) {
                 periodPicker
@@ -80,12 +99,17 @@ struct TokenUsageSettingsPage: View {
 
                     TokenUsageSparkline(
                         days: rangeDays,
+                        rangePreset: model.tokenUsage.rangePreset,
                         locale: locale,
-                        formatTokens: formatTokens,
-                        hoveredIndex: $hoveredDayIndex
+                        formatTokens: formatTokens
                     )
 
-                    shareSection(stats: stats)
+                    TokenUsageShareSection(
+                        stats: stats,
+                        shareDimension: $shareDimension,
+                        formatTokens: formatTokens,
+                        formatPercent: formatPercent
+                    )
 
                     breakdownDisclosure(stats: stats)
                 } else {
@@ -206,7 +230,7 @@ struct TokenUsageSettingsPage: View {
         var cursor = template.startIndex
         var sequentialIndex = 0
 
-        for match in template.matches(of: #/(?:%%|%([1-9][0-9]*)\$@|%@)/#) {
+        for match in template.matches(of: Self.heroFormatTokenRegex) {
             if cursor < match.range.lowerBound {
                 let literal = String(template[cursor..<match.range.lowerBound])
                 pieces.append(
@@ -305,140 +329,6 @@ struct TokenUsageSettingsPage: View {
         }
     }
 
-    // MARK: - Share Bar & Legend
-
-    private func shareSection(stats: RangeStats) -> some View {
-        let slices = makeShareSlices(stats: stats)
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                ChromeSegmentedPicker(options: Self.dimensionOptions, selection: $shareDimension)
-                Spacer(minLength: 0)
-                if let hovered = slices.first(where: { $0.id == hoveredSliceID }) {
-                    Text(verbatim: "\(hovered.name) · \(formatTokens(hovered.tokens))")
-                        .font(.ui(.caption))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                }
-            }
-
-            GeometryReader { proxy in
-                let widths = Self.segmentWidths(for: slices, totalWidth: proxy.size.width)
-                HStack(spacing: 2) {
-                    ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(slice.color)
-                            .opacity(hoveredSliceID == nil || hoveredSliceID == slice.id ? 1 : 0.4)
-                            .frame(width: index < widths.count ? widths[index] : 0, height: 8)
-                            .onHover { hovering in
-                                updateHoveredSlice(id: slice.id, hovering: hovering)
-                            }
-                    }
-                }
-            }
-            .frame(height: 8)
-            .accessibilityHidden(true)
-
-            FlowLayout(spacing: 16, lineSpacing: 8) {
-                ForEach(slices) { slice in
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(slice.color)
-                            .frame(width: 7.5, height: 7.5)
-                            .accessibilityHidden(true)
-                        Text(verbatim: slice.name)
-                            .font(.ui(.subheadline))
-                            .foregroundStyle(Chrome.primaryText)
-                            .lineLimit(1)
-                        Text(verbatim: formatPercent(slice.share))
-                            .font(.ui(.subheadline))
-                            .foregroundStyle(Chrome.secondaryText)
-                            .monospacedDigit()
-                    }
-                    .opacity(hoveredSliceID == nil || hoveredSliceID == slice.id ? 1 : 0.45)
-                    .onHover { hovering in
-                        updateHoveredSlice(id: slice.id, hovering: hovering)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-            }
-            .padding(.top, 2)
-        }
-    }
-
-    private func updateHoveredSlice(id: String, hovering: Bool) {
-        if hovering {
-            if hoveredSliceID != id { hoveredSliceID = id }
-        } else if hoveredSliceID == id {
-            hoveredSliceID = nil
-        }
-    }
-
-    private func makeShareSlices(stats: RangeStats) -> [ShareSlice] {
-        guard stats.totalTokens > 0 else { return [] }
-        let entries = shareDimension == .tool ? stats.byTool : stats.byModel
-        let total = Double(stats.totalTokens)
-
-        var result: [ShareSlice] = []
-        let topEntries = entries.prefix(5)
-        for (index, entry) in topEntries.enumerated() {
-            result.append(
-                ShareSlice(
-                    id: "rank-\(index)-\(entry.name)",
-                    name: entry.name,
-                    tokens: entry.tokens,
-                    share: Double(entry.tokens) / total,
-                    color: Self.sliceColor(index: index, isOther: false)
-                )
-            )
-        }
-
-        if entries.count > 5 {
-            let overflowTokens = entries.dropFirst(5).reduce(Int64(0)) { $0 + $1.tokens }
-            if overflowTokens > 0 {
-                result.append(
-                    ShareSlice(
-                        id: "overflow-other",
-                        name: Chrome.localized("Other"),
-                        tokens: overflowTokens,
-                        share: Double(overflowTokens) / total,
-                        color: Self.sliceColor(index: 5, isOther: true)
-                    )
-                )
-            }
-        }
-
-        return result
-    }
-
-    private static func sliceColor(index: Int, isOther: Bool) -> Color {
-        if isOther {
-            return Chrome.secondaryText.opacity(0.18)
-        }
-        switch index {
-        case 0: return Chrome.accent
-        case 1: return Chrome.accent.opacity(0.7)
-        case 2: return Chrome.accent.opacity(0.45)
-        case 3: return Chrome.secondaryText.opacity(0.55)
-        default: return Chrome.secondaryText.opacity(0.35)
-        }
-    }
-
-    private static func segmentWidths(for slices: [ShareSlice], totalWidth: CGFloat) -> [CGFloat] {
-        guard !slices.isEmpty, totalWidth > 0 else { return [] }
-        let gaps = CGFloat(max(slices.count - 1, 0)) * 2
-        let available = max(0, totalWidth - gaps)
-        guard available > 0 else { return Array(repeating: 0, count: slices.count) }
-
-        let totalTokens = Double(max(slices.reduce(Int64(0)) { $0 + $1.tokens }, 1))
-        let minSegment = min(4, available / CGFloat(slices.count))
-        let raw = slices.map { max(minSegment, available * CGFloat(Double($0.tokens) / totalTokens)) }
-        let rawSum = raw.reduce(0, +)
-        guard rawSum > 0 else { return raw }
-        let scale = available / rawSum
-        return raw.map { $0 * scale }
-    }
-
     // MARK: - Breakdown Disclosure
 
     private func breakdownDisclosure(stats: RangeStats) -> some View {
@@ -505,34 +395,43 @@ struct TokenUsageSettingsPage: View {
         }
         return ChromeSection(title: "Data source") {
             ChromeCard {
-                TimelineView(.periodic(from: .now, by: 60)) { timeline in
-                    let _ = timeline.date
-                    ChromeRow(
-                        title: "Token Taken",
-                        detail: installedDetail,
-                        localizesDetail: false,
-                        localizesTitle: false
-                    ) {
-                        HStack(spacing: 8) {
-                            Button("Refresh") { model.tokenUsage.refresh() }
-                                .chromePillButton()
-                                .disabled(model.tokenUsage.isFetching)
-                            if let appURL = TokenTakenSource.appURL() {
-                                Button("Open Token Taken") {
-                                    NSWorkspace.shared.openApplication(at: appURL, configuration: .init())
-                                }
-                                .chromePillButton()
-                            }
-                        }
+                if FrontMonitor.shared.isVisible {
+                    TimelineView(.periodic(from: .now, by: 60)) { timeline in
+                        let _ = timeline.date
+                        dataSourceCardContent(syncWarnings: syncWarnings)
                     }
-
-                    if !syncWarnings.isEmpty {
-                        ChromeRowDivider()
-                        warningsRow(syncWarnings)
-                    }
+                } else {
+                    dataSourceCardContent(syncWarnings: syncWarnings)
                 }
             }
             footerLinks
+        }
+    }
+
+    @ViewBuilder
+    private func dataSourceCardContent(syncWarnings: [String]) -> some View {
+        ChromeRow(
+            title: "Token Taken",
+            detail: installedDetail,
+            localizesDetail: false,
+            localizesTitle: false
+        ) {
+            HStack(spacing: 8) {
+                Button("Refresh") { model.tokenUsage.refresh() }
+                    .chromePillButton()
+                    .disabled(model.tokenUsage.isFetching)
+                if let appURL = TokenTakenSource.appURL() {
+                    Button("Open Token Taken") {
+                        NSWorkspace.shared.openApplication(at: appURL, configuration: .init())
+                    }
+                    .chromePillButton()
+                }
+            }
+        }
+
+        if !syncWarnings.isEmpty {
+            ChromeRowDivider()
+            warningsRow(syncWarnings)
         }
     }
 
@@ -632,7 +531,7 @@ struct TokenUsageSettingsPage: View {
 
     private func formattedWarning(_ raw: String) -> String {
         let trimmed = raw.trimmed
-        if let match = trimmed.wholeMatch(of: #/(?<name>.+?)\s*\([^()]+\):\s*partial,\s*last write\s+(?<stamp>\S+)/#) {
+        if let match = trimmed.wholeMatch(of: Self.partialWarningRegex) {
             let name = String(match.output.name).trimmed
             let stamp = String(match.output.stamp)
             if !name.isEmpty, let date = Self.parseWarningDate(stamp) {
@@ -651,13 +550,10 @@ struct TokenUsageSettingsPage: View {
         if let date = ISO8601.date(from: stamp) {
             return date
         }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: stamp) {
+        if let date = warningDateFormatterFractional.date(from: stamp) {
             return date
         }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: stamp)
+        return warningDateFormatterWhole.date(from: stamp)
     }
 
     private var footerLinks: some View {
@@ -691,7 +587,7 @@ struct TokenUsageSettingsPage: View {
     }
 
     private func handleAppear() {
-        sourceStatus = TokenTakenSource.detect()
+        refreshSourceStatus()
         if model.tokenUsage.brush != nil {
             model.tokenUsage.setPreset(model.tokenUsage.rangePreset)
         }
@@ -699,8 +595,168 @@ struct TokenUsageSettingsPage: View {
     }
 
     private func handleDidBecomeActive() {
-        sourceStatus = TokenTakenSource.detect()
+        refreshSourceStatus()
         model.tokenUsage.onAppear()
+    }
+
+    private func refreshSourceStatus() {
+        detectTask?.cancel()
+        detectTask = Task {
+            let detected = await TokenTakenSource.detect()
+            guard !Task.isCancelled else { return }
+            sourceStatus = detected
+        }
+    }
+}
+
+// MARK: - Share Bar & Legend
+
+private struct TokenUsageShareSection: View {
+    let stats: RangeStats
+    @Binding var shareDimension: ShareDimension
+    let formatTokens: (Int64) -> String
+    let formatPercent: (Double) -> String
+
+    @State private var hoveredSliceID: String?
+
+    private static let dimensionOptions: [(ShareDimension, String)] = [
+        (.tool, "By tool"),
+        (.model, "By model"),
+    ]
+
+    var body: some View {
+        let slices = makeShareSlices(stats: stats)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                ChromeSegmentedPicker(options: Self.dimensionOptions, selection: $shareDimension)
+                Spacer(minLength: 0)
+                if let hovered = slices.first(where: { $0.id == hoveredSliceID }) {
+                    Text(verbatim: "\(hovered.name) · \(formatTokens(hovered.tokens))")
+                        .font(.ui(.caption))
+                        .foregroundStyle(Chrome.secondaryText)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
+
+            GeometryReader { proxy in
+                let widths = Self.segmentWidths(for: slices, totalWidth: proxy.size.width)
+                HStack(spacing: 2) {
+                    ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(slice.color)
+                            .opacity(hoveredSliceID == nil || hoveredSliceID == slice.id ? 1 : 0.4)
+                            .frame(width: index < widths.count ? widths[index] : 0, height: 8)
+                            .onHover { hovering in
+                                updateHoveredSlice(id: slice.id, hovering: hovering)
+                            }
+                    }
+                }
+            }
+            .frame(height: 8)
+            .accessibilityHidden(true)
+
+            FlowLayout(spacing: 16, lineSpacing: 8) {
+                ForEach(slices) { slice in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(slice.color)
+                            .frame(width: 7.5, height: 7.5)
+                            .accessibilityHidden(true)
+                        Text(verbatim: slice.name)
+                            .font(.ui(.subheadline))
+                            .foregroundStyle(Chrome.primaryText)
+                            .lineLimit(1)
+                        Text(verbatim: formatPercent(slice.share))
+                            .font(.ui(.subheadline))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .monospacedDigit()
+                    }
+                    .opacity(hoveredSliceID == nil || hoveredSliceID == slice.id ? 1 : 0.45)
+                    .onHover { hovering in
+                        updateHoveredSlice(id: slice.id, hovering: hovering)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .padding(.top, 2)
+        }
+        .onChange(of: shareDimension) { _, _ in
+            hoveredSliceID = nil
+        }
+    }
+
+    private func updateHoveredSlice(id: String, hovering: Bool) {
+        if hovering {
+            if hoveredSliceID != id { hoveredSliceID = id }
+        } else if hoveredSliceID == id {
+            hoveredSliceID = nil
+        }
+    }
+
+    private func makeShareSlices(stats: RangeStats) -> [ShareSlice] {
+        guard stats.totalTokens > 0 else { return [] }
+        let entries = shareDimension == .tool ? stats.byTool : stats.byModel
+        let total = Double(stats.totalTokens)
+
+        var result: [ShareSlice] = []
+        let topEntries = entries.prefix(5)
+        for (index, entry) in topEntries.enumerated() {
+            result.append(
+                ShareSlice(
+                    id: "rank-\(index)-\(entry.name)",
+                    name: entry.name,
+                    tokens: entry.tokens,
+                    share: Double(entry.tokens) / total,
+                    color: Self.sliceColor(index: index, isOther: false)
+                )
+            )
+        }
+
+        if entries.count > 5 {
+            let overflowTokens = entries.dropFirst(5).reduce(Int64(0)) { $0 + $1.tokens }
+            if overflowTokens > 0 {
+                result.append(
+                    ShareSlice(
+                        id: "overflow-other",
+                        name: Chrome.localized("Other"),
+                        tokens: overflowTokens,
+                        share: Double(overflowTokens) / total,
+                        color: Self.sliceColor(index: 5, isOther: true)
+                    )
+                )
+            }
+        }
+
+        return result
+    }
+
+    private static func sliceColor(index: Int, isOther: Bool) -> Color {
+        if isOther {
+            return Chrome.secondaryText.opacity(0.18)
+        }
+        switch index {
+        case 0: return Chrome.accent
+        case 1: return Chrome.accent.opacity(0.7)
+        case 2: return Chrome.accent.opacity(0.45)
+        case 3: return Chrome.secondaryText.opacity(0.55)
+        default: return Chrome.secondaryText.opacity(0.35)
+        }
+    }
+
+    private static func segmentWidths(for slices: [ShareSlice], totalWidth: CGFloat) -> [CGFloat] {
+        guard !slices.isEmpty, totalWidth > 0 else { return [] }
+        let gaps = CGFloat(max(slices.count - 1, 0)) * 2
+        let available = max(0, totalWidth - gaps)
+        guard available > 0 else { return Array(repeating: 0, count: slices.count) }
+
+        let totalTokens = Double(max(slices.reduce(Int64(0)) { $0 + $1.tokens }, 1))
+        let minSegment = min(4, available / CGFloat(slices.count))
+        let raw = slices.map { max(minSegment, available * CGFloat(Double($0.tokens) / totalTokens)) }
+        let rawSum = raw.reduce(0, +)
+        guard rawSum > 0 else { return raw }
+        let scale = available / rawSum
+        return raw.map { $0 * scale }
     }
 }
 
@@ -708,9 +764,11 @@ struct TokenUsageSettingsPage: View {
 
 private struct TokenUsageSparkline: View {
     let days: [TokenUsageDay]
+    let rangePreset: Int
     let locale: Locale
     let formatTokens: (Int64) -> String
-    @Binding var hoveredIndex: Int?
+
+    @State private var hoveredIndex: Int?
 
     private var clampedHoveredDay: (index: Int, entry: TokenUsageDay)? {
         guard let hoveredIndex, days.indices.contains(hoveredIndex) else { return nil }
@@ -758,6 +816,9 @@ private struct TokenUsageSparkline: View {
                 .foregroundStyle(Chrome.secondaryText)
                 .monospacedDigit()
             }
+        }
+        .onChange(of: rangePreset) { _, _ in
+            hoveredIndex = nil
         }
     }
 
@@ -899,6 +960,53 @@ private struct ShareSlice: Identifiable {
     let tokens: Int64
     let share: Double
     let color: Color
+}
+
+private struct RangeStatsCacheKey: Equatable {
+    let fetchedAt: Date
+    let from: String
+    let to: String
+    let timeZone: String
+    let scope: TokenUsageScope
+    let rowCount: Int
+    let refreshToken: Int
+    let range: ClosedRange<Int>?
+    let daysCount: Int
+    let rangeRowCount: Int
+}
+
+@MainActor
+private final class RangeStatsCache {
+    private var key: RangeStatsCacheKey?
+    private var stats = RangeStats(rows: [])
+    private var rangeDays: [TokenUsageDay] = []
+
+    func resolve(
+        snapshot: TokenUsageSnapshot,
+        refreshToken: Int,
+        days: [TokenUsageDay],
+        range: ClosedRange<Int>?,
+        rows: [TokenUsageRow]
+    ) -> (stats: RangeStats, rangeDays: [TokenUsageDay]) {
+        let nextKey = RangeStatsCacheKey(
+            fetchedAt: snapshot.fetchedAt,
+            from: snapshot.from,
+            to: snapshot.to,
+            timeZone: snapshot.timeZone,
+            scope: snapshot.scope,
+            rowCount: snapshot.rows.count,
+            refreshToken: refreshToken,
+            range: range,
+            daysCount: days.count,
+            rangeRowCount: rows.count
+        )
+        if key != nextKey {
+            key = nextKey
+            stats = RangeStats(rows: rows)
+            rangeDays = range.map { Array(days[$0]) } ?? []
+        }
+        return (stats, rangeDays)
+    }
 }
 
 private struct RangeStats {

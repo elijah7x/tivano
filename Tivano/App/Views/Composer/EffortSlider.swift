@@ -57,30 +57,10 @@ struct ModelEffortButton: View {
 
     @State private var isPresented = false
 
-    /// The chip's width, in points. The chip always takes its content's width, so it
-    /// grows and shrinks as the effort's title, the model or the preset name changes.
-    @State private var chipWidth: CGFloat = 0
-
     /// Where the popover's arrow hangs, measured from the chip's leading edge: about the
-    /// center of a typical "model · effort · preset" chip. A fixed point keeps the open
-    /// popover still while the chip resizes under it; centering on the chip would drag
-    /// it sideways with every name change.
+    /// center of a typical "model · effort · preset" chip. The popover is anchored once
+    /// when it opens, so later chip resizes never move it.
     private static let popoverAnchorX: CGFloat = 100
-
-    /// The anchor point chosen when the popover opened, held until it closes so a chip
-    /// that shrinks below the point while open never moves the popover.
-    @State private var openAnchorX: CGFloat?
-
-    /// A chip too narrow to reach the fixed point hangs the arrow near its trailing end,
-    /// so the arrow never points past the chip as it opens.
-    private var anchorX: CGFloat {
-        min(Self.popoverAnchorX, max(chipWidth - 14, chipWidth / 2))
-    }
-
-    private var popoverAnchor: PopoverAttachmentAnchor {
-        guard !compact, chipWidth > 0 else { return .rect(.bounds) }
-        return .rect(.rect(CGRect(x: openAnchorX ?? anchorX, y: 0, width: 1, height: 1)))
-    }
 
     private var fallbackName: String {
         thread.model.map { ModelPin(provider: thread.provider, modelID: $0).displayName } ?? thread.provider.displayName
@@ -166,15 +146,17 @@ struct ModelEffortButton: View {
         }
         .buttonStyle(.chip(active: isPresented))
         .focusable(false)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipWidth = $0 }
-        .onChange(of: isPresented) { _, isOpen in
-            openAnchorX = isOpen ? anchorX : nil
-        }
         .help(Text(verbatim: helpText(current: current, isHydra: isHydra, isChimera: isChimera, pair: pair)))
         .accessibilityLabel(Text(verbatim: helpText(current: current, isHydra: isHydra, isChimera: isChimera, pair: pair)))
-        .popover(isPresented: $isPresented, attachmentAnchor: popoverAnchor, arrowEdge: .bottom) {
+        .anchoredPopover(
+            isPresented: $isPresented,
+            arrowEdge: .bottom,
+            sizing: .tracksContent,
+            anchor: compact ? nil : { bounds in
+                CGRect(x: min(Self.popoverAnchorX, max(bounds.width - 14, bounds.width / 2)), y: 0, width: 1, height: bounds.height)
+            }
+        ) {
             ModelEffortPanel(threadID: thread.id, hasHistory: hasHistory)
-                .presentedChrome()
         }
         #if DEBUG
         .background {
@@ -222,6 +204,7 @@ struct ModelEffortButton: View {
 private struct ModelEffortPanel: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.closePopover) private var closePopover
     let threadID: UUID
     let hasHistory: Bool
 
@@ -230,6 +213,14 @@ private struct ModelEffortPanel: View {
     }
 
     @State private var page: Page = .slider
+
+    private func close() {
+        if let closePopover {
+            closePopover()
+        } else {
+            dismiss()
+        }
+    }
 
     var body: some View {
         if let thread = model.thread(threadID) {
@@ -268,12 +259,12 @@ private struct ModelEffortPanel: View {
             if !hasHistory { model.settings.noteNewChatChoice(.pair(pair)) }
             model.enterHydraPair(pair, for: thread.id)
             page = .slider
-            dismiss()
+            close()
         } onEnterTemporaryPair: { pair in
             if !hasHistory { model.settings.noteNewChatChoice(.pair(pair)) }
             model.enterHydraPair(pair, for: thread.id, temporary: true)
             page = .slider
-            dismiss()
+            close()
         } onEditTemporaryPair: {
             if !hasHistory, let pair = model.thread(thread.id)?.temporaryHydraPair {
                 model.settings.noteNewChatChoice(.pair(pair))
@@ -2475,6 +2466,7 @@ private struct SubagentsCardSection: View {
     ) -> some View {
         let displayedPair = activePair ?? preferredPair ?? savedPairs.first
         let buttonTitle = displayedPair.map { HydraPairSummary.title($0, registry: model.providers) } ?? Chrome.localized("Preset")
+        let scrolls = savedPairs.count > 7
         Button {
             isComboMenuPresented.toggle()
         } label: {
@@ -2502,10 +2494,9 @@ private struct SubagentsCardSection: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .frame(maxWidth: 120, alignment: .trailing)
         .help(Text(verbatim: buttonTitle))
-        .popover(isPresented: $isComboMenuPresented, arrowEdge: .bottom) {
-            PopoverMenu(scrolls: savedPairs.count > 7) {
+        .anchoredPopover(isPresented: $isComboMenuPresented, arrowEdge: .bottom) {
+            PopoverMenu(idealHeight: scrolls ? 7 * 42 : nil, scrolls: scrolls) {
                 PopoverSectionHeader("Combos")
                 if let temporaryPair {
                     HydraPairListRow(
@@ -2536,6 +2527,7 @@ private struct SubagentsCardSection: View {
             }
             .frame(width: 280)
         }
+        .frame(maxWidth: 120, alignment: .trailing)
     }
 }
 
@@ -3049,7 +3041,7 @@ struct TrackEffect: View {
         let kind = look.kind
         let spark = look.spark
         let pair = look.pair
-        let paused = reduceMotion || !FrontMonitor.shared.isVisible || !columnVisibility.isShown
+        let paused = reduceMotion || ScrollActivity.shared.isScrolling || !FrontMonitor.shared.isVisible || !columnVisibility.isShown
         TimelineView(.animation(minimumInterval: 1.0 / (kind == .supercharged && pair == nil ? 30 : 60), paused: paused)) { timeline in
             let time = timeline.date.timeIntervalSince(startedAt)
             Canvas { context, size in

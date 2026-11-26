@@ -105,6 +105,7 @@ struct Git: Sendable {
 
     /// The same lease for landing and merging, including linked worktrees and editions.
     /// Callers hold it over their whole operation; helpers must not acquire it again.
+    @concurrent
     func repositoryWriteLease(wait: Bool = false) async throws -> SharedLibraryLease {
         let common = try await output(["rev-parse", "--path-format=absolute", "--git-common-dir"]).trimmed
         guard !common.isEmpty else { throw ShellError(AppText.localized("Git did not return its common directory.")) }
@@ -473,6 +474,7 @@ struct Git: Sendable {
     /// A tree of HEAD with only `paths` taken from the working tree, additions and
     /// deletions included: what one thread's work amounts to, with nothing else that
     /// happens to be uncommitted alongside it.
+    @concurrent
     func captureTree(paths: [String]) async throws -> String {
         let fileManager = FileManager.default
         let index = fileManager.temporaryDirectory.appendingPathComponent("tivano-index-\(UUID().uuidString)")
@@ -496,6 +498,7 @@ struct Git: Sendable {
     /// base's, the working tree's). Nil when any such file conflicts, is changed on one
     /// side and deleted on the other, or was added on both sides differently.
     /// `sourceTree` is the immutable input, also used when synchronizing the checkout.
+    @concurrent
     func captureTree(paths: [String], onto base: String, from head: String) async throws -> (tree: String, sourceTree: String)? {
         let sourceTree = try await captureTree(paths: paths)
         let fileManager = FileManager.default
@@ -856,6 +859,7 @@ struct Git: Sendable {
     /// Snapshots the working tree into a hidden ref without touching the user's index or
     /// branch. A tree already checkpointed since anything changed reuses its commit, so a
     /// turn starting on an untouched tree costs the `update-ref` alone.
+    @concurrent
     func captureCheckpoint(_ ref: String) async throws {
         let indexPath = await indexPath()
         let watch = indexPath.flatMap { watch(indexPath: $0) }
@@ -874,12 +878,14 @@ struct Git: Sendable {
 
     /// The working tree as a tree object, from the directory's watch when it can vouch
     /// that nothing changed since the last capture, else captured now.
+    @concurrent
     func currentTree() async throws -> String {
         let indexPath = await indexPath()
         let watch = indexPath.flatMap { watch(indexPath: $0) }
         return try await currentTree(indexPath: indexPath, watch: watch)
     }
 
+    @concurrent
     private func currentTree(indexPath: String?, watch: WorkingTreeWatch?) async throws -> String {
         guard let indexPath, let watch else { return try await captureTree() }
         return try await watch.currentTree(indexPath: indexPath) { scratch, paths in
@@ -892,6 +898,7 @@ struct Git: Sendable {
     /// directories the watch saw change since the last capture, only they are walked and
     /// the rest of the index stands. A walk that fails, as when a path vanished with
     /// nothing of it in the index, is redone whole.
+    @concurrent
     private func captureTree(scratch: URL, paths: [String]?, indexPath: String) async throws -> String {
         let environment = ["GIT_INDEX_FILE": scratch.path]
         if let paths, !paths.isEmpty, FileManager.default.fileExists(atPath: scratch.path),
@@ -918,6 +925,7 @@ struct Git: Sendable {
 
     /// The working tree as a tree object: a cheap before/after marker for a
     /// diff, with no commit and nothing referenced. Respects .gitignore.
+    @concurrent
     func captureTree() async throws -> String {
         let fileManager = FileManager.default
         let index = fileManager.temporaryDirectory.appendingPathComponent("tivano-index-\(UUID().uuidString)")
@@ -964,6 +972,7 @@ struct Git: Sendable {
     /// while that file stands unchanged: a snapshot asks three or four times, and every
     /// command tool takes two snapshots. A directory inside a repository, with no `.git`
     /// of its own, still asks every time, since the answer depends on its ancestors.
+    @concurrent
     private func indexPath() async -> String? {
         var isDirectory: ObjCBool = false
         let dotGit = directory.appendingPathComponent(".git").path

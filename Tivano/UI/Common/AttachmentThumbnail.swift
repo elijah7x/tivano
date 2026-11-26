@@ -136,44 +136,18 @@ struct AttachmentThumbnail: View {
     var body: some View {
         // The anchor box alone: the hover responder and the anchor view must not keep
         // this row (and its attachment) alive after it scrolls away.
-        let anchorBox = ownAnchor
+        let anchorBox: WeakView = ownAnchor
+        let trackerPath: String = attachment.isImage ? attachment.path : ""
+        let loadID = AttachmentMediaLoad(
+            path: attachment.path,
+            snapshot: fileSnapshot,
+            width: size,
+            height: height
+        )
         Button {
             togglePanel()
         } label: {
-            if attachment.isImage {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.quaternary.opacity(0.6))
-                    if let image {
-                        Image(decorative: image, scale: 2)
-                            .resizable()
-                            .interpolation(.high)
-                            .aspectRatio(contentMode: .fill)
-                            .transition(.opacity)
-                    }
-                }
-                .frame(width: size, height: height ?? size)
-                .clipShape(.rect(cornerRadius: 12, style: .continuous))
-            } else if attachment.isVideo {
-                AttachmentVideoThumbnail(attachment: attachment, size: size)
-            } else {
-                // A file fills its chip the way a photo does: the Finder icon at the
-                // chip's full size on the same plate, so a text file, a PDF and a
-                // folder all read at a glance. The name is the tooltip and the preview
-                // panel; at 48pt it never fit under a 16pt icon anyway.
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.quaternary.opacity(0.6))
-                    Image(nsImage: FileIcons.icon(for: attachment.path))
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
-                        .padding(size * 0.08)
-                }
-                .frame(width: size, height: size)
-                .clipShape(.rect(cornerRadius: 12, style: .continuous))
-                .accessibilityLabel(Text(attachment.name))
-            }
+            thumbnailContent
         }
         .buttonStyle(.plain)
         .focusable(false)
@@ -181,31 +155,76 @@ struct AttachmentThumbnail: View {
         // pinning the hit shape to the cell keeps the neighbour's remove badge
         // reachable no matter how hit-testing treats the overflow.
         .contentShape(.rect(cornerRadius: 12, style: .continuous))
-        .onHover { [needed = $needsAnchor, anchorless] hovering in
+        .onHover { [needed = $needsAnchor, anchorless] (hovering: Bool) in
             if hovering, !anchorless, !needed.wrappedValue { needed.wrappedValue = true }
         }
         .background {
             if needsAnchor, !anchorless {
-                AttachmentAnchorCapture { [weak anchorBox] in anchorBox?.value = $0 }
+                AttachmentAnchorCapture { [weak anchorBox] (view: NSView) in anchorBox?.value = view }
             }
         }
-        .modifier(AttachmentFileTracker(path: attachment.isImage ? attachment.path : "", snapshot: $fileSnapshot))
-        .task(id: AttachmentMediaLoad(path: attachment.path, snapshot: fileSnapshot, width: size, height: height)) {
-            guard !Task.isCancelled else { return }
-            image = nil
-            guard attachment.isImage, let version = fileSnapshot?.version, version.path == attachment.path else { return }
-            guard await AttachmentFileVersion.read(attachment.path) == version, !Task.isCancelled else { return }
-            if let known = ThumbnailMemory.image(for: version, pointSize: size, height: height) {
-                if image !== known { image = known }
-                return
-            }
-            // A rectangular tile keeps the photo's aspect, so its long side must run past the
-            // tile for the .fill crop to land on enough pixels.
-            let requested = height == nil ? size : max(size, height ?? size) * 1.5
-            guard let thumbnail = await ThumbnailCache.shared.thumbnail(for: attachment.path, pointSize: requested, fillingSquare: height == nil, version: version),
-                  !Task.isCancelled else { return }
-            ThumbnailMemory.store(thumbnail.image, for: version, pointSize: size, height: height)
-            withAnimation(.easeOut(duration: 0.15)) { image = thumbnail.image }
+        .modifier(AttachmentFileTracker(path: trackerPath, snapshot: $fileSnapshot))
+        .task(id: loadID) {
+            await loadThumbnail()
         }
+    }
+
+    @ViewBuilder
+    private var thumbnailContent: some View {
+        if attachment.isImage {
+            let frameHeight: CGFloat = height ?? size
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.quaternary.opacity(0.6))
+                if let image {
+                    Image(decorative: image, scale: 2)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fill)
+                        .transition(.opacity)
+                }
+            }
+            .frame(width: size, height: frameHeight)
+            .clipShape(.rect(cornerRadius: 12, style: .continuous))
+        } else if attachment.isVideo {
+            AttachmentVideoThumbnail(attachment: attachment, size: size)
+        } else {
+            // A file fills its chip the way a photo does: the Finder icon at the
+            // chip's full size on the same plate, so a text file, a PDF and a
+            // folder all read at a glance. The name is the tooltip and the preview
+            // panel; at 48pt it never fit under a 16pt icon anyway.
+            let iconPadding: CGFloat = size * 0.08
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.quaternary.opacity(0.6))
+                Image(nsImage: FileIcons.icon(for: attachment.path))
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .padding(iconPadding)
+            }
+            .frame(width: size, height: size)
+            .clipShape(.rect(cornerRadius: 12, style: .continuous))
+            .accessibilityLabel(Text(attachment.name))
+        }
+    }
+
+    private func loadThumbnail() async {
+        guard !Task.isCancelled else { return }
+        image = nil
+        guard attachment.isImage, let version = fileSnapshot?.version, version.path == attachment.path else { return }
+        guard await AttachmentFileVersion.read(attachment.path) == version, !Task.isCancelled else { return }
+        if let known = ThumbnailMemory.image(for: version, pointSize: size, height: height) {
+            if image !== known { image = known }
+            return
+        }
+        // A rectangular tile keeps the photo's aspect, so its long side must run past the
+        // tile for the .fill crop to land on enough pixels.
+        let tileHeight: CGFloat = height ?? size
+        let requested: CGFloat = height == nil ? size : max(size, tileHeight) * 1.5
+        guard let thumbnail = await ThumbnailCache.shared.thumbnail(for: attachment.path, pointSize: requested, fillingSquare: height == nil, version: version),
+              !Task.isCancelled else { return }
+        ThumbnailMemory.store(thumbnail.image, for: version, pointSize: size, height: height)
+        withAnimation(.easeOut(duration: 0.15)) { image = thumbnail.image }
     }
 }

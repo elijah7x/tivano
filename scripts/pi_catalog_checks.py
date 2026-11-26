@@ -14,6 +14,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'Tivano/Services/Providers/PiCLI.swift'
+SUPPORT = ROOT / 'Tivano/Services/Providers/PiCLISupport.swift'
 
 
 def main():
@@ -30,6 +31,15 @@ def main():
     if '--no-extensions' in match.group(1) or '"-ne"' in match.group(1):
         print('FAIL: the Pi catalog probe disables extensions, so providers they register '
               '(google-antigravity) never reach the model list', file=sys.stderr)
+        return 1
+    support = SUPPORT.read_text(encoding='utf-8')
+    probe_start = support.find('static func probeRPC(')
+    if probe_start < 0:
+        print(f'FAIL: {SUPPORT.relative_to(ROOT)}: probeRPC not found; update the check', file=sys.stderr)
+        return 1
+    if '--no-extensions' in support[probe_start:] or '"-ne"' in support[probe_start:]:
+        print('FAIL: PiCLISupport.probeRPC must not inject --no-extensions/-ne into Pi catalog probes',
+              file=sys.stderr)
         return 1
     print('PASS: the Pi catalog probe loads extensions like a Pi chat session.')
     return 0

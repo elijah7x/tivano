@@ -2,63 +2,38 @@ import Foundation
 
 /// Runs omp over JSONL RPC; only the matching prompt_result completes an agent turn.
 @MainActor
-final class OmpSession: ProviderSession {
-    var onEvent: ((ProviderEvent) -> Void)?
+final class OmpSession: PiRPCSession {
+    private static let config = Config(
+        displayName: "omp",
+        approveValue: "Approve",
+        approveAlwaysValue: "Approve",
+        confirmYesLabel: { String(localized: "Yes") },
+        confirmNoLabel: { String(localized: "No") },
+        missingSessionError: { String(localized: "omp no longer has this conversation; starting a new one.") },
+        startFailureError: { String(format: String(localized: "omp could not start: %@"), $0) },
+        busyTurnError: { String(localized: "omp is still on the last turn.") },
+        extensionErrorFallback: { String(localized: "omp reported an extension error.") },
+        notificationFallback: { String(localized: "omp sent a notification.") },
+        exitedError: { String(format: String(localized: "omp exited with status %d%@"), $0, $1) }
+    )
 
-    private let configuration: SessionConfiguration
-    private var process: StdioProcess?
-    private var readTask: Task<Void, Never>?
-    /// The omp session file path, taken from `configuration.resumeID`.
-    private var sessionID: String?
-    private var started = false
-    private var stopped = false
-    private let runtimeMode: RuntimeMode
-    private let interactionMode: InteractionMode
-    private var model: String?
     /// Resolved from OMP's settings-backed @default role, never the resumed session model.
     private var defaultModel: String?
     private var activeModel: String?
-    private var effort: String?
-    /// This session's settings overlay (see `OmpCLI.writeLaunchSettings`) and gate file (see
-    /// `writeGate`), removed on stop.
+    /// This session's settings overlay (see `OmpCLI.writeLaunchSettings`), removed on stop.
     private var settingsFile: URL?
-    private var gateURL: URL?
-
-    private var turnActive = false
-    private var preparationID: UUID?
-    private var interruptRequested = false
     /// The prompt whose `prompt_result` ends the turn.
     private var promptID: String?
     private var isFinalReport = false
-    /// Namespaces ids per launch, so a resumed thread never streams into an old entry.
-    private let launchID: String
-    private var stream: StreamedTextTracker
-    private var toolNames: [String: String] = [:]
-    private var toolInputs: [String: JSONValue] = [:]
-    private var editSnapshots = EditSnapshots()
-    /// The model's context ceiling, from the session state's model.
-    private var contextWindow: Int?
-    private var pendingApprovals: [String: ApprovalRequest] = [:]
-    /// `extension_ui_request` ids by method, for the app's questions.
-    private var pendingQuestions: [String: String] = [:]
-    /// Approval kinds allowed for the rest of the session ("Approve for session").
-    private var sessionGrants: Set<String> = []
     /// Calls that have started and not ended, oldest first: the approval prompt names its
     /// tool but not the call, so it is matched to the oldest call of that name without one.
     private var runningTools: [String] = []
     private var toolsAwaitingAnswer: [String: String] = [:]
     /// Calls shown as something other than a row (the todo list).
     private var hiddenCalls: Set<String> = []
-    private var turnError: String?
     /// What the turn's failed model requests said, for telling a spent usage limit from any
     /// other error.
     private var failure = Failure()
-    /// The turn's last reply, which plan mode hands over as the plan.
-    private var lastReplyText = ""
-    private var turnCounter = 0
-    private var pendingResponses = PendingReplies<JSONValue>()
-    private var requestCounter = 0
-
     /// A title asked for with `/rename` is on its way; omp's one line about how it went (it
     /// follows the title, or stands in for it) is not shown.
     private var isRenaming = false
@@ -77,37 +52,17 @@ final class OmpSession: ProviderSession {
     private static let usageLimitFlag = 0x0008_0000
 
     init(configuration: SessionConfiguration) {
-        let launchID = String(UUID().uuidString.prefix(8))
-        self.launchID = launchID
-        stream = StreamedTextTracker(
-            messageID: { "\(launchID)-m-\($0)" },
-            thinkingID: { "\(launchID)-t-\($0)" }
-        )
-        self.configuration = configuration
-        runtimeMode = configuration.runtimeMode
-        interactionMode = configuration.interactionMode
-        model = configuration.model
-        effort = configuration.effort
-        sessionID = configuration.resumeID.flatMap { $0.isEmpty ? nil : $0 }
+        super.init(config: Self.config, configuration: configuration)
     }
-
-    var isRunning: Bool { started && !stopped && process?.isRunning == true }
-
-    private var workingDirectory: String { configuration.workingDirectory.path }
 
     /// What the gate extension reads before every tool call: the app's word on this session's
     /// mode, whether this turn is a final report, and whether ordinary `task` calls may run.
     /// Hydra always disables `task`; without Hydra only Full access permits it. The mode is
     /// the session's own, fixed for its life.
-    private func writeGate(finalReport: Bool) throws {
-        guard let gateURL else { throw ProviderError.notRunning }
-        let gate: JSONValue = [
-            "runtimeMode": .string(runtimeMode.rawValue),
-            "interactionMode": .string(interactionMode.rawValue),
-            "finalReport": .bool(finalReport),
+    override func extraGateFields(finalReport: Bool) -> [String: JSONValue] {
+        [
             "allowTask": .bool(configuration.hydra == nil && runtimeMode == .fullAccess && interactionMode != .plan && !finalReport),
         ]
-        try gate.data().write(to: gateURL, options: .atomic)
     }
 
     /// Appended to omp's system prompt: the lead's Hydra policy with a team and plan
@@ -122,32 +77,22 @@ final class OmpSession: ProviderSession {
         return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
-    // MARK: - Lifecycle
+    // MARK: - Lifecycle Hooks
 
-    func start() async throws -> String {
-        guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
+    override func validateStart() throws {
         guard configuration.provider.supports(runtimeMode) else {
             throw ProviderError.failed(String(localized: "omp does not support Auto permissions."))
         }
         try validateSelection(model: model, effort: effort)
-        // omp writes the session file with the first reply, so a conversation that was never
-        // answered has none; that thread never recorded an id either.
-        if let sessionID, !FileManager.default.fileExists(atPath: sessionID) {
-            throw ProviderError.failed(String(localized: "omp no longer has this conversation; starting a new one."))
-        }
+    }
 
+    override func prepareLaunch() throws -> (arguments: [String], environment: [String: String]) {
         let extensionURL = try OmpCLI.installExtension()
-        let settings: URL
-        do {
-            settings = try OmpCLI.writeLaunchSettings(id: launchID)
-            settingsFile = settings
-            gateURL = try OmpCLI.gateFile(id: launchID)
-            try writeGate(finalReport: false)
-        } catch {
-            removeLaunchFiles()
-            throw error
-        }
-        stopped = false
+        let settings = try OmpCLI.writeLaunchSettings(id: launchID)
+        settingsFile = settings
+        gateURL = try OmpCLI.gateFile(id: launchID)
+        try writeGate(finalReport: false)
+
         // omp runs as `yolo` in every mode: the decision is the gate extension's, which asks
         // the app about what the mode does not let through. omp's own approval is no gate
         // (`OmpCLI.extensionSource`).
@@ -166,31 +111,10 @@ final class OmpSession: ProviderSession {
         }
         if !systemPrompt.isEmpty { arguments += ["--append-system-prompt", systemPrompt] }
         if let sessionID { arguments += ["--resume", sessionID] }
+        return (arguments, environment)
+    }
 
-        let process = StdioProcess(
-            executable: executable,
-            arguments: arguments,
-            directory: configuration.workingDirectory,
-            environment: environment,
-            framing: .lines
-        )
-        do {
-            try process.start()
-        } catch {
-            removeLaunchFiles()
-            throw ProviderError.failed(String(format: String(localized: "omp could not start: %@"), error.localizedDescription))
-        }
-        self.process = process
-        let messages = process.messages
-        readTask = Task { [weak self] in
-            for await message in messages {
-                guard let self else { return }
-                self.handle(message)
-            }
-            let status = await process.waitForExit()
-            self?.didClose(status: status)
-        }
-
+    override func completeStartup(process: StdioProcess) async throws {
         // The gate is what keeps omp's tools in check: omp runs without it only if it did not
         // load the extension, and then nothing is let through, so the session does not start.
         let commandsResponse = await request(["type": .string("get_available_commands")])
@@ -207,12 +131,7 @@ final class OmpSession: ProviderSession {
             throw ProviderError.failed(String(localized: "omp could not read the session state."))
         }
         let data = state["data"] ?? state
-        if let file = data["sessionFile"]?.string, !file.isEmpty {
-            self.sessionID = file
-        } else if let id = data["sessionId"]?.string, !id.isEmpty {
-            self.sessionID = id
-        }
-        contextWindow = data["model"]?["contextWindow"]?.int
+        applySessionState(data)
         if let provider = data["model"]?["provider"]?.string, let id = data["model"]?["id"]?.string {
             activeModel = "\(provider)/\(id)"
         }
@@ -224,10 +143,7 @@ final class OmpSession: ProviderSession {
         }
         onEvent?(.sessionReady(sessionID: self.sessionID ?? ""))
 
-        emitCommands(commandsResponse["data"] ?? commandsResponse)
-        started = true
-        stopped = false
-        return self.sessionID ?? ""
+        emitCommands(commandsResponse["data"] ?? commandsResponse, excluding: OmpCLI.gateCommand)
     }
 
     /// Invalid UI/stored selections must not silently run the previous model or effort.
@@ -273,94 +189,52 @@ final class OmpSession: ProviderSession {
         contextWindow = (response["data"] ?? response)["contextWindow"]?.int
     }
 
-    func send(_ input: TurnInput) async throws {
-        guard isRunning, let process else { throw ProviderError.notRunning }
+    override func validateBeforeBusyCheck(_ input: TurnInput) throws {
         try validateSelection(model: input.model, effort: input.effort)
-        guard !turnActive, preparationID == nil else { throw ProviderError.failed(String(localized: "omp is still on the last turn.")) }
+    }
+
+    override func validateModesForTurn(_ input: TurnInput) throws {
         guard input.runtimeMode == runtimeMode, input.interactionMode == interactionMode else {
             throw ProviderError.failed(String(localized: "Restart the omp session to change its permission or interaction mode."))
         }
-        let preparation = UUID()
-        preparationID = preparation
-        interruptRequested = false
-        defer {
-            if preparationID == preparation { preparationID = nil }
-        }
-        guard continuePreparation(preparation) else { return }
+    }
+
+    override func prepareTurn(_ input: TurnInput, preparation: UUID, process: StdioProcess) async throws -> Bool {
         do {
             try await selectModel(input.model, preparation: preparation)
         } catch {
-            guard continuePreparation(preparation) else { return }
+            guard continuePreparation(preparation) else { return false }
             throw error
         }
-        guard continuePreparation(preparation) else { return }
+        guard continuePreparation(preparation) else { return false }
         if let wanted = input.effort, !wanted.isEmpty, wanted != effort, OmpCLI.thinkingLevels.contains(wanted) {
             let response = await request(["type": .string("set_thinking_level"), "level": .string(wanted)])
-            guard continuePreparation(preparation) else { return }
+            guard continuePreparation(preparation) else { return false }
             guard !response.isNull, response["success"]?.bool != false else {
                 throw ProviderError.failed(response["error"]?.string ?? String(localized: "omp could not change its thinking level."))
             }
             effort = wanted
         }
         try writeGate(finalReport: input.isFinalReport)
-        turnCounter += 1
-        let id = "tivano-turn-\(turnCounter)"
+        return true
+    }
+
+    override func makePromptFields(for input: TurnInput, turnNumber: Int) -> (fields: [String: JSONValue], promptID: String?) {
+        let id = "tivano-turn-\(turnNumber)"
         let text = input.isFinalReport ? Self.finalReportPrompt + "\n\n" + input.text : input.text
-        var fields: [String: JSONValue] = ["type": .string("prompt"), "id": .string(id), "message": .string(text)]
-        let encodedImages = await Attachment.base64Images(input.images)
-        guard continuePreparation(preparation) else { return }
-        let images: [JSONValue] = encodedImages.map { image, base64 in
-            ["type": "image", "data": .string(base64), "mimeType": .string(image.mimeType)]
-        }
-        if !images.isEmpty { fields["images"] = .array(images) }
-        let payload = await Self.encodePrompt(.object(fields))
-        guard continuePreparation(preparation) else { return }
-        guard payload.count <= 32 * 1024 * 1024 else {
-            throw ProviderError.failed(AppText.localized("The agent input queue exceeded 32 MB or the connection closed."))
-        }
-        preparationID = nil
-        turnActive = true
+        return (["type": .string("prompt"), "id": .string(id), "message": .string(text)], id)
+    }
+
+    override func willStartTurn(input: TurnInput, promptID: String?) {
         isFinalReport = input.isFinalReport
-        turnError = nil
         failure = Failure()
-        lastReplyText = ""
-        toolNames.removeAll()
-        toolInputs.removeAll()
-        editSnapshots.removeAll()
         runningTools.removeAll()
         toolsAwaitingAnswer.removeAll()
         hiddenCalls.removeAll()
-        promptID = id
-        process.write(payload)
-        onEvent?(.turnStarted(providerTurnID: nil))
+        self.promptID = promptID
     }
 
-    @concurrent
-    private static func encodePrompt(_ prompt: JSONValue) async -> Data {
-        prompt.data() + Data([0x0A])
-    }
-
-    private func continuePreparation(_ id: UUID) -> Bool {
-        guard preparationID == id, !stopped else { return false }
-        if Task.isCancelled || interruptRequested {
-            stop()
-            onEvent?(.turnCompleted(status: .interrupted, error: nil))
-            return false
-        }
-        return isRunning
-    }
-
-    func interrupt() async {
-        interruptRequested = true
-        if preparationID != nil {
-            stop()
-            onEvent?(.turnCompleted(status: .interrupted, error: nil))
-            return
-        }
-        process?.send(["type": .string("abort")])
-    }
-
-    func compact() async throws {
+    override func compact() async throws {
         guard isRunning else { throw ProviderError.notRunning }
         onEvent?(.notice(Notice(level: .info, message: String(localized: "Compacting the conversation…"))))
         // Compaction summarises the whole conversation with the model, which takes a while.
@@ -431,97 +305,38 @@ final class OmpSession: ProviderSession {
         isRenaming = false
     }
 
-    func stop() {
-        stopped = true
-        preparationID = nil
-        started = false
-        pendingResponses.resolveAll(.null)
-        clearRequests()
-        process?.terminate()
-        process = nil
-        readTask?.cancel()
-        readTask = nil
-        removeLaunchFiles()
+    override func clearRequests() {
+        toolsAwaitingAnswer.removeAll()
+        super.clearRequests()
     }
 
-    private func removeLaunchFiles() {
-        for file in [settingsFile, gateURL] {
-            if let file { try? FileManager.default.removeItem(at: file) }
+    override func removeLaunchFiles() {
+        if let settingsFile {
+            try? FileManager.default.removeItem(at: settingsFile)
+            self.settingsFile = nil
         }
-        settingsFile = nil
-        gateURL = nil
+        super.removeLaunchFiles()
     }
 
-    func resolveApproval(_ requestID: String, optionID: String) {
-        guard let request = pendingApprovals.removeValue(forKey: requestID) else { return }
-        let value: String
-        switch request.options.first(where: { $0.id == optionID })?.role {
-        case .approveAlways:
-            value = "Approve"
-            sessionGrants.insert(request.kind.grantKey)
-        case .decline, .cancel, nil:
-            value = "Deny"
-        case .approve:
-            value = "Approve"
-        }
+    override func didResolveApproval(_ request: ApprovalRequest) {
         if let toolID = request.toolItemID { toolsAwaitingAnswer.removeValue(forKey: toolID) }
-        process?.send(["type": .string("extension_ui_response"), "id": .string(requestID), "value": .string(value)])
-        onEvent?(.requestResolved(id: requestID))
     }
 
-    func answerQuestion(_ requestID: String, answers: [String: [String]]) {
-        guard let method = pendingQuestions.removeValue(forKey: requestID) else { return }
-        let texts = answers.values.flatMap { $0 }
-        if texts.isEmpty {
-            process?.send(["type": .string("extension_ui_response"), "id": .string(requestID), "cancelled": true])
-        } else if method == "confirm" {
-            process?.send(["type": .string("extension_ui_response"), "id": .string(requestID), "confirmed": .bool(texts.first == String(localized: "Yes"))])
-        } else {
-            process?.send(["type": .string("extension_ui_response"), "id": .string(requestID), "value": .string(texts.first ?? "")])
+    // MARK: - Stream Hooks
+
+    override func handleUnmatchedResponse(id: String, message: JSONValue) {
+        guard id == promptID else { return }
+        if message["success"]?.bool == false {
+            turnError = message["error"]?.string ?? String(localized: "omp reported an error.")
+            finishTurn()
+        } else if message["data"]?["agentInvoked"]?.bool == false {
+            // A slash command omp ran itself: no turn follows.
+            finishTurn()
         }
-        onEvent?(.requestResolved(id: requestID))
     }
 
-    // MARK: - Requests
-
-    /// Writes a request line with a fresh id and resumes with the `response` that
-    /// carries it, or `.null` after the timeout.
-    private func request(_ fields: [String: JSONValue], timeout: Duration = .seconds(30)) async -> JSONValue {
-        guard let process else { return .null }
-        requestCounter += 1
-        let id = "tivano-\(requestCounter)"
-        var line = fields
-        line["id"] = .string(id)
-        let value = try? await pendingResponses.register(id, timeout: timeout, timeoutValue: .null) {
-            process.send(.object(line))
-        }
-        return value ?? .null
-    }
-
-    private func emitCommands(_ data: JSONValue) {
-        guard let entries = data["commands"]?.array else { return }
-        let commands = entries.compactMap { entry -> SlashCommand? in
-            guard let name = entry["name"]?.string, name != OmpCLI.gateCommand else { return nil }
-            return SlashCommand(name: name, detail: entry["description"]?.string ?? "")
-        }
-        if !commands.isEmpty { onEvent?(.commands(commands)) }
-    }
-
-    // MARK: - Stream
-
-    private func handle(_ message: JSONValue) {
-        switch message["type"]?.string {
-        case "response":
-            guard let id = message["id"]?.string else { return }
-            if pendingResponses.resolve(id, message) { return }
-            guard id == promptID else { return }
-            if message["success"]?.bool == false {
-                turnError = message["error"]?.string ?? String(localized: "omp reported an error.")
-                finishTurn()
-            } else if message["data"]?["agentInvoked"]?.bool == false {
-                // A slash command omp ran itself: no turn follows.
-                finishTurn()
-            }
+    override func handleProviderEvent(type: String, message: JSONValue) {
+        switch type {
         case "prompt_result":
             guard message["id"]?.string == promptID else { return }
             switch message["status"]?.string {
@@ -536,8 +351,6 @@ final class OmpSession: ProviderSession {
                 break
             }
             finishTurn()
-        case "message_start", "message_update", "message_end", "tool_execution_start", "tool_execution_update", "tool_execution_end":
-            handleStream(message)
         case "command_output":
             guard let text = message["text"]?.string, !text.trimmed.isEmpty else { return }
             if isRenaming {
@@ -551,7 +364,7 @@ final class OmpSession: ProviderSession {
             guard let title = message["title"]?.string, !title.isEmpty else { return }
             onEvent?(.title(title))
         case "available_commands_update":
-            emitCommands(message)
+            emitCommands(message, excluding: OmpCLI.gateCommand)
         case "auto_compaction_start":
             onEvent?(.notice(Notice(level: .info, message: String(localized: "Compacting the conversation…"))))
         case "auto_compaction_end":
@@ -578,50 +391,12 @@ final class OmpSession: ProviderSession {
             default: .info
             }
             onEvent?(.notice(Notice(level: level, message: text)))
-        case "extension_error":
-            onEvent?(.notice(Notice(level: .error, message: message["error"]?.string ?? String(localized: "omp reported an extension error."))))
-        case "extension_ui_request":
-            handleExtensionUI(message)
         default:
             break
         }
     }
 
-    private func handleStream(_ message: JSONValue) {
-        switch message["type"]?.string {
-        case "message_start":
-            guard message["message"]?["role"]?.string == "assistant" else { return }
-            stream.startMessage()
-            stream.resetThinking()
-        case "message_update":
-            handleUpdate(message)
-        case "message_end":
-            handleMessageEnd(message["message"] ?? message)
-        case "tool_execution_start":
-            handleToolStart(message)
-        case "tool_execution_update":
-            guard let id = message["toolCallId"]?.string, !hiddenCalls.contains(id) else { return }
-            let text = ToolText.blocks(message["partialResult"]?["content"])
-            if !text.isEmpty { onEvent?(.toolOutput(id: id, text: text)) }
-        case "tool_execution_end":
-            handleToolEnd(message)
-        default:
-            break
-        }
-    }
-
-    private func handleUpdate(_ message: JSONValue) {
-        let event = message["assistantMessageEvent"] ?? .null
-        switch event["type"]?.string {
-        case "text_delta":
-            guard let delta = event["delta"]?.string, !delta.isEmpty else { return }
-            onEvent?(.messageDelta(id: stream.appendMessage(delta), text: delta))
-        case "thinking_delta":
-            guard let delta = event["delta"]?.string, !delta.isEmpty else { return }
-            onEvent?(.reasoningDelta(id: stream.appendThinking(delta), text: delta))
-        default:
-            break
-        }
+    override func reportUpdateUsage(message: JSONValue, event: JSONValue) {
         reportContext(message["message"]?["usage"])
     }
 
@@ -631,25 +406,7 @@ final class OmpSession: ProviderSession {
         onEvent?(.usage(ContextUsage(usedTokens: used, windowTokens: contextWindow)))
     }
 
-    private func handleMessageEnd(_ message: JSONValue) {
-        guard message["role"]?.string == "assistant" else { return }
-        var finalText = stream.messageText
-        if let blocks = message["content"]?.array {
-            let joined = blocks.compactMap { block -> String? in
-                guard block["type"]?.string == "text" else { return nil }
-                return block["text"]?.string
-            }.joined()
-            if !joined.isEmpty { finalText = joined }
-        }
-        if let id = stream.currentThinkingID, !stream.thinkingText.trimmed.isEmpty {
-            onEvent?(.reasoningCompleted(id: id, text: stream.thinkingText))
-        }
-        stream.endThinking()
-        if let id = stream.currentMessageID {
-            onEvent?(.messageCompleted(id: id, text: finalText))
-            lastReplyText = finalText
-        }
-        stream.endMessage()
+    override func didFinishAssistantMessage(_ message: JSONValue) {
         // A failed request ends with an error message that omp may still retry, so the turn's
         // verdict is the `prompt_result`, not this message's stop reason; what it said is kept
         // for telling a spent usage limit from any other error.
@@ -661,7 +418,6 @@ final class OmpSession: ProviderSession {
         let usage = message["usage"] ?? .null
         reportContext(usage)
         if let spent = usage["totalTokens"]?.int, spent > 0 {
-            TokenLedger.shared.record(spend: spent)
             // subagent_event wrappers are ignored; ordinary message usage is recorded per message.
             onEvent?(.tokenSpend(TokenSpend(
                 provider: .omp,
@@ -677,57 +433,53 @@ final class OmpSession: ProviderSession {
 
     // MARK: - Tools
 
-    private func handleToolStart(_ message: JSONValue) {
-        guard let id = message["toolCallId"]?.string, let name = message["toolName"]?.string else { return }
-        let args = message["args"] ?? .null
-        toolNames[id] = name
-        toolInputs[id] = args
+    override func isHiddenToolCall(_ id: String) -> Bool {
+        hiddenCalls.contains(id)
+    }
+
+    override func willStartTool(id: String, name: String, args: JSONValue) -> Bool {
         let device = name == "write" ? args["path"]?.string.flatMap(Self.toolDevice) : nil
         // The lead's todo list is the thread's checklist card, not a row.
         if (device ?? name) == "todo" {
             hiddenCalls.insert(id)
-            return
+            return false
         }
         runningTools.append(id)
         if name == "write", device == nil, let path = args["path"]?.string {
             editSnapshots.capture(id, path: absolute(path))
         }
-        let call = describe(name: name, args: args)
-        onEvent?(.toolStarted(id: id, call: ToolCall(kind: call.kind, title: call.title, detail: call.detail)))
+        return true
     }
 
-    private func handleToolEnd(_ message: JSONValue) {
-        guard let id = message["toolCallId"]?.string else { return }
+    override func describeTool(name: String, args: JSONValue) -> ToolCall {
+        let call = describe(name: name, args: args)
+        return ToolCall(kind: call.kind, title: call.title, detail: call.detail)
+    }
+
+    override func consumeHiddenToolEnd(id: String, details: JSONValue, isError: Bool) -> Bool {
         runningTools.removeAll { $0 == id }
         toolsAwaitingAnswer.removeValue(forKey: id)
-        let result = message["result"] ?? .null
-        let details = result["details"] ?? .null
-        let isError = message["isError"]?.bool == true || result["isError"]?.bool == true
         if hiddenCalls.remove(id) != nil {
             // The call's own answer is the whole list as it stands, and a refused call leaves it as it was.
             if !isError, let steps = Self.todoSteps(details) { onEvent?(.todos(steps)) }
-            return
+            return true
         }
-        let output = ToolText.blocks(result["content"])
+        return false
+    }
+
+    override func isDeclinedToolOutput(_ output: String) -> Bool {
         // A call the gate (or omp) refused comes back as an error that says so, opening with
         // "Declined:" for the gate's own reasons; the row reads as declined rather than failed.
-        let status: ToolCall.Status = !isError ? .completed
-            : output.hasPrefix("Declined:") || output.hasPrefix("Error: Declined:") || output.hasPrefix("Tool call denied by user") ? .declined : .failed
-        let exitCode = details["exitCode"]?.int
-        var edits: [FileEdit]? = nil
-        if let name = toolNames[id], let args = toolInputs[id] {
-            edits = isError ? nil : editDiff(name: name, args: args, details: details, id: id)
-        }
-        editSnapshots.discard(id)
-        let displayOutput: String
+        output.hasPrefix("Declined:") || output.hasPrefix("Error: Declined:") || output.hasPrefix("Tool call denied by user")
+    }
+
+    override func formatToolOutput(_ output: String, isError: Bool) -> String {
         if output.hasPrefix("Declined:") || (isError && output.hasPrefix("Error: Declined:")) {
             let refusal = output.hasPrefix("Error: ") ? String(output.dropFirst("Error: ".count)) : output
             let end = refusal.firstIndex(of: "\n") ?? refusal.endIndex
-            displayOutput = AppText.localized(String(refusal[..<end])) + String(refusal[end...])
-        } else {
-            displayOutput = output
+            return AppText.localized(String(refusal[..<end])) + String(refusal[end...])
         }
-        onEvent?(.toolUpdated(id: id, update: ToolUpdate(output: displayOutput.isEmpty ? nil : displayOutput, status: status, exitCode: exitCode, edits: edits)))
+        return output
     }
 
     /// The row a tool call gets. omp's tools: `bash`, `read`, `write`, `edit` (one string of
@@ -801,7 +553,8 @@ final class OmpSession: ProviderSession {
 
     /// The finished edit as the file before against after. A `write` is the snapshot taken
     /// as it started against the content written; an `edit` carries both texts in its result.
-    private func editDiff(name: String, args: JSONValue, details: JSONValue, id: String) -> [FileEdit]? {
+    override func editDiff(name: String, args: JSONValue, details: JSONValue, id: String, isError: Bool) -> [FileEdit]? {
+        guard !isError else { return nil }
         switch name {
         case "write":
             guard let path = args["path"]?.string, Self.toolDevice(path) == nil, let content = args["content"]?.string else { return nil }
@@ -813,14 +566,6 @@ final class OmpSession: ProviderSession {
         default:
             return nil
         }
-    }
-
-    private static func unifiedDiff(path: String, old: String, new: String) -> FileEdit {
-        let body = old.components(separatedBy: "\n").map { "-\($0)" }
-            + new.components(separatedBy: "\n").map { "+\($0)" }
-        let diff = (["--- a/\(path)", "+++ b/\(path)"] + body).joined(separator: "\n")
-        let stats = ToolTitles.diffStats(diff)
-        return FileEdit(path: path, diff: diff, additions: stats.additions, deletions: stats.deletions)
     }
 
     /// The checklist the `todo` tool left, whole: omp answers each call with every phase and
@@ -850,31 +595,17 @@ final class OmpSession: ProviderSession {
         return steps
     }
 
-    // MARK: - Turn end
+    // MARK: - Turn End Hooks
 
-    private func finishTurn() {
-        guard turnActive else { return }
-        turnActive = false
+    override func willFinishTurn() {
         promptID = nil
         clearRequests()
-        let error = turnError
-        turnError = nil
-        // Plan mode refuses every tool that is not a read: its final reply is the plan.
-        if interactionMode == .plan, error == nil, !interruptRequested,
-           !lastReplyText.trimmed.isEmpty {
-            onEvent?(.planCompleted(id: "\(launchID)-plan-\(turnCounter)", markdown: lastReplyText))
-        }
-        if interruptRequested {
-            onEvent?(.turnCompleted(status: .interrupted, error: nil))
-        } else if let error {
-            // A spent usage limit says so first, with the time it comes back when the provider gave one.
-            let limit = spentLimit(error)
-            if limit.isSpent { onEvent?(.usageLimit(resetsAt: limit.resetsAt)) }
-            onEvent?(.turnCompleted(status: .failed, error: error))
-        } else {
-            onEvent?(.turnCompleted(status: .completed, error: nil))
-        }
-        interruptRequested = false
+    }
+
+    override func willReportTurnError(_ error: String) {
+        // A spent usage limit says so first, with the time it comes back when the provider gave one.
+        let limit = spentLimit(error)
+        if limit.isSpent { onEvent?(.usageLimit(resetsAt: limit.resetsAt)) }
     }
 
     /// Whether the turn failed on a spent usage limit, and when it resets if anything said.
@@ -889,75 +620,25 @@ final class OmpSession: ProviderSession {
         return (true, UsageLimitSignal.resetTime(in: text))
     }
 
-    // MARK: - Extension UI
+    // MARK: - Extension UI Hooks
 
-    private func handleExtensionUI(_ message: JSONValue) {
-        guard let id = message["id"]?.string ?? message["requestId"]?.string,
-              let method = message["method"]?.string else { return }
-        let params = message["params"] ?? message
-        switch method {
-        case "select":
-            handleSelect(id: id, params: params)
-        case "confirm":
-            let title = params["title"]?.string ?? "omp"
-            let prompt = [title, params["message"]?.string].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
-            pendingQuestions[id] = "confirm"
-            onEvent?(.question(QuestionRequest(id: id, questions: [
-                QuestionRequest.Question(
-                    id: id,
-                    header: "omp",
-                    prompt: prompt,
-                    choices: [QuestionRequest.Choice(label: String(localized: "Yes"), detail: nil), QuestionRequest.Choice(label: String(localized: "No"), detail: nil)],
-                    allowsMultiple: false,
-                    allowsOther: false,
-                    isSecret: false
-                ),
-            ])))
-        case "input", "editor":
-            pendingQuestions[id] = method
-            onEvent?(.question(QuestionRequest(id: id, questions: [
-                QuestionRequest.Question(
-                    id: id,
-                    header: "omp",
-                    prompt: params["title"]?.string ?? "omp",
-                    choices: [],
-                    allowsMultiple: false,
-                    allowsOther: true,
-                    isSecret: false
-                ),
-            ])))
-        case "cancel":
-            // omp withdrew a dialog (a timeout, an abort): the question or approval is moot.
-            guard let target = params["targetId"]?.string ?? message["id"]?.string else { return }
-            let hadApproval = pendingApprovals.removeValue(forKey: target) != nil
-            let hadQuestion = pendingQuestions.removeValue(forKey: target) != nil
-            toolsAwaitingAnswer = toolsAwaitingAnswer.filter { $0.value != target }
-            if hadApproval || hadQuestion { onEvent?(.requestResolved(id: target)) }
-        case "notify":
-            let text = params["message"]?.string ?? ""
-            let prefix = "tivano-default-model "
-            if !started, text.hasPrefix(prefix) {
-                if let value = JSONValue.parse(String(text.dropFirst(prefix.count))),
-                   let provider = value["provider"]?.string, !provider.isEmpty,
-                   let id = value["id"]?.string, !id.isEmpty {
-                    defaultModel = "\(provider)/\(id)"
-                }
-                return
-            }
-            let level: Notice.Level = switch params["notifyType"]?.string {
-            case "warning": .warning
-            case "error": .error
-            default: .info
-            }
-            onEvent?(.notice(Notice(level: level, message: params["message"]?.string ?? String(localized: "omp sent a notification."))))
-        default:
-            // setStatus, setWidget, setTitle, set_editor_text, open_url and the like draw omp's
-            // own interface, which this app has no use for.
-            break
-        }
+    override func didCancelRequest(_ target: String) {
+        toolsAwaitingAnswer = toolsAwaitingAnswer.filter { $0.value != target }
     }
 
-    private func handleSelect(id: String, params: JSONValue) {
+    override func handleCustomNotification(_ params: JSONValue) -> Bool {
+        let text = params["message"]?.string ?? ""
+        let prefix = "tivano-default-model "
+        guard !started, text.hasPrefix(prefix) else { return false }
+        if let value = JSONValue.parse(String(text.dropFirst(prefix.count))),
+           let provider = value["provider"]?.string, !provider.isEmpty,
+           let id = value["id"]?.string, !id.isEmpty {
+            defaultModel = "\(provider)/\(id)"
+        }
+        return true
+    }
+
+    override func handleSelect(id: String, params: JSONValue) {
         let title = params["title"]?.string ?? ""
         // The gate extension names the call it asks about exactly: its tool, arguments and id.
         if title.hasPrefix(Self.gatePrefix) {
@@ -966,7 +647,7 @@ final class OmpSession: ProviderSession {
                   let args = payload["input"], args.object != nil,
                   let toolID = payload["toolCallId"]?.string, !toolID.isEmpty,
                   payload["kind"]?.string == Self.approvalKind(toolName: name, args: args).grantKey else {
-                answer(id, "Deny")
+                sendUIResponse(id, value: "Deny")
                 return
             }
             // The payload's kind must agree with the actual tool/device; it cannot widen a grant.
@@ -974,7 +655,7 @@ final class OmpSession: ProviderSession {
                 let device = actualName == "write" ? actualArgs["path"]?.string.flatMap(Self.toolDevice) : nil
                 guard (actualName == name || device == name),
                       Self.approvalKind(toolName: actualName, args: actualArgs) == Self.approvalKind(toolName: name, args: args) else {
-                    answer(id, "Deny")
+                    sendUIResponse(id, value: "Deny")
                     return
                 }
             }
@@ -987,18 +668,7 @@ final class OmpSession: ProviderSession {
             return
         }
         guard title.hasPrefix(Self.approvalPrefix) else {
-            pendingQuestions[id] = "select"
-            onEvent?(.question(QuestionRequest(id: id, questions: [
-                QuestionRequest.Question(
-                    id: id,
-                    header: "omp",
-                    prompt: title,
-                    choices: (params["options"]?.array ?? []).compactMap(\.string).map { QuestionRequest.Choice(label: $0, detail: nil) },
-                    allowsMultiple: false,
-                    allowsOther: false,
-                    isSecret: false
-                ),
-            ])))
+            emitSelectQuestion(id: id, title: title, params: params)
             return
         }
         // omp's own prompt, for a tool that declares it must be asked about (the gate asks for
@@ -1028,20 +698,20 @@ final class OmpSession: ProviderSession {
 
         // task subagents never ask about their own tools, so only unrestricted sessions allow them.
         if toolName == "task" || device == "task" {
-            answer(id, configuration.hydra == nil && runtimeMode == .fullAccess && interactionMode != .plan && !isFinalReport ? "Approve" : "Deny")
+            sendUIResponse(id, value: configuration.hydra == nil && runtimeMode == .fullAccess && interactionMode != .plan && !isFinalReport ? "Approve" : "Deny")
             return
         }
         // Plan mode and a final report are read-only turns: nothing that asks may run.
         if interactionMode == .plan || isFinalReport {
-            answer(id, "Deny")
+            sendUIResponse(id, value: "Deny")
             return
         }
         if runtimeMode == .fullAccess || sessionGrants.contains(kind.grantKey) {
-            answer(id, "Approve")
+            sendUIResponse(id, value: "Approve")
             return
         }
         if runtimeMode == .autoAcceptEdits, kind == .fileChange {
-            answer(id, "Approve")
+            sendUIResponse(id, value: "Approve")
             return
         }
 
@@ -1076,10 +746,6 @@ final class OmpSession: ProviderSession {
         onEvent?(.approval(pendingApprovals[id]!))
     }
 
-    private func answer(_ id: String, _ value: String) {
-        process?.send(["type": .string("extension_ui_response"), "id": .string(id), "value": .string(value)])
-    }
-
     /// The command an approval prompt asks about: its "Command:" line and any lines after it,
     /// since a command can run over several.
     private static func promptCommand(_ detail: String?) -> String? {
@@ -1091,33 +757,5 @@ final class OmpSession: ProviderSession {
     /// The path an approval prompt asks about, from its "Path:" line.
     private static func promptPath(_ detail: String?) -> String? {
         detail?.components(separatedBy: "\n").first { $0.hasPrefix("Path: ") }.map { String($0.dropFirst("Path: ".count)) }
-    }
-
-    private func clearRequests() {
-        let ids = Set(pendingApprovals.keys).union(pendingQuestions.keys)
-        pendingApprovals.removeAll()
-        pendingQuestions.removeAll()
-        toolsAwaitingAnswer.removeAll()
-        for id in ids { onEvent?(.requestResolved(id: id)) }
-    }
-
-    private func didClose(status: Int32) {
-        pendingResponses.resolveAll(.null)
-        clearRequests()
-        let tail = TextCleanup.lastLines(process?.errorTail ?? "")
-        process = nil
-        removeLaunchFiles()
-        if turnActive {
-            turnActive = false
-            onEvent?(.turnCompleted(status: interruptRequested ? .interrupted : .failed, error: tail.flatMap { $0.isEmpty ? nil : $0 }))
-        }
-        guard !stopped else { return }
-        started = false
-        if status == 0 {
-            onEvent?(.exited(error: nil))
-        } else {
-            let suffix = (tail ?? "").isEmpty ? "" : "\n" + (tail ?? "")
-            onEvent?(.exited(error: String(format: String(localized: "omp exited with status %d%@"), status, suffix)))
-        }
     }
 }

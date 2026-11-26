@@ -29,8 +29,8 @@ struct CommandPalette: View {
     }
 
     private struct LibraryKey: Equatable {
-        var threads: [ChatThread]
-        var projects: [Project]
+        var threadsRevision: UInt64
+        var projectsRevision: UInt64
     }
 
     private struct Item: Identifiable {
@@ -132,7 +132,8 @@ struct CommandPalette: View {
         }
         .onChange(of: model.selectedThreadID) { items = results }
         .onChange(of: LibraryKey(
-            threads: model.threads, projects: model.projects
+            threadsRevision: model.threadsRevision,
+            projectsRevision: model.projectsRevision
         ), initial: true) { _, _ in
             threadCandidates = model.threads
                 .filter { $0.isStandaloneListCandidate }

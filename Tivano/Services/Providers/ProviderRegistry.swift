@@ -72,6 +72,12 @@ final class ProviderRegistry {
     // When the provider last delivered a list, persisted under `catalogDatesKey`.
     @ObservationIgnored private let catalogDatesKey = "providerModelCatalogDates"
     @ObservationIgnored var catalogFetchedAt: [ProviderKind: Date] = [:]
+    @ObservationIgnored private var catalogPersistTask: Task<Void, Never>?
+    @ObservationIgnored private var catalogsVersion: UInt64 = 0
+    @ObservationIgnored private var catalogsPersistedVersion: UInt64 = 0
+    @ObservationIgnored private var catalogDatesVersion: UInt64 = 0
+    @ObservationIgnored private var catalogDatesPersistedVersion: UInt64 = 0
+    @ObservationIgnored private var catalogPersistWriteEpoch: UInt64 = 0
 
     /// Installed and latest CLI versions, and whether an update is waiting or running.
     /// A nil `latest` is an unknown feed, not confirmation that the install is current.
@@ -281,6 +287,12 @@ final class ProviderRegistry {
         for provider in ProviderKind.allCases where provider.namesModelVariants || provider == .dsh {
             if let list = catalogs[provider] { settings.adoptModelFamilies(list, for: provider) }
         }
+    }
+
+    /// Starts watching DeepSeek key changes after the Keychain has been loaded off the
+    /// main thread, so `init` never triggers synchronous securityd reads before the first frame.
+    func startObservingDeepSeekKey() {
+        guard deepSeekKeyFingerprint == nil else { return }
         observeDeepSeekKey()
     }
 
@@ -468,7 +480,7 @@ final class ProviderRegistry {
         }
         // OpenCode takes its MCP servers as config content in the environment,
         // so the connected servers reach it without a line written into its config files.
-        if provider == .opencode { environment.merge(MCPSessionOverrides.opencodeEnvironment()) { _, new in new } }
+        if provider == .opencode { environment.merge(MCPProviderConfig.opencodeEnvironment()) { _, new in new } }
         return environment
     }
 
@@ -613,7 +625,7 @@ final class ProviderRegistry {
         if provider == .claude, let observedAccount, !ProviderAccounts.beginRead(observedAccount) { return }
         defer { if provider == .claude, let observedAccount { ProviderAccounts.endRead(observedAccount) } }
         let environment = environment(for: provider)
-        if provider == .claude, !Self.claudeAccountAllowsProbe(environment: environment) {
+        if provider == .claude, !(await Self.claudeAccountAllowsProbe(environment: environment)) {
             status.isChecking = false
             status.auth = .unknown
             setStatus(status, for: provider)
@@ -624,7 +636,8 @@ final class ProviderRegistry {
                 ? .signedOut : .signedIn(AppText.localized("GLM Coding Plan key"))
             let authMessage = auth == .signedOut
                 ? AppText.localized("ZCode signs in with your GLM Coding Plan key. Add it in Settings › Provider management › Z.ai.") : nil
-            setStatus(ProviderStatus(executable: executable, version: ZCodeCLI.version(entry: executable), auth: auth,
+            let version = await ZCodeCLI.loadVersion(entry: executable)
+            setStatus(ProviderStatus(executable: executable, version: version, auth: auth,
                                      authMessage: authMessage, catalogError: statuses[provider]?.catalogError), for: provider)
             return
         }
@@ -831,7 +844,7 @@ final class ProviderRegistry {
         case .commandcode: try? await CommandCodeAPI.listModels(executable: executable, environment: environment)
         case .pi: try? await PiCLI.listModels(executable: executable, environment: environment)
         case .omp: try? await OmpCLI.listModels(executable: executable, environment: environment, force: forceCatalogProbe)
-        case .zcode: ZCodeCLI.models(entry: executable, region: ZaiRegion.current)
+        case .zcode: await ZCodeCLI.loadModels(entry: executable, region: ZaiRegion.current)
         case .minimaxCode:
             await loadMiniMaxCodeCatalog(executable: executable, environment: environment)
         case .cursor, .grok, .devin, .kimi, .dsh: try? await ACPSession.probeModels(provider: provider, executable: executable, environment: environment)
@@ -978,9 +991,77 @@ final class ProviderRegistry {
     /// can tell a fresh catalog from one cached before the account gained a model.
     private func storeCatalogDates() {
         guard !CaptureRun.isEnabled else { return }
-        let raw = Dictionary(catalogFetchedAt.map { ($0.key.rawValue, $0.value.timeIntervalSince1970) }, uniquingKeysWith: { first, _ in first })
-        guard let data = try? JSONEncoder().encode(raw) else { return }
-        UserDefaults.standard.set(data, forKey: catalogDatesKey)
+        catalogDatesVersion &+= 1
+        scheduleCatalogPersist()
+    }
+
+    private func scheduleCatalogPersist() {
+        catalogPersistTask?.cancel()
+        catalogPersistTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+            guard let self, !Task.isCancelled else { return }
+            await self.persistPendingCatalogsInBackground()
+        }
+    }
+
+    private func persistPendingCatalogsInBackground() async {
+        guard !CaptureRun.isEnabled else { return }
+        let targetCatalogsVersion = catalogsVersion
+        let targetDatesVersion = catalogDatesVersion
+        let catalogsSnapshot: [String: [ModelOption]]? = targetCatalogsVersion != catalogsPersistedVersion
+            ? Dictionary(uniqueKeysWithValues: catalogs.map { ($0.key.rawValue, $0.value) }) : nil
+        let datesSnapshot: [String: Double]? = targetDatesVersion != catalogDatesPersistedVersion
+            ? Dictionary(catalogFetchedAt.map { ($0.key.rawValue, $0.value.timeIntervalSince1970) }, uniquingKeysWith: { first, _ in first }) : nil
+        guard catalogsSnapshot != nil || datesSnapshot != nil else { return }
+        catalogPersistWriteEpoch &+= 1
+        let epoch = catalogPersistWriteEpoch
+        let encoded = await Self.encodeCatalogPersistence(catalogs: catalogsSnapshot, dates: datesSnapshot)
+        guard !Task.isCancelled, catalogPersistWriteEpoch == epoch else { return }
+        if let data = encoded.catalogs {
+            UserDefaults.standard.set(data, forKey: cacheKey)
+            catalogsPersistedVersion = targetCatalogsVersion
+        }
+        if let data = encoded.dates {
+            UserDefaults.standard.set(data, forKey: catalogDatesKey)
+            catalogDatesPersistedVersion = targetDatesVersion
+        }
+    }
+
+    @concurrent
+    private nonisolated static func encodeCatalogPersistence(
+        catalogs: [String: [ModelOption]]?,
+        dates: [String: Double]?
+    ) async -> (catalogs: Data?, dates: Data?) {
+        let encoder = JSONEncoder()
+        let catalogsData = catalogs.flatMap { try? encoder.encode($0) }
+        let datesData = dates.flatMap { try? encoder.encode($0) }
+        return (catalogsData, datesData)
+    }
+
+    /// Writes any debounced catalog or catalog-date updates before the app quits.
+    func flushCatalogPersistence() {
+        catalogPersistTask?.cancel()
+        catalogPersistTask = nil
+        guard !CaptureRun.isEnabled else { return }
+        let needsCatalogs = catalogsVersion != catalogsPersistedVersion
+        let needsDates = catalogDatesVersion != catalogDatesPersistedVersion
+        guard needsCatalogs || needsDates else { return }
+        catalogPersistWriteEpoch &+= 1
+        let encoder = JSONEncoder()
+        if needsCatalogs {
+            let encoded = Dictionary(uniqueKeysWithValues: catalogs.map { ($0.key.rawValue, $0.value) })
+            if let data = try? encoder.encode(encoded) {
+                UserDefaults.standard.set(data, forKey: cacheKey)
+            }
+            catalogsPersistedVersion = catalogsVersion
+        }
+        if needsDates {
+            let raw = Dictionary(catalogFetchedAt.map { ($0.key.rawValue, $0.value.timeIntervalSince1970) }, uniquingKeysWith: { first, _ in first })
+            if let data = try? encoder.encode(raw) {
+                UserDefaults.standard.set(data, forKey: catalogDatesKey)
+            }
+            catalogDatesPersistedVersion = catalogDatesVersion
+        }
     }
 
     func invalidateClaudeAccountViews() {
@@ -1202,10 +1283,8 @@ final class ProviderRegistry {
         catalogs[provider] = list
         if provider.namesModelVariants || provider == .dsh { settings.adoptModelFamilies(list, for: provider) }
         guard !CaptureRun.isEnabled else { return }
-        let encoded = Dictionary(uniqueKeysWithValues: catalogs.map { ($0.key.rawValue, $0.value) })
-        if let data = try? JSONEncoder().encode(encoded) {
-            UserDefaults.standard.set(data, forKey: cacheKey)
-        }
+        catalogsVersion &+= 1
+        scheduleCatalogPersist()
     }
 
     static func commandKey(_ provider: ProviderKind, directory: String) -> String {
@@ -1288,10 +1367,10 @@ final class ProviderRegistry {
     /// Claude Code owns token validation and refresh. Its auth status and profile metadata
     /// identify the isolated login without blocking an expired token before the CLI can refresh it.
     static func claudeIdentity(executable: URL, environment: [String: String], directory: URL, signingInAccountID: UUID? = nil, reusingFor accountID: UUID? = nil) async throws -> ClaudeAccountIdentity {
-        guard claudeAccountAllowsProbe(environment: environment, signingInAccountID: signingInAccountID) else {
+        guard await claudeAccountAllowsProbe(environment: environment, signingInAccountID: signingInAccountID) else {
             throw ClaudeAccountValidationError.verificationFailed
         }
-        try rejectClaudeAuthenticationOverrides(environment: environment, directory: directory)
+        try await rejectClaudeAuthenticationOverrides(environment: environment, directory: directory)
         guard let accountID else {
             return try await probeClaudeIdentity(executable: executable, environment: environment, directory: directory)
         }
@@ -1299,13 +1378,19 @@ final class ProviderRegistry {
         // answer; a login from elsewhere rewrites the profile's oauthAccount, which must still match.
         let configDirectory = environment["CLAUDE_CONFIG_DIR"] ?? ""
         if let cached = claudeIdentityCache[accountID], cached.configDirectory == configDirectory,
-           Date.now.timeIntervalSince(cached.verifiedAt) < claudeIdentityReuse,
-           let metadata = ProviderAccountStore.claudeIdentity(home: ProviderAccountStore.defaultClaudeHome(environment: environment),
-                                                              isDefault: environment["CLAUDE_CONFIG_DIR"].map { $0.isEmpty } ?? true),
-           metadata["accountUuid"]?.string == cached.identity.accountID,
-           metadata["organizationUuid"]?.string == cached.identity.organizationID,
-           metadata["emailAddress"]?.string?.lowercased() == cached.identity.email.lowercased() {
-            return cached.identity
+           Date.now.timeIntervalSince(cached.verifiedAt) < claudeIdentityReuse {
+            let home = ProviderAccountStore.defaultClaudeHome(environment: environment)
+            let isDefault = environment["CLAUDE_CONFIG_DIR"].map { $0.isEmpty } ?? true
+            if let metadata = await ProviderAccountStore.readClaudeIdentity(home: home, isDefault: isDefault),
+               let current = claudeIdentityCache[accountID],
+               current.configDirectory == configDirectory,
+               current.identity == cached.identity,
+               Date.now.timeIntervalSince(current.verifiedAt) < claudeIdentityReuse,
+               metadata["accountUuid"]?.string == current.identity.accountID,
+               metadata["organizationUuid"]?.string == current.identity.organizationID,
+               metadata["emailAddress"]?.string?.lowercased() == current.identity.email.lowercased() {
+                return current.identity
+            }
         }
         if let task = claudeIdentityProbes[accountID] { return try await task.value }
         let task = Task {
@@ -1322,7 +1407,8 @@ final class ProviderRegistry {
         return identity
     }
 
-    private static func probeClaudeIdentity(executable: URL, environment: [String: String], directory: URL) async throws -> ClaudeAccountIdentity {
+    @concurrent
+    private nonisolated static func probeClaudeIdentity(executable: URL, environment: [String: String], directory: URL) async throws -> ClaudeAccountIdentity {
         let result: ShellResult
         do {
             result = try await Shell.run(executable, ["--setting-sources", "user,project,local", "auth", "status"],
@@ -1348,7 +1434,8 @@ final class ProviderRegistry {
         return ClaudeAccountIdentity(accountID: accountID, organizationID: organizationID, email: email)
     }
 
-    private static func rejectClaudeAuthenticationOverrides(environment: [String: String], directory: URL) throws {
+    @concurrent
+    private nonisolated static func rejectClaudeAuthenticationOverrides(environment: [String: String], directory: URL) async throws {
         func conflicts(_ key: String, _ value: String) -> Bool {
             guard !value.isEmpty else { return false }
             if ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"].contains(key) { return value != environment[key] }
@@ -1391,10 +1478,11 @@ final class ProviderRegistry {
         }
     }
 
-    private static func claudeAccountAllowsProbe(environment: [String: String], signingInAccountID: UUID? = nil) -> Bool {
+    private static func claudeAccountAllowsProbe(environment: [String: String], signingInAccountID: UUID? = nil) async -> Bool {
         guard !CaptureRun.isEnabled else { return false }
         let managed = environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1"
-        let account = ProviderAccountStore.load().accounts.first {
+        let book = await ProviderAccountStore.loadAsync()
+        let account = book.accounts.first {
             $0.provider == .claude && (managed ? $0.home == environment["CLAUDE_CONFIG_DIR"] : $0.isDefault)
         }
         guard !managed || account != nil else { return false }
@@ -1417,7 +1505,7 @@ final class ProviderRegistry {
             let signedIn = text.localizedCaseInsensitiveContains("logged in") || text.localizedCaseInsensitiveContains("api key configured")
             return result.succeeded && signedIn ? .signedIn(nil) : .signedOut
         case .claude:
-            guard claudeAccountAllowsProbe(environment: environment) else { return .unknown }
+            guard await claudeAccountAllowsProbe(environment: environment) else { return .unknown }
             guard let result = try? await Shell.run(executable, ["auth", "status"], environment: environment, timeout: 20),
                   let json = JSONValue.parse(result.stdout) else { return .unknown }
             if environment["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1" {
@@ -1464,26 +1552,31 @@ final class ProviderRegistry {
             if let name = credentials.first { return .signedIn(name) }
             return .signedOut
         case .grok:
-            let url = URL(fileURLWithPath: (LoginEnvironment.homeDirectory as NSString).appendingPathComponent(".grok/auth.json"))
-            let hasAPIKey = [environment["XAI_API_KEY"], ProcessInfo.processInfo.environment["XAI_API_KEY"]]
-                .contains { $0?.trimmed.isEmpty == false }
-            if !FileManager.default.fileExists(atPath: url.path) {
-                return hasAPIKey ? .unknown : .signedOut
-            }
-            guard let data = try? Data(contentsOf: url), let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .unknown }
-            let entries = root.values.compactMap { $0 as? [String: Any] }
-            // A file without account entries (such as `{}`) still allows an API key.
-            guard !entries.isEmpty else { return hasAPIKey ? .unknown : .signedOut }
-            if let email = entries.lazy.compactMap({ $0["email"] as? String }).first(where: { !$0.isEmpty }) {
-                return .signedIn(email)
-            }
-            if let name = entries.lazy.compactMap({ $0["first_name"] as? String }).first(where: { !$0.isEmpty }) {
-                return .signedIn(name)
-            }
-            return .signedIn(nil)
+            return await grokAuth(environment: environment)
         case .deepseek, .meta, .zai, .minimaxCode, .zcode:
             return .unknown
         }
+    }
+
+    @concurrent
+    private nonisolated static func grokAuth(environment: [String: String]) async -> ProviderStatus.Auth {
+        let url = URL(fileURLWithPath: (LoginEnvironment.homeDirectory as NSString).appendingPathComponent(".grok/auth.json"))
+        let hasAPIKey = [environment["XAI_API_KEY"], ProcessInfo.processInfo.environment["XAI_API_KEY"]]
+            .contains { $0?.trimmed.isEmpty == false }
+        if !FileManager.default.fileExists(atPath: url.path) {
+            return hasAPIKey ? .unknown : .signedOut
+        }
+        guard let data = try? Data(contentsOf: url), let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .unknown }
+        let entries = root.values.compactMap { $0 as? [String: Any] }
+        // A file without account entries (such as `{}`) still allows an API key.
+        guard !entries.isEmpty else { return hasAPIKey ? .unknown : .signedOut }
+        if let email = entries.lazy.compactMap({ $0["email"] as? String }).first(where: { !$0.isEmpty }) {
+            return .signedIn(email)
+        }
+        if let name = entries.lazy.compactMap({ $0["first_name"] as? String }).first(where: { !$0.isEmpty }) {
+            return .signedIn(name)
+        }
+        return .signedIn(nil)
     }
 
     // Accept legacy ● credential lines and V2 provider / credential / source table rows.

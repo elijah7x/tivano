@@ -8,6 +8,52 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [3.0.24] - 2026-11-26
+
+### English
+
+### New features
+
+- Right-click any message and choose Branch from here to continue the chat in a new one from that point; the original stays as it was. On a reply, the new chat keeps everything up to it; on your own message, it keeps what came before and puts that message back in the message box to edit. A line under the copied history says where it came from and opens the original.
+- Typing @ in the message box now suggests folders as well as files, and shows more matches; a folder is passed to the agent as its path.
+
+### Bug fixes
+
+- After you type in the message box, the pointer no longer stays a text cursor over the thread list and other controls.
+- A finished reply no longer sometimes shows as a blank space of the right height until Tivano is restarted, as could happen under its "Worked for" line after it sent out sub-agents.
+- In a numbered or bulleted item whose text continues on the next line, the continuation no longer starts back under the number; every line now lines up with the item's text.
+- Menus and panels that open from a button, such as a thread's … menu, the model and effort picker and the combo list, no longer jump to another spot a moment after opening when Tivano has been running for a long time.
+
+### Refinements
+
+- When a chat's sub-agents are folded in the sidebar, the line under it now also says how many are still running, such as "5 sub-agents · 2 running".
+- Full access now shows a shield with an exclamation mark, and an independent review in the chat shows a checkmark seal, so the two no longer share one icon.
+- Tivano does less on the main thread: more startup work waits until the window is up, MCP, account, Git and token reads run in the background, and streaming replies use less CPU.
+
+### 简体中文
+
+### 新功能
+
+- 右键任意消息，选择「从这里分叉」，即可从这一点开一个新对话接着聊，原对话保持不变。在回复上分叉时，新对话保留到这条回复为止；在你自己的消息上分叉时，保留这条之前的内容，并把这条消息放回输入框供你修改。复制来的历史下方会标明来源，并可打开原对话。
+- 在输入框中输入 @ 时，除文件外也会建议文件夹，并显示更多匹配项；引用文件夹时只把路径交给 Agent。
+
+### 问题修复
+
+- 在输入框打字后，把鼠标移到对话列表等控件上，指针不再一直显示为文字光标。
+- 已完成的回复不再偶尔显示成一块等高的空白、要重启 Tivano 才恢复；派出子代理后「已工作」行下方的回复以前可能出现这种情况。
+- 编号或项目符号列表中，条目文字换行续写时，续写的那一行不再缩回到编号下方，所有行都与条目文字对齐。
+- 从按钮弹出的菜单和面板（如对话行的「…」菜单、模型与推理强度选择器、组合列表）在 Tivano 长时间运行后，不再在打开片刻后跳到另一个位置。
+
+### 优化改进
+
+- 侧边栏中折叠起来的子代理行现在会同时显示还有几个在运行，例如「5 个子代理 · 2 个在运行」。
+- 「完全访问」改用带感叹号的盾牌图标，对话里的「独立审查」改用带勾的印章图标，两者不再共用同一个图标。
+- Tivano 主线程更轻：更多启动工作推迟到窗口出现之后，MCP、账户、Git 和 token 的读取改在后台进行，流式回复占用的 CPU 也更少。
+
+### Thanks
+
+- No outside contributors.
+
 ## [3.0.15] - 2026-11-23
 
 ### English

@@ -161,12 +161,11 @@ def check_sources():
         'promptActive = false',
         'if configuration.provider == .antigravity, let usage, !usage.isNull',
         'usage["totalTokens"]?.int',
-        'TokenLedger.shared.record(spend: total)',
         'onEvent?(.tokenSpend(TokenSpend(',
         'provider: .antigravity',
         'AntigravitySession.loginHint(in: evidence)',
     ], path=ACP)
-    if finish.index('promptActive = false') > finish.index('TokenLedger.shared.record(spend: total)'):
+    if finish.index('promptActive = false') > finish.index('onEvent?(.tokenSpend(TokenSpend('):
         fail('finishPrompt must clear promptActive before recording per-turn token spend')
     for forbidden_delta in ('reportedSpend', 'spendBaseline', 'cumulativeSpend'):
         if forbidden_delta in finish:

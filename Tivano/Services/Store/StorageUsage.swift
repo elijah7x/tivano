@@ -10,7 +10,6 @@ struct StorageUsage: Equatable, Sendable {
     var worktrees: [WorktreeUsage] = []
 
     var worktreesTotal: Int64 { worktrees.reduce(0) { $0 + $1.size } }
-    var buildFilesTotal: Int64 { worktrees.reduce(0) { $0 + $1.buildFilesSize } }
 }
 
 /// One folder under the managed worktrees directory.

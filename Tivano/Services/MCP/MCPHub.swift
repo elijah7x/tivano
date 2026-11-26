@@ -73,6 +73,7 @@ actor MCPHub {
         let generation = self.generation
         var all: [Tool] = []
         var complete = true
+        var pending: [(id: String, client: MCPClient)] = []
         for id in current.keys.sorted() {
             try Task.checkCancellation()
             guard !shuttingDown, generation == self.generation else { throw CancellationError() }
@@ -85,22 +86,60 @@ actor MCPHub {
                 continue
             }
             guard let spec = current[id] else { continue }
-            let client = self.client(for: id, spec: spec)
-            do {
-                let listed = try await client.listTools()
-                try Task.checkCancellation()
-                guard !shuttingDown, generation == self.generation else { throw CancellationError() }
-                toolCache[id] = listed
-                combinedToolCache = nil
-                all += listed
-            } catch is CancellationError {
+            pending.append((id: id, client: self.client(for: id, spec: spec)))
+        }
+        if !pending.isEmpty {
+            enum FetchOutcome: Sendable {
+                case tools(String, [Tool])
+                case failed(String, String)
+                case cancelled
+            }
+            let outcomes = await withTaskGroup(of: FetchOutcome.self) { group in
+                for item in pending {
+                    group.addTask {
+                        do {
+                            let listed = try await item.client.listTools()
+                            return .tools(item.id, listed)
+                        } catch is CancellationError {
+                            return .cancelled
+                        } catch {
+                            return .failed(item.id, error.localizedDescription)
+                        }
+                    }
+                }
+                var collected: [FetchOutcome] = []
+                for await outcome in group {
+                    if case .cancelled = outcome {
+                        group.cancelAll()
+                    }
+                    collected.append(outcome)
+                }
+                return collected
+            }
+            try Task.checkCancellation()
+            guard !shuttingDown, generation == self.generation else { throw CancellationError() }
+            if outcomes.contains(where: { if case .cancelled = $0 { return true }; return false }) {
                 throw CancellationError()
-            } catch {
-                try Task.checkCancellation()
-                guard !shuttingDown, generation == self.generation else { throw CancellationError() }
-                Self.log.error("MCPHub: \(id): \(error.localizedDescription)")
-                failed.insert(id)
-                complete = false
+            }
+            var byID: [String: [Tool]] = [:]
+            for outcome in outcomes {
+                switch outcome {
+                case .tools(let id, let listed):
+                    toolCache[id] = listed
+                    combinedToolCache = nil
+                    byID[id] = listed
+                case .failed(let id, let message):
+                    Self.log.error("MCPHub: \(id): \(message)")
+                    failed.insert(id)
+                    complete = false
+                case .cancelled:
+                    throw CancellationError()
+                }
+            }
+            for item in pending {
+                if let listed = byID[item.id] {
+                    all += listed
+                }
             }
         }
         try Task.checkCancellation()

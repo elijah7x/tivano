@@ -9,6 +9,7 @@ struct NewThreadPrompt: View {
 
     @State private var isVisible = false
     @State private var isChoosingProject = false
+    @State private var isMoving = false
     @State private var isHoveringName = false
     @FocusState private var isMenuFocused: Bool
 
@@ -76,43 +77,60 @@ struct NewThreadPrompt: View {
     }
 
     private var projectChoices: some View {
-        let current = model.thread(threadID)?.affiliation
-        let canMove = model.canChangeThreadAffiliation(threadID)
+        let current: ThreadAffiliation? = model.thread(threadID)?.affiliation
+        let canMove: Bool = model.canChangeThreadAffiliation(threadID)
+        let activeProjects: [Project] = model.projects.filter { (project: Project) -> Bool in !project.isShelved }
+        let shelvedProjects: [Project] = model.projects.filter { (project: Project) -> Bool in project.isShelved }
+        let orderedProjects: [Project] = activeProjects + shelvedProjects
         return PopoverMenu {
             PopoverItem("Work without a project", symbol: "bubble.left", isChecked: current == .standalone, isEnabled: canMove) {
                 move(to: .standalone)
             }
             PopoverDivider()
             PopoverSectionHeader("Projects")
-            ForEach(model.projects.filter { !$0.isShelved } + model.projects.filter { $0.isShelved }) { project in
-                PopoverItem(project.name, leading: AnyView(ProjectIconMark(icon: project.icon, size: 12)), isChecked: current == .project(project.id), isEnabled: canMove) {
-                    move(to: .project(project.id))
-                }
+            ForEach(orderedProjects) { (project: Project) in
+                projectChoiceRow(project, current: current, canMove: canMove)
             }
             PopoverDivider()
             PopoverItem("Add project…", symbol: "plus", isEnabled: canMove) {
-                guard model.canChangeThreadAffiliation(threadID), let added = model.addProjectsFromPanel() else { return }
-                move(to: .project(added.id))
+                addProjectAndMove()
             }
         }
     }
 
+    private func projectChoiceRow(_ project: Project, current: ThreadAffiliation?, canMove: Bool) -> some View {
+        let iconView = AnyView(ProjectIconMark(icon: project.icon, size: 12))
+        let isChecked: Bool = current == .project(project.id)
+        return PopoverItem(project.name, leading: iconView, isChecked: isChecked, isEnabled: canMove) {
+            move(to: .project(project.id))
+        }
+    }
+
+    private func addProjectAndMove() {
+        guard model.canChangeThreadAffiliation(threadID), let added: Project = model.addProjectsFromPanel() else { return }
+        move(to: .project(added.id))
+    }
+
     private func move(to affiliation: ThreadAffiliation) {
-        guard let thread = model.thread(threadID), thread.affiliation != affiliation else { return }
+        guard !isMoving, let thread = model.thread(threadID), thread.affiliation != affiliation else { return }
         guard model.canChangeThreadAffiliation(threadID) else {
             model.alert = AppAlert(title: "Could not change thread location", message: Chrome.localized("Thread location can only be changed before the first message."))
             return
         }
-        let moved = withAnimation(Chrome.panelSlide) {
-            model.moveThread(threadID, to: affiliation)
-        }
-        guard moved else {
-            if model.alert == nil {
-                model.alert = AppAlert(title: "Could not change thread location", message: Chrome.localized("Thread location can only be changed before the first message."))
+        // The stored-history check reads the thread file off the main thread; a second
+        // click while it runs is ignored.
+        isMoving = true
+        Task {
+            defer { isMoving = false }
+            let moved = await model.moveThreadAsync(threadID, to: affiliation, animation: Chrome.panelSlide)
+            guard moved else {
+                if model.alert == nil {
+                    model.alert = AppAlert(title: "Could not change thread location", message: Chrome.localized("Thread location can only be changed before the first message."))
+                }
+                return
             }
-            return
+            model.terminals.closeAll(for: threadID)
+            isChoosingProject = false
         }
-        model.terminals.closeAll(for: threadID)
-        isChoosingProject = false
     }
 }

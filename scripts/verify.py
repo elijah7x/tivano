@@ -76,7 +76,7 @@ CHECKS = (
            'Tivano/App/Runtime/VoiceController.swift', 'Tivano/Core/Models/Voice.swift')),
     check('standalone_task_checks', 'fast', (), 300, SWIFT, TASK_SOURCES),
     check('runtime_audit_checks', 'fast', (), 360, SWIFT,
-          (*paths(PROVIDERS, 'ACPSession.swift PiSession.swift OmpSession.swift ClaudeSession.swift '
+          (*paths(PROVIDERS, 'ACPSession.swift PiRPCSession.swift PiSession.swift OmpSession.swift ClaudeSession.swift '
                   'CopilotSession.swift OpenAICompatibleSession.swift'),
            'Tivano/Core/Support/JSONValue.swift', 'Tivano/Services/MCP/MCPHub.swift',
            'Tivano/App/AppModel.swift', 'Tivano/App/AppModel+Hydra.swift',
@@ -98,7 +98,7 @@ CHECKS = (
            'Tivano/App/Control/AppControlService.swift', 'Tivano/App/Runtime/ThreadRuntime.swift',
            'Tivano/App/AppSettings.swift', 'Tivano/App/AppUpdater.swift',
            'Tivano/App/AppModel+Hydra.swift', 'Tivano/App/Runtime/ControlFailureClassifier.swift',
-           *paths(MODELS, 'LocalControl.swift Library.swift ProviderAccount.swift Chimera.swift Hydra.swift Hydra2.swift'),
+           *paths(MODELS, 'LocalControl.swift Library.swift ThreadBranch.swift ProviderAccount.swift Chimera.swift Hydra.swift Hydra2.swift'),
            *paths(SUPPORT, 'Coding.swift StoragePaths.swift Text.swift'),
            *paths(PROVIDERS, 'ClaudeAccountCredentials.swift PlanLimits.swift'),
            'Tivano/Services/Control/ControlLedger.swift'),
@@ -142,8 +142,8 @@ CHECKS = (
            'Tivano/App/Control/EphemeralAgentRunner.swift',
            'Tivano/Core/Models/Provider.swift',
            'Tivano/Resources/Localizable.xcstrings'), 'none (read-only)'),
-    check('pi_catalog_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'PiCLI.swift'),), 'none (read-only)'),
-    check('upstream_channel_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'CLIUpdates.swift ACPSession.swift PiSession.swift'),), 'none (read-only)'),
+    check('pi_catalog_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'PiCLI.swift PiCLISupport.swift'),), 'none (read-only)'),
+    check('upstream_channel_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'CLIUpdates.swift ACPSession.swift PiSession.swift PiRPCSession.swift'),), 'none (read-only)'),
     check('dsh_patch_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'DshPatches.swift DshMarketplaceBootstrap.swift ACPSession.swift'),), 'none (read-only)'),
     check('codex_protocol_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'CodexSession.swift'),), 'none (read-only)'),
     check('codex_one_shot_checks', 'fast', (), 60, (), (*paths(PROVIDERS, 'CodexSession.swift TextGeneration.swift'),), 'none (read-only)'),
@@ -208,11 +208,13 @@ CHECKS = (
            'Tivano/App/Views/Settings/ConversationSettingsPage.swift',
            'Tivano/Resources/Localizable.xcstrings'),
           'temporary directory'),
+    check('thread_branch_checks', 'fast', (), 120, SWIFT,
+          (*paths(MODELS, 'ThreadBranch.swift Timeline.swift Library.swift'),)),
     check('runtime_storage_checks', 'slow', (), 7200, (*SWIFT, 'unprivileged'),
           (*paths(SUPPORT, 'HangWatchdog.swift JSONValue.swift ISO8601.swift RuntimeStorageUsage.swift '
                   'CaptureRun.swift StoragePaths.swift Text.swift'),
            'Tivano/App/AppUpdater.swift', 'Tivano/App/UpdateChecker.swift',
-           'Tivano/Services/Store/Storage+Diagnostics.swift',
+           'Tivano/Services/Store/Storage.swift',
            'Tivano/App/Views/Settings/StorageSettingsSections.swift'), 'build.noindex (temporary directory)'),
     check('data_safety_audit_checks', 'slow', ('{out}', '--git', '{git}'), 7200,
           (*SWIFT, 'git-cat-file-Z', 'unprivileged'),
@@ -220,7 +222,7 @@ CHECKS = (
            'Tivano/Services/Store/Storage.swift', 'Tivano/Services/Store/StorageUsage.swift',
            'Tivano/Core/Models/Timeline.swift', 'Tivano/App/AppModel.swift',
            'Tivano/App/AppModel+Hydra.swift', 'Tivano/App/AppSettings.swift',
-           *paths(SUPPORT, 'Coding.swift Shell.swift SharedLibraryLease.swift SharedResourceLock.swift CheckoutClaims.swift')),
+           *paths(SUPPORT, 'Coding.swift ISO8601.swift Shell.swift SharedLibraryLease.swift SharedResourceLock.swift CheckoutClaims.swift')),
           'fresh external directory'),
     check('local_control_checks', 'slow', ('{short}',), 1200, (*SWIFT, 'arm64', 'short-socket-path'),
           ('scripts/fixtures/local_control/', 'Tivano/Core/Models/LocalControl.swift',
@@ -231,7 +233,8 @@ CHECKS = (
           ('scripts/fixtures/dsh_adapter/', *ACP_SOURCES), 'build.noindex/dsh-adapter/run-*'),
     check('omp_adapter_stress', 'slow', ('--fake-only', '--output', '{out}'), 300, SWIFT,
           ('scripts/fixtures/omp_adapter/',
-           *paths(PROVIDERS, 'OmpSession.swift OmpCLI.swift ProviderSession.swift SessionSupport.swift '
+           *paths(PROVIDERS, 'PiRPCSession.swift OmpSession.swift PiCLISupport.swift OmpCLI.swift '
+                  'CLIProbeCache.swift ProviderSession.swift SessionSupport.swift '
                   'UsageLimitSignal.swift ProviderRegistry.swift'),
            *paths(SUPPORT, 'StdioProcess.swift StdioFramer.swift JSONValue.swift PendingReplies.swift '
                   'StoragePaths.swift Text.swift Coding.swift'),
@@ -250,7 +253,8 @@ CHECKS = (
     check('selection_redraw_checks', 'gui', (), 600, (*SWIFT, 'gui-session'),
           ('Tivano/UI/Markdown/LinkParagraphView.swift',)),
     check('text_height_heal_checks', 'gui', (), 600, (*SWIFT, 'gui-session'),
-          ('Tivano/UI/Markdown/LinkParagraphView.swift', 'Tivano/UI/Markdown/ProseRunView.swift')),
+          ('Tivano/UI/Markdown/LinkParagraphView.swift', 'Tivano/UI/Markdown/ProseRunView.swift',
+           'Tivano/UI/Markdown/TextDisplayAudit.swift', 'Tivano/UI/Markdown/StreamVeil.swift')),
     check('ui_audit_checks', 'gui', (), 420, (*SWIFT, 'gui-session'),
           ('scripts/fixtures/ui_audit/', 'Tivano/App/Runtime/ThreadRuntime.swift',
            'Tivano/UI/Markdown/MarkdownView.swift', 'Tivano/UI/Markdown/MarkdownParser.swift',

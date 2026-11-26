@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// The user's MCP connections: which catalog servers are connected, their field values,
 /// and what each announced when it was last probed. Persists to `MCPPaths.connectionsURL`
@@ -17,7 +18,7 @@ final class MCPStore {
     /// The servers the user defined themselves, in the order they were made.
     private(set) var customs: [MCPCustomServer] = []
 
-    struct ConfigurationLoadError: Error {
+    struct ConfigurationLoadError: Error, Sendable {
         let url: URL
         let isReadFailure: Bool
     }
@@ -35,28 +36,36 @@ final class MCPStore {
     }
 
     private(set) var configurationLoadError: ConfigurationLoadError?
-    var isConfigurationLoaded: Bool { configurationLoadError == nil }
+    private(set) var hasLoadedConfiguration = false
+    var isConfigurationLoaded: Bool { hasLoadedConfiguration && configurationLoadError == nil }
 
+    @ObservationIgnored private var isLoadingConfiguration = false
+    @ObservationIgnored private var readyTask: Task<Void, Never>?
+    @ObservationIgnored private let persistence = PersistenceQueue()
     @ObservationIgnored private var probeGeneration = UUID()
     @ObservationIgnored private var probeIDs: [String: UUID] = [:]
     @ObservationIgnored private var probes: [String: Task<Void, Never>] = [:]
 
+    nonisolated private static let latestReadyTask = Mutex<Task<Void, Never>?>(nil)
+
     init() {
-        load()
-        // Up before anything resolves a route to it: the probe, the hub and every launch
-        // reach signed-in servers through the proxy.
-        if isConfigurationLoaded {
-            MCPProxy.shared.start()
-            exportAll()
-        }
+        startLoad()
+    }
+
+    /// Waits for the initial off-main configuration load, proxy start and provider config export.
+    func ensureReady() async {
+        await readyTask?.value
+    }
+
+    /// Waits for the active store's initial load and export from service-layer callers without an AppModel reference.
+    nonisolated static func waitUntilReady() async {
+        let task = latestReadyTask.withLock { $0 }
+        await task?.value
     }
 
     func retryConfigurationLoad() {
-        guard !isConfigurationLoaded else { return }
-        load()
-        guard isConfigurationLoaded else { return }
-        MCPProxy.shared.start()
-        exportAll()
+        guard hasLoadedConfiguration, configurationLoadError != nil, !isLoadingConfiguration else { return }
+        startLoad()
     }
 
     // MARK: Reading
@@ -281,17 +290,124 @@ final class MCPStore {
 
     // MARK: Persistence
 
-    private func load() {
+    private enum LoadOutcome: Sendable {
+        case loaded(
+            customs: [MCPCustomServer],
+            connections: [String: MCPConnection],
+            states: [String: MCPConnectionState],
+            resolvedServers: [MCPResolvedServer]
+        )
+        case failed(ConfigurationLoadError)
+    }
+
+    private struct ExportTarget: Sendable {
+        let entry: MCPCatalogEntry
+        let plainValues: [String: String]
+    }
+
+    private final class PersistenceQueue: Sendable {
+        private struct Generations {
+            var connections: UInt64 = 0
+            var customs: UInt64 = 0
+            var export: UInt64 = 0
+        }
+
+        private let queue = DispatchQueue(label: "tivano.mcp.persistence", qos: .utility)
+        private let generations = Mutex(Generations())
+
+        func writeConnections(_ list: [MCPConnection]) {
+            let generation = generations.withLock { state -> UInt64 in
+                state.connections &+= 1
+                return state.connections
+            }
+            queue.async { [self] in
+                guard generations.withLock({ $0.connections == generation }) else { return }
+                guard let data = try? JSONEncoder.storagePretty.encode(list) else { return }
+                try? data.write(to: MCPPaths.connectionsURL, options: .atomic)
+            }
+        }
+
+        func writeCustoms(_ list: [MCPCustomServer]) {
+            let generation = generations.withLock { state -> UInt64 in
+                state.customs &+= 1
+                return state.customs
+            }
+            queue.async { [self] in
+                guard generations.withLock({ $0.customs == generation }) else { return }
+                guard let data = try? JSONEncoder.storagePretty.encode(list) else { return }
+                try? data.write(to: MCPPaths.customsURL, options: .atomic)
+            }
+        }
+
+        func export(_ targets: [ExportTarget], preResolved: [MCPResolvedServer]? = nil, reloadHub: Bool = true) {
+            let generation = generations.withLock { state -> UInt64 in
+                state.export &+= 1
+                return state.export
+            }
+            queue.async { [self] in
+                guard generations.withLock({ $0.export == generation }) else { return }
+                let servers = preResolved ?? targets.map { target in
+                    MCPStore.resolveServer(target.entry, plainValues: target.plainValues)
+                }.sorted { $0.id < $1.id }
+                // The proxy's routes follow the enabled list: one per signed-in server.
+                MCPProxy.shared.replaceAll(servers.compactMap { server in
+                    guard let remote = server.oauthUpstream else { return nil }
+                    return (serverID: server.id, upstream: remote, headers: [:], usesOAuth: true)
+                })
+                MCPProviderConfig.writeAll(servers)
+                // The in-app clients (API providers) pick the new list up on their next use.
+                if reloadHub {
+                    Task { await MCPHub.shared.reload() }
+                }
+            }
+        }
+
+        func waitForIdle() async {
+            await withCheckedContinuation { continuation in
+                queue.async { continuation.resume() }
+            }
+        }
+    }
+
+    private func startLoad() {
+        isLoadingConfiguration = true
         // No callback from the previous snapshot may change the newly loaded one.
         probeGeneration = UUID()
         probes.values.forEach { $0.cancel() }
         probes.removeAll()
         probeIDs.removeAll()
+        let task = Task { [weak self] in
+            let outcome = await Self.loadConfigurationOffMain()
+            guard let self else { return }
+            self.isLoadingConfiguration = false
+            switch outcome {
+            case .loaded(let loadedCustoms, let nextConnections, let nextStates, let resolvedServers):
+                self.customs = loadedCustoms
+                self.connections = nextConnections
+                self.states = nextStates
+                self.drafts.removeAll()
+                self.configurationLoadError = nil
+                self.hasLoadedConfiguration = true
+                // Up before anything resolves a route to it: the probe, the hub and every launch
+                // reach signed-in servers through the proxy. `MCPProxy.port` was loaded off-main.
+                MCPProxy.shared.start()
+                self.exportAll(preResolved: resolvedServers, reloadHub: false)
+                await self.persistence.waitForIdle()
+                await MCPHub.shared.reload()
+            case .failed(let error):
+                self.configurationLoadError = error
+                self.hasLoadedConfiguration = true
+            }
+        }
+        readyTask = task
+        Self.latestReadyTask.withLock { $0 = task }
+    }
+
+    @concurrent
+    nonisolated private static func loadConfigurationOffMain() async -> LoadOutcome {
         do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let loadedCustoms = try readConfiguration([MCPCustomServer].self, at: MCPPaths.customsURL, decoder: decoder) ?? []
-            let loadedConnections = try readConfiguration([MCPConnection].self, at: MCPPaths.connectionsURL, decoder: decoder) ?? []
+            let loadedCustoms = try readConfiguration([MCPCustomServer].self, at: MCPPaths.customsURL, decoder: .storage) ?? []
+            let loadedConnections = try readConfiguration([MCPConnection].self, at: MCPPaths.connectionsURL, decoder: .storage) ?? []
             var nextConnections: [String: MCPConnection] = [:]
             var nextStates: [String: MCPConnectionState] = [:]
             for connection in loadedConnections {
@@ -300,19 +416,31 @@ final class MCPStore {
                     nextStates[connection.catalogID] = .connected(toolCount: connection.tools.count)
                 }
             }
-            customs = loadedCustoms
-            connections = nextConnections
-            states = nextStates
-            drafts.removeAll()
-            configurationLoadError = nil
+            // Warm the proxy port (reads/writes `proxy-port`) off-main before resolving OAuth routes.
+            _ = MCPProxy.port
+            let resolvedServers: [MCPResolvedServer] = nextConnections.values
+                .filter { $0.isEnabled && $0.connectedAt != nil }
+                .compactMap { connection in
+                    let entry = loadedCustoms.first { $0.id == connection.catalogID }?.catalogEntry()
+                        ?? MCPCatalog.entry(id: connection.catalogID)
+                    guard let entry else { return nil }
+                    return resolveServer(entry, plainValues: connection.values)
+                }
+                .sorted { $0.id < $1.id }
+            return .loaded(
+                customs: loadedCustoms,
+                connections: nextConnections,
+                states: nextStates,
+                resolvedServers: resolvedServers
+            )
         } catch let error as ConfigurationLoadError {
-            configurationLoadError = error
+            return .failed(error)
         } catch {
-            configurationLoadError = ConfigurationLoadError(url: MCPPaths.connectionsURL, isReadFailure: true)
+            return .failed(ConfigurationLoadError(url: MCPPaths.connectionsURL, isReadFailure: true))
         }
     }
 
-    private func readConfiguration<Value: Decodable>(_ type: Value.Type, at url: URL, decoder: JSONDecoder) throws -> Value? {
+    nonisolated private static func readConfiguration<Value: Decodable>(_ type: Value.Type, at url: URL, decoder: JSONDecoder) throws -> Value? {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -332,36 +460,47 @@ final class MCPStore {
         }
     }
 
+    nonisolated private static func resolveServer(_ entry: MCPCatalogEntry, plainValues: [String: String]) -> MCPResolvedServer {
+        var values = plainValues
+        for field in entry.fields where field.kind == .secret {
+            if let secret = MCPKeychain.value(server: entry.id, field: field.key) {
+                values[field.key] = secret
+            }
+        }
+        return entry.resolve(values: values)
+    }
+
+    @concurrent
+    nonisolated private static func resolveServerOffMain(_ entry: MCPCatalogEntry, plainValues: [String: String]) async -> MCPResolvedServer {
+        resolveServer(entry, plainValues: plainValues)
+    }
+
     private func save() {
         guard isConfigurationLoaded else { return }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
         let list = connections.values.sorted { $0.catalogID < $1.catalogID }
-        guard let data = try? encoder.encode(list) else { return }
-        try? data.write(to: MCPPaths.connectionsURL, options: .atomic)
+        persistence.writeConnections(list)
     }
 
     private func saveCustoms() {
         guard isConfigurationLoaded else { return }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(customs) else { return }
-        try? data.write(to: MCPPaths.customsURL, options: .atomic)
+        persistence.writeCustoms(customs)
     }
 
-    /// Rewrites every provider's config from `enabledServers`.
-    private func exportAll() {
+    /// Rewrites every provider's config from the current enabled servers on the background writer queue.
+    private func exportAll(preResolved: [MCPResolvedServer]? = nil, reloadHub: Bool = true) {
         guard isConfigurationLoaded else { return }
-        let servers = enabledServers
-        // The proxy's routes follow the enabled list: one per signed-in server.
-        MCPProxy.shared.replaceAll(servers.compactMap { server in
-            guard let remote = server.oauthUpstream else { return nil }
-            return (serverID: server.id, upstream: remote, headers: [:], usesOAuth: true)
-        })
-        MCPProviderConfig.writeAll(servers)
-        // The in-app clients (API providers) pick the new list up on their next use.
-        Task { await MCPHub.shared.reload() }
+        let targets: [ExportTarget]
+        if preResolved != nil {
+            targets = []
+        } else {
+            targets = connections.values
+                .filter { $0.isEnabled && $0.connectedAt != nil }
+                .compactMap { connection in
+                    guard let entry = entry(for: connection.catalogID) else { return nil }
+                    return ExportTarget(entry: entry, plainValues: connection.values)
+                }
+        }
+        persistence.export(targets, preResolved: preResolved, reloadHub: reloadHub)
     }
 
     /// Non-secret values from the connection, overlaid with the Keychain's secrets.
@@ -403,10 +542,11 @@ final class MCPStore {
         let generation = probeGeneration
         let probeID = UUID()
         probeIDs[entry.id] = probeID
+        let plainValues = connections[entry.id]?.values ?? [:]
         probes[entry.id] = Task {
             do {
                 try requireCurrentProbe(entry.id, generation: generation, probeID: probeID)
-                let resolved = entry.resolve(values: storedValues(for: entry))
+                let resolved = await Self.resolveServerOffMain(entry, plainValues: plainValues)
                 let result: MCPProbeResult
                 do {
                     result = try await probeOnce(entry, resolved: resolved, generation: generation, probeID: probeID)

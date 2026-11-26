@@ -59,6 +59,37 @@ private func copyActions(text: String, selection: SelectionCopy) -> [RowAction] 
     ]
 }
 
+/// Maps branch failures to catalog keys; unknown errors fall back to their description.
+private func branchErrorMessage(for error: Error) -> String {
+    if let failure = error as? ThreadBranchFailure {
+        switch failure {
+        case .busy:
+            return "Wait for the current reply to finish before branching."
+        case .unavailablePoint, .notFound:
+            return "This message can no longer be branched from."
+        case .directoryUnavailable:
+            return "The chat's folder is unavailable."
+        }
+    }
+    return error.localizedDescription
+}
+
+/// Builds a popover callback that branches the thread without retaining row state.
+@MainActor
+private func branchAction(model: AppModel, sourceID: UUID, point: ThreadBranchPoint) -> @MainActor () -> Void {
+    { [weak model, sourceID, point] in
+        guard let model else { return }
+        Task { @MainActor [weak model] in
+            guard let model else { return }
+            do {
+                _ = try await model.branchThread(from: sourceID, at: point)
+            } catch {
+                model.alert = AppAlert(title: "Could not branch chat", message: branchErrorMessage(for: error))
+            }
+        }
+    }
+}
+
 /// Carries a message row's context-menu intents outside its @State, the way the sidebar's
 /// menuRequests does: the AppKit menu outlives the right-click, so its callbacks must not
 /// retain the row. The row takes the request up below.
@@ -75,6 +106,7 @@ struct UserMessageRow: View {
     let canRevert: Bool
     var turnHasOutput = false
 
+    @Environment(AppModel.self) private var model
     @Environment(\.revealTimelineEnd) private var revealBox
     @Environment(\.timelineBlockID) private var blockID
     @State private var fallbackExpanded = false
@@ -214,11 +246,16 @@ struct UserMessageRow: View {
             // capture the row, so the popover cannot pin the row's state storage
             // after dismiss. The revert intent goes through the binding alone, the
             // way the hover responder does below.
-            .rightClickPopover { [message, canRevert, confirming = $menuRequests.confirmRevert] selection in
-                Self.messageActions(
-                    text: message.text,
+            .rightClickPopover { [text = message.text, turnID = entry.turnID, canRevert, confirming = $menuRequests.confirmRevert, weak runtime, weak model] selection in
+                var onBranch: (@MainActor () -> Void)?
+                if let turnID, let runtime, let model, runtime.canBranch(at: .before(turnID: turnID)) {
+                    onBranch = branchAction(model: model, sourceID: runtime.threadID, point: .before(turnID: turnID))
+                }
+                return Self.messageActions(
+                    text: text,
                     canRevert: canRevert,
                     confirmRevert: confirming,
+                    onBranch: onBranch,
                     selection: selection
                 )
             }
@@ -259,12 +296,23 @@ struct UserMessageRow: View {
 
     /// The context menu's items, from value snapshots with weak captures: the AppKit menu
     /// outlives the right-click, so its callbacks must not retain the row.
-    private static func messageActions(text: String, canRevert: Bool, confirmRevert: Binding<Bool>, selection: SelectionCopy) -> [RowAction] {
+    private static func messageActions(
+        text: String,
+        canRevert: Bool,
+        confirmRevert: Binding<Bool>,
+        onBranch: (@MainActor () -> Void)? = nil,
+        selection: SelectionCopy
+    ) -> [RowAction] {
         var items = copyActions(text: text, selection: selection)
+        var startsGroup = true
         if canRevert {
-            items.append(RowAction(title: "Edit from here", symbol: "arrow.uturn.backward", startsGroup: true) { [confirm = confirmRevert] in
+            items.append(RowAction(title: "Edit from here", symbol: "arrow.uturn.backward", startsGroup: startsGroup) { [confirm = confirmRevert] in
                 confirm.wrappedValue = true
             })
+            startsGroup = false
+        }
+        if let onBranch {
+            items.append(RowAction(title: "Branch from here", symbol: "arrow.triangle.branch", startsGroup: startsGroup, action: onBranch))
         }
         return items
     }
@@ -1472,7 +1520,7 @@ struct AssistantMessageRow: View {
             .onHover { [hovering = $isHovering] isOver in
                 withAnimation(.easeOut(duration: 0.12)) { hovering.wrappedValue = isOver }
             }
-            .messageMenu(text: message.text, runtime: runtime)
+            .messageMenu(text: message.text, runtime: runtime, turnID: entry.turnID)
             // Same trade as the user row: the hover line's room stays inside the row
             // (so hovering it works and text never moves), but not in its height, so
             // the controls fill the gap below instead of adding to it. (2 = the
@@ -1483,7 +1531,12 @@ struct AssistantMessageRow: View {
 
     /// The context menu's items, from value snapshots with weak captures: the AppKit menu
     /// outlives the right-click, so its callbacks must not retain the row.
-    static func messageActions(text: String, runtime: ThreadRuntime, selection: SelectionCopy) -> [RowAction] {
+    static func messageActions(
+        text: String,
+        runtime: ThreadRuntime,
+        selection: SelectionCopy,
+        onBranch: (@MainActor () -> Void)? = nil
+    ) -> [RowAction] {
         let quoteSnapshot = selection.text ?? text
         var items = copyActions(text: text, selection: selection)
         items.append(RowAction(title: "Add to reply", symbol: "arrow.turn.down.left", startsGroup: true, confirms: "Added") { [weak runtime] in
@@ -1491,34 +1544,57 @@ struct AssistantMessageRow: View {
             guard !runtime.draft.quotes.contains(where: { $0.text == quoteSnapshot }) else { return }
             runtime.draft.quotes.append(ReplyQuote(text: quoteSnapshot))
         })
+        if let onBranch {
+            items.append(RowAction(title: "Branch from here", symbol: "arrow.triangle.branch", action: onBranch))
+        }
         return items
     }
 }
 
-extension View {
-    /// The right-click popover of a reply, opened at the pointer, wherever its text
-    /// is shown: copy, and quoting it into the chat box.
-    /// Snapshots only: the popover builder must not capture the
-    /// row, so the popover cannot pin the row's state storage after dismiss.
-    func messageMenu(text: String, runtime: ThreadRuntime) -> some View {
-        rightClickPopover { [text, runtime] selection in
-            AssistantMessageRow.messageActions(
+private struct ReplyMessageMenuModifier: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let text: String
+    let runtime: ThreadRuntime
+    let turnID: UUID?
+
+    func body(content: Content) -> some View {
+        // Snapshots and weak refs only: the popover builder must not capture the
+        // row, so the popover cannot pin the row's state storage after dismiss.
+        content.rightClickPopover { [text, turnID, weak runtime, weak model] selection in
+            guard let runtime else { return copyActions(text: text, selection: selection) }
+            var onBranch: (@MainActor () -> Void)?
+            if let turnID, let model, runtime.canBranch(at: .through(turnID: turnID)) {
+                onBranch = branchAction(model: model, sourceID: runtime.threadID, point: .through(turnID: turnID))
+            }
+            return AssistantMessageRow.messageActions(
                 text: text,
                 runtime: runtime,
-                selection: selection
+                selection: selection,
+                onBranch: onBranch
             )
         }
     }
 }
 
+extension View {
+    /// The right-click popover of a reply, opened at the pointer, wherever its text
+    /// is shown: copy, quoting it into the chat box, and branching from its turn.
+    /// Snapshots only: the popover builder must not capture the
+    /// row, so the popover cannot pin the row's state storage after dismiss.
+    func messageMenu(text: String, runtime: ThreadRuntime, turnID: UUID? = nil) -> some View {
+        modifier(ReplyMessageMenuModifier(text: text, runtime: runtime, turnID: turnID))
+    }
+}
+
 private struct FoldedAnswerView: View {
     let parts: [String]
+    let turnID: UUID?
     let runtime: ThreadRuntime
 
     var body: some View {
         let text = parts.joined(separator: "\n\n")
         MarkdownView(text: text, parts: parts.count > 1 ? parts : nil).equatable()
-            .messageMenu(text: text, runtime: runtime)
+            .messageMenu(text: text, runtime: runtime, turnID: turnID)
     }
 }
 
@@ -2914,7 +2990,7 @@ struct TurnFinishedBlock: View {
                             case .assistant:
                                 // The finished turn's consecutive replies as one text, so a selection
                                 // runs across them; the same menu as a reply row.
-                                FoldedAnswerView(parts: part.parts, runtime: runtime)
+                                FoldedAnswerView(parts: part.parts, turnID: entry.turnID ?? turnID, runtime: runtime)
                             case .plan:
                                 PlanCard(entry: entry, runtime: runtime)
                             default:
@@ -2992,6 +3068,46 @@ private struct TurnStepGroupRow: View {
             // Never among the steps: the heads list below shows them.
             EmptyView()
         }
+    }
+}
+
+@MainActor
+private enum HydraReviewCache {
+    private static var itemsCache = RecentCache<String, [HydraReviewVerdicts.Item]>(
+        limit: 64, costLimit: 4_194_304, entryCostLimit: 1_048_576
+    )
+    private static var inlineCache = RecentCache<String, AttributedString>(
+        limit: 256, costLimit: 2_097_152, entryCostLimit: 131_072
+    )
+    private static var memoryPressureObserver: (any NSObjectProtocol)?
+
+    private static func armMemoryPressureIfNeeded() {
+        guard memoryPressureObserver == nil else { return }
+        memoryPressureObserver = NotificationCenter.default.addObserver(
+            forName: .memoryPressure, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                itemsCache = RecentCache(limit: 64, costLimit: 4_194_304, entryCostLimit: 1_048_576)
+                inlineCache = RecentCache(limit: 256, costLimit: 2_097_152, entryCostLimit: 131_072)
+            }
+        }
+    }
+
+    static func items(for reply: String) -> [HydraReviewVerdicts.Item] {
+        armMemoryPressureIfNeeded()
+        if let cached = itemsCache.value(for: reply) { return cached }
+        let parsed = HydraReviewVerdicts.items(reply)
+        itemsCache.insert(parsed, for: reply, cost: max(64, reply.utf8.count))
+        return parsed
+    }
+
+    static func inlineMarkdown(for text: String) -> AttributedString {
+        armMemoryPressureIfNeeded()
+        if let cached = inlineCache.value(for: text) { return cached }
+        let built = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+        inlineCache.insert(built, for: text, cost: max(64, text.utf8.count * 2))
+        return built
     }
 }
 
@@ -3137,8 +3253,7 @@ struct HydraReviewTurnCard: View {
         }
         // The one-line preview reads the explanation's inline Markdown (bold, code) rather
         // than showing its markers; the opened row renders it in full below.
-        let inline = (try? AttributedString(markdown: item.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(item.text)
+        let inline = HydraReviewCache.inlineMarkdown(for: item.text)
         let detail = Text(" ") + Text(inline)
         return Text("\(number)\(verdict)\(detail)")
     }
@@ -3177,11 +3292,22 @@ struct HydraReviewTurnCard: View {
     }
 
     var body: some View {
-        let reply = content.compactMap { entry -> String? in
-            guard case .assistant(let message) = entry.item.content else { return nil }
-            return message.text
-        }.joined(separator: "\n")
-        let items = HydraReviewVerdicts.items(reply)
+        let reply: String = {
+            var first: String?
+            var parts: [String]?
+            for entry in content {
+                guard case .assistant(let message) = entry.item.content else { continue }
+                if first == nil {
+                    first = message.text
+                } else {
+                    if parts == nil { parts = [first!] }
+                    parts!.append(message.text)
+                }
+            }
+            if let parts { return parts.joined(separator: "\n") }
+            return first ?? ""
+        }()
+        let items = HydraReviewCache.items(for: reply)
         let accepted = items.count { $0.accepted }
         let rejected = items.count - accepted
         let toggleLabel = Chrome.localized(isExpanded ? "Hide the review" : "Show the review")
@@ -3226,7 +3352,7 @@ struct HydraReviewTurnCard: View {
                         }
                     } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: "checkmark.shield")
+                            Image(systemName: "checkmark.seal")
                                 .font(.chat(.callout))
                                 .frame(width: TimelineMetrics.iconWidth)
                                 .foregroundStyle(Chrome.secondaryText)
@@ -3385,7 +3511,7 @@ struct HydraReviewTurnCard: View {
                                         VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
                                             ForEach(stepGroups) { group in
                                                 if case .single(let entry) = group, case .assistant(let message) = entry.item.content {
-                                                    FoldedAnswerView(parts: [HydraReviewVerdicts.strippingVerdictLines(message.text)], runtime: runtime)
+                                                    FoldedAnswerView(parts: [HydraReviewVerdicts.strippingVerdictLines(message.text)], turnID: entry.turnID ?? turnID, runtime: runtime)
                                                 } else {
                                                     TurnStepGroupRow(group: group, runtime: runtime, workingDirectory: workingDirectory)
                                                 }
@@ -3431,7 +3557,7 @@ struct HydraReviewTurnCard: View {
             }
 
             if !summaryText.isEmpty {
-                FoldedAnswerView(parts: [summaryText], runtime: runtime)
+                FoldedAnswerView(parts: [summaryText], turnID: turnID, runtime: runtime)
                     .padding(.top, TimelineMetrics.rowSpacing)
             }
 

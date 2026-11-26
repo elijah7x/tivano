@@ -112,6 +112,7 @@ def generated_source():
         "    private func answerDeliveryHandler() -> @MainActor (Bool) -> Void {\n"
         "        { [weak self] succeeded in if !succeeded { self?.deliveryFailures += 1 } }\n"
         "    }\n}\n",
+        declaration("Tivano/Core/Support/Text.swift", "enum AppText {"),
         declaration("Tivano/UI/Chrome/Chrome.swift", "enum Chrome {"),
         read("Tivano/UI/Theme/AppTheme.swift"),
         read("Tivano/UI/Theme/ThemeStyle.swift"),

@@ -106,25 +106,53 @@ enum ProductCaptures {
         }
         // 4. capture-slider: zoomed on the effort card hanging from the composer's chip.
         await capture(model, stage, recorder, name: "capture-slider", backdrop: .slider, size: NSSize(width: 960, height: 600)) {
-            if let pair = model.settings.hydraPairs.first {
+            if let pair: HydraPair = model.settings.hydraPairs.first {
                 model.enterHydraPair(pair, for: WebsiteCaptures.freshThreadID)
             }
-            model.updateThread(WebsiteCaptures.freshThreadID) { $0.effort = "max" }
-            guard let thread = model.thread(WebsiteCaptures.freshThreadID) else { return nil }
-            let option = model.providers.model(thread.model, for: thread.provider)
-            let pair = model.settings.hydraPair(thread.hydraPairID).map { EffortPairLook($0, registry: model.providers, resolvedHeadsEffort: nil) }
+            model.updateThread(WebsiteCaptures.freshThreadID) { (thread: inout ChatThread) in thread.effort = "max" }
+            guard let thread: ChatThread = model.thread(WebsiteCaptures.freshThreadID) else { return nil }
+            let option: ModelOption? = model.providers.model(thread.model, for: thread.provider)
+            let pair: EffortPairLook? = model.settings.hydraPair(thread.hydraPairID).map { (hydraPair: HydraPair) -> EffortPairLook in
+                EffortPairLook(hydraPair, registry: model.providers, resolvedHeadsEffort: nil)
+            }
+            let modelName: String
+            if let shortName: String = option?.shortName {
+                modelName = shortName
+            } else if let threadModel: String = thread.model {
+                modelName = threadModel
+            } else {
+                modelName = thread.provider.displayName
+            }
+            let efforts: [String] = option?.efforts ?? []
+            let supportsFast: Bool = option?.supportsFast ?? false
+            let effortBinding = Binding<String?>(
+                get: { model.thread(WebsiteCaptures.freshThreadID)?.effort },
+                set: { (effort: String?) in
+                    model.updateThread(WebsiteCaptures.freshThreadID) { (chatThread: inout ChatThread) in
+                        chatThread.effort = effort
+                    }
+                }
+            )
+            let fastModeBinding = Binding<Bool>(
+                get: { model.thread(WebsiteCaptures.freshThreadID)?.fastMode ?? false },
+                set: { (on: Bool) in
+                    model.updateThread(WebsiteCaptures.freshThreadID) { (chatThread: inout ChatThread) in
+                        chatThread.fastMode = on
+                    }
+                }
+            )
             let card = EffortSliderCard(
-                modelName: option?.shortName ?? thread.model ?? thread.provider.displayName,
+                modelName: modelName,
                 provider: thread.provider,
                 pair: pair,
-                efforts: option?.efforts ?? [],
+                efforts: efforts,
                 defaultEffort: option?.defaultEffort,
-                supportsFast: option?.supportsFast ?? false,
-                effort: Binding(get: { model.thread(WebsiteCaptures.freshThreadID)?.effort }, set: { effort in model.updateThread(WebsiteCaptures.freshThreadID) { $0.effort = effort } }),
-                fastMode: Binding(get: { model.thread(WebsiteCaptures.freshThreadID)?.fastMode ?? false }, set: { on in model.updateThread(WebsiteCaptures.freshThreadID) { $0.fastMode = on } }),
+                supportsFast: supportsFast,
+                effort: effortBinding,
+                fastMode: fastModeBinding,
                 onTitleTap: {}
             )
-            let popover = stage.presentPopover(card.environment(model), width: 330, chipOf: WebsiteCaptures.freshThreadID)
+            let popover: NSPopover = stage.presentPopover(card.environment(model), width: 330, chipOf: WebsiteCaptures.freshThreadID)
             await stage.holdPopover(popover, seconds: 2.0)
             return popover
         }
@@ -134,9 +162,9 @@ enum ProductCaptures {
             if model.sidebar.isVisible { model.sidebar.toggle() }
             model.selectedThreadID = WebsiteCaptures.composerThreadID
             try? await Task.sleep(for: .milliseconds(900))
-            let width = model.sidebar.width
+            let width: CGFloat = model.sidebar.width
             let list = SidebarView(inPopover: true, dismiss: {}).frame(width: width, height: 560).presentedChrome().environment(model)
-            let popover = stage.presentPopover(list, width: width, chipOf: WebsiteCaptures.composerThreadID, at: WebsiteCaptures.threadsButtonFrame)
+            let popover: NSPopover = stage.presentPopover(list, width: width, chipOf: WebsiteCaptures.composerThreadID, at: WebsiteCaptures.threadsButtonFrame)
             await stage.holdPopover(popover, seconds: 2.0)
             return popover
         }
@@ -148,7 +176,7 @@ enum ProductCaptures {
             try? await Task.sleep(for: .milliseconds(900))
             // The panel sizes itself (460 by 540); the popover takes that width whole.
             let panel = HydraCookbookPanel().environment(model)
-            let popover = stage.presentPopover(panel, width: 460, chipOf: WebsiteCaptures.freshThreadID)
+            let popover: NSPopover = stage.presentPopover(panel, width: 460, chipOf: WebsiteCaptures.freshThreadID)
             await stage.holdPopover(popover, seconds: 2.0)
             return popover
         }

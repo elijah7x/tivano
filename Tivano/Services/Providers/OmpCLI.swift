@@ -1,53 +1,5 @@
 import Foundation
 
-private struct OmpCatalogProbeKey: Hashable {
-    let executable: String
-    let environment: String
-
-    init(executable: URL, environment: [String: String]) {
-        self.executable = executable.resolvingSymlinksInPath().standardizedFileURL.path
-        self.environment = environment.sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }
-            .joined(separator: "\0")
-    }
-}
-
-private actor OmpCatalogProbeCache {
-    struct Entry {
-        let key: OmpCatalogProbeKey
-        let task: Task<[JSONValue], Error>
-        var completedAt: Date?
-    }
-
-    var entry: Entry?
-
-    func reset(key: OmpCatalogProbeKey) {
-        if entry?.key == key { entry = nil }
-    }
-
-    func catalog(
-        key: OmpCatalogProbeKey,
-        force: Bool,
-        operation: @escaping @Sendable () async throws -> [JSONValue]
-    ) async throws -> [JSONValue] {
-        if force { entry = nil }
-        if let entry, entry.key == key,
-           entry.completedAt.map({ (0..<5).contains(Date.now.timeIntervalSince($0)) }) ?? true {
-            return try await entry.task.value
-        }
-        let task = Task { try await operation() }
-        entry = Entry(key: key, task: task, completedAt: nil)
-        do {
-            let models = try await task.value
-            if entry?.task == task { entry?.completedAt = .now }
-            return models
-        } catch {
-            if entry?.task == task { entry = nil }
-            throw error
-        }
-    }
-}
-
 /// The small surface Tivano needs of omp (oh-my-pi, `omp`, https://omp.sh): whether
 /// it is signed in, its model catalog, and the two files Tivano installs for its
 /// sessions.
@@ -58,25 +10,24 @@ private actor OmpCatalogProbeCache {
 enum OmpCLI {
     /// omp's `--thinking` levels, which Tivano's effort strings map to 1:1. omp has an
     /// `auto` of its own that the effort slider does not offer.
-    static let thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+    static let thinkingLevels = PiCLISupport.thinkingLevels
 
     /// Where the MCP extension and the settings file live.
     static var supportDirectory: URL {
         StoragePaths.directory("omp")
     }
 
-    private static let catalogProbeCache = OmpCatalogProbeCache()
+    private static let catalogProbeCache = CLIProbeCache<[JSONValue]>()
 
     static func beginCatalogProbeCycle(executable: URL, environment: [String: String]) async {
-        await catalogProbeCache.reset(key: OmpCatalogProbeKey(executable: executable, environment: environment))
+        await catalogProbeCache.reset(key: CLIProbeKey(executable: executable, environment: environment))
     }
 
     /// Distinct provider names with at least one usable model, else signed out; unknown
     /// when omp could not be asked.
     static func authStatus(executable: URL, environment: [String: String]) async -> ProviderStatus.Auth {
         guard let models = try? await catalog(executable: executable, environment: environment) else { return .unknown }
-        let providers = Set(models.compactMap { $0["provider"]?.string }).sorted()
-        return providers.isEmpty ? .signedOut : .signedIn(providers.joined(separator: ", "))
+        return PiCLISupport.authStatus(providers: models.compactMap { $0["provider"]?.string })
     }
 
     /// The chat models omp can use, with the model omp itself is set to marked as the default.
@@ -88,32 +39,25 @@ enum OmpCLI {
         async let current = currentModel(executable: executable, environment: environment)
         let items = try await catalog(executable: executable, environment: environment, force: force)
         let currentSelector = await current
-        var options: [ModelOption] = []
-        for item in items {
-            guard let provider = item["provider"]?.string, let id = item["id"]?.string else { continue }
-            let fullID = "\(provider)/\(id)"
-            // The model's own effort levels; a model that does not reason has none.
-            let efforts = (item["thinking"]?.array ?? []).compactMap(\.string)
-            options.append(ModelOption(
-                id: fullID,
-                name: item["name"]?.string ?? id,
-                detail: provider,
-                efforts: efforts,
-                defaultEffort: efforts.contains("medium") ? "medium" : efforts.first,
-                isDefault: fullID == currentSelector
-            ))
-        }
-        guard !options.isEmpty else {
-            throw ProviderError.failed(String(localized: "omp listed no models."))
-        }
-        return options.sorted { ($0.detail ?? "", $0.name) < ($1.detail ?? "", $1.name) }
+        return try PiCLISupport.modelOptions(
+            from: items,
+            emptyError: String(localized: "omp listed no models."),
+            efforts: { item in
+                // The model's own effort levels; a model that does not reason has none.
+                let efforts = (item["thinking"]?.array ?? []).compactMap(\.string)
+                return (efforts, efforts.contains("medium") ? "medium" : efforts.first)
+            },
+            isDefault: { _, _, fullID in
+                fullID == currentSelector
+            }
+        )
     }
 
     /// `omp models --json`: no session and no frame size limit, unlike the same list over RPC.
     private static func catalog(executable: URL, environment: [String: String], force: Bool = false) async throws -> [JSONValue] {
-        let key = OmpCatalogProbeKey(executable: executable, environment: environment)
-        return try await catalogProbeCache.catalog(key: key, force: force) {
-            let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? LoginEnvironment.homeDirectory
+        let key = CLIProbeKey(executable: executable, environment: environment)
+        return try await catalogProbeCache.value(key: key, force: force) {
+            let home = PiCLISupport.homeDirectory(environment: environment)
             let result = try await Shell.run(
                 executable,
                 ["models", "--json", "--no-extensions"],
@@ -130,48 +74,16 @@ enum OmpCLI {
 
     /// `provider/id` of the model omp starts on, from a throwaway `omp --mode rpc` process.
     private static func currentModel(executable: URL, environment: [String: String]) async -> String? {
-        let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? LoginEnvironment.homeDirectory
-        let process = StdioProcess(
+        guard let responses = try? await PiCLISupport.probeRPC(
             executable: executable,
             arguments: ["--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--no-rules"],
-            directory: URL(fileURLWithPath: home),
             environment: environment,
-            framing: .lines
-        )
-        do {
-            try process.start()
-        } catch {
+            requests: [(id: "state", type: "get_state")],
+            timeout: .seconds(20)
+        ) else {
             return nil
         }
-        process.send(["type": "get_state", "id": "state"])
-        let timeout = Task {
-            try? await Task.sleep(for: .seconds(20))
-            process.terminate()
-        }
-        var selector: String?
-        for await message in process.messages where message["id"]?.string == "state" {
-            if let model = (message["data"] ?? message)["model"],
-               let provider = model["provider"]?.string, let id = model["id"]?.string {
-                selector = "\(provider)/\(id)"
-            }
-            break
-        }
-        timeout.cancel()
-        process.terminate()
-        return selector
-    }
-
-    /// Writes `text` into the support directory and returns its path. Rewritten only when
-    /// the text changed, so a new build's file replaces the old one.
-    private static func install(_ name: String, _ text: String) throws -> URL {
-        let directory = supportDirectory
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent(name)
-        let data = Data(text.utf8)
-        if (try? Data(contentsOf: file)) != data {
-            try data.write(to: file, options: .atomic)
-        }
-        return file
+        return PiCLISupport.stateModel(from: responses["state"]).map { "\($0.provider)/\($0.id)" }
     }
 
     /// The settings overlay one session runs with (`--config`), a file of its own because
@@ -189,27 +101,20 @@ enum OmpCLI {
     /// chat in a project opens with another chat's conversation in it. Off here.
     static func writeLaunchSettings(id: String) throws -> URL {
         let lines = ["autoResume: false", "bash:", "  autoBackground:", "    enabled: false", "async:", "  enabled: false", "task:", "  maxRecursionDepth: 1"]
-        let file = try launchDirectory("launch").appendingPathComponent("\(id).yml")
+        let file = try PiCLISupport.subdirectory("launch", in: supportDirectory).appendingPathComponent("\(id).yml")
         try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: file, options: .atomic)
         return file
     }
 
     /// Where this launch's gate file goes (see `OmpSession.writeGate`); the session writes it.
     static func gateFile(id: String) throws -> URL {
-        try launchDirectory("gates").appendingPathComponent("\(id).json")
-    }
-
-    /// Each session owns its files until it stops; age alone cannot identify an inactive session.
-    private static func launchDirectory(_ name: String) throws -> URL {
-        let directory = supportDirectory.appendingPathComponent(name, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
+        try PiCLISupport.subdirectory("gates", in: supportDirectory).appendingPathComponent("\(id).json")
     }
 
     /// Writes the gate extension where omp can load it with `-e` and returns its path. Rewritten
     /// only when its text changed, so a new build's extension replaces the old one.
     static func installExtension() throws -> URL {
-        try install("tivano-gate.ts", extensionSource)
+        try PiCLISupport.installFile(in: supportDirectory, named: "tivano-gate.ts", contents: extensionSource)
     }
 
     /// The name of the slash command the gate extension registers. Its presence in omp's command

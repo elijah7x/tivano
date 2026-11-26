@@ -642,9 +642,6 @@ struct SettingsSwitch: View {
     }
 }
 
-typealias DefaultModelPickerButton = ModelChoiceButton
-typealias DefaultModelPopover = NewThreadModelPicker
-
 struct ModelChoiceButton<Popover: View>: View {
     let title: String
     let help: String
@@ -741,137 +738,212 @@ struct NewThreadModelPicker: View {
     }
 
     var body: some View {
-        let registry = model.providers
-        let providers = registry.availableProviders.filter { allowedProviders?.contains($0) ?? true }
-        let provider = selectedProvider.flatMap { providers.contains($0) ? $0 : nil }
-        let providerPrompt = selectedProvider.map {
-            String(format: Chrome.localized("%@ (unavailable)"), $0.displayName)
+        let registry: ProviderRegistry = model.providers
+        let providers: [ProviderKind] = registry.availableProviders.filter { (kind: ProviderKind) -> Bool in
+            allowedProviders?.contains(kind) ?? true
+        }
+        let provider: ProviderKind? = selectedProvider.flatMap { (kind: ProviderKind) -> ProviderKind? in
+            providers.contains(kind) ? kind : nil
+        }
+        let providerPrompt: String = selectedProvider.map { (kind: ProviderKind) -> String in
+            String(format: Chrome.localized("%@ (unavailable)"), kind.displayName)
         } ?? Chrome.localized("Choose a provider")
-        let providerOptions = (provider == nil ? [(ProviderKind?.none, providerPrompt)] : [])
-            + providers.map { (Optional($0), $0.displayName) }
-        let options = provider.map { model.pickerModels(for: $0, keeping: selectedModelID.map { Set([$0]) } ?? []) } ?? []
-        let selectedOption = selection?.provider == provider
-            ? options.first { $0.id == selectedModelID }
+        let providerLeadOption: [(value: ProviderKind?, title: String)] = provider == nil ? [(value: nil, title: providerPrompt)] : []
+        let providerOptions: [(value: ProviderKind?, title: String)] = providerLeadOption
+            + providers.map { (kind: ProviderKind) -> (value: ProviderKind?, title: String) in (value: Optional(kind), title: kind.displayName) }
+        let keptModelIDs: Set<String> = selectedModelID.map { (id: String) -> Set<String> in Set([id]) } ?? []
+        let options: [ModelOption] = provider.map { (kind: ProviderKind) -> [ModelOption] in
+            model.pickerModels(for: kind, keeping: keptModelIDs)
+        } ?? []
+        let selectedOption: ModelOption? = selection?.provider == provider
+            ? options.first { (option: ModelOption) -> Bool in option.id == selectedModelID }
             : nil
-        let modelTitle = selectedOption?.name ?? Chrome.localized("Choose a model")
-        let effortTitle = Chrome.localized(ModelOption.effortTitle(
-            selection?.effort.flatMap { selectedOption?.efforts.contains($0) == true ? $0 : nil }
-                ?? selectedOption?.defaultEffort ?? ""
-        ))
-        let isLoading = provider.map { registry.loadingCatalogs.contains($0) } ?? false
-        let error = provider.flatMap { registry.status($0).catalogError }
+        let modelTitle: String = selectedOption?.name ?? Chrome.localized("Choose a model")
+        let selectedEffort: String? = selection?.effort.flatMap { (effort: String) -> String? in
+            selectedOption?.efforts.contains(effort) == true ? effort : nil
+        }
+        let effortTitle: String = Chrome.localized(ModelOption.effortTitle(selectedEffort ?? selectedOption?.defaultEffort ?? ""))
+        let isLoading: Bool = provider.map { (kind: ProviderKind) -> Bool in registry.loadingCatalogs.contains(kind) } ?? false
+        let error: String? = provider.flatMap { (kind: ProviderKind) -> String? in registry.status(kind).catalogError }
+        let topPadding: CGFloat = showsAutomaticChoice ? 0 : 6
         VStack(alignment: .leading, spacing: 0) {
             if showsAutomaticChoice {
-                PopoverItem(automaticTitle, isChecked: selection == nil && !offSelected) {
-                    select(nil)
-                }
-                .padding(.horizontal, 6)
-                .padding(.top, 6)
-                if let selectOff {
-                    PopoverItem("Off", isChecked: offSelected, action: selectOff)
-                        .padding(.horizontal, 6)
-                }
-                Divider()
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 5)
-                // Shares the Last selection row's checkmark column so the two choices read as peers.
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark")
-                        .font(.ui(.subheadline, weight: .semibold))
-                        .foregroundStyle(Chrome.primaryText)
-                        .opacity(selection == nil || offSelected ? 0 : 1)
-                        .frame(width: 14)
-                    Text(verbatim: Chrome.localized("Specific model"))
-                        .font(.ui(.subheadline, weight: .semibold))
-                        .foregroundStyle(Chrome.secondaryText)
-                }
-                .padding(.leading, 14)
-                .padding(.top, 2)
-                .padding(.bottom, 3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text("Specific model"))
-                .accessibilityAddTraits(selection == nil || offSelected ? .isHeader : [.isHeader, .isSelected])
+                automaticChoiceSection
             }
-            editorRow("Provider") {
-                GlassPickerButton(
-                    options: providerOptions,
-                    selection: Binding(
-                        get: { provider },
-                        set: { if let provider = $0 { selectedProvider = provider } }
-                    ),
-                    asset: { $0?.iconName },
-                    maxWidth: 190
-                )
-                .disabled(providers.isEmpty)
-                .help(Text(verbatim: provider?.displayName ?? providerPrompt))
-                .accessibilityLabel(Text("Provider"))
-                .accessibilityValue(Text(verbatim: provider?.displayName ?? providerPrompt))
-            }
-            editorRow("Model") {
-                GlassPickerButton(
-                    options: [(String?.none, "Choose a model")] + options.map { (Optional($0.id), $0.label(among: options)) },
-                    selection: Binding(
-                        get: { selectedOption?.id },
-                        set: { id in
-                            guard let provider, selectedProvider == provider,
-                                  registry.availableProviders.contains(provider),
-                                  let id, let option = options.first(where: { $0.id == id }) else { return }
-                            let effort = selection?.effort.flatMap { option.efforts.contains($0) ? $0 : nil }
-                            select(NewThreadModelSelection(provider: provider, modelID: id, effort: effort))
-                        }
-                    ),
-                    maxWidth: 190
-                )
-                .disabled(options.isEmpty)
-                .help(Text(verbatim: modelTitle))
-                .accessibilityLabel(Text("Model"))
-                .accessibilityValue(Text(verbatim: modelTitle))
-            }
+            providerPickerRow(
+                providers: providers,
+                provider: provider,
+                providerPrompt: providerPrompt,
+                providerOptions: providerOptions
+            )
+            modelPickerRow(
+                registry: registry,
+                provider: provider,
+                options: options,
+                selectedOption: selectedOption,
+                modelTitle: modelTitle
+            )
             if let selectedOption, !selectedOption.efforts.isEmpty {
-                editorRow("Reasoning effort") {
-                    GlassPickerButton(
-                        options: [(String?.none, "Default")] + selectedOption.efforts.map { (Optional($0), ModelOption.effortTitle($0)) },
-                        selection: Binding(
-                            get: { selection?.effort.flatMap { selectedOption.efforts.contains($0) ? $0 : nil } },
-                            set: { effort in
-                                guard let selection else { return }
-                                select(NewThreadModelSelection(provider: selection.provider, modelID: selection.modelID, effort: effort))
-                            }
-                        ),
-                        maxWidth: 190
-                    )
-                    .help(Text(verbatim: effortTitle))
-                    .accessibilityLabel(Text("Reasoning effort"))
-                    .accessibilityValue(Text(verbatim: effortTitle))
-                }
+                effortPickerRow(selectedOption: selectedOption, effortTitle: effortTitle)
             }
-            if providers.isEmpty {
-                catalogNote(Chrome.localized(showsAutomaticChoice && automaticTitle == "Last selection" ? "No providers available. You can still use Last selection." : "No providers available."))
-            } else if let provider {
-                if isLoading {
-                    catalogNote(String(format: Chrome.localized(options.isEmpty ? "Loading %@'s models…" : "Refreshing %@'s models…"), provider.displayName))
-                } else if let error {
-                    catalogNote(
-                        options.isEmpty ? error : String(
-                            format: Chrome.localized("Could not refresh %@'s models. You can still use the loaded models.\n%@"),
-                            provider.displayName, error
-                        ),
-                        retryProvider: provider
-                    )
-                } else if options.isEmpty {
-                    catalogNote(
-                        String(format: Chrome.localized("No models loaded for %@ yet."), provider.displayName),
-                        retryProvider: provider
-                    )
-                }
-            }
+            catalogStatusSection(
+                providers: providers,
+                provider: provider,
+                options: options,
+                isLoading: isLoading,
+                error: error
+            )
         }
-        .padding(.top, showsAutomaticChoice ? 0 : 6)
+        .padding(.top, topPadding)
         .padding(.bottom, 14)
         .task(id: selectedProvider) {
             guard let provider = selectedProvider, providers.contains(provider), !Task.isCancelled else { return }
             await registry.loadCatalog(provider, force: false)
+        }
+    }
+
+    @ViewBuilder
+    private var automaticChoiceSection: some View {
+        let isSpecificSelected: Bool = selection != nil && !offSelected
+        PopoverItem(automaticTitle, isChecked: selection == nil && !offSelected) {
+            select(nil)
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 6)
+        if let selectOff {
+            PopoverItem("Off", isChecked: offSelected, action: selectOff)
+                .padding(.horizontal, 6)
+        }
+        Divider()
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+        // Shares the Last selection row's checkmark column so the two choices read as peers.
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark")
+                .font(.ui(.subheadline, weight: .semibold))
+                .foregroundStyle(Chrome.primaryText)
+                .opacity(isSpecificSelected ? 1 : 0)
+                .frame(width: 14)
+            Text(verbatim: Chrome.localized("Specific model"))
+                .font(.ui(.subheadline, weight: .semibold))
+                .foregroundStyle(Chrome.secondaryText)
+        }
+        .padding(.leading, 14)
+        .padding(.top, 2)
+        .padding(.bottom, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Specific model"))
+        .accessibilityAddTraits(isSpecificSelected ? [.isHeader, .isSelected] : .isHeader)
+    }
+
+    private func providerPickerRow(
+        providers: [ProviderKind],
+        provider: ProviderKind?,
+        providerPrompt: String,
+        providerOptions: [(value: ProviderKind?, title: String)]
+    ) -> some View {
+        let displayTitle: String = provider?.displayName ?? providerPrompt
+        return editorRow("Provider") {
+            GlassPickerButton(
+                options: providerOptions,
+                selection: Binding<ProviderKind?>(
+                    get: { provider },
+                    set: { (chosen: ProviderKind?) in if let chosen { selectedProvider = chosen } }
+                ),
+                asset: { (kind: ProviderKind?) -> String? in kind?.iconName },
+                maxWidth: 190
+            )
+            .disabled(providers.isEmpty)
+            .help(Text(verbatim: displayTitle))
+            .accessibilityLabel(Text("Provider"))
+            .accessibilityValue(Text(verbatim: displayTitle))
+        }
+    }
+
+    private func modelPickerRow(
+        registry: ProviderRegistry,
+        provider: ProviderKind?,
+        options: [ModelOption],
+        selectedOption: ModelOption?,
+        modelTitle: String
+    ) -> some View {
+        let modelOptions: [(value: String?, title: String)] = [(value: nil, title: "Choose a model")]
+            + options.map { (option: ModelOption) -> (value: String?, title: String) in (value: Optional(option.id), title: option.label(among: options)) }
+        return editorRow("Model") {
+            GlassPickerButton(
+                options: modelOptions,
+                selection: Binding<String?>(
+                    get: { selectedOption?.id },
+                    set: { (id: String?) in
+                        guard let provider, selectedProvider == provider,
+                              registry.availableProviders.contains(provider),
+                              let id, let option = options.first(where: { (candidate: ModelOption) -> Bool in candidate.id == id }) else { return }
+                        let effort: String? = selection?.effort.flatMap { (value: String) -> String? in option.efforts.contains(value) ? value : nil }
+                        select(NewThreadModelSelection(provider: provider, modelID: id, effort: effort))
+                    }
+                ),
+                maxWidth: 190
+            )
+            .disabled(options.isEmpty)
+            .help(Text(verbatim: modelTitle))
+            .accessibilityLabel(Text("Model"))
+            .accessibilityValue(Text(verbatim: modelTitle))
+        }
+    }
+
+    private func effortPickerRow(selectedOption: ModelOption, effortTitle: String) -> some View {
+        let effortOptions: [(value: String?, title: String)] = [(value: nil, title: "Default")]
+            + selectedOption.efforts.map { (effort: String) -> (value: String?, title: String) in (value: Optional(effort), title: ModelOption.effortTitle(effort)) }
+        return editorRow("Reasoning effort") {
+            GlassPickerButton(
+                options: effortOptions,
+                selection: Binding<String?>(
+                    get: { selection?.effort.flatMap { (effort: String) -> String? in selectedOption.efforts.contains(effort) ? effort : nil } },
+                    set: { (effort: String?) in
+                        guard let selection else { return }
+                        select(NewThreadModelSelection(provider: selection.provider, modelID: selection.modelID, effort: effort))
+                    }
+                ),
+                maxWidth: 190
+            )
+            .help(Text(verbatim: effortTitle))
+            .accessibilityLabel(Text("Reasoning effort"))
+            .accessibilityValue(Text(verbatim: effortTitle))
+        }
+    }
+
+    @ViewBuilder
+    private func catalogStatusSection(
+        providers: [ProviderKind],
+        provider: ProviderKind?,
+        options: [ModelOption],
+        isLoading: Bool,
+        error: String?
+    ) -> some View {
+        if providers.isEmpty {
+            let emptyMessage: String = Chrome.localized(
+                showsAutomaticChoice && automaticTitle == "Last selection"
+                    ? "No providers available. You can still use Last selection."
+                    : "No providers available."
+            )
+            catalogNote(emptyMessage)
+        } else if let provider {
+            if isLoading {
+                let template: String = Chrome.localized(options.isEmpty ? "Loading %@'s models…" : "Refreshing %@'s models…")
+                catalogNote(String(format: template, provider.displayName))
+            } else if let error {
+                let errorMessage: String = options.isEmpty ? error : String(
+                    format: Chrome.localized("Could not refresh %@'s models. You can still use the loaded models.\n%@"),
+                    provider.displayName, error
+                )
+                catalogNote(errorMessage, retryProvider: provider)
+            } else if options.isEmpty {
+                catalogNote(
+                    String(format: Chrome.localized("No models loaded for %@ yet."), provider.displayName),
+                    retryProvider: provider
+                )
+            }
         }
     }
 
@@ -1221,108 +1293,31 @@ private struct ProviderSettingsSection: View {
     private static let regionOptions = ZaiRegion.allCases.map { ($0, $0.title) }
 
     var body: some View {
-        let settings = model.settings
-        let registry = model.providers
-        let status = registry.status(provider)
+        let settings: AppSettings = model.settings
+        let registry: ProviderRegistry = model.providers
+        let status: ProviderStatus = registry.status(provider)
         let isSignedIn: Bool = {
             if case .signedIn = status.auth { return true }
             return false
         }()
-        let showsUsage = settings.showsProviderUsage
+        let showsUsage: Bool = settings.showsProviderUsage
             && (PlanLimitsReader.exposesLimits(provider) || CreditsReader.exposesCredits(provider))
             && status.isInstalled && status.auth != .signedOut
+        let showsSignIn: Bool = !status.isChecking && !isSignedIn && !provider.loginCommand.isEmpty
+        let updateState: ProviderUpdateViewState? = makeUpdateState(settings: settings, registry: registry, status: status)
+        let watchedZaiRegion: ZaiRegion? = provider == .zai ? settings.zaiRegion : nil
+        let watchedAPIKeyInput: String? = provider.acceptsAPIKey ? settings.apiKeyInput(for: provider) : nil
         VStack(alignment: .leading, spacing: Chrome.pageSectionHeaderSpacing) {
             Group {
-                let showsSignIn = !status.isChecking && !isSignedIn && !provider.loginCommand.isEmpty
-                let updateState: ProviderUpdateViewState? = provider.isAPIKeyBased ? nil : {
-                    let update = registry.cliUpdates[provider]
-                    let phase: ProviderUpdateViewState.Phase
-                    switch update?.phase {
-                    case .checking: phase = .checking
-                    case .current: phase = .current
-                    case nil: phase = settings.monitorsUpdates(provider) ? .checking : .current
-                    case .available: phase = .available
-                    case .waiting: phase = .waiting
-                    case .updating: phase = .updating
-                    case .updated: phase = .updated
-                    case .failed: phase = .failed
-                    }
-                    return ProviderUpdateViewState(
-                        phase: phase,
-                        installed: update?.installed ?? status.version,
-                        latest: update?.latest,
-                        command: update?.channel?.command,
-                        error: update?.error,
-                        updateFailed: update?.updateFailed ?? false,
-                        monitoringEnabled: registry.monitorsCLIUpdates(provider),
-                        customBinaryPath: !settings.binaryPath(for: provider).isEmpty,
-                        channelKnown: update?.channel != nil
-                    )
-                }()
                 ChromeCard {
-                    HStack(spacing: 12) {
-                        ProviderIcon(provider: provider, size: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: provider.displayName)
-                                .font(.ui(.title3, weight: .semibold))
-                                .foregroundStyle(Chrome.primaryText)
-                                .accessibilityAddTraits(.isHeader)
-                            if !provider.routeSummary.isEmpty {
-                                Text(verbatim: provider.routeSummary)
-                                    .font(.ui(.subheadline))
-                                    .foregroundStyle(Chrome.secondaryText)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
+                    cardHeaderRow
                     ChromeRowDivider()
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: Chrome.localized(status.isChecking ? "Checking…" : status.summary))
-                                .font(.ui(size: 13))
-                            if status.isInstalled, let updateState {
-                                ProviderUpdateSubtitle(state: updateState)
-                            } else if provider.isAPIKeyBased, status.apiKeyConfigured, let host = provider.apiHost {
-                                Text(verbatim: String(format: Chrome.localized("Native API · %@"), host))
-                                    .font(.ui(.subheadline))
-                                    .foregroundStyle(Chrome.secondaryText)
-                            }
-                        }
-                        Spacer()
-                        if status.isInstalled, let updateState {
-                            ProviderUpdateAction(
-                                state: updateState,
-                                onCheck: { Task { await registry.checkCLIUpdate(provider, force: true) } },
-                                onUpdate: { Task { await registry.updateCLI(provider) } }
-                            )
-                        }
-                    }
-                    .padding(.leading, 16)
-                    .padding(.trailing, Chrome.rowControlTrailingPadding)
-                    .padding(.vertical, 11)
+                    cardStatusRow(registry: registry, status: status, updateState: updateState)
                     if showsUsage {
-                        ChromeRowDivider()
-                        VStack(alignment: .leading, spacing: 14) {
-                            if PlanLimitsReader.exposesLimits(provider) {
-                                PlanLimitsView(provider: provider)
-                            }
-                            if CreditsReader.exposesCredits(provider) {
-                                CreditsView(provider: provider)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        cardUsageSection
                     }
                     if provider == .zai {
-                        ChromeRowDivider()
-                        ChromeRow(title: "Region", detail: "Where your key was issued. Global uses api.z.ai, China uses open.bigmodel.cn.") {
-                            GlassPickerButton(options: Self.regionOptions, selection: Binding(
-                                get: { settings.zaiRegion },
-                                set: { settings.zaiRegion = $0 }
-                            ))
-                        }
+                        zaiRegionRow(settings: settings)
                     }
                     if provider == .dsh || provider == .minimaxCode, let error = status.catalogError {
                         ChromeRowDivider()
@@ -1331,131 +1326,13 @@ private struct ProviderSettingsSection: View {
                         }
                     }
                     if provider == .minimaxCode {
-                        ChromeRowDivider()
-                        ChromeRow(title: "Authentication", detail: "Tivano uses the authentication route already selected in mcode. Token Plan uses your existing mcode sign-in; API-key users keep their configured key. Local checks and model lists do not verify server authentication.") {
-                            Link(destination: URL(string: "https://agent.minimax.io/docs/cli/configuration")!) {
-                                Text("Setup guide")
-                            }
-                            .chromePillButton()
-                        }
-                        ChromeRowDivider()
-                        ChromeRow(title: "CLI updates", detail: "Update MiniMax Code with its official installer or the documented npm command.") {
-                            Link(destination: provider.installURL) {
-                                Text("Setup guide")
-                            }
-                            .chromePillButton()
-                        }
-                        ChromeRowDivider()
-                        ChromeRow(title: "Attachments and usage", detail: "MiniMax Code currently uses text input in Tivano. Image attachments, plan balances and token-spend accounting are not enabled.") {
-                            EmptyView()
-                        }
+                        minimaxRows
                     }
                     if provider.acceptsAPIKey {
-                        ChromeRowDivider()
-                        ChromeRow(
-                            title: provider.isAPIKeyBased ? "API key" : "API key (optional)",
-                            detail: apiKeyDetail
-                        ) {
-                            HStack(spacing: 8) {
-                                Group {
-                                    if showsAPIKey {
-                                        TextField("", text: $apiKey, prompt: Text(verbatim: Chrome.localized(provider == .zai ? ZaiRegion.apiKeyPlaceholder : "sk-…")))
-                                    } else {
-                                        SecureField("", text: $apiKey, prompt: Text(verbatim: Chrome.localized(provider == .zai ? ZaiRegion.apiKeyPlaceholder : "sk-…")))
-                                    }
-                                }
-                                .textFieldStyle(.roundedBorder)
-                                .font(.ui(size: 12, design: .monospaced))
-                                .frame(width: 200)
-                                Button {
-                                    showsAPIKey.toggle()
-                                } label: {
-                                    Image(systemName: showsAPIKey ? "eye.slash" : "eye")
-                                        .font(.ui(size: 12))
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(Chrome.secondaryText)
-                                .help(Text(verbatim: Chrome.localized(showsAPIKey ? "Hide the API key" : "Show the API key")))
-                                .accessibilityLabel(Text(verbatim: Chrome.localized(showsAPIKey ? "Hide the API key" : "Show the API key")))
-                            }
-                        }
-                        if provider.isAPIKeyBased, !status.isInstalled {
-                            ChromeRowDivider()
-                            ChromeRow(title: "Get a key", detail: provider == .zai
-                                ? "Z.ai needs a GLM Coding Plan key. Standard API keys will not work here. Nothing to install."
-                                : String(format: Chrome.localized("%@ needs an API key. Nothing to install."), provider.displayName)) {
-                                Link(destination: provider.installURL) {
-                                    Text(verbatim: String(format: Chrome.localized("Get a %@ key"), provider.displayName))
-                                }
-                                .chromePillButton()
-                            }
-                        }
+                        apiKeySection(status: status)
                     }
                     if updateState != nil {
-                        if settings.showsProviderBinaryPaths {
-                            ChromeRowDivider()
-                            ChromeRow(title: "Binary path", detail: status.executable?.path) {
-                                TextField("", text: $binaryPath, prompt: Text(provider.executableName))
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.ui(size: 12, design: .monospaced))
-                                    .frame(width: 200)
-                            }
-                        }
-                        if !status.isInstalled {
-                            ChromeRowDivider()
-                            let missing = String(format: Chrome.localized("%@ was not found on your PATH."), provider.displayName)
-                            let detail = provider == .zcode
-                                ? Chrome.localized("ZCode is not installed. Install the ZCode app, then click Check providers again at the top right.")
-                                : LoginEnvironment.diagnostic.map { missing + " " + $0 } ?? missing
-                            ChromeRow(title: "Install", detail: detail) {
-                                Link(destination: provider.installURL) {
-                                    Text(verbatim: String(format: Chrome.localized("Get %@"), provider.displayName))
-                                }
-                                .chromePillButton()
-                            }
-                        } else if showsSignIn {
-                            ChromeRowDivider()
-                            let signInDetail = provider == .dsh
-                                ? (registry.signingIn == .dsh
-                                    ? "Waiting for you to sign in to DeepSeek Harness…"
-                                    : signInError ?? (FileManager.default.fileExists(atPath: "/Applications/DeepSeek Harness.app")
-                                        ? "Opens DeepSeek Harness to sign in to your DeepSeek account."
-                                        : "Opens your browser to sign in to your DeepSeek account."))
-                                : signInError ?? "Click Sign in on the right."
-                            ChromeRow(title: provider == .minimaxCode ? "Token Plan sign-in" : "Sign in", detail: provider == .minimaxCode
-                                ? "Use mcode login for Token Plan, or mcode login --region global for Global accounts. If already signed in, refresh the provider. API-key users do not need this step."
-                                : signInDetail) {
-                                if provider == .dsh {
-                                    HStack(spacing: 8) {
-                                        if registry.signingIn == .dsh {
-                                            ProgressView().controlSize(.mini)
-                                            Button("Cancel") { signInTask?.cancel() }
-                                                .chromePillButton()
-                                                .disabled(signInTask == nil)
-                                        } else {
-                                            Button {
-                                                signInError = nil
-                                                signInTask = Task {
-                                                    signInError = await registry.signIn(provider)
-                                                    signInTask = nil
-                                                }
-                                            } label: {
-                                                Text(verbatim: Chrome.localized("Sign in"))
-                                            }
-                                            .chromePillButton()
-                                            .disabled(registry.signingIn != nil)
-                                        }
-                                    }
-                                } else {
-                                    Button {
-                                        Workspace.openTerminal(running: provider.loginCommand)
-                                    } label: {
-                                        Text(verbatim: Chrome.localized("Sign in"))
-                                    }
-                                    .chromePillButton()
-                                }
-                            }
-                        }
+                        cliManagementRows(settings: settings, registry: registry, status: status, showsSignIn: showsSignIn)
                     }
                     if ProviderAccounts.supportedProviders.contains(provider), status.isInstalled {
                         ChromeRowDivider()
@@ -1470,7 +1347,7 @@ private struct ProviderSettingsSection: View {
             binaryPath = settings.binaryPath(for: provider)
             if provider.acceptsAPIKey { apiKey = settings.apiKeyInput(for: provider) }
         }
-        .onChange(of: showsUsage, initial: true) { _, shows in
+        .onChange(of: showsUsage, initial: true) { (_: Bool, shows: Bool) in
             // Fires once when the page opens on a signed-in account and again when a check signs
             // one in. Sections are eager, so scrolling never re-fires it, and the registry hands
             // back what it read within the last minute instead of asking the provider again.
@@ -1478,18 +1355,18 @@ private struct ProviderSettingsSection: View {
             registry.refreshPlanLimits(provider)
             registry.refreshCredits(provider)
         }
-        .onChange(of: binaryPath) { _, value in
+        .onChange(of: binaryPath) { (_: String, value: String) in
             guard value != settings.binaryPath(for: provider) else { return }
             settings.setBinaryPath(value, for: provider)
         }
-        .onChange(of: provider == .zai ? settings.zaiRegion : nil) { _, _ in
+        .onChange(of: watchedZaiRegion) { (_: ZaiRegion?, _: ZaiRegion?) in
             guard provider == .zai else { return }
             Task {
                 await registry.refresh(provider)
                 await registry.loadCatalog(provider, force: true)
             }
         }
-        .onChange(of: settings.isEnabled(provider)) { _, enabled in
+        .onChange(of: settings.isEnabled(provider)) { (_: Bool, enabled: Bool) in
             registry.cliMonitoringChanged(provider)
             if provider == .dsh, enabled {
                 Task {
@@ -1498,26 +1375,290 @@ private struct ProviderSettingsSection: View {
                 }
             }
         }
-        .onChange(of: settings.binaryPath(for: provider)) { _, _ in
+        .onChange(of: settings.binaryPath(for: provider)) { (_: String, _: String) in
             registry.cliMonitoringChanged(provider)
         }
-        .onChange(of: apiKey) { _, value in
-            // Only an edit counts: loading the stored key into the field must not save or check it.
-            guard provider.acceptsAPIKey, value != settings.apiKeyInput(for: provider) else { return }
-            settings.setAPIKeyInput(value, for: provider)
-            // The registry observes DeepSeek changes even when this page is closed.
-            guard provider != .deepseek else { return }
-            keyCheck?.cancel()
-            keyCheck = Task {
-                try? await Task.sleep(for: .milliseconds(600))
-                guard !Task.isCancelled else { return }
-                await registry.refresh(provider)
-                await registry.loadCatalog(provider, force: true)
-            }
+        .onChange(of: apiKey) { (_: String, value: String) in
+            handleAPIKeyEdit(value, settings: settings, registry: registry)
         }
-        .onChange(of: provider.acceptsAPIKey ? settings.apiKeyInput(for: provider) : nil) { _, value in
+        .onChange(of: watchedAPIKeyInput) { (_: String?, value: String?) in
             guard let value, value != apiKey else { return }
             apiKey = value
+        }
+    }
+
+    private func makeUpdateState(
+        settings: AppSettings,
+        registry: ProviderRegistry,
+        status: ProviderStatus
+    ) -> ProviderUpdateViewState? {
+        guard !provider.isAPIKeyBased else { return nil }
+        let update = registry.cliUpdates[provider]
+        let phase: ProviderUpdateViewState.Phase
+        switch update?.phase {
+        case .checking: phase = .checking
+        case .current: phase = .current
+        case nil: phase = settings.monitorsUpdates(provider) ? .checking : .current
+        case .available: phase = .available
+        case .waiting: phase = .waiting
+        case .updating: phase = .updating
+        case .updated: phase = .updated
+        case .failed: phase = .failed
+        }
+        return ProviderUpdateViewState(
+            phase: phase,
+            installed: update?.installed ?? status.version,
+            latest: update?.latest,
+            command: update?.channel?.command,
+            error: update?.error,
+            updateFailed: update?.updateFailed ?? false,
+            monitoringEnabled: registry.monitorsCLIUpdates(provider),
+            customBinaryPath: !settings.binaryPath(for: provider).isEmpty,
+            channelKnown: update?.channel != nil
+        )
+    }
+
+    private var cardHeaderRow: some View {
+        HStack(spacing: 12) {
+            ProviderIcon(provider: provider, size: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: provider.displayName)
+                    .font(.ui(.title3, weight: .semibold))
+                    .foregroundStyle(Chrome.primaryText)
+                    .accessibilityAddTraits(.isHeader)
+                if !provider.routeSummary.isEmpty {
+                    Text(verbatim: provider.routeSummary)
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    private func cardStatusRow(
+        registry: ProviderRegistry,
+        status: ProviderStatus,
+        updateState: ProviderUpdateViewState?
+    ) -> some View {
+        let statusTitle: String = Chrome.localized(status.isChecking ? "Checking…" : status.summary)
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: statusTitle)
+                    .font(.ui(size: 13))
+                if status.isInstalled, let updateState {
+                    ProviderUpdateSubtitle(state: updateState)
+                } else if provider.isAPIKeyBased, status.apiKeyConfigured, let host = provider.apiHost {
+                    Text(verbatim: String(format: Chrome.localized("Native API · %@"), host))
+                        .font(.ui(.subheadline))
+                        .foregroundStyle(Chrome.secondaryText)
+                }
+            }
+            Spacer()
+            if status.isInstalled, let updateState {
+                ProviderUpdateAction(
+                    state: updateState,
+                    onCheck: { Task { await registry.checkCLIUpdate(provider, force: true) } },
+                    onUpdate: { Task { await registry.updateCLI(provider) } }
+                )
+            }
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, Chrome.rowControlTrailingPadding)
+        .padding(.vertical, 11)
+    }
+
+    @ViewBuilder
+    private var cardUsageSection: some View {
+        ChromeRowDivider()
+        VStack(alignment: .leading, spacing: 14) {
+            if PlanLimitsReader.exposesLimits(provider) {
+                PlanLimitsView(provider: provider)
+            }
+            if CreditsReader.exposesCredits(provider) {
+                CreditsView(provider: provider)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    @ViewBuilder
+    private func zaiRegionRow(settings: AppSettings) -> some View {
+        ChromeRowDivider()
+        ChromeRow(title: "Region", detail: "Where your key was issued. Global uses api.z.ai, China uses open.bigmodel.cn.") {
+            GlassPickerButton(options: Self.regionOptions, selection: Binding<ZaiRegion>(
+                get: { settings.zaiRegion },
+                set: { (region: ZaiRegion) in settings.zaiRegion = region }
+            ))
+        }
+    }
+
+    @ViewBuilder
+    private var minimaxRows: some View {
+        ChromeRowDivider()
+        ChromeRow(title: "Authentication", detail: "Tivano uses the authentication route already selected in mcode. Token Plan uses your existing mcode sign-in; API-key users keep their configured key. Local checks and model lists do not verify server authentication.") {
+            Link(destination: URL(string: "https://agent.minimax.io/docs/cli/configuration")!) {
+                Text("Setup guide")
+            }
+            .chromePillButton()
+        }
+        ChromeRowDivider()
+        ChromeRow(title: "CLI updates", detail: "Update MiniMax Code with its official installer or the documented npm command.") {
+            Link(destination: provider.installURL) {
+                Text("Setup guide")
+            }
+            .chromePillButton()
+        }
+        ChromeRowDivider()
+        ChromeRow(title: "Attachments and usage", detail: "MiniMax Code currently uses text input in Tivano. Image attachments, plan balances and token-spend accounting are not enabled.") {
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func apiKeySection(status: ProviderStatus) -> some View {
+        let placeholder: String = Chrome.localized(provider == .zai ? ZaiRegion.apiKeyPlaceholder : "sk-…")
+        let toggleHelp: String = Chrome.localized(showsAPIKey ? "Hide the API key" : "Show the API key")
+        ChromeRowDivider()
+        ChromeRow(
+            title: provider.isAPIKeyBased ? "API key" : "API key (optional)",
+            detail: apiKeyDetail
+        ) {
+            HStack(spacing: 8) {
+                Group {
+                    if showsAPIKey {
+                        TextField("", text: $apiKey, prompt: Text(verbatim: placeholder))
+                    } else {
+                        SecureField("", text: $apiKey, prompt: Text(verbatim: placeholder))
+                    }
+                }
+                .textFieldStyle(.roundedBorder)
+                .font(.ui(size: 12, design: .monospaced))
+                .frame(width: 200)
+                Button {
+                    showsAPIKey.toggle()
+                } label: {
+                    Image(systemName: showsAPIKey ? "eye.slash" : "eye")
+                        .font(.ui(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Chrome.secondaryText)
+                .help(Text(verbatim: toggleHelp))
+                .accessibilityLabel(Text(verbatim: toggleHelp))
+            }
+        }
+        if provider.isAPIKeyBased, !status.isInstalled {
+            let getKeyDetail: String = provider == .zai
+                ? "Z.ai needs a GLM Coding Plan key. Standard API keys will not work here. Nothing to install."
+                : String(format: Chrome.localized("%@ needs an API key. Nothing to install."), provider.displayName)
+            ChromeRowDivider()
+            ChromeRow(title: "Get a key", detail: getKeyDetail) {
+                Link(destination: provider.installURL) {
+                    Text(verbatim: String(format: Chrome.localized("Get a %@ key"), provider.displayName))
+                }
+                .chromePillButton()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cliManagementRows(
+        settings: AppSettings,
+        registry: ProviderRegistry,
+        status: ProviderStatus,
+        showsSignIn: Bool
+    ) -> some View {
+        if settings.showsProviderBinaryPaths {
+            ChromeRowDivider()
+            ChromeRow(title: "Binary path", detail: status.executable?.path) {
+                TextField("", text: $binaryPath, prompt: Text(provider.executableName))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.ui(size: 12, design: .monospaced))
+                    .frame(width: 200)
+            }
+        }
+        if !status.isInstalled {
+            ChromeRowDivider()
+            let missing: String = String(format: Chrome.localized("%@ was not found on your PATH."), provider.displayName)
+            let detail: String = provider == .zcode
+                ? Chrome.localized("ZCode is not installed. Install the ZCode app, then click Check providers again at the top right.")
+                : LoginEnvironment.diagnostic.map { (diag: String) -> String in missing + " " + diag } ?? missing
+            ChromeRow(title: "Install", detail: detail) {
+                Link(destination: provider.installURL) {
+                    Text(verbatim: String(format: Chrome.localized("Get %@"), provider.displayName))
+                }
+                .chromePillButton()
+            }
+        } else if showsSignIn {
+            ChromeRowDivider()
+            let rowTitle: String = provider == .minimaxCode ? "Token Plan sign-in" : "Sign in"
+            let rowDetail: String = provider == .minimaxCode
+                ? "Use mcode login for Token Plan, or mcode login --region global for Global accounts. If already signed in, refresh the provider. API-key users do not need this step."
+                : signInDetail(registry: registry)
+            ChromeRow(title: rowTitle, detail: rowDetail) {
+                if provider == .dsh {
+                    HStack(spacing: 8) {
+                        if registry.signingIn == .dsh {
+                            ProgressView().controlSize(.mini)
+                            Button("Cancel") { signInTask?.cancel() }
+                                .chromePillButton()
+                                .disabled(signInTask == nil)
+                        } else {
+                            Button {
+                                signInError = nil
+                                signInTask = Task {
+                                    signInError = await registry.signIn(provider)
+                                    signInTask = nil
+                                }
+                            } label: {
+                                Text(verbatim: Chrome.localized("Sign in"))
+                            }
+                            .chromePillButton()
+                            .disabled(registry.signingIn != nil)
+                        }
+                    }
+                } else {
+                    Button {
+                        Workspace.openTerminal(running: provider.loginCommand)
+                    } label: {
+                        Text(verbatim: Chrome.localized("Sign in"))
+                    }
+                    .chromePillButton()
+                }
+            }
+        }
+    }
+
+    private func signInDetail(registry: ProviderRegistry) -> String {
+        guard provider == .dsh else {
+            return signInError ?? "Click Sign in on the right."
+        }
+        if registry.signingIn == .dsh {
+            return "Waiting for you to sign in to DeepSeek Harness…"
+        }
+        if let signInError {
+            return signInError
+        }
+        return FileManager.default.fileExists(atPath: "/Applications/DeepSeek Harness.app")
+            ? "Opens DeepSeek Harness to sign in to your DeepSeek account."
+            : "Opens your browser to sign in to your DeepSeek account."
+    }
+
+    private func handleAPIKeyEdit(_ value: String, settings: AppSettings, registry: ProviderRegistry) {
+        // Only an edit counts: loading the stored key into the field must not save or check it.
+        guard provider.acceptsAPIKey, value != settings.apiKeyInput(for: provider) else { return }
+        settings.setAPIKeyInput(value, for: provider)
+        // The registry observes DeepSeek changes even when this page is closed.
+        guard provider != .deepseek else { return }
+        keyCheck?.cancel()
+        keyCheck = Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            await registry.refresh(provider)
+            await registry.loadCatalog(provider, force: true)
         }
     }
 }

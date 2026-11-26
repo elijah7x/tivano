@@ -54,68 +54,24 @@ struct TokenTimeStrip: View {
     private var days: [TokenUsageDay] { data.days }
 
     var body: some View {
-        let captionFont = Font.ui(.caption2)
-        GeometryReader { geometry in
-            Canvas { context, size in
-                guard !days.isEmpty, size.width > 0 else { return }
-                let step = size.width / CGFloat(days.count)
-                let range = clampedBrush
-                let baseline = chartHeight - Chrome.unitHeaderSpacing
-                for (index, segments) in data.bars.enumerated() {
-                    var y = baseline
-                    for segment in segments {
-                        let height = data.maximum > 0 ? CGFloat(segment.count / data.maximum) * (baseline - Chrome.unitHeaderSpacing) : 0
-                        y -= height
-                        let rect = CGRect(x: CGFloat(index) * step, y: y,
-                                          width: max(step * 0.65, 0.5), height: height)
-                        context.fill(Path(rect), with: .color((data.colors[segment.tool] ?? Chrome.accent)
-                            .opacity(range.contains(index) ? 0.55 : 0.15)))
-                    }
-                }
-
-                var ruler = Path()
-                ruler.move(to: CGPoint(x: 0, y: chartHeight))
-                ruler.addLine(to: CGPoint(x: size.width, y: chartHeight))
-                context.stroke(ruler, with: .color(Chrome.overlay(0.12)), lineWidth: 0.5)
-                var lastLabelEnd: CGFloat = -.infinity
-                for mark in data.months {
-                    let x = CGFloat(mark.index) * step
-                    var tick = Path()
-                    tick.move(to: CGPoint(x: x, y: chartHeight))
-                    tick.addLine(to: CGPoint(x: x, y: chartHeight + 3))
-                    context.stroke(tick, with: .color(Chrome.overlay(0.2)), lineWidth: 0.5)
-                    let label = context.resolve(Text(verbatim: mark.label).font(captionFont).foregroundColor(Chrome.secondaryText))
-                    let width = label.measure(in: size).width
-                    let left = min(max(0, x), max(0, size.width - width))
-                    guard left >= lastLabelEnd + Chrome.unitHeaderSpacing else { continue }
-                    context.draw(label, at: CGPoint(x: left, y: chartHeight + Chrome.unitHeaderSpacing), anchor: .topLeading)
-                    lastLabelEnd = left + width
-                }
-
-                let left = CGFloat(range.lowerBound) * step
-                let right = CGFloat(range.upperBound + 1) * step
-                let rect = CGRect(x: left, y: 0, width: right - left, height: chartHeight)
-                context.fill(Path(rect), with: .color(Chrome.accent.opacity(0.06)))
-                context.stroke(Path(rect.insetBy(dx: 0.5, dy: 0.5)), with: .color(Chrome.secondaryText), lineWidth: 1)
-                for edge in [left, right] {
-                    let handle = CGRect(x: min(max(0, edge - 2), max(0, size.width - 4)),
-                                        y: Chrome.unitHeaderSpacing, width: 4,
-                                        height: chartHeight - Chrome.unitHeaderSpacing * 2)
-                    context.fill(Path(roundedRect: handle, cornerRadius: 2), with: .color(Chrome.secondaryText))
-                }
+        let captionFont: Font = Font.ui(.caption2)
+        let totalHeight: CGFloat = chartHeight + Chrome.pageTitleSpacing
+        GeometryReader { (geometry: GeometryProxy) in
+            Canvas { (context: inout GraphicsContext, size: CGSize) in
+                drawCanvas(in: &context, size: size, captionFont: captionFont)
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { value in updateDrag(value, width: geometry.size.width) }
+                .onChanged { (value: DragGesture.Value) in updateDrag(value, width: geometry.size.width) }
                 .onEnded { _ in drag = nil })
         }
-        .frame(height: chartHeight + Chrome.pageTitleSpacing)
+        .frame(height: totalHeight)
         .background { NoWindowDragArea() }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Date range"))
         .accessibilityValue(Text(verbatim: accessibleValue))
         .accessibilityHint(Text("Adjust to move the selected range by one day."))
-        .accessibilityAdjustableAction { direction in
+        .accessibilityAdjustableAction { (direction: AccessibilityAdjustmentDirection) in
             switch direction {
             case .increment: move(by: 1)
             case .decrement: move(by: -1)
@@ -127,9 +83,68 @@ struct TokenTimeStrip: View {
         .accessibilityAction(named: Text("Extend end by one day")) { resizeEnd(by: 1) }
         .accessibilityAction(named: Text("Shorten end by one day")) { resizeEnd(by: -1) }
         .focusable()
-        .onMoveCommand { direction in
+        .onMoveCommand { (direction: MoveCommandDirection) in
             if direction == .left { move(by: -1) }
             if direction == .right { move(by: 1) }
+        }
+    }
+
+    private func drawCanvas(in context: inout GraphicsContext, size: CGSize, captionFont: Font) {
+        guard !days.isEmpty, size.width > 0 else { return }
+        let step: CGFloat = size.width / CGFloat(days.count)
+        let range: ClosedRange<Int> = clampedBrush
+        let baseline: CGFloat = chartHeight - Chrome.unitHeaderSpacing
+        let maxBarHeight: CGFloat = baseline - Chrome.unitHeaderSpacing
+        let barWidth: CGFloat = max(step * 0.65, 0.5)
+        for (index, segments) in data.bars.enumerated() {
+            var y: CGFloat = baseline
+            let barX: CGFloat = CGFloat(index) * step
+            let opacity: Double = range.contains(index) ? 0.55 : 0.15
+            for segment in segments {
+                let height: CGFloat = data.maximum > 0 ? CGFloat(segment.count / data.maximum) * maxBarHeight : 0
+                y -= height
+                let rect = CGRect(x: barX, y: y, width: barWidth, height: height)
+                let color: Color = data.colors[segment.tool] ?? Chrome.accent
+                context.fill(Path(rect), with: .color(color.opacity(opacity)))
+            }
+        }
+
+        var ruler = Path()
+        ruler.move(to: CGPoint(x: 0, y: chartHeight))
+        ruler.addLine(to: CGPoint(x: size.width, y: chartHeight))
+        context.stroke(ruler, with: .color(Chrome.overlay(0.12)), lineWidth: 0.5)
+
+        var lastLabelEnd: CGFloat = -.infinity
+        let tickBottom: CGFloat = chartHeight + 3
+        let labelY: CGFloat = chartHeight + Chrome.unitHeaderSpacing
+        for mark in data.months {
+            let x: CGFloat = CGFloat(mark.index) * step
+            var tick = Path()
+            tick.move(to: CGPoint(x: x, y: chartHeight))
+            tick.addLine(to: CGPoint(x: x, y: tickBottom))
+            context.stroke(tick, with: .color(Chrome.overlay(0.2)), lineWidth: 0.5)
+            let labelText: Text = Text(verbatim: mark.label).font(captionFont).foregroundColor(Chrome.secondaryText)
+            let label: GraphicsContext.ResolvedText = context.resolve(labelText)
+            let width: CGFloat = label.measure(in: size).width
+            let maxLeft: CGFloat = max(0, size.width - width)
+            let left: CGFloat = min(max(0, x), maxLeft)
+            guard left >= lastLabelEnd + Chrome.unitHeaderSpacing else { continue }
+            context.draw(label, at: CGPoint(x: left, y: labelY), anchor: .topLeading)
+            lastLabelEnd = left + width
+        }
+
+        let left: CGFloat = CGFloat(range.lowerBound) * step
+        let right: CGFloat = CGFloat(range.upperBound + 1) * step
+        let rect = CGRect(x: left, y: 0, width: right - left, height: chartHeight)
+        context.fill(Path(rect), with: .color(Chrome.accent.opacity(0.06)))
+        context.stroke(Path(rect.insetBy(dx: 0.5, dy: 0.5)), with: .color(Chrome.secondaryText), lineWidth: 1)
+        let handleHeight: CGFloat = chartHeight - Chrome.unitHeaderSpacing * 2
+        let maxHandleX: CGFloat = max(0, size.width - 4)
+        let edges: [CGFloat] = [left, right]
+        for edge in edges {
+            let handleX: CGFloat = min(max(0, edge - 2), maxHandleX)
+            let handle = CGRect(x: handleX, y: Chrome.unitHeaderSpacing, width: 4, height: handleHeight)
+            context.fill(Path(roundedRect: handle, cornerRadius: 2), with: .color(Chrome.secondaryText))
         }
     }
 

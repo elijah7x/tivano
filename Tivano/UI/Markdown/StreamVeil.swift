@@ -544,6 +544,11 @@ final class LinkTextVeil {
     private var utf8Offsets: [Int] = []
 
     private weak var tickTarget: NSTextView?
+
+    /// Whether temporary colours are still laid over the text, so a check of the text's
+    /// effective colour does not mistake a chunk mid-dissolve for invisible text.
+    var isDissolving: Bool { displayLink != nil || painted.length > 0 }
+
     /// The render scope of the column this paragraph sits in, subscribed for its
     /// visibility. Weak, so a scope discarded with its column is not held by a view
     /// that is only retiring.

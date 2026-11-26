@@ -44,9 +44,9 @@ struct ChatView: View {
     /// Nothing in the conversation needs to answer a hover while a panel is being moved,
     /// so for the length of the drag it does not.
     private var isMovingAPanel: Bool {
-        subagentDrag.position != nil || hydraDrag.position != nil
-            || poppedDrag.position != nil
-            || autoDrags.values.contains { $0.position != nil }
+        subagentDrag.isDragging || hydraDrag.isDragging
+            || poppedDrag.isDragging
+            || autoDrags.values.contains { $0.isDragging }
     }
     /// When the team's panel came on screen, and whether it is lingering past its heads.
     /// Heads that go out and fall at the door leave the panel within a frame or two of

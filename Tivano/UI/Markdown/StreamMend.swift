@@ -18,45 +18,50 @@ import Foundation
 /// never closes settles honestly, once.
 enum StreamMend {
     static func mended(_ source: String) -> String {
-        guard source.contains(where: { $0 == "*" || $0 == "_" || $0 == "~" || $0 == "`" }) else { return source }
-        let chars = Array(source)
+        guard source.utf8.contains(where: { $0 == 42 || $0 == 95 || $0 == 126 || $0 == 96 }) else { return source }
         // The display suffix belongs before whitespace, where emphasis can close.
-        var end = chars.count
-        while end > 0, chars[end - 1].isWhitespace { end -= 1 }
+        var end = source.endIndex
+        while end > source.startIndex {
+            let prev = source.index(before: end)
+            guard source[prev].isWhitespace else { break }
+            end = prev
+        }
         var partial: (marker: Character, missing: Int)?
         var partialTicks = 0
-        var stack: [(marker: Character, length: Int, contentStart: Int)] = []
-        var code: (ticks: Int, contentStart: Int)?
-        var index = 0
-        while index < chars.count {
-            let char = chars[index]
+        var stack: [(marker: Character, length: Int, contentStart: String.Index)] = []
+        var code: (ticks: Int, contentStart: String.Index)?
+        var index = source.startIndex
+        while index < source.endIndex {
+            let char = source[index]
             if char == "\\", code == nil {
-                index += 2
+                let next = source.index(after: index)
+                index = next < source.endIndex ? source.index(after: next) : source.endIndex
                 continue
             }
             if char == "`" {
-                let run = Self.run(of: char, in: chars, at: index)
+                let (run, runEnd) = Self.run(of: char, in: source, at: index)
                 if let open = code {
                     if open.ticks == run {
                         code = nil
-                    } else if run < open.ticks, index + run == end {
+                    } else if run < open.ticks, runEnd == end {
                         partialTicks = run
                     }
                 } else {
-                    code = (run, index + run)
+                    code = (run, runEnd)
                 }
-                index += run
+                index = runEnd
                 continue
             }
             guard code == nil, char == "*" || char == "_" || char == "~" else {
-                index += 1
+                index = source.index(after: index)
                 continue
             }
-            var run = Self.run(of: char, in: chars, at: index)
-            let before: Character? = index > 0 ? chars[index - 1] : nil
-            let after: Character? = index + run < chars.count ? chars[index + run] : nil
+            let (totalRun, runEnd) = Self.run(of: char, in: source, at: index)
+            var run = totalRun
+            let before: Character? = index > source.startIndex ? source[source.index(before: index)] : nil
+            let after: Character? = runEnd < source.endIndex ? source[runEnd] : nil
             if char == "~", run < 2, stack.last?.marker != char {
-                index += run
+                index = runEnd
                 continue
             }
             if let before, !before.isWhitespace {
@@ -68,7 +73,7 @@ enum StreamMend {
             // Only an unescaped terminal run can be a half-written closer. Account
             // for markers already consumed by an inner span (e.g. `***a**`).
             if run > 0, let top = stack.last, top.marker == char, run < top.length,
-               index + Self.run(of: char, in: chars, at: index) == end,
+               runEnd == end,
                let before, !before.isWhitespace {
                 partial = (char, top.length - run)
                 stack.removeLast()
@@ -80,16 +85,16 @@ enum StreamMend {
                 while run > 0 {
                     if char == "~", run < 2 { break }
                     let length = char == "~" ? 2 : min(run, 2)
-                    stack.append((char, length, index + Self.run(of: char, in: chars, at: index)))
+                    stack.append((char, length, runEnd))
                     run -= length
                 }
             }
-            index += Self.run(of: char, in: chars, at: index)
+            index = runEnd
         }
 
         // Closers go before any trailing whitespace: a closer after a space closes nothing.
-        func hasContent(from start: Int) -> Bool {
-            start < end && chars[start..<end].contains { !$0.isWhitespace }
+        func hasContent(from start: String.Index) -> Bool {
+            start < end && source[start..<end].contains { !$0.isWhitespace }
         }
         var closers = ""
         if let open = code {
@@ -104,17 +109,32 @@ enum StreamMend {
         }
         guard !closers.isEmpty else { return source }
         if code == nil {
-            var slashStart = end
-            while slashStart > 0, chars[slashStart - 1] == "\\" { slashStart -= 1 }
+            var slashCount = 0
+            var cursor = end
+            while cursor > source.startIndex {
+                let prev = source.index(before: cursor)
+                guard source[prev] == "\\" else { break }
+                slashCount += 1
+                cursor = prev
+            }
             // A dangling escape must not swallow the first synthetic closer.
-            if (end - slashStart) % 2 == 1 { closers = "\\" + closers }
+            if slashCount % 2 == 1 { closers = "\\" + closers }
         }
-        return String(chars[..<end]) + closers + String(chars[end...])
+        var result = String()
+        result.reserveCapacity(source.utf8.count + closers.utf8.count)
+        result.append(contentsOf: source[..<end])
+        result.append(closers)
+        result.append(contentsOf: source[end...])
+        return result
     }
 
-    private static func run(of char: Character, in chars: [Character], at index: Int) -> Int {
+    private static func run(of char: Character, in source: String, at index: String.Index) -> (length: Int, end: String.Index) {
         var length = 0
-        while index + length < chars.count, chars[index + length] == char { length += 1 }
-        return length
+        var cursor = index
+        while cursor < source.endIndex, source[cursor] == char {
+            length += 1
+            cursor = source.index(after: cursor)
+        }
+        return (length, cursor)
     }
 }

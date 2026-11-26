@@ -29,9 +29,10 @@ enum StoragePaths {
 }
 
 // Fixed filenames allow real filesystem collisions, not mocked write results.
-final class ISO8601DateFormatter {
-    var formatOptions: Foundation.ISO8601DateFormatter.Options = []
-    func string(from date: Date) -> String { "fixture" }
+enum ISO8601 {
+    struct Fixed { func format(_ date: Date) -> String { "fixture" } }
+    static let fractional = Fixed()
+    static func string(from date: Date) -> String { "fixture" }
 }
 
 /* MODELS_PRODUCTION */

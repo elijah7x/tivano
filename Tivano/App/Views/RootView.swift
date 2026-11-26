@@ -8,20 +8,33 @@ struct RootView: View {
     @State private var voiceStageShown = false
 
     var body: some View {
-        let sidebar = model.sidebar
-        let settingsShown = SettingsNavigation.shared.isPresented
-        let settingsSidebarWidth = max(sidebar.width, 212)
+        let settingsShown: Bool = SettingsNavigation.shared.isPresented
+        let currentAlert: AppAlert? = model.alert
+        let alertTitle: String = Chrome.localized(currentAlert?.title ?? "")
+        let isAlertPresented = Binding<Bool>(
+            get: { model.alert != nil },
+            set: { (presented: Bool) in if !presented { model.alert = nil } }
+        )
+        let pendingApproval: RemoteMCPApprovalRequest? = model.remoteMCP.pendingApprovals.first
+        let approvalTitle: String = String(
+            format: Chrome.localized("Allow %@ to control Tivano?"),
+            pendingApproval?.clientName ?? ""
+        )
+        let isApprovalPresented = Binding<Bool>(
+            get: { model.remoteMCP.pendingApprovals.first != nil },
+            set: { (_: Bool) in }
+        )
         ZStack {
             GlobalWeatherLayer()
-            standardLayout(settingsShown: settingsShown, settingsSidebarWidth: settingsSidebarWidth)
+            standardLayout(settingsShown: settingsShown)
         }
         // Initial library restoration must not dismiss an About deep link after relaunch.
-        .onChange(of: model.selectedThreadID) { old, _ in
+        .onChange(of: model.selectedThreadID) { (old: UUID?, _: UUID?) in
             if old != nil { WindowManager.shared.hideSettings() }
             if model.appSpace != .session { model.appSpace = .session }
             model.voice.setStageOpen(false)
         }
-        .onChange(of: SettingsNavigation.shared.isPresented) { _, presented in
+        .onChange(of: SettingsNavigation.shared.isPresented) { (_: Bool, presented: Bool) in
             if presented, model.appSpace != .session { model.appSpace = .session }
         }
         .background {
@@ -29,11 +42,7 @@ struct RootView: View {
             WindowBackdrop(opacity: model.settings.backdropOpacity, wallpaper: WallpaperStore.shared.image)
         }
         .background {
-            WindowChromeConfigurator(
-                sidebarVisible: settingsShown || sidebar.holdsTrafficLights,
-                sidebarDragging: sidebar.isDragging && !settingsShown,
-                placement: .standard
-            )
+            RootWindowChromeConfigurator(sidebar: model.sidebar, settingsShown: settingsShown)
         }
         .ignoresSafeArea()
         .coordinateSpace(.named(GenieAnimator.coordinateSpace))
@@ -43,7 +52,7 @@ struct RootView: View {
                 CommandPalette()
             }
         }
-        .onChange(of: model.voice.stageOpen, initial: true) { _, open in
+        .onChange(of: model.voice.stageOpen, initial: true) { (_: Bool, open: Bool) in
             if open {
                 voiceStageShown = true
                 withAnimation(reduceMotion ? nil : VoiceStageMetrics.enter) { voiceReveal = 1 }
@@ -56,82 +65,44 @@ struct RootView: View {
                 }
             }
         }
-        .dropDestination(for: URL.self) { urls, _ in
+        .dropDestination(for: URL.self) { (urls: [URL], _: CGPoint) -> Bool in
             guard !settingsShown else { return false }
             return handleDrop(urls)
         }
         .alert(
-            Chrome.localized(model.alert?.title ?? ""),
-            isPresented: Binding(
-                get: { model.alert != nil },
-                set: { if !$0 { model.alert = nil } }
-            ),
-            presenting: model.alert
-        ) { _ in
+            alertTitle,
+            isPresented: isAlertPresented,
+            presenting: currentAlert
+        ) { (_: AppAlert) in
             Button("OK", role: .cancel) {}
-        } message: { alert in
+        } message: { (alert: AppAlert) in
             Text(verbatim: Chrome.localized(alert.message))
         }
         .alert(
-            String(format: Chrome.localized("Allow %@ to control Tivano?"), model.remoteMCP.pendingApprovals.first?.clientName ?? ""),
-            isPresented: Binding(
-                get: { model.remoteMCP.pendingApprovals.first != nil },
-                set: { _ in }
-            ),
-            presenting: model.remoteMCP.pendingApprovals.first
-        ) { request in
+            approvalTitle,
+            isPresented: isApprovalPresented,
+            presenting: pendingApproval
+        ) { (request: RemoteMCPApprovalRequest) in
             if request.requestedScopes.contains(.write) {
                 Button("Allow full control") { model.remoteMCP.decide(request, .allow(request.requestedScopes)) }
             }
             Button("Allow read only") { model.remoteMCP.decide(request, .allow([.read])) }
             Button("Deny", role: .cancel) { model.remoteMCP.decide(request, .deny) }
-        } message: { request in
-            Text(verbatim: String(format: Chrome.localized("Code %@. Check that it matches the page in your browser. It returns to %@. Full control can create threads and send messages; approvals and questions still wait for you in Tivano."), request.code, request.redirectHost))
+        } message: { (request: RemoteMCPApprovalRequest) in
+            let message: String = String(
+                format: Chrome.localized("Code %@. Check that it matches the page in your browser. It returns to %@. Full control can create threads and send messages; approvals and questions still wait for you in Tivano."),
+                request.code,
+                request.redirectHost
+            )
+            Text(verbatim: message)
         }
     }
 
-    private func standardLayout(settingsShown: Bool, settingsSidebarWidth: CGFloat) -> some View {
-        let sidebar = model.sidebar
-        let trayShown = settingsShown || (sidebar.isVisible && sidebar.renderedWidth > 0)
-        return HStack(spacing: 0) {
-            ZStack(alignment: .leading) {
-                // Keep the chat sidebar mounted so its search and scroll survive Settings.
-                // The rows are laid out at the sidebar's width once, and the slide moves the clip
-                // alone, so no row re-wraps per frame.
-                SidebarView()
-                    .frame(width: sidebar.width)
-                    .frame(width: sidebar.renderedWidth, alignment: .trailing)
-                    .clipped()
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { sidebar.noteLaidOutWidth($0) }
-                    .opacity(settingsShown ? 0 : 1)
-                    .disabled(settingsShown)
-                    .allowsHitTesting(!settingsShown)
-                    .accessibilityHidden(settingsShown)
-                if settingsShown {
-                    SettingsSidebar()
-                        .frame(width: settingsSidebarWidth)
-                        .transition(.opacity)
-                }
-            }
-            .frame(width: settingsShown ? settingsSidebarWidth : nil, alignment: .leading)
-            .sidebarTray()
-            .overlay(alignment: .trailing) {
-                SidebarResizeHandle(
-                    isActive: sidebar.isVisible && !settingsShown,
-                    onBegin: { sidebar.beginDrag() },
-                    onChange: { sidebar.drag(by: $0) },
-                    onEnd: { sidebar.endDrag() }
-                )
-                .frame(width: SidebarResizeHandle.hitWidth)
-                .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
-            }
-            .padding([.top, .bottom], Chrome.sidebarTrayInset)
-            .padding(.leading, trayShown ? Chrome.sidebarTrayInset : 0)
-            .opacity(trayShown ? 1 : 0)
-            .allowsHitTesting(trayShown)
-            .accessibilityHidden(!trayShown)
+    private func standardLayout(settingsShown: Bool) -> some View {
+        HStack(spacing: 0) {
+            RootSidebarContainer(sidebar: model.sidebar, settingsShown: settingsShown)
 
-        ZStack {
+            ZStack {
                 // The chat stays built underneath, including the streaming runtime and draft.
                 DetailView()
                     .frame(minWidth: 0, maxWidth: .infinity)
@@ -146,23 +117,15 @@ struct RootView: View {
                     .clipped()
                     .opacity(settingsShown || model.appSpace == .tokens ? 0 : 1)
                     .allowsHitTesting(!settingsShown && !(model.appSpace == .tokens))
-                        .accessibilityHidden(settingsShown || model.appSpace == .tokens)
+                    .accessibilityHidden(settingsShown || model.appSpace == .tokens)
                 if model.appSpace == .tokens {
                     TokenUsagePage(model: model.tokenUsage, isActive: !settingsShown && !model.voice.stageOpen)
                         .padding(.top, 52)
                         .padding([.horizontal, .bottom], Chrome.contentHorizontalPadding)
                         .overlay(alignment: .topLeading) {
-                            HStack(spacing: 8) {
-                                if !sidebar.holdsTrafficLights, !sidebar.isSliding {
-                                    SidebarToggleButton(inSidebar: false)
-                                        .transition(.softAppear)
-                                }
-                                ChromeTextButton(symbol: "chevron.left", title: "Back", help: "Back") {
-                                    model.appSpace = .session
-                                }
+                            TokenUsageLeadingControls(sidebar: model.sidebar) {
+                                model.appSpace = .session
                             }
-                            .padding(.leading, sidebar.holdsTrafficLights ? Chrome.chromeHorizontalPadding : WindowChrome.collapsedTrafficLightClearance)
-                            .padding(.top, Chrome.chromeTopPadding)
                         }
                         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(1 - voiceReveal)
@@ -187,25 +150,10 @@ struct RootView: View {
         }
         // While the sidebar is hidden, dragging the window's leading edge pulls it back out.
         .overlay(alignment: .leading) {
-            SidebarResizeHandle(
-                isActive: !sidebar.isVisible && !settingsShown,
-                onBegin: { sidebar.beginDrag() },
-                onChange: { sidebar.drag(by: $0) },
-                onEnd: { sidebar.endDrag() }
-            )
-            .frame(width: SidebarResizeHandle.hitWidth)
-            .padding(.top, WindowChrome.collapsedTrafficLightTop + Chrome.trafficLightDiameter)
+            CollapsedSidebarResizeHandle(sidebar: model.sidebar, settingsShown: settingsShown)
         }
         .overlay(alignment: .topLeading) {
-            // Waiting out the slide like the chat chrome's copy does, so it never
-            // doubles the header's own toggle still riding the edge.
-            if !settingsShown, !sidebar.holdsTrafficLights, !sidebar.isSliding,
-               model.appSpace == .session,
-               model.selectedThreadID.flatMap({ model.thread($0) }) == nil {
-                SidebarToggleButton(inSidebar: false)
-                    .padding(.leading, WindowChrome.collapsedTrafficLightClearance)
-                    .padding(.top, Chrome.chromeTopPadding)
-            }
+            EmptyStateSidebarToggle(sidebar: model.sidebar, settingsShown: settingsShown)
         }
     }
 
@@ -225,6 +173,119 @@ struct RootView: View {
             Storage.attach(files.map(AttachmentSource.file), to: Bindable(model.runtime(for: threadID)).draft.attachments)
         }
         return !folders.isEmpty || !files.isEmpty
+    }
+}
+
+/// Observes `SidebarLayout` for the window chrome without subscribing `RootView.body`.
+private struct RootWindowChromeConfigurator: View {
+    let sidebar: SidebarLayout
+    let settingsShown: Bool
+
+    var body: some View {
+        WindowChromeConfigurator(
+            sidebarVisible: settingsShown || sidebar.holdsTrafficLights,
+            sidebarDragging: sidebar.isDragging && !settingsShown,
+            placement: .standard
+        )
+    }
+}
+
+/// Owns the sidebar container's frame, tray, and resize handle so dragging or sliding
+/// the sidebar only re-evaluates this subview rather than `RootView.body`.
+private struct RootSidebarContainer: View {
+    let sidebar: SidebarLayout
+    let settingsShown: Bool
+
+    var body: some View {
+        let settingsSidebarWidth = max(sidebar.width, 212)
+        let trayShown = settingsShown || (sidebar.isVisible && sidebar.renderedWidth > 0)
+        ZStack(alignment: .leading) {
+            // Keep the chat sidebar mounted so its search and scroll survive Settings.
+            // The rows are laid out at the sidebar's width once, and the slide moves the clip
+            // alone, so no row re-wraps per frame.
+            SidebarView()
+                .frame(width: sidebar.width)
+                .frame(width: sidebar.renderedWidth, alignment: .trailing)
+                .clipped()
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { sidebar.noteLaidOutWidth($0) }
+                .opacity(settingsShown ? 0 : 1)
+                .disabled(settingsShown)
+                .allowsHitTesting(!settingsShown)
+                .accessibilityHidden(settingsShown)
+            if settingsShown {
+                SettingsSidebar()
+                    .frame(width: settingsSidebarWidth)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: settingsShown ? settingsSidebarWidth : nil, alignment: .leading)
+        .sidebarTray()
+        .overlay(alignment: .trailing) {
+            SidebarResizeHandle(
+                isActive: sidebar.isVisible && !settingsShown,
+                onBegin: { sidebar.beginDrag() },
+                onChange: { sidebar.drag(by: $0) },
+                onEnd: { sidebar.endDrag() }
+            )
+            .frame(width: SidebarResizeHandle.hitWidth)
+            .padding(.top, Chrome.trafficLightTop + Chrome.trafficLightDiameter)
+        }
+        .padding([.top, .bottom], Chrome.sidebarTrayInset)
+        .padding(.leading, trayShown ? Chrome.sidebarTrayInset : 0)
+        .opacity(trayShown ? 1 : 0)
+        .allowsHitTesting(trayShown)
+        .accessibilityHidden(!trayShown)
+    }
+}
+
+private struct CollapsedSidebarResizeHandle: View {
+    let sidebar: SidebarLayout
+    let settingsShown: Bool
+
+    var body: some View {
+        SidebarResizeHandle(
+            isActive: !sidebar.isVisible && !settingsShown,
+            onBegin: { sidebar.beginDrag() },
+            onChange: { sidebar.drag(by: $0) },
+            onEnd: { sidebar.endDrag() }
+        )
+        .frame(width: SidebarResizeHandle.hitWidth)
+        .padding(.top, WindowChrome.collapsedTrafficLightTop + Chrome.trafficLightDiameter)
+    }
+}
+
+private struct TokenUsageLeadingControls: View {
+    let sidebar: SidebarLayout
+    let onBack: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if !sidebar.holdsTrafficLights, !sidebar.isSliding {
+                SidebarToggleButton(inSidebar: false)
+                    .transition(.softAppear)
+            }
+            ChromeTextButton(symbol: "chevron.left", title: "Back", help: "Back", action: onBack)
+        }
+        .padding(.leading, sidebar.holdsTrafficLights ? Chrome.chromeHorizontalPadding : WindowChrome.collapsedTrafficLightClearance)
+        .padding(.top, Chrome.chromeTopPadding)
+    }
+}
+
+private struct EmptyStateSidebarToggle: View {
+    @Environment(AppModel.self) private var model
+    let sidebar: SidebarLayout
+    let settingsShown: Bool
+
+    var body: some View {
+        // Waiting out the slide like the chat chrome's copy does, so it never
+        // doubles the header's own toggle still riding the edge.
+        if !settingsShown, !sidebar.holdsTrafficLights, !sidebar.isSliding,
+           model.appSpace == .session,
+           model.selectedThreadID.flatMap({ model.thread($0) }) == nil {
+            SidebarToggleButton(inSidebar: false)
+                .padding(.leading, WindowChrome.collapsedTrafficLightClearance)
+                .padding(.top, Chrome.chromeTopPadding)
+        }
     }
 }
 
@@ -785,16 +846,23 @@ private struct HostedChatColumn: View {
     let scope: VeilRenderScope
 
     var body: some View {
-        ChatView(runtime: state.runtime)
-            .environment(\.chatColumnVisibility, state.visibility)
-            .environment(\.chatColumnInitialFrame, state.initialFrame)
-            .environment(\.chatColumnInitialPaneSize, state.paneSize)
-            .environment(\.chatColumnInitialPaneHeight, state.paneHeight)
+        let runtime: ThreadRuntime = state.runtime
+        let visibility: ChatColumnVisibility = state.visibility
+        let initialFrame: Bool = state.initialFrame
+        let paneSize: CGSize = state.paneSize
+        let paneHeight: CGFloat = state.paneHeight
+        let isLayoutActive: Bool = state.isShown
+        let environmentModifier = HostedEnvironment(model: model, liveResize: liveResize, isLayoutActive: isLayoutActive)
+        ChatView(runtime: runtime)
+            .environment(\.chatColumnVisibility, visibility)
+            .environment(\.chatColumnInitialFrame, initialFrame)
+            .environment(\.chatColumnInitialPaneSize, paneSize)
+            .environment(\.chatColumnInitialPaneHeight, paneHeight)
             .environment(\.veilRenderScope, scope)
             // No `.disabled` for a hidden column: flipping it re-walked the column's focus
             // modifiers on every reveal. `FrameHostingView` already refuses a hidden column
             // hit testing, first responder and key equivalents.
-            .modifier(HostedEnvironment(model: model, liveResize: liveResize, isLayoutActive: state.isShown))
+            .modifier(environmentModifier)
     }
 }
 

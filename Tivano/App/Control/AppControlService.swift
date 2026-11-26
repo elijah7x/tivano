@@ -108,6 +108,7 @@ final class AppControlService {
                 guard app.settings.isRemoteMCPEnabled, app.remoteMCP.listening else { throw ControlFailure(code: .disabled) }
                 if request.command.isAgent { throw ControlFailure(code: .permission) }
                 if case .settingsSet = request.command { throw ControlFailure(code: .permission) }
+                if case .branch = request.command { throw ControlFailure(code: .permission) }
             }
             guard !isShuttingDown else { throw ControlFailure(code: .shutdown) }
             guard request.instance == instance else { throw ControlFailure(code: .instanceMismatch) }
@@ -128,7 +129,7 @@ final class AppControlService {
                 result = .history(try await Storage.controlHistory(query, scope: instance.uuidString, allowsMissing: !thread.hasStartedTurn))
             case .operation(let ticket): result = .operation(ledger.outcome(ticket))
             case .settingsGet: result = .settings(settingsSnapshot(app))
-            case .create, .submit, .interrupt, .settingsSet:
+            case .create, .branch, .submit, .interrupt, .settingsSet:
                 result = .operation(try performWrite(request.command, app: app, source: source))
             case .agentModels: result = .agentModels(await agentRunner.models())
             case .agentRun: throw ControlFailure(code: .invalidRequest, detail: "streaming_only")
@@ -185,6 +186,21 @@ final class AppControlService {
                         } catch { self.fail(ticket, error) }
                     }
                 }
+            case .branch(let request):
+                let thread = try requireOrdinaryThread(request.threadID, app: app)
+                let point: ThreadBranchPoint = switch request.mode {
+                case .before: .before(turnID: request.turnID)
+                case .through: .through(turnID: request.turnID)
+                }
+                ledger.update(ticket) { $0.threadID = thread.id; $0.turnID = request.turnID; $0.state = .preparing }
+                Task { [weak self, weak app] in
+                    guard let self, let app else { return }
+                    do {
+                        let branched = try await app.branchThread(from: thread.id, at: point)
+                        self.ledger.update(ticket) { $0.threadID = branched.id; $0.state = .ready }
+                        app.updateTaskSleepPrevention()
+                    } catch { self.fail(ticket, Self.mapBranchError(error)) }
+                }
             case .submit(let request):
                 guard !request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       request.text.utf8.count <= LocalControl.maxText else { throw ControlFailure(code: .bounds) }
@@ -229,6 +245,17 @@ final class AppControlService {
         app?.updateTaskSleepPrevention()
     }
 
+    private static func mapBranchError(_ error: Error) -> Error {
+        if let failure = error as? ControlFailure { return failure }
+        guard let branch = error as? ThreadBranchFailure else { return error }
+        switch branch {
+        case .notFound: return ControlFailure(code: .notFound)
+        case .busy: return ControlFailure(code: .busy)
+        case .unavailablePoint: return ControlFailure(code: .conflict, detail: "unavailable_point")
+        case .directoryUnavailable: return ControlFailure(code: .directoryUnavailable)
+        }
+    }
+
     private func updateTurn(_ ticket: ControlTicket, _ event: ControlTurnUpdate) {
         ledger.update(ticket) {
             $0.state = event.state
@@ -268,15 +295,18 @@ final class AppControlService {
     }
 
     private func resolveContinuation(_ requested: ControlContinuation, thread: ChatThread) throws -> ControlContinuation {
+        // A branch that could not fork its provider's session carries the history it
+        // copied as text into the new session's first turn.
+        let rebuildsBranch = thread.branchOrigin != nil && thread.providerSessionID == nil
         let mode: ControlContinuation = requested == .automatic
-            ? (!thread.hasStartedTurn ? .fresh : (thread.provider.isAPIKeyBased ? .transcript : .providerSession)) : requested
+            ? (!thread.hasStartedTurn ? .fresh : (thread.provider.isAPIKeyBased || rebuildsBranch ? .transcript : .providerSession)) : requested
         switch mode {
         case .fresh:
             guard !thread.hasStartedTurn, thread.providerSessionID == nil else { throw ControlFailure(code: .continuationUnavailable) }
         case .providerSession:
             guard Self.supportsExactContinuation(thread.provider), thread.providerSessionID != nil else { throw ControlFailure(code: .continuationUnavailable) }
         case .transcript:
-            guard thread.provider.isAPIKeyBased else { throw ControlFailure(code: .continuationUnavailable) }
+            guard thread.provider.isAPIKeyBased || rebuildsBranch else { throw ControlFailure(code: .continuationUnavailable) }
         case .automatic: throw ControlFailure(code: .invalidRequest)
         }
         return mode

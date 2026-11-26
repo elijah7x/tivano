@@ -16,9 +16,13 @@ struct TerminalPanel: View {
     }
 
     private var location: Location {
-        let thread = model.thread(runtime.threadID)
-        return Location(threadID: runtime.threadID, affiliation: thread?.affiliation,
-                        directory: thread.flatMap { try? model.executionDirectory(for: $0) })
+        let thread: ChatThread? = model.thread(runtime.threadID)
+        let directory: String? = if let thread {
+            try? model.executionDirectory(for: thread)
+        } else {
+            nil
+        }
+        return Location(threadID: runtime.threadID, affiliation: thread?.affiliation, directory: directory)
     }
 
     @State private var dragOrigin: Double?
@@ -27,49 +31,13 @@ struct TerminalPanel: View {
     @State private var dragHeight: Double?
 
     var body: some View {
-        let terminals = model.terminals
-        let isPrepared = preparedLocation == location
-        let sessions = isPrepared ? terminals.sessions(for: runtime.threadID) : []
-        let selected = isPrepared ? terminals.selected(for: runtime.threadID) : nil
+        let terminals: TerminalStore = model.terminals
+        let isPrepared: Bool = preparedLocation == location
+        let sessions: [TerminalSession] = isPrepared ? terminals.sessions(for: runtime.threadID) : []
+        let selected: TerminalSession? = isPrepared ? terminals.selected(for: runtime.threadID) : nil
+        let panelHeight: CGFloat = CGFloat(dragHeight ?? model.settings.terminalHeight)
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(sessions) { session in
-                            TerminalTab(
-                                session: session,
-                                isSelected: session.id == selected?.id,
-                                select: { terminals.selection[runtime.threadID] = session.id },
-                                restart: { openTerminal(restarting: session) },
-                                close: { terminals.close(session) }
-                            )
-                        }
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                Button {
-                    openTerminal()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(Chrome.iconFont)
-                }
-                .buttonStyle(.chip)
-                .help(Text(verbatim: Chrome.localized("New terminal")))
-                .accessibilityLabel(Text("New terminal"))
-                Spacer(minLength: 0)
-                Button {
-                    runtime.isTerminalVisible = false
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(Chrome.iconFont)
-                }
-                .buttonStyle(.chip)
-                .help(Text(verbatim: Chrome.localized("Hide terminal") + ShortcutStore.hint(for: .toggleTerminal)))
-                .accessibilityLabel(Text("Hide terminal"))
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 38)
-            .pointerStyle(.default)
+            headerBar(terminals: terminals, sessions: sessions, selected: selected)
 
             if let selected {
                 TerminalHost(session: selected, runtime: runtime, isDark: colorScheme == .dark) { runtime.isTerminalVisible = false }
@@ -78,57 +46,117 @@ struct TerminalPanel: View {
                     .padding(.trailing, 6)
                     .padding(.bottom, 6)
             } else {
-                // Every tab closed leaves the drawer open with nothing in it; the way
-                // back is here rather than only on the plus in the corner.
-                VStack(spacing: 10) {
-                    if let directoryError {
-                        Text(verbatim: directoryError)
-                            .font(.ui(.callout))
-                            .foregroundStyle(Chrome.danger)
-                            .textSelection(.enabled)
-                    }
-                    Text("No shell open in this thread")
-                        .font(.system(.body))
-                        .foregroundStyle(Chrome.secondaryText)
-                    Button("New shell") {
-                        openTerminal()
-                    }
-                    .chromeGlassButtonStyle()
-                    .controlSize(.small)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyState
             }
         }
-        .frame(height: dragHeight ?? model.settings.terminalHeight)
+        .frame(height: panelHeight)
         // The drag lives on a strip of its own at the very top edge, overlaid on the empty
         // band above the tabs: the whole tab row used to resize, so a sideways drag across
         // the tabs moved the drawer instead of scrolling them.
         .overlay(alignment: .top) {
-            TerminalResizeHandle(
-                onBegin: { dragOrigin = model.settings.terminalHeight; runtime.isTerminalResizing = true },
-                onChange: { delta in
-                    let origin = dragOrigin ?? model.settings.terminalHeight
-                    dragHeight = min(760, max(140, origin + delta))
-                },
-                onEnd: {
-                    if let dragHeight { model.settings.terminalHeight = dragHeight }
-                    dragHeight = nil
-                    dragOrigin = nil
-                    runtime.isTerminalResizing = false
-                }
-            )
-            .frame(height: 8)
+            resizeHandleOverlay
         }
         // Rounded top corners, so the panel reads as a sheet rising into the conversation.
-        .background(
-            UnevenRoundedRectangle(
-                topLeadingRadius: Chrome.sheetCornerRadius,
-                topTrailingRadius: Chrome.sheetCornerRadius,
-                style: .continuous
-            )
-            .fill(colorScheme == .dark ? Color(white: 0.08) : Color(white: 0.985))
-        )
+        .background(panelBackground)
         .task(id: location) { openTerminal(onlyIfNeeded: true) }
+    }
+
+    private func headerBar(
+        terminals: TerminalStore,
+        sessions: [TerminalSession],
+        selected: TerminalSession?
+    ) -> some View {
+        let hideHelp: String = Chrome.localized("Hide terminal") + ShortcutStore.hint(for: .toggleTerminal)
+        return HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(sessions) { (session: TerminalSession) in
+                        TerminalTab(
+                            session: session,
+                            isSelected: session.id == selected?.id,
+                            select: { terminals.selection[runtime.threadID] = session.id },
+                            restart: { openTerminal(restarting: session) },
+                            close: { terminals.close(session) }
+                        )
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Button {
+                openTerminal()
+            } label: {
+                Image(systemName: "plus")
+                    .font(Chrome.iconFont)
+            }
+            .buttonStyle(.chip)
+            .help(Text(verbatim: Chrome.localized("New terminal")))
+            .accessibilityLabel(Text("New terminal"))
+            Spacer(minLength: 0)
+            Button {
+                runtime.isTerminalVisible = false
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(Chrome.iconFont)
+            }
+            .buttonStyle(.chip)
+            .help(Text(verbatim: hideHelp))
+            .accessibilityLabel(Text("Hide terminal"))
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 38)
+        .pointerStyle(.default)
+    }
+
+    private var emptyState: some View {
+        // Every tab closed leaves the drawer open with nothing in it; the way
+        // back is here rather than only on the plus in the corner.
+        VStack(spacing: 10) {
+            if let directoryError {
+                Text(verbatim: directoryError)
+                    .font(.ui(.callout))
+                    .foregroundStyle(Chrome.danger)
+                    .textSelection(.enabled)
+            }
+            Text("No shell open in this thread")
+                .font(.system(.body))
+                .foregroundStyle(Chrome.secondaryText)
+            Button("New shell") {
+                openTerminal()
+            }
+            .chromeGlassButtonStyle()
+            .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var resizeHandleOverlay: some View {
+        TerminalResizeHandle(
+            onBegin: {
+                dragOrigin = model.settings.terminalHeight
+                runtime.isTerminalResizing = true
+            },
+            onChange: { (delta: CGFloat) in
+                let origin: Double = dragOrigin ?? model.settings.terminalHeight
+                dragHeight = min(760.0, max(140.0, origin + Double(delta)))
+            },
+            onEnd: {
+                if let dragHeight { model.settings.terminalHeight = dragHeight }
+                dragHeight = nil
+                dragOrigin = nil
+                runtime.isTerminalResizing = false
+            }
+        )
+        .frame(height: 8)
+    }
+
+    private var panelBackground: some View {
+        let fillColor: Color = colorScheme == .dark ? Color(white: 0.08) : Color(white: 0.985)
+        return UnevenRoundedRectangle(
+            topLeadingRadius: Chrome.sheetCornerRadius,
+            topTrailingRadius: Chrome.sheetCornerRadius,
+            style: .continuous
+        )
+        .fill(fillColor)
     }
 
     private func openTerminal(onlyIfNeeded: Bool = false, restarting session: TerminalSession? = nil) {

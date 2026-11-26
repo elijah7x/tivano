@@ -148,6 +148,18 @@ def main():
     elif '.onDisappear' not in strip_line_comments(link_hover_text):
         failures.append(f'{link_hover_rel}: missing .onDisappear')
 
+    # The composer's AppKit text view puts up the I-beam; the SwiftUI around it never sets the
+    # arrow back (its pointer style does not change), so the field must restore it on exit.
+    composer_rel = 'Tivano/App/Views/Composer/ComposerTextView.swift'
+    composer_text = read_rel(composer_rel)
+    if composer_text is None:
+        failures.append(f'{composer_rel}: missing (cannot check the I-beam hand-back)')
+    else:
+        span = declaration_span(composer_text, 'ComposerNSTextView')
+        code = strip_line_comments(span or '')
+        if 'override func mouseExited' not in code or 'NSCursor.arrow.set()' not in code:
+            failures.append(f'{composer_rel}: ComposerNSTextView must restore the arrow when the pointer leaves it')
+
     if failures:
         print('FAIL: cursor_stack_checks:')
         for failure in failures:

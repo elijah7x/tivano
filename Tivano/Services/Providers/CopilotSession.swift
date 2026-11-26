@@ -518,10 +518,11 @@ final class CopilotSession: ProviderSession {
         environment: [String: String],
         configure: (JSONRPCConnection) -> Void
     ) async throws -> JSONRPCConnection {
+        await MCPStore.waitUntilReady()
         var arguments = ["--headless", "--stdio", "--no-auto-update", "--log-level", "error"]
         // Connected servers from Settings are the only MCP servers the session sees;
         // the user's own are switched off for this session by name, their file untouched.
-        arguments += MCPSessionOverrides.copilotArguments()
+        arguments += MCPProviderConfig.copilotArguments()
         let process = StdioProcess(
             executable: executable,
             arguments: arguments,
@@ -590,7 +591,6 @@ final class CopilotSession: ProviderSession {
         case "assistant.usage":
             let spend = (data["inputTokens"]?.int ?? 0) + (data["outputTokens"]?.int ?? 0)
             if spend > 0 {
-                TokenLedger.shared.record(spend: spend)
                 // One report per message, so it is already the amount that message
                 // consumed. A head's report carries its id: it is the account's
                 // spend, and the head's alone, not the lead's.

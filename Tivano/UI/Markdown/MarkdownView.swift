@@ -100,6 +100,8 @@ private enum MarkdownMemoryPressure {
 struct MarkdownView: View, Equatable {
     let text: String
     static let warmCandidateLimit = 96
+    static let warmScanLimit = 384
+    static let warmBatchLimit = 24
     /// True while the text is still arriving. A streaming message parses through a slot of
     /// its own instead of the shared cache: it changes on every flush, and each of those
     /// would otherwise take a cache entry away from a finished message that scrolling back
@@ -474,13 +476,17 @@ struct MarkdownView: View, Equatable {
         var missing: [String] = []
         var seen: Set<String> = []
         var remainingBytes = 1_048_576
-        for text in texts.prefix(warmCandidateLimit) {
+        var scanned = 0
+        for text in texts {
+            scanned += 1
+            if scanned > warmScanLimit { break }
+            guard !blockCache.contains(text) else { continue }
             let bytes = text.utf8.prefix(262_145).count
             guard bytes <= 262_144, bytes <= remainingBytes,
-                  !blockCache.contains(text), seen.insert(text).inserted else { continue }
+                  seen.insert(text).inserted else { continue }
             missing.append(text)
             remainingBytes -= bytes
-            if missing.count == 24 { break }
+            if missing.count == warmBatchLimit { break }
         }
         return missing
     }
@@ -1009,32 +1015,6 @@ enum RichLink {
         return (hosts, videos)
     }
 
-    @MainActor
-    static func linkHosts(for source: String, streaming: Bool = false) -> [String] {
-        let pretty = prettyAttributed(source, streaming: streaming)
-        var hosts: [String] = []
-        var seen = Set<String>()
-        for run in pretty.runs {
-            if let host = run.link?.host?.lowercased(), !host.isEmpty, seen.insert(host).inserted {
-                hosts.append(host)
-            }
-        }
-        return hosts
-    }
-
-    /// The video ids a paragraph's links carry, first-seen order, each once.
-    @MainActor
-    static func videoIDs(for source: String, streaming: Bool = false) -> [String] {
-        let pretty = prettyAttributed(source, streaming: streaming)
-        var ids: [String] = []
-        var seen = Set<String>()
-        for run in pretty.runs {
-            guard let link = run.link, let id = LinkTitles.videoID(for: link), seen.insert(id).inserted else { continue }
-            ids.append(id)
-        }
-        return ids
-    }
-
     /// What keys the paragraph's link work: hosts and video ids together, empty when
     /// there is neither, so a caller's `isEmpty` test still means something.
     @MainActor
@@ -1205,27 +1185,31 @@ enum RichLink {
         "sg", "hk", "tw", "th", "my", "id", "ph", "vn", "tr", "il", "ae", "sa", "cl", "ar", "pe"
     ]
 
+    private static func mayContainBareDomain(_ slice: AttributedSubstring) -> Bool {
+        var afterDot = false
+        for scalar in slice.unicodeScalars {
+            let value = scalar.value
+            // ICU case folding can also match non-ASCII letters to [A-Za-z].
+            if afterDot && ((65...90).contains(value) || (97...122).contains(value) || value >= 128) {
+                return true
+            }
+            afterDot = value == 46
+        }
+        return false
+    }
+
     /// Links the bare domains Foundation leaves alone: `tivano.app` typed in chat
     /// reads as a link with its favicon, the same as a full URL does.
     private static func autolinkedBareDomains(_ parsed: AttributedString) -> AttributedString {
-        var out = AttributedString()
+        guard let pattern = bareDomainPattern else { return parsed }
+        var out: AttributedString?
         for run in parsed.runs {
             let slice = parsed[run.range]
-            if run.link != nil || (run.inlinePresentationIntent ?? []).contains(.code) {
-                out.append(AttributedString(slice))
+            if run.link != nil || (run.inlinePresentationIntent ?? []).contains(.code) || !mayContainBareDomain(slice) {
+                out?.append(AttributedString(slice))
                 continue
             }
             let text = String(slice.characters)
-            var afterDot = false
-            let mayContainDomain = text.utf8.contains { byte in
-                defer { afterDot = byte == 46 }
-                // ICU case folding can also match non-ASCII letters to [A-Za-z].
-                return afterDot && ((65...90).contains(byte) || (97...122).contains(byte) || byte >= 128)
-            }
-            guard mayContainDomain, let pattern = bareDomainPattern else {
-                out.append(AttributedString(slice))
-                continue
-            }
             let ns = text as NSString
             let matches = pattern.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length))
             let trimSet = ".,;:!?'\""
@@ -1241,8 +1225,17 @@ enum RichLink {
                 return (matchText, url)
             }
             guard matches.contains(where: { candidate($0)?.url != nil }) else {
-                out.append(AttributedString(slice))
+                out?.append(AttributedString(slice))
                 continue
+            }
+            var built: AttributedString
+            if let existing = out {
+                out = nil
+                built = existing
+            } else {
+                built = run.range.lowerBound > parsed.startIndex
+                    ? AttributedString(parsed[parsed.startIndex..<run.range.lowerBound])
+                    : AttributedString()
             }
             // Offsets are Characters throughout: the regex reports UTF-16 ranges, and
             // `Range(_:in:)` turns one back into the text's own indices, so a sentence with
@@ -1268,20 +1261,21 @@ enum RichLink {
                 guard start >= cursor else { continue }
                 guard let candidate = candidate(match) else { continue }
                 let end = start + candidate.text.count
-                if start > cursor { out.append(piece(cursor..<start)) }
+                if start > cursor { built.append(piece(cursor..<start)) }
                 if let url = candidate.url {
                     var linkSlice = piece(start..<end)
                     linkSlice.link = url
-                    out.append(linkSlice)
+                    built.append(linkSlice)
                 } else if end > cursor {
-                    out.append(piece(start..<end))
+                    built.append(piece(start..<end))
                 }
                 cursor = end
             }
             let count = textOffset + text.distance(from: textIndex, to: text.endIndex)
-            if cursor < count { out.append(piece(cursor..<count)) }
+            if cursor < count { built.append(piece(cursor..<count)) }
+            out = built
         }
-        return out
+        return out ?? parsed
     }
 
     private static func baseAttributed(_ source: String) -> AttributedString {

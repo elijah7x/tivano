@@ -245,107 +245,29 @@ struct KeepsakesSettingsPage: View {
     }
 
     private func story(_ keepsake: Keepsake?, _ definition: KeepsakeDefinition) -> some View {
-        let isLit = keepsake?.litAt != nil
-        let duration = reduceMotion ? 0 : M.flight
-        let travelTime = closing ? max(0, flightTime - M.closeLead) : flightTime
-        let p = duration == 0 ? 1 : min(1, travelTime / duration)
-        let travel = closing ? 1 - Motion.settle(p) : Motion.settle(p)
-        let veil = overlayProgress
-        let thumb = thumbnailFrames[definition.id] ?? .zero
+        let isLit: Bool = keepsake?.litAt != nil
+        let duration: Double = reduceMotion ? 0.0 : M.flight
+        let travelTime: Double = closing ? max(0.0, flightTime - M.closeLead) : flightTime
+        let p: Double = duration == 0.0 ? 1.0 : min(1.0, travelTime / duration)
+        let travel: Double = closing ? 1.0 - Motion.settle(p) : Motion.settle(p)
+        let veil: Double = overlayProgress
+        let thumb: CGRect = thumbnailFrames[definition.id] ?? .zero
         let source = CGPoint(x: thumb.midX, y: thumb.midY)
         let target = CGPoint(x: flightFrame.midX, y: flightFrame.midY)
-        let metadata = reduceMotion ? (closing ? 0.0 : 1.0) : (closing
-            ? 1 - Motion.ease.value(flightTime / M.metadataOut)
-            : Motion.ease.value((flightTime - M.flight - M.metadataDelay) / M.metadataIn))
-        let hint = reduceMotion ? (hintTime < 3 ? 1.0 : 0.0)
-            : (hintTime <= 3 ? Motion.ease.value(hintTime / 0.8) : 1 - Motion.ease.value((hintTime - 3) / 0.8))
+        let metadata: Double = storyMetadataProgress()
+        let hint: Double = storyHintProgress()
 
         return ZStack(alignment: .topTrailing) {
-            ZStack {
-                KeepsakeBackdrop()
-                KeepsakeOverlayStyle.veil(dark: dark)
-            }
-            .opacity(veil)
-            .contentShape(Rectangle())
-            .onTapGesture { close() }
-            .pointingHandCursor()
+            storyBackdrop(veil: veil)
 
             VStack(spacing: 0) {
-                Button {
-                    guard !busy, isLit else { return }
-                    withAnimation(reduceMotion ? nil : Motion.ease.animation(0.7)) { flipped.toggle() }
-                    withAnimation(reduceMotion ? nil : Motion.ease.animation(0.8)) { hintDismissed = true }
-                } label: {
-                    ZStack {
-                        if isLit {
-                            KeepsakeFlipFace(
-                                front: image(definition.frontAsset),
-                                back: image(definition.backAsset),
-                                angle: flipped ? 180 : 0
-                            )
-                        } else {
-                            asset(definition.unlitAsset)
-                        }
-                    }
-                    .frame(width: M.viewer, height: M.viewer)
-                }
-                .buttonStyle(.plain)
-                .pointerStyle(isLit ? .link : .default)
-                .focused($focus, equals: .badge)
-                .accessibilityLabel(Text(verbatim: Chrome.localized(definition.title)))
-                .accessibilityHint(Text(verbatim: isLit ? Chrome.localized("Tap to flip") : ""))
-                .scaleEffect((M.thumbnail + (M.viewer - M.thumbnail) * travel) / M.viewer)
-                .offset(x: (source.x - target.x) * (1 - travel), y: (source.y - target.y) * (1 - travel))
-                // Measured outside the flight transforms, so the target is the card's resting layout frame.
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("keepsake-page")) } action: { flightFrame = $0 }
-
-                VStack(spacing: 0) {
-                    Text(verbatim: Chrome.localized(definition.title))
-                        .font(.ui(size: 15, weight: .medium))
-                        .foregroundStyle(text)
-                    if let keepsake {
-                        Text(verbatim: earnedText(keepsake))
-                            .font(.ui(size: 12))
-                            .padding(.top, 8)
-                    }
-                    Text(verbatim: Chrome.localized(captionKey(for: keepsake)))
-                        .font(.ui(size: 12))
-                        .padding(.top, keepsake == nil ? 8 : 4)
-                    Text(verbatim: Chrome.localized(definition.detail))
-                        .font(.ui(size: 13))
-                        .lineSpacing(6)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 12)
-                    if isLit {
-                        Text("Tap to flip")
-                            .font(.ui(size: 12))
-                            .padding(.top, 20)
-                            .opacity(hintDismissed ? 0 : hint * (closing
-                                ? (reduceMotion ? 0 : 1 - Motion.ease.value(flightTime / 0.8)) : 1))
-                    }
-                }
-                .foregroundStyle(text.opacity(0.7))
-                .multilineTextAlignment(.center)
-                .padding(.top, 10)
-                .opacity(metadata)
+                storyBadgeButton(definition: definition, isLit: isLit, travel: travel, source: source, target: target)
+                storyMetadataBlock(keepsake: keepsake, definition: definition, isLit: isLit, metadata: metadata, hint: hint)
             }
             .frame(width: M.viewer)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Button(action: close) {
-                Text(verbatim: "×")
-                    .font(.system(size: 18))
-                    .foregroundStyle(text.opacity(0.7))
-                    .frame(width: 28, height: 28)
-                    .background(.white.opacity(dark ? 7.0 / 255 : 64.0 / 255), in: Circle())
-                    .overlay(Circle().strokeBorder(dark ? .white.opacity(18.0 / 255) : M.color(0x252727, 18.0 / 255), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor()
-            .focused($focus, equals: .close)
-            .accessibilityLabel(Text("Close"))
-            .padding(18)
-            .opacity(veil)
+            storyCloseButton(veil: veil)
         }
         .accessibilityElement(children: .contain)
         .onExitCommand { close() }
@@ -353,6 +275,143 @@ struct KeepsakesSettingsPage: View {
             focus = focus == .badge ? .close : .badge
             return .handled
         }
+    }
+
+    private func storyMetadataProgress() -> Double {
+        if reduceMotion {
+            return closing ? 0.0 : 1.0
+        }
+        if closing {
+            return 1.0 - Motion.ease.value(flightTime / M.metadataOut)
+        }
+        return Motion.ease.value((flightTime - M.flight - M.metadataDelay) / M.metadataIn)
+    }
+
+    private func storyHintProgress() -> Double {
+        if reduceMotion {
+            return hintTime < 3.0 ? 1.0 : 0.0
+        }
+        if hintTime <= 3.0 {
+            return Motion.ease.value(hintTime / 0.8)
+        }
+        return 1.0 - Motion.ease.value((hintTime - 3.0) / 0.8)
+    }
+
+    private func storyBackdrop(veil: Double) -> some View {
+        ZStack {
+            KeepsakeBackdrop()
+            KeepsakeOverlayStyle.veil(dark: dark)
+        }
+        .opacity(veil)
+        .contentShape(Rectangle())
+        .onTapGesture { close() }
+        .pointingHandCursor()
+    }
+
+    private func storyBadgeButton(
+        definition: KeepsakeDefinition,
+        isLit: Bool,
+        travel: Double,
+        source: CGPoint,
+        target: CGPoint
+    ) -> some View {
+        let travelFactor: CGFloat = CGFloat(travel)
+        let remainingFactor: CGFloat = CGFloat(1.0 - travel)
+        let badgeScale: CGFloat = (M.thumbnail + (M.viewer - M.thumbnail) * travelFactor) / M.viewer
+        let offsetX: CGFloat = (source.x - target.x) * remainingFactor
+        let offsetY: CGFloat = (source.y - target.y) * remainingFactor
+        let titleText: String = Chrome.localized(definition.title)
+        let hintText: String = isLit ? Chrome.localized("Tap to flip") : ""
+        return Button {
+            guard !busy, isLit else { return }
+            withAnimation(reduceMotion ? nil : Motion.ease.animation(0.7)) { flipped.toggle() }
+            withAnimation(reduceMotion ? nil : Motion.ease.animation(0.8)) { hintDismissed = true }
+        } label: {
+            ZStack {
+                if isLit {
+                    KeepsakeFlipFace(
+                        front: image(definition.frontAsset),
+                        back: image(definition.backAsset),
+                        angle: flipped ? 180.0 : 0.0
+                    )
+                } else {
+                    asset(definition.unlitAsset)
+                }
+            }
+            .frame(width: M.viewer, height: M.viewer)
+        }
+        .buttonStyle(.plain)
+        .pointerStyle(isLit ? .link : .default)
+        .focused($focus, equals: .badge)
+        .accessibilityLabel(Text(verbatim: titleText))
+        .accessibilityHint(Text(verbatim: hintText))
+        .scaleEffect(badgeScale)
+        .offset(x: offsetX, y: offsetY)
+        // Measured outside the flight transforms, so the target is the card's resting layout frame.
+        .onGeometryChange(for: CGRect.self) { (proxy: GeometryProxy) -> CGRect in
+            proxy.frame(in: .named("keepsake-page"))
+        } action: { (frame: CGRect) in
+            flightFrame = frame
+        }
+    }
+
+    private func storyMetadataBlock(
+        keepsake: Keepsake?,
+        definition: KeepsakeDefinition,
+        isLit: Bool,
+        metadata: Double,
+        hint: Double
+    ) -> some View {
+        let captionTopPadding: CGFloat = keepsake == nil ? 8 : 4
+        let closeFade: Double = closing ? (reduceMotion ? 0.0 : 1.0 - Motion.ease.value(flightTime / 0.8)) : 1.0
+        let hintOpacity: Double = hintDismissed ? 0.0 : hint * closeFade
+        return VStack(spacing: 0) {
+            Text(verbatim: Chrome.localized(definition.title))
+                .font(.ui(size: 15, weight: .medium))
+                .foregroundStyle(text)
+            if let keepsake {
+                Text(verbatim: earnedText(keepsake))
+                    .font(.ui(size: 12))
+                    .padding(.top, 8)
+            }
+            Text(verbatim: Chrome.localized(captionKey(for: keepsake)))
+                .font(.ui(size: 12))
+                .padding(.top, captionTopPadding)
+            Text(verbatim: Chrome.localized(definition.detail))
+                .font(.ui(size: 13))
+                .lineSpacing(6)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 12)
+            if isLit {
+                Text("Tap to flip")
+                    .font(.ui(size: 12))
+                    .padding(.top, 20)
+                    .opacity(hintOpacity)
+            }
+        }
+        .foregroundStyle(text.opacity(0.7))
+        .multilineTextAlignment(.center)
+        .padding(.top, 10)
+        .opacity(metadata)
+    }
+
+    private func storyCloseButton(veil: Double) -> some View {
+        let fillColor: Color = Color.white.opacity(dark ? 7.0 / 255.0 : 64.0 / 255.0)
+        let borderColor: Color = dark ? Color.white.opacity(18.0 / 255.0) : M.color(0x252727, 18.0 / 255.0)
+        return Button(action: close) {
+            Text(verbatim: "×")
+                .font(.system(size: 18))
+                .foregroundStyle(text.opacity(0.7))
+                .frame(width: 28, height: 28)
+                .background(fillColor, in: Circle())
+                .overlay(Circle().strokeBorder(borderColor, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .focused($focus, equals: .close)
+        .accessibilityLabel(Text("Close"))
+        .padding(18)
+        .opacity(veil)
     }
 
     private func tick(_ date: Date) {

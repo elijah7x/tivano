@@ -39,7 +39,8 @@ actor RemoteMCPAuthority {
     private let stateURL: URL
     private let onPendingChanged: @Sendable ([RemoteMCPApprovalRequest]) -> Void
     private let onGrantsChanged: @Sendable ([RemoteMCPGrant]) -> Void
-    private var state: RemoteMCPState
+    private var state = RemoteMCPState()
+    private var stateLoaded = false
     private var base = ""
     private var resource: String { base + RemoteMCP.mcpPath }
     private var pending: [UUID: Pending] = [:]
@@ -54,10 +55,14 @@ actor RemoteMCPAuthority {
         self.stateURL = stateURL
         self.onPendingChanged = onPendingChanged
         self.onGrantsChanged = onGrantsChanged
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+    }
+
+    /// Loads `remote-mcp.json` on the actor's executor on first use rather than blocking init.
+    private func loadStateIfNeeded() {
+        guard !stateLoaded else { return }
+        stateLoaded = true
         if let data = try? Data(contentsOf: stateURL) {
-            if let loaded = try? decoder.decode(RemoteMCPState.self, from: data) {
+            if let loaded = try? JSONDecoder.storage.decode(RemoteMCPState.self, from: data) {
                 state = loaded
             } else {
                 var quarantine = stateURL.appendingPathExtension("corrupt")
@@ -75,6 +80,7 @@ actor RemoteMCPAuthority {
     func setBaseURL(_ base: String) { self.base = base }
 
     func handle(_ request: RemoteHTTPRequest) async -> RemoteHTTPResponse? {
+        loadStateIfNeeded()
         switch request.path {
         case "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp":
             guard request.method == "GET" else { return .empty(405, headers: ["Allow": "GET"]) }
@@ -119,6 +125,7 @@ actor RemoteMCPAuthority {
     }
 
     func authenticate(_ request: RemoteHTTPRequest) -> RemoteMCPAccess? {
+        loadStateIfNeeded()
         guard let header = request.header("Authorization") else { return nil }
         let parts = header.split(whereSeparator: { $0 == " " || $0 == "\t" })
         guard parts.count == 2, parts[0].lowercased() == "bearer" else { return nil }
@@ -149,15 +156,20 @@ actor RemoteMCPAuthority {
         notifyPending()
     }
 
-    func grants() -> [RemoteMCPGrant] { state.grants }
+    func grants() -> [RemoteMCPGrant] {
+        loadStateIfNeeded()
+        return state.grants
+    }
 
     func revoke(grantID: UUID) {
+        loadStateIfNeeded()
         state.grants.removeAll { $0.id == grantID }
         accessTokens = accessTokens.filter { $0.value.grantID != grantID }
         grantsChanged()
     }
 
     func revokeAll() {
+        loadStateIfNeeded()
         state.grants.removeAll()
         accessTokens.removeAll()
         codes.removeAll()

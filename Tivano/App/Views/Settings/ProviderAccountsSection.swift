@@ -235,46 +235,7 @@ private struct ProviderAccountMenu: View {
 
     var body: some View {
         Menu {
-            if let fullNotice, !fullNotice.isEmpty {
-                Button {} label: {
-                    Text(verbatim: fullNotice)
-                }
-                .disabled(true)
-                Divider()
-            }
-            if !account.requiresClaudeCleanup || !account.requiresClaudeActivation {
-                if !account.requiresClaudeActivation {
-                    if !isActive && !account.requiresClaudeCleanup && (isSignedIn || account.provider == .claude) {
-                        Button("Use this account") { accounts.use(account) }
-                    }
-                }
-                Button("Sign in again") {
-                    error = nil
-                    isSigningIn = true
-                    Task {
-                        if account.provider == .claude {
-                            error = await ThreadRuntime.signInClaudeAccount(account, app: model,
-                                expectedIdentities: dependentChats.compactMap(\.claudeIdentity))
-                        } else {
-                            error = await accounts.signIn(account)
-                        }
-                        isSigningIn = false
-                    }
-                }
-                .disabled(isSigningIn || isRemoving || state?.isSigningIn == true)
-                Button("Rename…") {
-                    newName = account.name ?? ""
-                    isRenaming = true
-                }
-            }
-            if !account.isDefault {
-                Button("Remove account", role: .destructive) { confirmsRemoval = true }
-                    .disabled(isRemoving || isSigningIn || state?.isSigningIn == true)
-                if account.provider == .claude && account.requiresClaudeCleanup {
-                    Button("Remove from Tivano anyway", role: .destructive) { confirmsForceRemoval = true }
-                        .disabled(isRemoving || isSigningIn || state?.isSigningIn == true)
-                }
-            }
+            menuItems
         } label: {
             Label("Account actions", systemImage: "ellipsis")
                 .labelStyle(.iconOnly)
@@ -286,38 +247,98 @@ private struct ProviderAccountMenu: View {
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Remove this account?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
-            Button("Remove account", role: .destructive) {
-                error = nil
-                isRemoving = true
-                Task {
-                    if account.provider == .claude {
-                        error = await ThreadRuntime.removeClaudeAccount(account, app: model)
-                    } else {
-                        error = await accounts.remove(account)
-                    }
-                    isRemoving = false
-                }
-            }
+            Button("Remove account", role: .destructive) { removeAccount() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            if account.provider == .claude {
-                Text(verbatim: claudeRemovalMessage)
-            } else {
-                Text("Tivano signs this account out and deletes its sign-in folder on this Mac. Chats keep their history.")
-            }
+            removalMessage
         }
         .confirmationDialog("Remove from Tivano anyway?", isPresented: $confirmsForceRemoval, titleVisibility: .visible) {
-            Button("Remove from Tivano anyway", role: .destructive) {
-                error = nil
-                isRemoving = true
-                Task {
-                    error = await ThreadRuntime.removeClaudeAccount(account, app: model, forceRemoveLocal: true)
-                    isRemoving = false
-                }
-            }
+            Button("Remove from Tivano anyway", role: .destructive) { forceRemoveAccount() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Removes this account from Tivano even if macOS Keychain denies credential cleanup. You can delete any remaining Keychain item in Keychain Access.")
+        }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        let isBusy: Bool = isSigningIn || isRemoving || state?.isSigningIn == true
+        if let fullNotice, !fullNotice.isEmpty {
+            Button {} label: {
+                Text(verbatim: fullNotice)
+            }
+            .disabled(true)
+            Divider()
+        }
+        if !account.requiresClaudeCleanup || !account.requiresClaudeActivation {
+            if !account.requiresClaudeActivation {
+                if !isActive && !account.requiresClaudeCleanup && (isSignedIn || account.provider == .claude) {
+                    Button("Use this account") { accounts.use(account) }
+                }
+            }
+            Button("Sign in again") { signInAgain() }
+                .disabled(isBusy)
+            Button("Rename…") {
+                newName = account.name ?? ""
+                isRenaming = true
+            }
+        }
+        if !account.isDefault {
+            Button("Remove account", role: .destructive) { confirmsRemoval = true }
+                .disabled(isBusy)
+            if account.provider == .claude && account.requiresClaudeCleanup {
+                Button("Remove from Tivano anyway", role: .destructive) { confirmsForceRemoval = true }
+                    .disabled(isBusy)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var removalMessage: some View {
+        if account.provider == .claude {
+            Text(verbatim: claudeRemovalMessage)
+        } else {
+            Text("Tivano signs this account out and deletes its sign-in folder on this Mac. Chats keep their history.")
+        }
+    }
+
+    private func signInAgain() {
+        error = nil
+        isSigningIn = true
+        Task {
+            if account.provider == .claude {
+                let expectedIdentities: [ClaudeAccountIdentity] = dependentChats.compactMap(\.claudeIdentity)
+                error = await ThreadRuntime.signInClaudeAccount(
+                    account,
+                    app: model,
+                    expectedIdentities: expectedIdentities
+                )
+            } else {
+                error = await accounts.signIn(account)
+            }
+            isSigningIn = false
+        }
+    }
+
+    private func removeAccount() {
+        error = nil
+        isRemoving = true
+        Task {
+            if account.provider == .claude {
+                error = await ThreadRuntime.removeClaudeAccount(account, app: model)
+            } else {
+                error = await accounts.remove(account)
+            }
+            isRemoving = false
+        }
+    }
+
+    private func forceRemoveAccount() {
+        error = nil
+        isRemoving = true
+        Task {
+            error = await ThreadRuntime.removeClaudeAccount(account, app: model, forceRemoveLocal: true)
+            isRemoving = false
         }
     }
 
@@ -342,8 +363,6 @@ private struct ProviderAccountMenu: View {
 
 @MainActor
 private enum AccountSupport {
-    static let resetFormatter = RelativeDateTimeFormatter()
-
     static func windows(for account: ProviderAccount, state: ProviderAccounts.State?) -> [PlanLimits.Window] {
         guard !account.requiresClaudeActivation, !account.requiresClaudeCleanup else { return [] }
         let windows = (state?.limits?.windows ?? []).filter { !$0.id.contains("extra") }
@@ -422,7 +441,7 @@ private enum AccountSupport {
                 ? Chrome.localized("Login expired")
                 : localizedProblem)
         } else if let reset = state?.exhaustedUntil, reset > .now {
-            parts.append(String(format: Chrome.localized("Usage limit reached · resets %@"), Self.resetFormatter.localizedString(for: reset, relativeTo: .now)))
+            parts.append(String(format: Chrome.localized("Usage limit reached · resets %@"), AppFormatting.relativeDateTime.localizedString(for: reset, relativeTo: .now)))
         } else if isActive {
             parts.append(Chrome.localized(account.provider == .claude ? "Selected for new chats" : "In use"))
         }

@@ -183,8 +183,33 @@ struct ThreadTimeline: View, Equatable {
     /// Changes to rebuild the lazy stack from scratch: the second repair for a viewport
     /// the stack has built nothing for (see `repairLayout`).
     @State private var stackGeneration = 0
+    /// Stable holder for the timeline's link handler so `.environment(\.openURL, ...)`
+    /// keeps the same `OpenURLAction` across body evaluations while reading the latest
+    /// `AppModel` and `workingDirectory`.
+    @MainActor
+    private final class OpenURLBox {
+        weak var model: AppModel?
+        var workingDirectory: String?
+        private var cachedAction: OpenURLAction?
+
+        var action: OpenURLAction {
+            if let cachedAction { return cachedAction }
+            let action = OpenURLAction { [weak self] url in
+                guard let self else { return .discarded }
+                if let headID = HydraMentionTarget.threadID(in: url) {
+                    self.model?.openThread(headID)
+                    return .handled
+                }
+                MarkdownLinkOpener.open(url, base: self.workingDirectory)
+                return .handled
+            }
+            cachedAction = action
+            return action
+        }
+    }
     /// The rows' way to the reveal (see `revealEnd`), made once for the timeline's life.
     @State private var revealBox = TimelineRevealBox()
+    @State private var openURLBox = OpenURLBox()
     /// The blocks as last built. This body re-runs for plenty of reasons the conversation
     /// knows nothing about (the reader starting or ending a scroll, the column resizing, a
     /// setting elsewhere), and partitioning every entry into blocks again each time is work
@@ -197,13 +222,21 @@ struct ThreadTimeline: View, Equatable {
         let _ = tracking.bindTrace(runtime.threadID, viewportHeight)
         #endif
         let entries = runtime.entries
+        let thread = model.thread(runtime.threadID)
+        // Every head the chat ever sent out, not only those still in the panel: a head that
+        // finished and left for the sidebar is still named in the prose above, and keeps its
+        // glyph and colour there rather than falling back to plain text as it clears. With
+        // Hydra on, the whole roster besides: the lead names its heads in the prose before
+        // the block that sends them out, so a name is drawn as its head from the first
+        // frame rather than as plain text until the spawn lands.
+        let headThreads = model.children(of: runtime.threadID).filter(\.isHydraHead)
         // The cache reads whether a tool row has images (a flag that flips once), never
         // message text or tool output, so a streaming reply or a running command redraws
         // its own row and never brings this body with it.
         // Every unarchived head, in the panel or not: a finished head that has already left
         // the panel for the sidebar (auto-clear, or Clear finished heads) keeps its pill
         // until its batch reports, so the list is not the panel's.
-        let team = model.helpers(of: runtime.threadID).filter(\.isHydraHead)
+        let team = headThreads.filter { !$0.isArchived }
         let finished = HydraHeadsWorkingRow.finishedHeads(in: team).sorted { ($0.finishedAt ?? .distantPast) < ($1.finishedAt ?? .distantPast) }
         let since = runtime.isRunning ? runtime.turnStartedAt : nil
         let earlier = since.map { cut in finished.filter { ($0.finishedAt ?? .distantPast) < cut } } ?? []
@@ -212,22 +245,26 @@ struct ThreadTimeline: View, Equatable {
         let pills = HeadPills(earlier: earlier.map(\.index), later: later.map(\.index))
         // A backgrounded command still running after the turn ended: kept out of the cache,
         // so the row comes and goes with the list.
-        let waiting: [DisplayBlock] = !runtime.isRunning && !runtime.isHydraMerging && !runtime.backgroundTasks.isEmpty
-            ? [.backgroundTasks(runtime.backgroundTasks)] : []
-        let blocks = blockCache.blocks(
+        let waitingTasks = !runtime.isRunning && !runtime.isHydraMerging ? runtime.backgroundTasks : []
+        let showsHelpersWorking = HelpersWorkingRow.shows(runtime: runtime, model: model)
+        let resolved = blockCache.resolvedBlocks(
             for: entries,
-            showReasoning: model.settings.showReasoning, isRunning: runtime.isRunning,
+            showReasoning: model.settings.showReasoning,
+            isRunning: runtime.isRunning,
             hydraMergeID: runtime.isHydraMerging ? (runtime.hydraMergeNoteID ?? "hydra-merging") : nil,
-            pills: pills
-        ) + waiting + (HelpersWorkingRow.shows(runtime: runtime, model: model) ? [.helpersWorking] : [])
-        // Every head the chat ever sent out, not only those still in the panel: a head that
-        // finished and left for the sidebar is still named in the prose above, and keeps its
-        // glyph and colour there rather than falling back to plain text as it clears. With
-        // Hydra on, the whole roster besides: the lead names its heads in the prose before
-        // the block that sends them out, so a name is drawn as its head from the first
-        // frame rather than as plain text until the spawn lands.
-        let thread = model.thread(runtime.threadID)
-        let headThreads = model.children(of: runtime.threadID).filter(\.isHydraHead)
+            pills: pills,
+            waitingTasks: waitingTasks,
+            showsHelpersWorking: showsHelpersWorking
+        )
+        let blocks = resolved.blocks
+        let branchOrigin = thread?.branchOrigin
+        // The trailing synthetic rows carry no turn, so the anchor search reads the same
+        // turns as over the cached blocks alone.
+        let branchDivider = blockCache.branchDividerPlacement(
+            for: branchOrigin,
+            in: blocks,
+            isLoadingHistory: runtime.isLoadingHistory
+        )
         let hydraMentionPersonas = blockCache.mentionPersonas(
             for: headThreads,
             roster: thread.map(model.hydraIsOn) ?? false
@@ -236,7 +273,7 @@ struct ThreadTimeline: View, Equatable {
         // A head's name in the prose leads to its own chat. A reused name points at the
         // newest head, so the oldest heads lose: iterate oldest first and let each write
         // over the last.
-        let hydraMentionTargets = Self.mentionTargets(for: headThreads)
+        let hydraMentionTargets = blockCache.mentionTargets(for: headThreads)
         // A history still being read off the main thread is not an empty thread: the
         // prompt for a new one would flash for the frames before it lands. Its newest
         // turns land first and show while the older ones are read.
@@ -244,10 +281,14 @@ struct ThreadTimeline: View, Equatable {
             if runtime.isLoadingHistory && blocks.isEmpty {
                 Color.clear
             } else if blocks.isEmpty && !runtime.isRunning {
+                // A branched thread starts with its quiet origin divider instead of the
+                // forwarded-context banner (it may also carry a continuation).
                 // A forwarded thread starts empty too, but it is not a new one: it explains
                 // where it came from before the reader picks anything.
                 Group {
-                    if let continuation = runtime.continuation {
+                    if let branchOrigin {
+                        branchOriginStart(branchOrigin)
+                    } else if let continuation = runtime.continuation {
                         continuationStart(continuation)
                     } else {
                         NewThreadPrompt(threadID: runtime.threadID, projectName: projectName)
@@ -258,22 +299,12 @@ struct ThreadTimeline: View, Equatable {
                     if scrollState.showsJumpButton { scrollState.showsJumpButton = false }
                 }
             } else {
-                timeline(blocks, thread: thread, turnsWithMultipleEntries: turnsWithMultipleEntries, hydraMentionPersonas: hydraMentionPersonas, hydraMentionTargets: hydraMentionTargets)
+                timeline(blocks, outline: resolved.outline, outlineIDs: resolved.outlineIDs, thread: thread, branchOrigin: branchOrigin, branchDivider: branchDivider, turnsWithMultipleEntries: turnsWithMultipleEntries, hydraMentionPersonas: hydraMentionPersonas, hydraMentionTargets: hydraMentionTargets)
             }
         }
         .background {
             ThreadResultReadObserver(model: model, threadID: runtime.threadID)
         }
-    }
-
-    /// Every head by its persona name, oldest first so a reused name lands on the newest head.
-    private static func mentionTargets(for heads: [ChatThread]) -> [String: HydraMentionTarget] {
-        var targets: [String: HydraMentionTarget] = [:]
-        for head in heads.sorted(by: { $0.createdAt < $1.createdAt }) {
-            guard let info = head.hydra else { continue }
-            targets[info.persona.name] = HydraMentionTarget(threadID: head.id, task: info.task, status: info.status)
-        }
-        return targets
     }
 
     /// What an empty forwarded thread shows before its first message: the source it
@@ -312,7 +343,21 @@ struct ThreadTimeline: View, Equatable {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func timeline(_ blocks: [DisplayBlock], thread: ChatThread?, turnsWithMultipleEntries: Set<UUID>, hydraMentionPersonas: [HydraPersona], hydraMentionTargets: [String: HydraMentionTarget]) -> some View {
+    /// What a branched thread with no copied turns shows before its first message:
+    /// the quiet branch-origin divider resting in the same column geometry as the timeline.
+    private func branchOriginStart(_ origin: ThreadBranchOrigin) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer(minLength: 0)
+            BranchOriginDivider(sourceID: origin.sourceID, sourceTitle: origin.sourceTitle)
+        }
+        .frame(maxWidth: 820, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, Chrome.contentTopInset)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    }
+
+    private func timeline(_ blocks: [DisplayBlock], outline: [(id: String, hasUserMessage: Bool)], outlineIDs: [String], thread: ChatThread?, branchOrigin: ThreadBranchOrigin?, branchDivider: BranchDividerPlacement?, turnsWithMultipleEntries: Set<UUID>, hydraMentionPersonas: [HydraPersona], hydraMentionTargets: [String: HydraMentionTarget]) -> some View {
         // The window is anchored on identity rather than a fixed suffix, so a block
         // appended at the end never pushes one out the front in the same pass. Older
         // history still loads on demand; only this start moves.
@@ -325,15 +370,13 @@ struct ThreadTimeline: View, Equatable {
         let topSpace = cold?.unpinnedAnchorOffset.map { max(0, $0) } ?? (sums[range.lowerBound] - sums[startIndex])
         let bottomSpace = cold?.unpinnedAnchorOffset != nil ? 0 : (sums[blocks.count] - sums[range.upperBound])
         let initialAnchor: UnitPoint = cold?.unpinnedAnchorOffset != nil ? .top : .bottom
-        let outline = blocks.map { (id: $0.id, hasUserMessage: $0.hasUserMessage) }
-        let outlineIDs = outline.map(\.id)
         measurements.noteArrivals(outlineIDs, questions: runtime.questions.map(\.id))
         // The turns a row may offer to revert. Read here, once, so a turn record changing
         // (checkpoints, diffs, anchors) re-runs this body alone; rows get a plain flag that
         // only changes when their own answer does.
         let rewindable: Set<UUID>
         if supportsRewind && !runtime.isRunning {
-            rewindable = Set(runtime.turns.lazy.map(\.id))
+            rewindable = blockCache.rewindableTurns(for: runtime.turns, revision: runtime.turnsStructureRevision, runtime: runtime)
         } else {
             rewindable = []
         }
@@ -357,11 +400,13 @@ struct ThreadTimeline: View, Equatable {
             hydraWaitingTurns = waiting
         }
         let continuableTurn = continuableTurnID(thread: thread)
+        openURLBox.model = model
+        openURLBox.workingDirectory = workingDirectory
         // The rail floats over the timeline's leading gutter instead of taking layout
         // space, so the conversation stays centered exactly like the composer.
         // Ticks centre in the full column height, so the queue tab opening never moves them.
         return ZStack(alignment: .leading) {
-            timelineScroll(blocks: blocks, outline: outline, outlineIDs: outlineIDs, visible: visible, hidden: hidden, topSpace: topSpace, bottomSpace: bottomSpace, initialAnchor: initialAnchor, rewindable: rewindable, hydraWaitingTurns: hydraWaitingTurns, continuableTurn: continuableTurn, turnsWithMultipleEntries: turnsWithMultipleEntries)
+            timelineScroll(blocks: blocks, outline: outline, outlineIDs: outlineIDs, visible: visible, hidden: hidden, topSpace: topSpace, bottomSpace: bottomSpace, initialAnchor: initialAnchor, rewindable: rewindable, hydraWaitingTurns: hydraWaitingTurns, continuableTurn: continuableTurn, turnsWithMultipleEntries: turnsWithMultipleEntries, branchOrigin: branchOrigin, branchDivider: branchDivider)
             // The rail fades with the slide of the panel that takes its edge.
             ZStack {
                 if showsMinimap, outline.lazy.filter(\.hasUserMessage).prefix(2).count > 1 {
@@ -398,14 +443,7 @@ struct ThreadTimeline: View, Equatable {
         .environment(\.markdownLinkBase, workingDirectory)
         // A head's name in the prose opens the head's chat; every other link resolves
         // local paths against the chat's working directory.
-        .environment(\.openURL, OpenURLAction { url in
-            if let headID = HydraMentionTarget.threadID(in: url) {
-                model.openThread(headID)
-                return .handled
-            }
-            MarkdownLinkOpener.open(url, base: workingDirectory)
-            return .handled
-        })
+        .environment(\.openURL, openURLBox.action)
     }
 
     /// Jump the timeline to a minimap block. A target above the loaded
@@ -933,29 +971,40 @@ struct ThreadTimeline: View, Equatable {
             for: headThreads,
             roster: thread.map(model.hydraIsOn) ?? false
         )
-        return (mentions, Self.mentionTargets(for: headThreads))
+        return (mentions, blockCache.mentionTargets(for: headThreads))
     }
 
     /// Parses every finished reply's markdown off the main thread, so rows scrolling into
     /// view for the first time never parse on the frame. Cached texts are skipped.
     private func warmMarkdown() async {
-        var allTexts: [String] = []
+        var proseTexts: [String] = []
         var unparsed: [String] = []
+        var seenUnparsed: Set<String> = []
+        var scanned = 0
         for entry in runtime.entries.reversed() {
             guard case .assistant(let message) = entry.item.content, !message.isStreaming else { continue }
-            allTexts.append(message.text)
-            if !MarkdownView.isCached(message.text) {
+            scanned += 1
+            if proseTexts.count < MarkdownView.warmCandidateLimit {
+                proseTexts.append(message.text)
+            }
+            if !MarkdownView.isCached(message.text), seenUnparsed.insert(message.text).inserted {
                 unparsed.append(message.text)
             }
-            if allTexts.count == MarkdownView.warmCandidateLimit { break }
+            if scanned == MarkdownView.warmScanLimit { break }
         }
-        guard !allTexts.isEmpty else { return }
+        guard !proseTexts.isEmpty || !unparsed.isEmpty else { return }
         if !unparsed.isEmpty {
             try? await MarkdownView.warm(unparsed)
             guard !Task.isCancelled else { return }
         }
         let context = currentMentionsAndTargets()
-        await MarkdownView.warmProseRuns(allTexts, mentions: context.mentions, targets: context.targets)
+        await MarkdownView.warmProseRuns(proseTexts, mentions: context.mentions, targets: context.targets)
+        guard !Task.isCancelled else { return }
+        let recentSet = Set(proseTexts)
+        let olderWarmed = unparsed.filter { !recentSet.contains($0) && MarkdownView.isCached($0) }
+        if !olderWarmed.isEmpty {
+            await MarkdownView.warmProseRuns(olderWarmed, mentions: context.mentions, targets: context.targets)
+        }
     }
 
     /// Starts the next history page's parse before its blocks enter the window. The page
@@ -1036,7 +1085,7 @@ struct ThreadTimeline: View, Equatable {
 
     /// One block row, built outside the stack because the view builder timed the
     /// compiler out on the row's modifier chain.
-    private func row(_ block: DisplayBlock, rewindable: Set<UUID>, hydraWaitingTurns: Set<UUID>, continuableTurn: UUID?, turnsWithMultipleEntries: Set<UUID>) -> some View {
+    private func row(_ block: DisplayBlock, rewindable: Set<UUID>, hydraWaitingTurns: Set<UUID>, continuableTurn: UUID?, turnsWithMultipleEntries: Set<UUID>, branchOriginAfter: ThreadBranchOrigin?) -> some View {
         let canRewind = block.turnID.map { rewindable.contains($0) } ?? false
         let waitsForBlockEnd = block.turnID.map { hydraWaitingTurns.contains($0) } ?? false
         let continuableTurnID = block.turnID.flatMap { $0 == continuableTurn ? $0 : nil }
@@ -1053,8 +1102,18 @@ struct ThreadTimeline: View, Equatable {
         // Captured for this mount. A later rebuild uses the next `stackGeneration`, and the
         // row this one leaves behind must not clear that mount's visibility.
         let visibilityOwner = stackGeneration
-        return DisplayBlockView(block: block, runtime: runtime, context: context)
-            .equatable()
+        return Group {
+            if let branchOriginAfter {
+                VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
+                    DisplayBlockView(block: block, runtime: runtime, context: context)
+                        .equatable()
+                    BranchOriginDivider(sourceID: branchOriginAfter.sourceID, sourceTitle: branchOriginAfter.sourceTitle)
+                }
+            } else {
+                DisplayBlockView(block: block, runtime: runtime, context: context)
+                    .equatable()
+            }
+        }
             .environment(\.hydraWaitsForBlockEnd, waitsForBlockEnd)
             .environment(\.timelineBlockID, block.id)
             .environment(\.markdownMemoryScope, block.id)
@@ -1137,7 +1196,7 @@ struct ThreadTimeline: View, Equatable {
         return nil
     }
 
-    private func timelineScroll(blocks: [DisplayBlock], outline: [(id: String, hasUserMessage: Bool)], outlineIDs: [String], visible: [DisplayBlock], hidden: Int, topSpace: CGFloat, bottomSpace: CGFloat, initialAnchor: UnitPoint, rewindable: Set<UUID>, hydraWaitingTurns: Set<UUID>, continuableTurn: UUID?, turnsWithMultipleEntries: Set<UUID>) -> some View {
+    private func timelineScroll(blocks: [DisplayBlock], outline: [(id: String, hasUserMessage: Bool)], outlineIDs: [String], visible: [DisplayBlock], hidden: Int, topSpace: CGFloat, bottomSpace: CGFloat, initialAnchor: UnitPoint, rewindable: Set<UUID>, hydraWaitingTurns: Set<UUID>, continuableTurn: UUID?, turnsWithMultipleEntries: Set<UUID>, branchOrigin: ThreadBranchOrigin?, branchDivider: BranchDividerPlacement?) -> some View {
         // What the stack renders last: the newest question badge, or the newest block.
         // Its change is something arriving at the end of the conversation.
         let lastEntryID = runtime.questions.last.map { "question-" + $0.id } ?? visible.last?.id
@@ -1162,8 +1221,9 @@ struct ThreadTimeline: View, Equatable {
             VStack(alignment: .leading, spacing: 0) {
                 Spacer(minLength: 0)
                 // A forwarded thread keeps saying where it came from, once, at the head of
-                // the conversation and outside the folds.
-                if let continuation = runtime.continuation {
+                // the conversation and outside the folds. Suppressed for branched chats,
+                // which render their own branch-origin divider instead.
+                if let continuation = runtime.continuation, branchOrigin == nil {
                     ContinuationSourceLabel(sourceTitle: continuation.sourceTitle)
                         .font(.chat(size: 12, weight: .medium))
                         .foregroundStyle(Chrome.secondaryText)
@@ -1197,8 +1257,18 @@ struct ThreadTimeline: View, Equatable {
                 // phases). The window keeps the eager stack bounded instead.
                 VStack(alignment: .leading, spacing: TimelineMetrics.rowSpacing) {
                     if topSpace > 0 { Color.clear.frame(height: max(0, topSpace - TimelineMetrics.rowSpacing)) }
+                    if let branchOrigin, branchDivider == .top, hidden == 0, topSpace == 0 {
+                        BranchOriginDivider(sourceID: branchOrigin.sourceID, sourceTitle: branchOrigin.sourceTitle)
+                    }
                     ForEach(visible) { block in
-                        row(block, rewindable: rewindable, hydraWaitingTurns: hydraWaitingTurns, continuableTurn: continuableTurn, turnsWithMultipleEntries: turnsWithMultipleEntries)
+                        row(
+                            block,
+                            rewindable: rewindable,
+                            hydraWaitingTurns: hydraWaitingTurns,
+                            continuableTurn: continuableTurn,
+                            turnsWithMultipleEntries: turnsWithMultipleEntries,
+                            branchOriginAfter: branchDivider == .afterBlock(block.id) ? branchOrigin : nil
+                        )
                     }
                     if bottomSpace > 0 { Color.clear.frame(height: max(0, bottomSpace - TimelineMetrics.rowSpacing)) }
                     if let reviewer = runtime.hydraReviewRunning {
@@ -1256,7 +1326,10 @@ struct ThreadTimeline: View, Equatable {
         .onDisappear {
             capturePresentation(threadID: runtime.threadID)
             tracking.placementTask?.cancel()
+            tracking.placementTask = nil
             tracking.placementToken = nil
+            tracking.activePlacement = nil
+            tracking.suspendedPlacement = nil
             cancelHistoryRequest()
             remeasurePending = false
             tracking.rebuildingStackGeneration = nil
@@ -1269,11 +1342,15 @@ struct ThreadTimeline: View, Equatable {
         .modifier(ColumnShownReaction(visibility: columnVisibility, initial: true) { shown in
             if shown { widthLayout.hasBeenShown = true }
             tracking.setColumnShown(shown, on: runtime)
-            if shown { tracking.armViewportRefresh("columnShown") }
+            if shown {
+                tracking.armViewportRefresh("columnShown")
+                _ = resumeSuspendedPlacement()
+            }
         })
         // The thread opens at its end and stays there while its rows measure in.
         .onAppear {
             tracking.setColumnShown(columnVisibility.isShown, on: runtime)
+            if columnVisibility.isShown { _ = resumeSuspendedPlacement() }
             tracking.holdEnd(for: 1.5)
             if seenAutoStartedTurnToken == nil {
                 seenAutoStartedTurnToken = runtime.autoStartedTurnToken
@@ -1646,7 +1723,10 @@ struct ThreadTimeline: View, Equatable {
         .onChange(of: runtime.threadID) { oldID, _ in
             capturePresentation(threadID: oldID)
             tracking.placementTask?.cancel()
+            tracking.placementTask = nil
             tracking.placementToken = nil
+            tracking.activePlacement = nil
+            tracking.suspendedPlacement = nil
             // A new thread starts with a fresh window on its newest messages, and no
             // block from the old one is on screen any more.
             windowStartID = nil
@@ -1710,17 +1790,34 @@ struct ThreadTimeline: View, Equatable {
 
     private func keepAnchor(_ id: String, offset: CGFloat, scrollFirst: Bool, corrections: Int = 24) {
         tracking.placementTask?.cancel()
-        let token = UUID()
+        tracking.placementTask = nil
+        tracking.placementToken = nil
+        tracking.activePlacement = nil
+        tracking.suspendedPlacement = nil
         let generation = tracking.navigationGeneration
         let threadID = runtime.threadID
-        tracking.placementToken = token
+        let pending = TimelineScrollTracking.PendingPlacement(
+            id: id,
+            offset: offset,
+            scrollFirst: scrollFirst,
+            generation: generation,
+            threadID: threadID
+        )
         tracking.isPinnedToBottom = false
         anchorsBottomOnGrowth = false
+        guard columnVisibility.isShown else {
+            tracking.suspendedPlacement = pending
+            return
+        }
+        let token = UUID()
+        tracking.placementToken = token
+        tracking.activePlacement = pending
         tracking.placementTask = Task { @MainActor in
             defer {
                 if tracking.placementToken == token {
                     tracking.placementToken = nil
                     tracking.placementTask = nil
+                    tracking.activePlacement = nil
                     if generation == tracking.navigationGeneration, threadID == runtime.threadID {
                         tracking.layoutAction()
                     }
@@ -1730,6 +1827,9 @@ struct ThreadTimeline: View, Equatable {
             guard !Task.isCancelled, generation == tracking.navigationGeneration else { return }
             if scrollFirst {
                 withTransaction(Self.unanimated) { position.scrollTo(id: id, anchor: .top) }
+                if tracking.placementToken == token {
+                    tracking.activePlacement?.scrollFirst = false
+                }
             }
             // Disclosures hold through their animation; a measured history page corrects once.
             for _ in 0..<corrections {
@@ -1748,6 +1848,18 @@ struct ThreadTimeline: View, Equatable {
             }
             updateJumpButton()
         }
+    }
+
+    @discardableResult
+    private func resumeSuspendedPlacement() -> Bool {
+        guard columnVisibility.isShown, let pending = tracking.suspendedPlacement else { return false }
+        tracking.suspendedPlacement = nil
+        guard pending.generation == tracking.navigationGeneration,
+              pending.threadID == runtime.threadID,
+              !tracking.isPinnedToBottom,
+              measurements.blockIDs.contains(pending.id) else { return false }
+        keepAnchor(pending.id, offset: pending.offset, scrollFirst: pending.scrollFirst)
+        return true
     }
 
     /// The jump button is for a reader who left the end: unpinned and a real distance up.
@@ -1918,6 +2030,10 @@ struct ThreadTimeline: View, Equatable {
         guard !tracking.isUserScrolling, !tracking.isCoasting, !tracking.isReaderScrolling, !FrontMonitor.isHeld else {
             tracking.repairSkippedWhileScrolling = true
             tracking.trace("repair", "scrolling")
+            return
+        }
+        if resumeSuspendedPlacement() {
+            tracking.trace("repair", "placement.resume")
             return
         }
         let distance = tracking.distanceFromBottom
@@ -2269,10 +2385,20 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// Whether new text keeps the timeline at the conversation's end. No view body reads
     /// it, only the scroll closures, so a pin flip must never be able to re-render the
     /// timeline.
+    struct PendingPlacement {
+        let id: String
+        let offset: CGFloat
+        var scrollFirst: Bool
+        let generation: Int
+        let threadID: UUID
+    }
+
     @ObservationIgnored var isPinnedToBottom = true
     @ObservationIgnored var navigationGeneration = 0
     @ObservationIgnored var placementToken: UUID?
     @ObservationIgnored var placementTask: Task<Void, Never>?
+    @ObservationIgnored var activePlacement: PendingPlacement?
+    @ObservationIgnored var suspendedPlacement: PendingPlacement?
     @ObservationIgnored var animatedNavigation = false
     @ObservationIgnored var navigationAction: () -> Void = {}
     @ObservationIgnored var layoutAction: () -> Void = {}
@@ -2385,7 +2511,10 @@ final class TimelineScrollTracking: ScrollActivityReporter {
             navigationAction()
         }
         placementTask?.cancel()
+        placementTask = nil
         placementToken = nil
+        activePlacement = nil
+        suspendedPlacement = nil
         if animatedNavigation, let scrollView {
             animatedNavigation = false
             let clip = scrollView.contentView
@@ -2607,6 +2736,13 @@ final class TimelineScrollTracking: ScrollActivityReporter {
     /// The timeline is gone (a thread switch, a panel closed): whatever it reported is
     /// withdrawn, mid-drag or mid-coast alike, so the app never goes on hearing it scroll.
     func endActivity() {
+        if let active = activePlacement, placementTask != nil {
+            suspendedPlacement = active
+        }
+        activePlacement = nil
+        placementTask?.cancel()
+        placementTask = nil
+        placementToken = nil
         lastWheelInputAt = -.infinity
         lastWheelEventAt = -.infinity
         isTrackpadHeld = false
@@ -3623,6 +3759,63 @@ private struct ContinuationSourceLabel: View {
             .lineLimit(1)
             .truncationMode(.middle)
             .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("Continuing from %@"), shownTitle)))
+    }
+}
+
+/// Where a branched chat's quiet origin divider sits in the timeline. Computed once per
+/// block build in `TimelineBlockCache`, never per row.
+enum BranchDividerPlacement: Equatable {
+    case top
+    case afterBlock(String)
+}
+
+/// A quiet horizontal divider marking where a branched chat diverged from its source.
+/// Reuses the untitled-title handling and "Open original chat" action from `continuationStart`.
+private struct BranchOriginDivider: View {
+    @Environment(AppModel.self) private var model
+    let sourceID: UUID
+    let sourceTitle: String
+
+    private var shownTitle: String {
+        sourceTitle == ChatThread.untitled ? Chrome.localized(ChatThread.untitled) : sourceTitle
+    }
+
+    var body: some View {
+        let label = String(format: Chrome.localized("Branched from %@"), shownTitle)
+        let sourceExists = model.thread(sourceID) != nil
+        HStack(spacing: 10) {
+            Rectangle()
+                .fill(Chrome.overlay(0.12))
+                .frame(height: 1)
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.chat(size: 11))
+                    .foregroundStyle(Chrome.secondaryText)
+                Text(verbatim: label)
+                    .font(.chat(size: 12))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if sourceExists {
+                    Text(verbatim: "·")
+                        .font(.chat(size: 12))
+                        .foregroundStyle(Chrome.secondaryText.opacity(0.6))
+                    Button("Open original chat") {
+                        model.openThread(sourceID)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.chat(size: 12))
+                    .foregroundStyle(Chrome.accent)
+                    .fixedSize()
+                }
+            }
+            .layoutPriority(1)
+            Rectangle()
+                .fill(Chrome.overlay(0.12))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -4746,20 +4939,87 @@ final class TimelineBlockCache {
         }
     }
 
+    private struct BranchDividerCacheKey: Equatable {
+        var blocksRevision: UInt64
+        var lastCopiedTurnID: UUID?
+        var isLoadingHistory: Bool
+    }
+
+    struct ResolvedBlocks {
+        var blocks: [DisplayBlock] = []
+        var outline: [(id: String, hasUserMessage: Bool)] = []
+        var outlineIDs: [String] = []
+    }
+
+    private struct MentionTargetKey: Equatable {
+        let id: UUID
+        let title: String
+        let createdAt: Date
+        let personaIndex: Int?
+        let task: String?
+        let status: HydraHeadInfo.Status?
+    }
+
     private var key: Key?
     private var built = DisplayBlock.Built(blocks: [], stableCount: 0, lastRunStart: 0)
+    private var branchDividerKey: BranchDividerCacheKey?
+    private var cachedBranchDivider: BranchDividerPlacement?
+    private var builtGeneration: UInt64 = 0
+    private var resolvedGeneration: UInt64?
+    private var resolvedWaitingTasks: [String] = []
+    private var resolvedShowsHelpersWorking = false
+    private var resolved = ResolvedBlocks()
     private var meta = TimelineMeta()
     var turnsWithMultipleEntries: Set<UUID> { meta.turnsWithMultipleEntries }
+    private weak var rewindableRuntime: ThreadRuntime?
+    private var rewindableRevision: UInt64?
+    private var cachedRewindable: Set<UUID> = []
     /// The mention list, once per roster of heads: heads come and go far more rarely
     /// than this body runs.
     private var personaHeads: [Int?] = []
     private var personaRoster = false
+    private var hasCachedPersonas = false
     private var personas: [HydraPersona] = []
+    private var mentionTargetKeys: [MentionTargetKey] = []
+    private var hasCachedMentionTargets = false
+    private var cachedMentionTargets: [String: HydraMentionTarget] = [:]
     #if DEBUG
     private var tailBuilds = 0
     #endif
 
+    private func matchesKey(
+        _ cached: Key,
+        entries: [TimelineEntry],
+        showReasoning: Bool,
+        isRunning: Bool,
+        hydraMergeID: String?,
+        pills: HeadPills
+    ) -> Bool {
+        guard cached.entries.count == entries.count,
+              cached.isRunning == isRunning,
+              cached.hydraMergeID == hydraMergeID,
+              cached.pills == pills,
+              cached.showReasoning == showReasoning else { return false }
+        var imageCursor = 0
+        let cachedImages = cached.imageEntries
+        var turnEnds = 0
+        for index in entries.indices {
+            let entry = entries[index]
+            let identity = ObjectIdentifier(entry)
+            if cached.entries[index] != identity { return false }
+            if TimelineGroup.hasImages(entry) {
+                guard imageCursor < cachedImages.count, cachedImages[imageCursor] == identity else { return false }
+                imageCursor += 1
+            }
+            if entry.kind == .turnEnd { turnEnds += 1 }
+        }
+        return imageCursor == cachedImages.count && turnEnds == cached.turnEnds
+    }
+
     func blocks(for entries: [TimelineEntry], showReasoning: Bool, isRunning: Bool, hydraMergeID: String?, pills: HeadPills = HeadPills()) -> [DisplayBlock] {
+        if let key, matchesKey(key, entries: entries, showReasoning: showReasoning, isRunning: isRunning, hydraMergeID: hydraMergeID, pills: pills) {
+            return built.blocks
+        }
         var identities: [ObjectIdentifier] = []
         identities.reserveCapacity(entries.count)
         var imageEntries: [ObjectIdentifier] = []
@@ -4779,7 +5039,6 @@ final class TimelineBlockCache {
             pills: pills,
             showReasoning: showReasoning
         )
-        if wanted == key { return built.blocks }
         if let key, wanted.extends(key),
            let tail = buildTail(entries, appendedFrom: key.entries.count, showReasoning: showReasoning, isRunning: isRunning, hydraMergeID: hydraMergeID, pills: pills) {
             built = tail
@@ -4788,7 +5047,87 @@ final class TimelineBlockCache {
             built = DisplayBlock.build(entries, from: 0, keeping: [], meta: meta, showReasoning: showReasoning, isRunning: isRunning, hydraMergeID: hydraMergeID, pills: pills)
         }
         key = wanted
+        builtGeneration &+= 1
         return built.blocks
+    }
+
+    func resolvedBlocks(
+        for entries: [TimelineEntry],
+        showReasoning: Bool,
+        isRunning: Bool,
+        hydraMergeID: String?,
+        pills: HeadPills = HeadPills(),
+        waitingTasks: [String],
+        showsHelpersWorking: Bool
+    ) -> ResolvedBlocks {
+        let base = blocks(
+            for: entries,
+            showReasoning: showReasoning,
+            isRunning: isRunning,
+            hydraMergeID: hydraMergeID,
+            pills: pills
+        )
+        if resolvedGeneration == builtGeneration,
+           resolvedWaitingTasks == waitingTasks,
+           resolvedShowsHelpersWorking == showsHelpersWorking {
+            return resolved
+        }
+        var full = base
+        if !waitingTasks.isEmpty {
+            full.append(.backgroundTasks(waitingTasks))
+        }
+        if showsHelpersWorking {
+            full.append(.helpersWorking)
+        }
+        let outline = full.map { (id: $0.id, hasUserMessage: $0.hasUserMessage) }
+        let outlineIDs = outline.map(\.id)
+        resolved = ResolvedBlocks(blocks: full, outline: outline, outlineIDs: outlineIDs)
+        resolvedGeneration = builtGeneration
+        resolvedWaitingTasks = waitingTasks
+        resolvedShowsHelpersWorking = showsHelpersWorking
+        return resolved
+    }
+
+    func rewindableTurns(for turns: [TurnRecord], revision: UInt64, runtime: ThreadRuntime) -> Set<UUID> {
+        if rewindableRuntime === runtime, rewindableRevision == revision {
+            return cachedRewindable
+        }
+        let ids = Set(turns.lazy.map(\.id))
+        rewindableRuntime = runtime
+        rewindableRevision = revision
+        cachedRewindable = ids
+        return ids
+    }
+
+    /// Resolves the branch-origin divider placement once per block build: right after
+    /// the last block whose `turnID == origin.lastCopiedTurnID`, or `.top` when nil.
+    func branchDividerPlacement(
+        for origin: ThreadBranchOrigin?,
+        in blocks: [DisplayBlock],
+        isLoadingHistory: Bool
+    ) -> BranchDividerPlacement? {
+        guard let origin else { return nil }
+        let wanted = BranchDividerCacheKey(
+            blocksRevision: builtGeneration,
+            lastCopiedTurnID: origin.lastCopiedTurnID,
+            isLoadingHistory: isLoadingHistory
+        )
+        if wanted == branchDividerKey { return cachedBranchDivider }
+        let resolved: BranchDividerPlacement?
+        if let lastCopiedTurnID = origin.lastCopiedTurnID {
+            if let anchor = blocks.last(where: { $0.turnID == lastCopiedTurnID }) {
+                resolved = .afterBlock(anchor.id)
+            } else if isLoadingHistory {
+                resolved = nil
+            } else {
+                resolved = .top
+            }
+        } else {
+            resolved = .top
+        }
+        branchDividerKey = wanted
+        cachedBranchDivider = resolved
+        return resolved
     }
 
     /// The append fast path: entries arrived and nothing else changed. Every run but the
@@ -4828,16 +5167,62 @@ final class TimelineBlockCache {
     /// every name on the roster after them (a head still to be sent out). Memoized on
     /// both, so the list is built when a head comes or goes and not on every pass.
     func mentionPersonas(for heads: [ChatThread], roster: Bool) -> [HydraPersona] {
-        let indices = heads.map { $0.hydra?.index }
-        if indices == personaHeads, roster == personaRoster { return personas }
+        if hasCachedPersonas, roster == personaRoster, heads.count == personaHeads.count {
+            var matched = true
+            for index in heads.indices where heads[index].hydra?.index != personaHeads[index] {
+                matched = false
+                break
+            }
+            if matched { return personas }
+        }
         var seen = Set<String>()
         personas = heads.compactMap { $0.hydra?.persona }.filter { seen.insert($0.name).inserted }
         if roster {
             personas += HydraRoster.personas.filter { seen.insert($0.name).inserted }
         }
-        personaHeads = indices
+        personaHeads = heads.map { $0.hydra?.index }
         personaRoster = roster
+        hasCachedPersonas = true
         return personas
+    }
+
+    /// Every head by its persona name, oldest first so a reused name lands on the newest head.
+    func mentionTargets(for heads: [ChatThread]) -> [String: HydraMentionTarget] {
+        if hasCachedMentionTargets, heads.count == mentionTargetKeys.count {
+            var matched = true
+            for index in heads.indices {
+                let head = heads[index]
+                let cached = mentionTargetKeys[index]
+                if cached.id != head.id
+                    || cached.title != head.title
+                    || cached.createdAt != head.createdAt
+                    || cached.personaIndex != head.hydra?.index
+                    || cached.task != head.hydra?.task
+                    || cached.status != head.hydra?.status {
+                    matched = false
+                    break
+                }
+            }
+            if matched { return cachedMentionTargets }
+        }
+        var targets: [String: HydraMentionTarget] = [:]
+        for head in heads.sorted(by: { $0.createdAt < $1.createdAt }) {
+            guard let info = head.hydra else { continue }
+            targets[info.persona.name] = HydraMentionTarget(threadID: head.id, task: info.task, status: info.status)
+        }
+        mentionTargetKeys = heads.map {
+            MentionTargetKey(
+                id: $0.id,
+                title: $0.title,
+                createdAt: $0.createdAt,
+                personaIndex: $0.hydra?.index,
+                task: $0.hydra?.task,
+                status: $0.hydra?.status
+            )
+        }
+        hasCachedMentionTargets = true
+        cachedMentionTargets = targets
+        return targets
     }
 }
 

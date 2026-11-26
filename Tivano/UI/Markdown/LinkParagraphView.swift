@@ -199,6 +199,7 @@ struct LinkParagraphView: NSViewRepresentable {
             costLimit: 12 * 1024 * 1024,
             entryCostLimit: 1 * 1024 * 1024
         )
+        TextHeightMeasurer.clear()
     }
 
     @MainActor
@@ -402,15 +403,76 @@ extension EnvironmentValues {
     }
 }
 
-/// Non-editable selectable text view that sizes itself to its content width.
-/// No continuous work: layout runs once per text or width change.
+/// A second, measurement-only layout manager on a `LinkTextView`'s own text storage, so
+/// `sizeThatFits` probes at other widths never resize the live `textContainer` or discard
+/// its glyph layout. Sharing the storage costs no copy, keeps the glyphs across widths
+/// (a new width only re-breaks lines) and follows streamed edits incrementally.
+@MainActor
+final class TextHeightMeasurer {
+    /// Live measurers, so memory pressure can drop their layout; each rebuilds on its next probe.
+    private static let all = NSHashTable<TextHeightMeasurer>.weakObjects()
+
+    /// The owning view's storage, which outlives this measurer (the view owns both).
+    private unowned let storage: NSTextStorage
+    private var layoutManager: NSLayoutManager?
+    private var container: NSTextContainer?
+
+    init(storage: NSTextStorage) {
+        self.storage = storage
+    }
+
+    func measure(width: CGFloat) -> CGFloat {
+        guard width > 0, storage.length > 0 else { return 0 }
+        let containerWidth = width.isFinite ? width : CGFloat.greatestFiniteMagnitude
+        let layout: NSLayoutManager
+        let box: NSTextContainer
+        if let existing = layoutManager, let existingContainer = container {
+            layout = existing
+            box = existingContainer
+        } else {
+            RichLink.armMemoryPressure()
+            layout = NSLayoutManager()
+            // Measured on demand only; idle-time layout here would redo every width.
+            layout.backgroundLayoutEnabled = false
+            box = NSTextContainer(size: NSSize(width: containerWidth, height: CGFloat.greatestFiniteMagnitude))
+            box.widthTracksTextView = false
+            box.heightTracksTextView = false
+            box.lineFragmentPadding = 0
+            layout.addTextContainer(box)
+            storage.addLayoutManager(layout)
+            layoutManager = layout
+            container = box
+            Self.all.add(self)
+        }
+        if box.containerSize.width != containerWidth {
+            box.containerSize = NSSize(width: containerWidth, height: CGFloat.greatestFiniteMagnitude)
+        }
+        layout.ensureLayout(for: box)
+        return ceil(layout.usedRect(for: box).height)
+    }
+
+    /// Detaches the measurement layout from the storage, freeing its glyphs and lines.
+    func clear() {
+        guard let layout = layoutManager else { return }
+        storage.removeLayoutManager(layout)
+        layoutManager = nil
+        container = nil
+        Self.all.remove(self)
+    }
+
+    static func clear() {
+        for measurer in all.allObjects { measurer.clear() }
+    }
+}
+
+/// Non-editable selectable text view whose frame is owned by SwiftUI; measurement uses
+/// an offscreen stack so width probes never disturb display layout.
 final class LinkTextView: NSTextView {
     /// Keep at most one active selection per window (tracked per window) so a stale inactive gray
     /// selection never sits beside the active one.
     private static let activeSelectionViews = NSMapTable<NSWindow, LinkTextView>.weakToWeakObjects()
     private static var isClearingPreviousSelection = false
 
-    private var lastLaidOutWidth: CGFloat = 0
     private var lastMeasuredHeight: CGFloat = 0
 
     /// Receives a merge or pull request link when its popover's Merge row is chosen. Nil
@@ -438,17 +500,26 @@ final class LinkTextView: NSTextView {
     /// and every link paragraph came out blank.
     private let storage = NSTextStorage()
 
+    /// Measures widths other than the live one; see `TextHeightMeasurer`.
+    private lazy var heightMeasurer = TextHeightMeasurer(storage: storage)
+
     init() {
         let layoutManager = NSLayoutManager()
+        // Lay out only what is drawn or measured. Idle-time layout would re-lay every row's
+        // whole text after each width change, offscreen rows included, while a pane is dragged.
+        layoutManager.backgroundLayoutEnabled = false
         storage.addLayoutManager(layoutManager)
-        let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
+        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        // Not `widthTracksTextView`: with it AppKit lays the whole text out synchronously on
+        // every width change, even offscreen; `setFrameSize` follows the width instead and
+        // leaves the layout to the next draw.
         container.widthTracksTextView = false
         container.heightTracksTextView = false
         container.lineFragmentPadding = 0
         layoutManager.addTextContainer(container)
         super.init(frame: .zero, textContainer: container)
-        // Vertical sizing is driven by `height(forWidth:)`; never clamp the text to
-        // the zero frame this view starts with.
+        // SwiftUI owns the view frame; AppKit tracks container width from bounds without
+        // resizing the view or applying autoresizing adjustments behind SwiftUI's back.
         minSize = .zero
         maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         isEditable = false
@@ -459,9 +530,8 @@ final class LinkTextView: NSTextView {
         usesFindBar = false
         focusRingType = .none
         textContainerInset = .zero
-        isVerticallyResizable = true
+        isVerticallyResizable = false
         isHorizontallyResizable = false
-        autoresizingMask = [.width]
         isAutomaticLinkDetectionEnabled = false
         isAutomaticDataDetectionEnabled = false
         isAutomaticTextCompletionEnabled = false
@@ -586,6 +656,8 @@ final class LinkTextView: NSTextView {
     /// rather than in `menu(for:)` so the click never moves the selection. Prose keeps the
     /// system's menu.
     override func hitTest(_ point: NSPoint) -> NSView? {
+        // Glyph lookups below and the click that follows use the shown width.
+        matchContainerToBounds()
         guard passesProseThrough, let superview else { return super.hitTest(point) }
         // `hitTest` gets the superview's coordinates; the link lookup wants this view's.
         let local = convert(point, from: superview)
@@ -685,7 +757,6 @@ final class LinkTextView: NSTextView {
     /// measurements instead of laying out the whole string again.
     private var measuredHeights: [CGFloat: CGFloat] = [:]
     private var measuredWidthOrder: [CGFloat] = []
-    private var needsSettleAfterResize = false
     private var intrinsicInvalidationQueued = false
     var cachedHeightHint: CGFloat {
         lastMeasuredHeight > 0 ? lastMeasuredHeight : (measuredHeights.values.first ?? 20)
@@ -706,11 +777,8 @@ final class LinkTextView: NSTextView {
         lastMeasuredHeight = 0
         measuredHeights.removeAll()
         measuredWidthOrder.removeAll()
-        contentGeneration &+= 1
-        paintHealAttempt = 0
-        resetHeal()
-        // resetHeal cancels any pending check; new text needs one of its own.
-        scheduleHeightCheck()
+        cancelPendingRecheck()
+        scheduleReconcile(reason: "text", repaint: false)
         // `render` runs from `updateNSView`, often inside the hosting view's layout pass
         // (a column laid out as it is shown); invalidating there can skip the pass and
         // leave the text undrawn inside its bubble.
@@ -765,19 +833,34 @@ final class LinkTextView: NSTextView {
     }
 
     func height(forWidth width: CGFloat) -> CGFloat {
-        guard width > 0, let layout = layoutManager, let container = textContainer else { return 0 }
-        // A hit leaves the container alone: resizing it discards the glyph layout, and
-        // `layout()` restores the real bounds width anyway.
+        guard width > 0, storage.length > 0 else { return 0 }
         if let height = measuredHeights[width] { return height }
-        container.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
-        layout.ensureLayout(for: container)
-        let height = ceil(layout.usedRect(for: container).height)
+        let height: CGFloat
+        if width.isFinite, let layout = layoutManager, let container = textContainer {
+            // Measured on the display stack: SwiftUI almost always sets the frame to the
+            // width it just asked about, so this layout is the one that gets drawn and a
+            // width change costs one layout, not two. Any other width is put back before
+            // the view draws or is checked (`matchContainerToBounds`).
+            setContainerWidth(width)
+            layout.ensureLayout(for: container)
+            height = ceil(layout.usedRect(for: container).height)
+            if bounds.width > 0, bounds.width != width {
+                scheduleReconcile(reason: "probe", repaint: false)
+            }
+        } else {
+            // A content-hugging bubble asks for its natural width; that layout would never
+            // be drawn, so it stays off the display stack.
+            height = heightMeasurer.measure(width: width)
+        }
         if measuredWidthOrder.count == 4 {
             let expiredWidth = measuredWidthOrder.removeFirst()
             measuredHeights[expiredWidth] = nil
         }
         measuredWidthOrder.append(width)
         measuredHeights[width] = height
+        if height > 0, width.isFinite, bounds.width <= 0 || abs(width - bounds.width) <= 0.5 {
+            lastMeasuredHeight = height
+        }
         return height
     }
 
@@ -792,28 +875,47 @@ final class LinkTextView: NSTextView {
     }
 
     override var intrinsicContentSize: NSSize {
-        let width = bounds.width > 0 ? bounds.width : lastLaidOutWidth
-        guard width > 0 else { return NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
-        return NSSize(width: NSView.noIntrinsicMetric, height: height(forWidth: width))
+        guard bounds.width > 0 else { return NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
+        return NSSize(width: NSView.noIntrinsicMetric, height: height(forWidth: bounds.width))
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         let oldSize = frame.size
         super.setFrameSize(newSize)
+        // Only a real width change: AppKit re-sets the same size when a measurement changes
+        // the container, and matching there would undo the measurement mid-way.
+        if newSize.width != oldSize.width {
+            matchContainerToBounds()
+        }
         // A view growing out of a zero-area frame can miss its initial draw if AppKit
         // clipped an earlier invalidation to empty bounds.
         if (oldSize.width <= 0 || oldSize.height <= 0), newSize.width > 0, newSize.height > 0 {
             needsDisplay = true
         }
-        // A resized view must paint again before the paint heal trusts it.
-        if abs(newSize.width - oldSize.width) > 0.5 || abs(newSize.height - oldSize.height) > 0.5 {
-            paintedGeneration = -1
-            paintHealAttempt = 0
+        if newSize != oldSize {
+            // AppKit redraws what a resize exposes, and a reply that grows with every streamed
+            // chunk would otherwise repaint whole each time; the zero-area case is handled above.
+            scheduleReconcile(reason: "frame", repaint: false)
         }
-        // Avoid short-circuiting an in-flight backoff when AppKit reapplies the same size.
-        if newSize != oldSize || healAttempt == 0 {
-            scheduleHeightCheck()
-        }
+    }
+
+    /// The one place the display container's width is set. Lazy: it only invalidates, and
+    /// the layout happens when the text is drawn or measured.
+    private func setContainerWidth(_ width: CGFloat) {
+        guard let container = textContainer, container.containerSize.width != width else { return }
+        container.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+    }
+
+    /// The text is laid out at exactly the width it is shown at whenever it is drawn,
+    /// checked or hit-tested (see `hitTest`); a measurement at another width never outlives that.
+    private func matchContainerToBounds() {
+        guard bounds.width > 0 else { return }
+        setContainerWidth(bounds.width)
+    }
+
+    override func viewWillDraw() {
+        matchContainerToBounds()
+        super.viewWillDraw()
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -829,258 +931,125 @@ final class LinkTextView: NSTextView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        // A reply mounted while its turn folds (running block → finished block) can be
-        // handed its text before it has a window; draw it once it is on screen.
-        if window != nil {
-            paintedGeneration = -1
-            paintHealAttempt = 0
-            needsDisplay = true
-        }
-        resetHeal()
-        if let window {
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(windowDidChangeOcclusionState(_:)),
-                name: NSWindow.didChangeOcclusionStateNotification,
-                object: window
-            )
-            scheduleHeightCheck()
-        }
+        cancelPendingRecheck()
+        guard let window else { return }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidChangeOcclusionState(_:)),
+            name: NSWindow.didChangeOcclusionStateNotification,
+            object: window
+        )
+        scheduleReconcile(reason: "window")
     }
 
     @objc private func windowDidChangeOcclusionState(_ notification: Notification) {
         // Kept hidden columns share the window; they wake on their own unhide.
         if !isHiddenOrHasHiddenAncestor, window?.occlusionState.contains(.visible) == true {
-            needsDisplay = true
-            paintedGeneration = -1
-            paintHealAttempt = 0
-            resetHeal()
-            scheduleHeightCheck()
+            scheduleReconcile(reason: "occlusion")
         }
     }
 
     override func viewDidUnhide() {
         super.viewDidUnhide()
-        needsDisplay = true
-        paintedGeneration = -1
-        paintHealAttempt = 0
-        resetHeal()
-        scheduleHeightCheck()
+        scheduleReconcile(reason: "unhide")
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        if !dirtyRect.isEmpty && bounds.width > 0 && bounds.height > 0 && window != nil {
-            paintedGeneration = contentGeneration
-            paintCheck?.cancel()
-            paintCheck = nil
-            paintHealAttempt = 0
-        }
-    }
-
-    override func layout() {
-        super.layout()
-        let width = bounds.width
-        // SwiftUI probes at infinity before settling on a width; make sure the text wraps
-        // to the frame it was actually given, not the last probe.
-        if width > 0, let container = textContainer, container.containerSize.width != width {
-            container.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
-            // Resizing the container discards the glyph layout from an earlier width probe.
-            needsDisplay = true
-        }
-        // While the window is being dragged SwiftUI already sizes the view through
-        // `sizeThatFits` for every width it proposes; the second measurement here only
-        // landed a frame late and made the paragraph hop between two heights, so it
-        // waits for the drag to end.
-        if window?.inLiveResize == true {
-            needsSettleAfterResize = true
-            return
-        }
-        guard width > 0, abs(width - lastLaidOutWidth) > 0.5 else { return }
-        // The first real width (or a new one) may arrive after the text was set while the
-        // frame was still zero; without an explicit mark the text could stay undrawn in a
-        // frame of the right height until something else forced a redraw.
-        let firstWidth = lastLaidOutWidth == 0
-        lastLaidOutWidth = width
-        resetHeal()
-        scheduleHeightCheck()
-        if firstWidth { needsDisplay = true }
-        let existing = measuredHeights[width]
-        let height = existing ?? height(forWidth: width)
-        // Skip the second invalidation when SwiftUI's `sizeThatFits` already measured this width.
-        if lastMeasuredHeight == 0, existing != nil {
-            lastMeasuredHeight = height
-            return
-        }
-        guard abs(height - lastMeasuredHeight) > 0.5 else { return }
-        lastMeasuredHeight = height
-        // Invalidating during layout makes the hosting view skip the whole pass, which could leave a just-mounted reply undrawn.
-        queueIntrinsicContentSizeInvalidation()
-    }
-
-    override func viewDidEndLiveResize() {
-        super.viewDidEndLiveResize()
-        // The one measurement the drag skipped, now that the width is final.
-        guard needsSettleAfterResize else { return }
-        needsSettleAfterResize = false
-        lastLaidOutWidth = bounds.width
-        let height = height(forWidth: bounds.width)
-        guard abs(height - lastMeasuredHeight) > 0.5 else { return }
-        lastMeasuredHeight = height
-        invalidateIntrinsicContentSize()
-    }
-
-    // MARK: - Height heal
+    // MARK: - Display reconciliation
 
     #if DEBUG
     static var debugHeightHealDisabled = false
     #endif
 
-    private static let heightHealLog = Logger(
+    private static let displayLog = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "Tivano",
         category: "LinkTextView"
     )
-    private var healAttempt = 0
-    /// After an attempt, the earliest time the next may run: checks triggered sooner (a
-    /// report, a frame set) leave it to the scheduled follow-up, so a cause that lasts a
-    /// moment cannot use up every attempt at once.
-    private var healNotBefore: CFTimeInterval = 0
-    private var healGeneration = 0
-    private var contentGeneration = 0
-    private var paintedGeneration = -1
-    private var heightCheckQueued = false
-    /// The height SwiftUI was last given per width (`ProseRunRepresentable.sizeThatFits`).
-    /// The text view sizes its own frame to its text, so its bounds alone can look right
-    /// while SwiftUI still lays it out in a slot measured before the text arrived.
-    private var reportedHeights: [CGFloat: CGFloat] = [:]
 
-    func noteReportedHeight(_ height: CGFloat, forWidth width: CGFloat) {
-        if reportedHeights.count >= 8, reportedHeights[width] == nil { reportedHeights.removeAll() }
-        reportedHeights[width] = height
-        // A stale report with an unchanged frame calls no other trigger.
-        scheduleHeightCheck()
+    private var pendingReconcileReason: StaticString?
+    private var pendingRepaint = false
+    private var recheckWorkItem: DispatchWorkItem?
+    /// Delays of the rechecks after a height mismatch: one soon, one after a transient
+    /// SwiftUI answer has had time to clear, then the audit's record takes over.
+    private static let recheckDelays: [TimeInterval] = [0.5, 2.0]
+    private var recheckAttempt = 0
+
+    /// `repaint` is false for text changes, measurements and resizes: the layout manager and
+    /// AppKit already redraw exactly what changed, and repainting the whole paragraph after
+    /// every streamed chunk would redraw all of it each time.
+    private func scheduleReconcile(reason: StaticString, repaint: Bool = true) {
+        let wasQueued = pendingReconcileReason != nil
+        pendingReconcileReason = reason
+        pendingRepaint = pendingRepaint || repaint
+        guard !wasQueued else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let reason = self.pendingReconcileReason else { return }
+            let repaint = self.pendingRepaint
+            self.pendingReconcileReason = nil
+            self.pendingRepaint = false
+            self.reconcileDisplay(reason: reason, repaint: repaint)
+        }
     }
 
-    private func resetHeal() {
-        healAttempt = 0
-        healNotBefore = 0
-        healGeneration &+= 1
-        heightCheckQueued = false
-    }
-
-    // Paint heal: separate from the height heal's attempts and backoff.
-
-    private var paintHealAttempt = 0
-    /// At most one pending check per view; a draw cancels it.
-    private var paintCheck: DispatchWorkItem?
-
-    private func schedulePaintCheck(after delay: TimeInterval) {
-        paintCheck?.cancel()
+    private func scheduleRecheck() {
+        recheckWorkItem?.cancel()
+        let delay = Self.recheckDelays[min(recheckAttempt, Self.recheckDelays.count - 1)]
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.paintCheck = nil
-            self.verifyPaint()
+            self.recheckWorkItem = nil
+            self.reconcileDisplay(reason: "recheck", repaint: true, isRecheck: true)
         }
-        paintCheck = item
+        recheckWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
-    private func verifyPaint() {
-        #if DEBUG
-        if Self.debugHeightHealDisabled { return }
-        #endif
-        guard paintedGeneration != contentGeneration,
-              paintHealAttempt < 3,
-              let window,
-              window.occlusionState.contains(.visible),
-              !isHiddenOrHasHiddenAncestor,
-              !window.inLiveResize,
-              !visibleRect.isEmpty,
-              bounds.width > 0, bounds.height > 0,
-              let textStorage, textStorage.length > 0 else { return }
-        // Scrolling mounts and paints rows on its own; check again once it settles.
-        if ScrollActivity.shared.isScrolling {
-            schedulePaintCheck(after: 0.25)
-            return
-        }
-        if let container = textContainer, container.containerSize.width != bounds.width {
-            container.containerSize = NSSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
-        }
-        needsDisplay = true
-        paintHealAttempt += 1
-        let attempt = paintHealAttempt
-        let width = Double(bounds.width)
-        let height = Double(bounds.height)
-        Self.heightHealLog.info("paint heal attempt \(attempt): width \(width) height \(height)")
-        if paintHealAttempt < 3 { schedulePaintCheck(after: [1.0, 3.0][paintHealAttempt - 1]) }
+    private func cancelPendingRecheck() {
+        recheckWorkItem?.cancel()
+        recheckWorkItem = nil
     }
 
-    func scheduleHeightCheck(after delay: TimeInterval = 0) {
-        let generation = healGeneration
-        if delay <= 0 {
-            guard !heightCheckQueued else { return }
-            heightCheckQueued = true
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.healGeneration == generation else { return }
-                self.heightCheckQueued = false
-                self.verifyHeight()
-            }
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self, self.healGeneration == generation else { return }
-                self.verifyHeight()
-            }
-        }
-    }
-
-    private func verifyHeight() {
-        #if DEBUG
-        if Self.debugHeightHealDisabled { return }
-        #endif
-        guard healAttempt <= 3,
-              let window,
+    private func reconcileDisplay(reason: StaticString, repaint: Bool, isRecheck: Bool = false) {
+        matchContainerToBounds()
+        guard window != nil,
               !isHiddenOrHasHiddenAncestor,
-              !window.inLiveResize,
               bounds.width > 0,
               let textStorage, textStorage.length > 0 else { return }
-        if intrinsicInvalidationQueued {
-            // A fresh measurement is already on its way; yield back to the run loop so
-            // it can land before re-checking, without spinning DispatchQueue.main.
-            guard !heightCheckQueued else { return }
-            heightCheckQueued = true
-            let generation = healGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
-                guard let self, self.healGeneration == generation else { return }
-                self.heightCheckQueued = false
-                self.verifyHeight()
-            }
-            return
+        if repaint, !visibleRect.isEmpty {
+            needsDisplay = true
         }
-        let expected = height(forWidth: bounds.width)
-        let actual = bounds.height
-        let reported = reportedHeights[bounds.width]
-        let staleSlot = reported.map { abs($0 - expected) > 0.5 } ?? false
-        if abs(actual - expected) <= 0.5, !staleSlot {
-            // A right-sized view can still be unpainted after the fold, staying
-            // blank until something rebuilds the column; give it one display pass first.
-            if paintedGeneration != contentGeneration, paintCheck == nil {
-                schedulePaintCheck(after: 0.25)
+        var checkHeight = true
+        #if DEBUG
+        if Self.debugHeightHealDisabled { checkHeight = false }
+        #endif
+        if checkHeight {
+            let expected = height(forWidth: bounds.width)
+            let actual = bounds.height
+            if abs(actual - expected) > 0.5 {
+                let width = Double(bounds.width)
+                let actualHeight = Double(actual)
+                let expectedHeight = Double(expected)
+                let reasonName = "\(reason)"
+                // Ask SwiftUI again for the size; each recheck asks once more, and after
+                // the last one any lasting mismatch is left to the audit's record.
+                invalidateIntrinsicContentSize()
+                superview?.needsLayout = true
+                if !isRecheck {
+                    recheckAttempt = 0
+                    Self.displayLog.info("height reconcile (\(reasonName, privacy: .public)): width \(width) bounds \(actualHeight) expected \(expectedHeight)")
+                    scheduleRecheck()
+                } else if recheckAttempt + 1 < Self.recheckDelays.count {
+                    recheckAttempt += 1
+                    scheduleRecheck()
+                } else {
+                    Self.displayLog.error("height reconcile failed after rechecks: width \(width) bounds \(actualHeight) expected \(expectedHeight)")
+                }
+            } else {
+                cancelPendingRecheck()
             }
-            if healAttempt > 0 { resetHeal() }
-            return
         }
-        guard CACurrentMediaTime() >= healNotBefore else { return }
-        lastMeasuredHeight = expected
-        healAttempt += 1
-        let attempt = healAttempt
-        invalidateIntrinsicContentSize()
-        needsDisplay = true
-        superview?.needsLayout = true
-        Self.heightHealLog.info("height heal attempt \(attempt): bounds \(Double(actual)) reported \(Double(reported ?? -1)) expected \(Double(expected))")
-        if healAttempt <= 3 {
-            let delay = [0.25, 1.0, 3.0][healAttempt - 1]
-            healNotBefore = CACurrentMediaTime() + delay - 0.01
-            scheduleHeightCheck(after: delay)
+        // Streamed text is still dissolving in; the check after it settles is the one that counts.
+        if !streamVeil.isDissolving, TextDisplayAudit.audit(self, reason: reason) {
+            needsDisplay = true
+            superview?.needsLayout = true
         }
     }
 }

@@ -118,25 +118,70 @@ final class TimelineEntry: Identifiable {
         case turnEnd
     }
 
+    struct ToolHeadline: Hashable {
+        let status: ToolCall.Status
+        let title: String
+    }
+
     let id: String
     /// Fixed for the row's lifetime, so grouping never observes streaming content.
     let kind: Kind
     let turnID: UUID?
+    @ObservationIgnored private var _item: TimelineItem
     var item: TimelineItem {
-        didSet {
-            if oldValue != item { onChange?() }
-            let images = Self.carriesImages(item)
-            if images != hasImages { hasImages = images }
+        get {
+            access(keyPath: \.item)
+            return _item
+        }
+        set {
+            let changed = _item != newValue
+            withMutation(keyPath: \.item) {
+                _item = newValue
+            }
+            if changed { onChange?() }
+            syncDerivedFields()
         }
     }
+    /// Direct read of the current item without registering an Observation dependency on `item`.
+    /// Used by summary views (e.g. `HydraProgressBar`) that key off narrower derived properties
+    /// like `toolHeadline` and must not re-evaluate on every streamed flush.
+    var unobservedItem: TimelineItem { _item }
     /// Whether this tool row carries images. Kept apart from `item` so grouping can watch it
     /// without watching the row's output: it only changes when the first image lands.
     private(set) var hasImages = false
+    /// Tool status and title, kept apart from `item` so progress bars watch tool transitions
+    /// without re-evaluating on every streamed output flush.
+    private(set) var toolHeadline: ToolHeadline?
     @ObservationIgnored var onChange: (() -> Void)?
 
     private static func carriesImages(_ item: TimelineItem) -> Bool {
         guard case .tool(let call) = item.content else { return false }
         return call.images?.isEmpty == false
+    }
+
+    private static func headline(of item: TimelineItem) -> ToolHeadline? {
+        guard case .tool(let call) = item.content else { return nil }
+        return ToolHeadline(status: call.status, title: call.title)
+    }
+
+    private func syncDerivedFields() {
+        let images = Self.carriesImages(_item)
+        if images != hasImages { hasImages = images }
+        let headline = Self.headline(of: _item)
+        if headline != toolHeadline { toolHeadline = headline }
+    }
+
+    /// Appends streamed text directly into `_item` so the payload string keeps a unique
+    /// reference instead of being retained by a `didSet` `oldValue` copy on every flush.
+    func appendStreamed(_ text: String, kind: ThreadRuntime.DeltaKind) -> Bool {
+        guard _item.content.acceptsStreamed(kind) else { return false }
+        let appended = withMutation(keyPath: \.item) {
+            _item.content.appendStreamed(text, kind: kind)
+        }
+        guard appended else { return false }
+        if !text.isEmpty { onChange?() }
+        syncDerivedFields()
+        return true
     }
 
     init(_ item: TimelineItem) {
@@ -152,8 +197,9 @@ final class TimelineEntry: Identifiable {
         case .notice: .notice
         case .turnEnd: .turnEnd
         }
-        self.item = item
+        self._item = item
         hasImages = Self.carriesImages(item)
+        toolHeadline = Self.headline(of: item)
     }
 }
 
@@ -288,21 +334,11 @@ final class ThreadRuntime {
     private(set) var entries: [TimelineEntry] = [] {
         didSet { itemPositionsInvalid = true }
     }
+    /// Bumped on every write to `turns`, so view caches can reuse turn-derived sets
+    /// without reading `oldValue` in `didSet`.
+    @ObservationIgnored private(set) var turnsStructureRevision: UInt64 = 0
     private(set) var turns: [TurnRecord] = [] {
-        // A turn leaving the thread (reverted) takes any edit of its message, and its
-        // cached diff, with it.
-        didSet {
-            let previous = Dictionary(oldValue.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
-            for turn in turns where previous[turn.id] != turn { markTurnDirty(turn.id) }
-            if let edit = messageEdit, !turns.contains(where: { $0.id == edit.id }) { messageEdit = nil }
-            if turns.count < oldValue.count {
-                let kept = Set(turns.map(\.id))
-                for turn in oldValue where !kept.contains(turn.id) {
-                    turnDiffs.removeValue(for: turn.id)
-                    legacyTurnChanges.removeValue(forKey: turn.id)
-                }
-            }
-        }
+        didSet { turnsStructureRevision &+= 1 }
     }
     private(set) var usage: ContextUsage?
     /// Forwarded context from another thread, kept with the thread's history rather than
@@ -722,6 +758,17 @@ final class ThreadRuntime {
         turnRevisions[id] = nextTurnRevision
     }
 
+    /// A turn leaving the thread (reverted or rolled back) takes any edit of its message,
+    /// and its cached diff, with it.
+    private func cleanupRemovedTurns(_ ids: some Sequence<UUID>) {
+        let editID = messageEdit?.id
+        for id in ids {
+            if id == editID { messageEdit = nil }
+            turnDiffs.removeValue(for: id)
+            legacyTurnChanges.removeValue(forKey: id)
+        }
+    }
+
     @ObservationIgnored private var saveRetryTask: Task<Void, Never>?
     @ObservationIgnored private var saveFailures = 0
     @ObservationIgnored private var saveNoticeID: String?
@@ -949,10 +996,13 @@ final class ThreadRuntime {
             if message.text.isEmpty { message.text = Chrome.localized("Sent out sub-agents.") }
             entry.item.content = .assistant(message)
         }
+        var recoveredTurnIDs: [UUID] = []
         for index in turns.indices where turns[index].status == .running {
             recovered = true
-            crashInterruptedTurnIDs.insert(turns[index].id)
+            let turnID = turns[index].id
+            crashInterruptedTurnIDs.insert(turnID)
             turns[index].status = .interrupted
+            recoveredTurnIDs.append(turnID)
         }
         // A turn the app quit under has no end marker, so it showed every step inline
         // for good; one is written for it here from the turn record, and the block
@@ -986,6 +1036,7 @@ final class ThreadRuntime {
         installingHistory = false
         if recovered {
             for turn in document.turns { markTurnDirty(turn.id) }
+            for turnID in recoveredTurnIDs { markTurnDirty(turnID) }
             saveRevision += 1
         }
         if !recovered && !wasDirty { lastSavedRevision = saveRevision }
@@ -1045,6 +1096,83 @@ final class ThreadRuntime {
         // Selecting the new row can warm a session before the snapshot is installed.
         releaseSession(stop: true)
         continuation = value
+        saveRevision += 1
+        saveNow()
+        return true
+    }
+
+    func canBranch(at point: ThreadBranchPoint) -> Bool {
+        guard !isRunning, !isReverting else { return false }
+        let targetID: UUID = switch point {
+        case .before(let turnID), .through(let turnID): turnID
+        }
+        guard turns.contains(where: { $0.id == targetID }) else { return false }
+        var document = ThreadDocument(threadID: threadID)
+        document.items = entries.map(\.item)
+        document.turns = turns
+        document.continuation = continuation
+        document.forwardedContinuation = forwardedContinuation
+        return ThreadBranch.slice(document, at: point) != nil
+    }
+
+    func forkCodexSession(through turn: TurnRecord) async throws -> String {
+        await waitForProviderHistory()
+        guard phase == .idle, !isReverting else { throw ThreadBranchFailure.busy }
+        guard let app, let thread, thread.provider == .codex,
+              let sessionID = thread.providerSessionID, !sessionID.isEmpty,
+              let providerTurnID = turn.providerTurnID, !providerTurnID.isEmpty,
+              let executable = app.providers.executable(for: .codex),
+              let directory = try? app.executionDirectory(for: thread) else {
+            throw ProviderError.failed(Chrome.localized("The original Codex conversation is unavailable."))
+        }
+        // A session of its own that never starts: its fork runs in a short-lived server,
+        // so this chat's live session neither stops nor holds the branch's new thread.
+        let forker = CodexSession(configuration: SessionConfiguration(
+            provider: .codex,
+            executable: executable,
+            workingDirectory: URL(fileURLWithPath: directory),
+            environment: app.providers.environment(for: .codex, account: app.providers.accounts.activeAccount(for: .codex)),
+            model: thread.model,
+            effort: thread.effort,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode
+        ))
+        return try await forker.fork(thread: sessionID, through: providerTurnID)
+    }
+
+    func installBranch(_ slice: ThreadBranchSlice, continuation: ThreadContinuation?) async -> Bool {
+        await ensureLoaded()
+        guard let app, thread != nil, turns.isEmpty, entries.isEmpty else { return false }
+        // Selecting the new row can warm a session before the branch history is installed.
+        releaseSession(stop: true)
+        var document = slice.document
+        document.threadID = threadID
+        document.turnIndex = nil
+        document.usage = nil
+        document.followUps = []
+        document.hydraMerges = []
+        document.continuation = nil
+        document.forwardedContinuation = nil
+        savedTurnRevisions = [:]
+        turnRevisions = [:]
+        itemPositions = [:]
+        install(document, prepared: true)
+        if document.itemPositions != nil {
+            entries.sort { (itemPositions[$0.id] ?? .greatestFiniteMagnitude) < (itemPositions[$1.id] ?? .greatestFiniteMagnitude) }
+        }
+        self.continuation = continuation
+        self.forwardedContinuation = nil
+        self.continuationSent = false
+        if slice.draft != nil || !slice.draftAttachments.isEmpty {
+            draft = ComposerDraft(text: slice.draft ?? "", attachments: slice.draftAttachments)
+        }
+        for turn in turns { markTurnDirty(turn.id) }
+        if !turns.isEmpty || hasSentPrompts {
+            app.updateThread(threadID) {
+                $0.hasStartedTurn = true
+                $0.lastStatus = turns.last?.status
+            }
+        }
         saveRevision += 1
         saveNow()
         return true
@@ -1881,6 +2009,7 @@ final class ThreadRuntime {
         let userItem = TimelineItem(turnID: turn.id, content: .user(UserMessage(text: text, attachments: attachments, hydraHeads: hydraHeads, hydraBrief: hydraBrief ? true : nil)))
         turn.userItemID = userItem.id
         turns.append(turn)
+        markTurnDirty(turn.id)
         saveRevision += 1
         currentTurnID = turn.id
         app.autoContinue.turnOpened(threadID)
@@ -1899,6 +2028,7 @@ final class ThreadRuntime {
         guard await app.beginThreadTurnAsync(threadID) else {
             remove(userItem.id)
             turns.removeAll { $0.id == turn.id }
+            cleanupRemovedTurns([turn.id])
             // A stop during the save may have let a newer turn take over; leave its state alone.
             if currentTurnID == turn.id {
                 currentTurnID = nil
@@ -2413,6 +2543,8 @@ final class ThreadRuntime {
         // A message sent right after launch waits for the login shell, where a CLI installed
         // off the fallback PATH is found; this must not read as "not installed".
         await LoginEnvironment.load()
+        // Provider configs and the MCP proxy are exported off the main actor at launch.
+        await app.mcp.ensureReady()
         guard !Task.isCancelled else { throw CancellationError() }
         releaseSession(stop: true)
         try await waitForReplacedSessions()
@@ -2425,7 +2557,7 @@ final class ThreadRuntime {
                 throw ProviderError.notInstalled(thread.provider)
             }
             func makeAPISession(resumeID: String?) -> any ProviderSession {
-                let configuration = SessionConfiguration(
+                var configuration = SessionConfiguration(
                     provider: thread.provider,
                     executable: nil,
                     workingDirectory: URL(fileURLWithPath: directory),
@@ -2442,6 +2574,7 @@ final class ThreadRuntime {
                     transcript: apiTranscript(),
                     isHydraHead: thread.hydra?.kind == .tivano
                 )
+                configuration.forkSession = resumeID != nil && thread.providerForkPending
                 let created: any ProviderSession = switch thread.provider {
                 case .deepseek: DeepSeekSession(configuration: configuration)
                 case .meta: MetaSession(configuration: configuration)
@@ -2491,7 +2624,7 @@ final class ThreadRuntime {
             throw ProviderError.notInstalled(thread.provider)
         }
         func makeSession(resumeID: String?) -> any ProviderSession {
-            let configuration = SessionConfiguration(
+            var configuration = SessionConfiguration(
                 provider: thread.provider,
                 executable: executable,
                 workingDirectory: URL(fileURLWithPath: directory),
@@ -2518,6 +2651,7 @@ final class ThreadRuntime {
                 claudeAccountID: claudeAccount?.id,
                 claudeIdentity: claudeIdentity
             )
+            configuration.forkSession = resumeID != nil && thread.providerForkPending
             let created: any ProviderSession = switch thread.provider {
             case .codex: CodexSession(configuration: configuration)
             case .claude: ClaudeSession(configuration: configuration)
@@ -2535,7 +2669,8 @@ final class ThreadRuntime {
             return created
         }
 
-        var candidate = makeSession(resumeID: thread.providerSessionID)
+        let resumedID = thread.providerSessionID
+        var candidate = makeSession(resumeID: resumedID)
         session = candidate
         sessionSignature = signature
         let sessionID: String
@@ -2575,12 +2710,16 @@ final class ThreadRuntime {
         }
         guard session === candidate, !Task.isCancelled else { throw CancellationError() }
         if let external = externalSubmission, external.continuation == .providerSession {
-            guard let expected = external.original.providerSessionID, sessionID == expected else {
+            // A branch's first launch forks: Claude confirms a new id for the same history.
+            guard let expected = external.original.providerSessionID,
+                  sessionID == expected || (external.original.providerForkPending && resumedID == expected) else {
                 throw ControlFailure(code: .continuationUnavailable, detail: "resume_identity_changed")
             }
         }
         started = true
-        recordSessionID(sessionID)
+        if resumedID == nil || sessionID != resumedID || app.thread(threadID)?.providerSessionID == resumedID {
+            recordSessionID(sessionID)
+        }
         completePendingProviderSwitch()
         if let codex = candidate as? CodexSession { recoverCrashedCodexTurn(using: codex) }
         if thread.provider == .codex, thread.hydra?.kind == .tivano,
@@ -2733,7 +2872,14 @@ final class ThreadRuntime {
         if app.thread(threadID)?.providerSessionID == nil {
             unsentSessionID = sessionID
         } else {
-            app.updateThread(threadID) { $0.providerSessionID = sessionID }
+            app.updateThread(threadID) {
+                let changed = !sessionID.isEmpty && $0.providerSessionID != sessionID
+                $0.providerSessionID = sessionID
+                if changed, $0.providerForkPending {
+                    $0.providerForkPending = false
+                    $0.providerResumeAt = nil
+                }
+            }
         }
     }
 
@@ -2806,52 +2952,89 @@ final class ThreadRuntime {
     /// was said and done. Tool calls stay out; the replies say what they did. Bounded, so
     /// a long thread does not send its whole past with every relaunch.
     private func apiTranscript() -> [TranscriptMessage] {
-        // One pass to collect the exchanges, then the runs are joined rather than
-        // appended into one another: repeated `+=` on array elements copies the whole
-        // reply for every fragment, which is quadratic on fragmented history.
+        // Walk from the newest entry back until the 40-message or 60,000-character cap
+        // fills, so long histories do not allocate and join exchanges that will be dropped.
         let exclude = currentTurnID
-        var fragments: [(assistant: Bool, text: String)] = []
-        fragments.reserveCapacity(entries.count)
-        for entry in entries where entry.item.turnID != exclude {
+        let maxMessages = 40
+        var reversedKept: [TranscriptMessage] = []
+        reversedKept.reserveCapacity(min(entries.count, maxMessages))
+        var budget = 60_000
+        var index = entries.count - 1
+
+        while index >= 0, reversedKept.count < maxMessages, budget > 0 {
+            let entry = entries[index]
+            index -= 1
+            guard entry.item.turnID != exclude else { continue }
             switch entry.item.content {
             case .user(let message) where !message.text.isEmpty:
-                fragments.append((assistant: false, text: message.text))
+                let length = message.text.count
+                if length <= budget {
+                    reversedKept.append(TranscriptMessage(role: .user, text: message.text))
+                    budget -= length
+                } else if budget > 200 {
+                    reversedKept.append(TranscriptMessage(role: .user, text: "…" + String(message.text.suffix(budget))))
+                    budget = 0
+                } else {
+                    budget = 0
+                }
             case .assistant(let message) where !message.text.isEmpty:
-                fragments.append((assistant: true, text: message.text))
+                // The status lines a turn streams between its tools read as one reply.
+                var runReversed = [message.text]
+                var runCharsLowerBound = message.text.count
+                var truncatedTail = false
+                runLoop: while index >= 0 {
+                    let earlier = entries[index]
+                    guard earlier.item.turnID != exclude else {
+                        index -= 1
+                        continue
+                    }
+                    switch earlier.item.content {
+                    case .assistant(let earlierMessage) where !earlierMessage.text.isEmpty:
+                        if runCharsLowerBound >= budget {
+                            // The collected tail already spans at least `budget` characters and
+                            // follows a `"\n\n"` separator (UAX #29 GB4 guarantees a grapheme
+                            // break after LF), so the full joined reply strictly exceeds `budget`
+                            // and has the exact same `suffix(budget)`.
+                            truncatedTail = true
+                            break runLoop
+                        }
+                        runReversed.append(earlierMessage.text)
+                        // Joining with `"\n\n"` adds at least 1 Character even when the earlier
+                        // fragment ends with `"\r"` (merging with the first `"\n"`).
+                        runCharsLowerBound += earlierMessage.text.count + 1
+                        index -= 1
+                    case .user(let earlierMessage) where !earlierMessage.text.isEmpty:
+                        // Leave `index` on this user entry for the outer loop.
+                        break runLoop
+                    default:
+                        index -= 1
+                    }
+                }
+                if truncatedTail {
+                    if budget > 200 {
+                        let tail = runReversed.count == 1 ? runReversed[0] : runReversed.reversed().joined(separator: "\n\n")
+                        reversedKept.append(TranscriptMessage(role: .assistant, text: "…" + String(tail.suffix(budget))))
+                    }
+                    budget = 0
+                    break
+                }
+                let joined = runReversed.count == 1 ? runReversed[0] : runReversed.reversed().joined(separator: "\n\n")
+                let length = joined.count
+                if length <= budget {
+                    reversedKept.append(TranscriptMessage(role: .assistant, text: joined))
+                    budget -= length
+                } else if budget > 200 {
+                    reversedKept.append(TranscriptMessage(role: .assistant, text: "…" + String(joined.suffix(budget))))
+                    budget = 0
+                } else {
+                    budget = 0
+                }
             default:
                 break
             }
         }
-        var transcript: [TranscriptMessage] = []
-        transcript.reserveCapacity(fragments.count)
-        var index = 0
-        while index < fragments.count {
-            if !fragments[index].assistant {
-                transcript.append(TranscriptMessage(role: .user, text: fragments[index].text))
-                index += 1
-                continue
-            }
-            // The status lines a turn streams between its tools read as one reply.
-            let runStart = index
-            while index < fragments.count, fragments[index].assistant { index += 1 }
-            let joined = fragments[runStart..<index].map(\.text).joined(separator: "\n\n")
-            transcript.append(TranscriptMessage(role: .assistant, text: joined))
-        }
-        var kept = Array(transcript.suffix(40))
-        var budget = 60_000
-        for index in kept.indices.reversed() {
-            let length = kept[index].text.count
-            if length <= budget {
-                budget -= length
-            } else if budget > 200 {
-                kept[index].text = "…" + String(kept[index].text.suffix(budget))
-                budget = 0
-            } else {
-                kept.removeSubrange(...index)
-                break
-            }
-        }
-        return kept
+        reversedKept.reverse()
+        return reversedKept
     }
 
     // MARK: - Controls
@@ -3156,16 +3339,19 @@ final class ThreadRuntime {
             }
             _ = try await Git(directory).output(["rev-parse", "--verify", base])
         }
-        // A staged switch, or an undone one whose session was lost, has no provider history
-        // to rewind: the next session starts from a snapshot of the shortened timeline.
+        // A staged switch, an undone one whose session was lost, or a branched chat using
+        // a text continuation before its first send has no provider history to rewind: the
+        // next session starts from a snapshot of the shortened timeline.
         let pendingHandoff = continuation?.isProviderHandoff == true && !continuationSent
-        if thread.pendingProviderSwitch != nil || (pendingHandoff && thread.providerSessionID == nil) {
+        let pendingBranchContinuation = thread.branchOrigin != nil && continuation != nil && !continuationSent && thread.providerSessionID == nil
+        if thread.pendingProviderSwitch != nil || (pendingHandoff && thread.providerSessionID == nil) || pendingBranchContinuation {
             releaseSession(stop: true)
             app.updateThread(threadID) {
                 $0.pendingProviderSwitch?.providerSessionID = nil
                 $0.pendingProviderSwitch?.providerResumeAt = nil
                 $0.providerSessionID = nil
                 $0.providerResumeAt = nil
+                $0.providerForkPending = false
             }
             // A staged switch recaptures at its send; an undone one is rebuilt below.
             if thread.pendingProviderSwitch != nil { providerSwitchUndone(sessionLost: false) }
@@ -3197,6 +3383,7 @@ final class ThreadRuntime {
                     app.updateThread(threadID) {
                         $0.providerSessionID = nil
                         $0.providerResumeAt = nil
+                        $0.providerForkPending = false
                     }
                 } else {
                     guard thread.providerSessionID != nil, let anchor = turns[index - 1].providerAnchor else {
@@ -3211,6 +3398,7 @@ final class ThreadRuntime {
                     app.updateThread(threadID) {
                         $0.providerSessionID = nil
                         $0.providerResumeAt = nil
+                        $0.providerForkPending = false
                     }
                 } else {
                     guard thread.providerSessionID != nil,
@@ -3230,6 +3418,7 @@ final class ThreadRuntime {
                 app.updateThread(threadID) {
                     $0.providerSessionID = nil
                     $0.providerResumeAt = nil
+                    $0.providerForkPending = false
                 }
             }
         }
@@ -3252,6 +3441,7 @@ final class ThreadRuntime {
         }
         entryIndex = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
         turns.removeSubrange(index...)
+        cleanupRemovedTurns(removedIDs)
         // A head's paths list is what the turn in flight has changed; the turn they
         // belonged to is gone.
         hydraCurrentTurnTouchedPaths = []
@@ -3265,7 +3455,24 @@ final class ThreadRuntime {
             $0.unreadRevision = UUID()
         }
         app.updateDockBadge()
-        if continuation?.isProviderHandoff == true, !continuationSent { rebuildProviderHandoff() }
+        if continuation?.isProviderHandoff == true, !continuationSent {
+            rebuildProviderHandoff()
+        } else if pendingBranchContinuation, let existing = continuation {
+            if turns.isEmpty {
+                continuation = nil
+            } else {
+                var document = snapshotForPersistence()
+                document.continuation = nil
+                document.forwardedContinuation = nil
+                let captured = ThreadContinuation.capture(
+                    sourceID: existing.sourceThreadID,
+                    title: existing.sourceTitle,
+                    document: document
+                )
+                continuation = captured.context.isEmpty ? nil : captured
+            }
+            continuationSent = false
+        }
         saveRevision += 1
         usage = nil
         if let fileError { appendNotice(.error, fileError) }
@@ -3491,6 +3698,7 @@ final class ThreadRuntime {
                   let endIndex = self.entries.lastIndex(where: { $0.turnID == turn.id && $0.kind == .turnEnd }),
                   case .turnEnd(var summary) = self.entries[endIndex].item.content else { return }
             self.turns[index].status = .completed
+            self.markTurnDirty(turn.id)
             summary.status = .completed
             self.entries[endIndex].item.content = .turnEnd(summary)
             let turnEntries = self.entries[..<endIndex].filter { $0.turnID == turn.id }
@@ -3917,6 +4125,7 @@ final class ThreadRuntime {
             amounts.append(spend)
         }
         turns[index].tokenSpends = amounts
+        markTurnDirty(turns[index].id)
         if thread?.hydra?.kind == .tivano { hydraTokens += spend.totalTokens }
         saveRevision += 1
         scheduleSave()
@@ -4239,6 +4448,7 @@ final class ThreadRuntime {
         var changed = false
         for index in turns.indices where ids.contains(turns[index].id) && !turns[index].hydraMerged {
             turns[index].hydraMerged = true
+            markTurnDirty(turns[index].id)
             changed = true
         }
         guard changed else { return }
@@ -5231,9 +5441,9 @@ final class ThreadRuntime {
         pendingFlushBytes = 0
         var heard = false
         for (id, delta) in deltas {
-            // Appended in place (see `appendStreamed`): binding the payload out of the enum
-            // copied the whole message on every flush.
-            guard let entry = entryIndex[id], entry.item.content.appendStreamed(delta.text, kind: delta.kind) else { continue }
+            // Appended in place (see `TimelineEntry.appendStreamed`): bypassing a `didSet`
+            // `oldValue` copy keeps the payload string uniquely referenced on every flush.
+            guard let entry = entryIndex[id], entry.appendStreamed(delta.text, kind: delta.kind) else { continue }
             saveRevision += 1
             if delta.kind != .plan { heard = true }
         }
@@ -5759,6 +5969,7 @@ final class ThreadRuntime {
     private func updateTurn(_ id: UUID, _ change: (inout TurnRecord) -> Void) {
         guard let index = turns.firstIndex(where: { $0.id == id }) else { return }
         change(&turns[index])
+        markTurnDirty(id)
         saveRevision += 1
     }
 
@@ -6107,11 +6318,24 @@ final class ThreadRuntime {
 }
 
 private extension TimelineItem.Content {
+    func acceptsStreamed(_ kind: ThreadRuntime.DeltaKind) -> Bool {
+        switch (kind, self) {
+        case (.message, .assistant),
+             (.reasoning, .reasoning),
+             (.toolOutput, .tool),
+             (.plan, .plan):
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Appends streamed text to the payload in place, and says whether the payload took it.
     /// Binding the payload out of the enum while the enum still holds it left two
     /// references, so every flush copied the whole message before appending; releasing
     /// the enum's reference first keeps the string unique and the append amortized
-    /// O(delta). Written through the entry's `item`, this is still one observed mutation.
+    /// O(delta). Written through `TimelineEntry.appendStreamed`, this is still one
+    /// observed mutation.
     mutating func appendStreamed(_ text: String, kind: ThreadRuntime.DeltaKind) -> Bool {
         switch (kind, self) {
         case (.message, .assistant(var message)):
@@ -6210,10 +6434,12 @@ extension ThreadRuntime {
             let userItem = TimelineItem(turnID: turn.id, content: .user(UserMessage(text: text)))
             turn.userItemID = userItem.id
             turns.append(turn)
+            markTurnDirty(turn.id)
             saveRevision += 1
             append(userItem)
         } else {
             turns.append(turn)
+            markTurnDirty(turn.id)
             saveRevision += 1
         }
         currentTurnID = turn.id

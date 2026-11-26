@@ -3,12 +3,6 @@ import Foundation
 /// Builds the read-only worktree tidy-up prompt that Settings › Storage prefills into a new chat.
 extension AppModel {
     func worktreeReviewPrompt(for usage: StorageUsage, now: Date = .now) -> String {
-        let relativeFormatter = RelativeDateTimeFormatter()
-        relativeFormatter.unitsStyle = .full
-
-        let byteFormatter = ByteCountFormatter()
-        byteFormatter.countStyle = .file
-
         let sorted = usage.worktrees
             .map { (worktree: $0, idle: isIdle($0)) }
             .sorted { lhs, rhs in
@@ -17,7 +11,7 @@ extension AppModel {
             }
 
         let entries = sorted.map {
-            worktreeRow(for: $0.worktree, now: now, relativeFormatter: relativeFormatter, byteFormatter: byteFormatter)
+            worktreeRow(for: $0.worktree, now: now)
         }
 
         let rows: [String]
@@ -53,9 +47,7 @@ extension AppModel {
 
     private func worktreeRow(
         for worktree: WorktreeUsage,
-        now: Date,
-        relativeFormatter: RelativeDateTimeFormatter,
-        byteFormatter: ByteCountFormatter
+        now: Date
     ) -> (line: String, isActive: Bool) {
         let users = threadsUsing(worktree)
         let preferredThread = users.max { lhs, rhs in
@@ -82,8 +74,8 @@ extension AppModel {
         }
 
         let lastActivityDate = [preferredThread?.updatedAt, worktree.lastCommitDate].compactMap { $0 }.max()
-        let lastActivity = lastActivityDate.map { relativeFormatter.localizedString(for: $0, relativeTo: now) } ?? "-"
-        let sizeText = "\(byteFormatter.string(fromByteCount: worktree.size)) (\(byteFormatter.string(fromByteCount: worktree.buildFilesSize)))"
+        let lastActivity = lastActivityDate.map { AppFormatting.relativeDateTime.localizedString(for: $0, relativeTo: now) } ?? "-"
+        let sizeText = "\(AppFormatting.fileByteCount.string(fromByteCount: worktree.size)) (\(AppFormatting.fileByteCount.string(fromByteCount: worktree.buildFilesSize)))"
 
         let cells = [
             worktree.name,
