@@ -35,8 +35,7 @@ enum RelativeTime {
     }
 
     static func duration(_ interval: TimeInterval) -> String {
-        Duration.seconds(max(0, Int(interval.rounded())))
-            .formatted(.units(allowed: [.seconds, .minutes, .hours], width: .narrow, maximumUnitCount: 2, fractionalPart: .hide(rounded: .down)))
+        AppFormatting.duration(seconds: max(0, Int(interval.rounded())), allowed: [.seconds, .minutes, .hours])
     }
 }
 
@@ -149,12 +148,6 @@ enum Workspace {
         NSWorkspace.shared.open(script)
     }
 
-    /// Looked up once per launch: the chat's controls build this list on every render, and each
-    /// entry is a Launch Services query.
-    static let installedEditors: [Editor] = editors.filter {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleID) != nil
-    }
-
     static func open(_ path: String, with editor: Editor) {
         guard let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: editor.bundleID) else { return }
         NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: application, configuration: NSWorkspace.OpenConfiguration())
@@ -173,9 +166,6 @@ enum Workspace {
         icons[editor.bundleID] = image
         return image
     }
-
-    /// Finder's icon, for the same menu.
-    @MainActor static let finderIcon = NSWorkspace.shared.icon(forFile: "/System/Library/CoreServices/Finder.app")
 
     static func revealInFinder(_ path: String) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])

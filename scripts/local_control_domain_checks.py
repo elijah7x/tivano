@@ -177,6 +177,17 @@ def main():
         "struct HydraLaunch { var isChimera = false; var chimeraPresets: [String] = []; var chimeraAutoDispatch = false }",
         'enum HydraPrompts { @MainActor static var acceptsChimeraFence = false; static func v2Policy(_ launch: HydraLaunch) -> String { fatalError("Hydra prompts are outside domain checks") } }',
     ]) + "\n"
+    branch_model = ROOT / "Tivano/Core/Models/ThreadBranch.swift"
+    if branch_model.exists():
+        branch_text = branch_model.read_text()
+        library_text = (ROOT / "Tivano/Core/Models/Library.swift").read_text()
+        if "struct ThreadBranchOrigin" in branch_text and "struct ThreadBranchOrigin" not in library_text:
+            origin_decl = declaration("Tivano/Core/Models/ThreadBranch.swift", "struct ThreadBranchOrigin")
+            if "ThreadBranchPoint" in origin_decl and "enum ThreadBranchPoint" in branch_text:
+                source += "\n" + declaration("Tivano/Core/Models/ThreadBranch.swift", "enum ThreadBranchPoint") + "\n"
+            if "ThreadBranchMode" in origin_decl and "enum ThreadBranchMode" in branch_text:
+                source += "\n" + declaration("Tivano/Core/Models/ThreadBranch.swift", "enum ThreadBranchMode") + "\n"
+            source += "\n" + origin_decl + "\n"
     generated.write_text(source)
     # Structural assertions supplement the executable front-door tests; they do not
     # stand in for executing provider delivery, updater or permission UI end-to-end.

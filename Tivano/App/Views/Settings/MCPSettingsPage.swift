@@ -14,17 +14,25 @@ struct MCPSettingsPage: View {
     @State private var selectedID: String? = nil
     @State private var isAddingCustom = false
 
-    private static let sortedEntries = MCPCatalog.entries.sorted { $0.name < $1.name }
+    private static let sortedEntries: [MCPCatalogEntry] = MCPCatalog.entries.sorted { (lhs: MCPCatalogEntry, rhs: MCPCatalogEntry) -> Bool in
+        lhs.name < rhs.name
+    }
 
     private var connected: [MCPCatalogEntry] {
-        Self.sortedEntries
-            .filter { !celebrating.contains($0.id) && model.mcp.state(for: $0.id).isConnected }
+        let mcp: MCPStore = model.mcp
+        let celebratingIDs: Set<String> = celebrating
+        return Self.sortedEntries.filter { (entry: MCPCatalogEntry) -> Bool in
+            !celebratingIDs.contains(entry.id) && mcp.state(for: entry.id).isConnected
+        }
     }
 
     private var matchingUnconnected: [MCPCatalogEntry] {
-        Self.sortedEntries.filter { entry in
-            (!model.mcp.state(for: entry.id).isConnected || celebrating.contains(entry.id))
-                && Self.matches(entry, query: query)
+        let mcp: MCPStore = model.mcp
+        let celebratingIDs: Set<String> = celebrating
+        let currentQuery: String = query
+        return Self.sortedEntries.filter { (entry: MCPCatalogEntry) -> Bool in
+            (!mcp.state(for: entry.id).isConnected || celebratingIDs.contains(entry.id))
+                && Self.matches(entry, query: currentQuery)
         }
     }
 

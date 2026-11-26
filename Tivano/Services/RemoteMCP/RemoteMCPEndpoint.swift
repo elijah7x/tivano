@@ -157,7 +157,7 @@ actor RemoteMCPEndpoint {
         case .info(let value), .welcome(let value):
             var object = try encode(value).object ?? [:]
             object.removeValue(forKey: "settings")
-            object["methods"] = .array(value.methods.filter { !["settingsGet", "settingsSet", "agentModels", "agentRun"].contains($0) }.map(JSONValue.string))
+            object["methods"] = .array(value.methods.filter { !["settingsGet", "settingsSet", "agentModels", "agentRun", "branch"].contains($0) }.map(JSONValue.string))
             return .object(object)
         case .providers(let value): return try encode(value)
         case .projects(let value): return try encode(value)

@@ -38,6 +38,40 @@ extension AppModel {
         return false
     }
 
+    /// Snapshot of Tivano's protected folders and home directory, built once per routing
+    /// or continuation check so repeated path checks don't re-canonicalize the same roots.
+    struct HydraProtectedPaths: Sendable {
+        let home: String
+        let taskWorkspaces: String
+        let roots: [String]
+
+        nonisolated private static let canonicalSystemRoots: [String] = [
+            "/System", "/Library", "/usr", "/bin", "/sbin", "/private/etc", "/Applications",
+        ].map { HydraPaths.canonical($0) }
+
+        nonisolated init() {
+            home = HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
+            taskWorkspaces = HydraPaths.canonical(StoragePaths.taskWorkspacesRoot.path)
+            roots = AppModel.hydraProtectedRoots()
+        }
+
+        /// Whether `path` falls into a refused folder. Pass `allowingHome: true` when
+        /// checking a checkout folder (home holds every protected folder and is judged one
+        /// owned file at a time), and `allowingHome: false` when checking an owned path.
+        nonisolated func isProtected(_ path: String, allowingHome: Bool, includeSystemRoots: Bool = false) -> Bool {
+            let canonical = HydraPaths.canonical(path)
+            if includeSystemRoots {
+                if canonical == "/" || Self.canonicalSystemRoots.contains(where: {
+                    canonical == $0 || canonical.hasPrefix($0 + "/")
+                }) {
+                    return true
+                }
+            }
+            if canonical == home { return !allowingHome }
+            return AppModel.hydraPathTouchesProtectedRoot(canonical, roots: roots, taskWorkspaces: taskWorkspaces)
+        }
+    }
+
     /// The first 50 paths of a report list, plus how many were left out.
     nonisolated static func hydraFileListing(_ files: [String], limit: Int = 50) -> String {
         var text = files.prefix(limit).joined(separator: ", ")
@@ -90,7 +124,7 @@ extension AppModel {
         let isContinuation = info.backupPath != nil
         let owned = Set((info.backupOwnedPaths ?? []).map { ($0 as NSString).standardizingPath })
         let folder = info.backupPath.map { URL(fileURLWithPath: $0) }
-            ?? StoragePaths.root.appendingPathComponent("hydra-backups", isDirectory: true).appendingPathComponent(id.uuidString)
+            ?? StoragePaths.hydraBackupsRoot.appendingPathComponent(id.uuidString)
         let added = isContinuation ? files.filter { !owned.contains(($0 as NSString).standardizingPath) } : files
         guard !added.isEmpty else { return }
         let result = await Self.copyHydraOwnedFiles(added, base: base, folder: folder)

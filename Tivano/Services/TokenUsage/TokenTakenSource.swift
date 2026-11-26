@@ -38,12 +38,18 @@ enum TokenTakenSource {
         return url
     }
 
-    static func detect() -> TokenTakenStatus {
+    @concurrent
+    static func detect() async -> TokenTakenStatus {
+        detectSync()
+    }
+
+    private static func detectSync() -> TokenTakenStatus {
         guard let url = appURL() else { return .notInstalled }
         let version = Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         return .installed(version: version)
     }
 
+    @concurrent
     static func fetch(
         lastDays: Int,
         timeZone: TimeZone,
@@ -324,31 +330,6 @@ enum TokenTakenSource {
         return true
     }
 
-    private final class DayFormatterCache: @unchecked Sendable {
-        static let shared = DayFormatterCache()
-        private let lock = NSLock()
-        private var entries: [TimeZone: (calendar: Calendar, formatter: DateFormatter)] = [:]
-
-        func withFormatter<R>(for timeZone: TimeZone, _ body: (Calendar, DateFormatter) throws -> R) rethrows -> R {
-            lock.lock()
-            defer { lock.unlock() }
-            let entry: (calendar: Calendar, formatter: DateFormatter)
-            if let existing = entries[timeZone] {
-                entry = existing
-            } else {
-                var calendar = Calendar(identifier: .gregorian)
-                calendar.timeZone = timeZone
-                let formatter = DateFormatter()
-                formatter.locale = Locale(identifier: "en_US_POSIX")
-                formatter.calendar = calendar
-                formatter.timeZone = timeZone
-                formatter.dateFormat = "yyyy-MM-dd"
-                entry = (calendar, formatter)
-                entries[timeZone] = entry
-            }
-            return try body(entry.calendar, entry.formatter)
-        }
-    }
 
     private static func merge(_ row: TokenUsageRow, into existing: inout TokenUsageRow, path: String, missing: inout Set<String>) {
         let counts: [(String, WritableKeyPath<TokenUsageRow, Int64>)] = [

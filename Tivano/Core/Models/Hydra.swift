@@ -1114,8 +1114,7 @@ enum HydraPrompts {
     }
 
     static func duration(_ seconds: TimeInterval) -> String {
-        Duration.seconds(Int(seconds))
-            .formatted(.units(allowed: [.seconds, .minutes], width: .narrow, maximumUnitCount: 2, fractionalPart: .hide(rounded: .down)))
+        AppFormatting.duration(seconds: Int(seconds), allowed: [.seconds, .minutes])
     }
 
     static func list(_ names: [String]) -> String {

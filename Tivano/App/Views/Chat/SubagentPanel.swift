@@ -441,6 +441,9 @@ private struct SubagentWorkingBox: View {
 final class PanelDragState {
     /// The panel's corner under the pointer, moved with no animation; nil at rest.
     private(set) var position: CGPoint?
+    /// Whether the panel is under the pointer right now; flips only at drag start and end
+    /// so observers outside the panel do not re-evaluate on every pointer move.
+    private(set) var isDragging = false
     /// Where the panel was when the handle took hold, so each move is measured from there.
     @ObservationIgnored private var grab: CGPoint?
     /// The pointer's speed over the last few moves, in points a second, for the flick.
@@ -472,6 +475,7 @@ final class PanelDragState {
         }
         lastMove = now
         position = next
+        if !isDragging { isDragging = true }
         return next
     }
 
@@ -486,6 +490,7 @@ final class PanelDragState {
     /// Clears any active pointer offset or velocity when switching a recycled column.
     func reset() {
         if position != nil { position = nil }
+        if isDragging { isDragging = false }
         grab = nil
         velocity = .zero
     }
@@ -494,7 +499,8 @@ final class PanelDragState {
     /// by the flick it was released with. Nil when it was never moved.
     func release() -> CGPoint? {
         defer {
-            position = nil
+            if position != nil { position = nil }
+            if isDragging { isDragging = false }
             grab = nil
             velocity = .zero
         }

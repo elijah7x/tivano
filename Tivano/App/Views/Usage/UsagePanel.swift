@@ -21,25 +21,15 @@ struct UsagePanel: View {
     }
 
     var body: some View {
-        let registry = model.providers
+        let registry: ProviderRegistry = model.providers
         // A second provider only when the pair's heads go out on one of their own.
         let heads: ProviderKind? = (headsProvider != nil && headsProvider != provider) ? headsProvider : nil
-        let showsLimits = PlanLimitsReader.exposesLimits(provider)
-        let showsCredits = CreditsReader.exposesCredits(provider)
-        let showsContext = usage?.fraction != nil && usage?.windowTokens != nil
+        let showsLimits: Bool = PlanLimitsReader.exposesLimits(provider)
+        let showsCredits: Bool = CreditsReader.exposesCredits(provider)
+        let showsContext: Bool = usage?.fraction != nil && usage?.windowTokens != nil
         VStack(alignment: .leading, spacing: 0) {
             if let usage, let fraction = usage.fraction, let window = usage.windowTokens {
-                HStack {
-                    Text("Context window")
-                        .foregroundStyle(Chrome.secondaryText)
-                    Spacer(minLength: 12)
-                    Text(verbatim: "\(Self.tokens(usage.usedTokens)) / \(Self.tokens(window)) (\(Int((fraction * 100).rounded()))%)")
-                        .foregroundStyle(Chrome.secondaryText)
-                        .monospacedDigit()
-                }
-                .font(.ui(.body))
-                UsageBar(fraction: fraction, tint: Chrome.accent, label: "Context window")
-                    .padding(.top, 10)
+                contextWindowSection(usage: usage, fraction: fraction, window: window)
             }
 
             if let heads {
@@ -47,30 +37,58 @@ struct UsagePanel: View {
                 // No leading divider when neither the context nor the lead showed anything.
                 providerSection(heads, role: "Sub-agents", needsDivider: showsContext || showsLimits || showsCredits)
             } else {
-                if showsLimits {
-                    if showsContext {
-                        Divider().padding(.vertical, 14)
-                    }
-                    PlanLimitsView(provider: provider, isChat: true, claudeAccountID: claudeAccountID)
-                }
-
-                if showsCredits {
-                    if showsContext {
-                        Divider().padding(.vertical, 14)
-                    }
-                    CreditsView(provider: provider)
-                }
+                singleProviderSection(showsContext: showsContext, showsLimits: showsLimits, showsCredits: showsCredits)
             }
         }
         .padding(16)
         .frame(width: 360)
         .onAppear {
-            if provider != .claude { registry.refreshPlanLimits(provider) }
-            registry.refreshCredits(provider)
-            if let heads {
-                if heads != .claude { registry.refreshPlanLimits(heads) }
-                registry.refreshCredits(heads)
+            refreshUsage(registry: registry, heads: heads)
+        }
+    }
+
+    @ViewBuilder
+    private func contextWindowSection(usage: ContextUsage, fraction: Double, window: Int) -> some View {
+        let usedText: String = Self.tokens(usage.usedTokens)
+        let windowText: String = Self.tokens(window)
+        let percent: Int = Int((fraction * 100.0).rounded())
+        let summaryText: String = "\(usedText) / \(windowText) (\(percent)%)"
+        HStack {
+            Text("Context window")
+                .foregroundStyle(Chrome.secondaryText)
+            Spacer(minLength: 12)
+            Text(verbatim: summaryText)
+                .foregroundStyle(Chrome.secondaryText)
+                .monospacedDigit()
+        }
+        .font(.ui(.body))
+        UsageBar(fraction: fraction, tint: Chrome.accent, label: "Context window")
+            .padding(.top, 10)
+    }
+
+    @ViewBuilder
+    private func singleProviderSection(showsContext: Bool, showsLimits: Bool, showsCredits: Bool) -> some View {
+        if showsLimits {
+            if showsContext {
+                Divider().padding(.vertical, 14)
             }
+            PlanLimitsView(provider: provider, isChat: true, claudeAccountID: claudeAccountID)
+        }
+
+        if showsCredits {
+            if showsContext {
+                Divider().padding(.vertical, 14)
+            }
+            CreditsView(provider: provider)
+        }
+    }
+
+    private func refreshUsage(registry: ProviderRegistry, heads: ProviderKind?) {
+        if provider != .claude { registry.refreshPlanLimits(provider) }
+        registry.refreshCredits(provider)
+        if let heads {
+            if heads != .claude { registry.refreshPlanLimits(heads) }
+            registry.refreshCredits(heads)
         }
     }
 

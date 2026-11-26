@@ -248,6 +248,7 @@ final class WorkingTreeWatch: Sendable {
     /// arrived, as everything written before it has by then. Nil without a stream, when
     /// nothing can be reused. A cookie that never arrives means the volume is not
     /// reporting; the stream is torn down and every later snapshot is taken fresh, at once.
+    @concurrent
     private func settledGeneration() async -> UInt64? {
         guard state.withLock({ $0.stream }) != nil else { return nil }
         let (cookie, waiter) = state.withLock { state -> (UInt64, UInt64) in
@@ -292,6 +293,7 @@ final class WorkingTreeWatch: Sendable {
     /// `capture` is handed the scratch index and, when the last capture's index can be
     /// built on, the directories changed since it; nil means the whole tree.
     /// `scratch` nil means an index of the capture's own, used once and thrown away.
+    @concurrent
     func currentTree(
         indexPath: String,
         capture: @escaping @Sendable (_ scratch: URL?, _ paths: [String]?) async throws -> String

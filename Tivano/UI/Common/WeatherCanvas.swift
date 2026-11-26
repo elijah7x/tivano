@@ -401,310 +401,360 @@ struct WeatherCanvas: View {
     // MARK: - 1. .awaiting -> Slender Behind-Glass Breeze
 
     private func drawWind(in ctx: GraphicsContext, size: CGSize, time: Double, entrance: Double) {
-        let w = Double(size.width)
-        let h = Double(size.height)
-        let isDark = colorScheme == .dark
-        let boost = glassBoost
-        let settleLift = (1.0 - entrance) * 6.0
+        let w: Double = Double(size.width)
+        let h: Double = Double(size.height)
+        let isDark: Bool = colorScheme == .dark
+        let boost: Double = glassBoost
+        let settleLift: Double = (1.0 - entrance) * 6.0
 
-        // (a) Upper-right cool celadon ambient wash
-        let washPeak = (isDark ? 0.060 : 0.072) * boost
-        let breezeOrigin = CGPoint(x: w * 0.84, y: h * 0.12)
-        let breezeRadius = max(w, h) * 0.62
-        ctx.fill(
-            Path(CGRect(origin: .zero, size: size)),
-            with: .radialGradient(
-                Gradient(stops: [
-                    .init(color: isDark ? rgb(0.46, 0.74, 0.72, washPeak) : rgb(0.28, 0.56, 0.60, washPeak), location: 0.0),
-                    .init(color: isDark ? rgb(0.42, 0.68, 0.68, washPeak * 0.44) : rgb(0.32, 0.60, 0.64, washPeak * 0.44), location: 0.48),
-                    .init(color: .clear, location: 1.0)
-                ]),
-                center: breezeOrigin,
-                startRadius: 0,
-                endRadius: breezeRadius
-            )
-        )
+        drawWindAmbientWash(in: ctx, size: size, w: w, h: h, isDark: isDark, boost: boost)
 
         // (b) 3 background mistRibbons in a single soft mist pass
         ctx.drawLayer { layer in
             layer.addFilter(.blur(radius: 24))
-            let steps = 24
-            let spanStart = -48.0
-            let spanWidth = w + 96.0
-
-            @inline(__always)
-            func ribbonMetrics(_ s: Int, ribbon: MistRibbon, baseY: Double) -> (x: Double, centerY: Double, halfBand: Double) {
-                let u = Double(s) / Double(steps)
-                let x = spanStart + u * spanWidth
-                let wave1 = sin(u * .pi * 2.1 - time * ribbon.speed + ribbon.phase) * ribbon.ampPrimary
-                let wave2 = cos(u * .pi * 3.3 - time * ribbon.speed * 1.35 + ribbon.phase * 1.7) * ribbon.ampSecondary
-                let centerY = baseY - u * ribbon.lift + wave1 + wave2
-                let gust = 0.80 + 0.20 * sin(u * .pi * 2.4 - time * ribbon.speed * 1.3 + ribbon.phase)
-                let halfBand = 0.5 * ribbon.thickness * (0.38 + 0.62 * sin(u * .pi)) * gust
-                return (x, centerY, halfBand)
-            }
-
-            for ribbon in Self.mistRibbons {
-                let baseY = ribbon.yNorm * h + settleLift
-                var bandPath = Path()
-                var corePath = Path()
-
-                for s in 0...steps {
-                    let m = ribbonMetrics(s, ribbon: ribbon, baseY: baseY)
-                    let coreHalf = m.halfBand * 0.52
-                    let outerPt = CGPoint(x: m.x, y: m.centerY - m.halfBand)
-                    let corePt = CGPoint(x: m.x, y: m.centerY - coreHalf * 1.12)
-                    if s == 0 {
-                        bandPath.move(to: outerPt)
-                        corePath.move(to: corePt)
-                    } else {
-                        bandPath.addLine(to: outerPt)
-                        corePath.addLine(to: corePt)
-                    }
-                }
-                for s in stride(from: steps, through: 0, by: -1) {
-                    let m = ribbonMetrics(s, ribbon: ribbon, baseY: baseY)
-                    let coreHalf = m.halfBand * 0.52
-                    bandPath.addLine(to: CGPoint(x: m.x, y: m.centerY + m.halfBand))
-                    corePath.addLine(to: CGPoint(x: m.x, y: m.centerY + coreHalf * 0.88))
-                }
-                bandPath.closeSubpath()
-                corePath.closeSubpath()
-
-                let fw = ribbon.focalWeight
-                let basePeak = (isDark ? 0.085 : 0.105) * fw * boost
-                let baseColor: (Double) -> Color = { alpha in
-                    isDark ? rgb(0.64, 0.84, 0.82, alpha) : rgb(0.24, 0.48, 0.53, alpha)
-                }
-
-                layer.fill(
-                    bandPath,
-                    with: .linearGradient(
-                        Gradient(stops: [
-                            .init(color: baseColor(basePeak * 0.28), location: 0.0),
-                            .init(color: baseColor(basePeak * 0.52), location: 0.28),
-                            .init(color: baseColor(basePeak * 0.78), location: 0.50),
-                            .init(color: baseColor(basePeak), location: 0.76),
-                            .init(color: .clear, location: 1.0)
-                        ]),
-                        startPoint: CGPoint(x: 0, y: baseY),
-                        endPoint: CGPoint(x: w, y: baseY - ribbon.lift)
-                    )
-                )
-
-                let whitePeak = (isDark ? 0.048 : 0.17) * fw * boost
-                layer.fill(
-                    corePath,
-                    with: .linearGradient(
-                        Gradient(stops: [
-                            .init(color: Color.white.opacity(whitePeak * 0.24), location: 0.0),
-                            .init(color: Color.white.opacity(whitePeak * 0.48), location: 0.30),
-                            .init(color: Color.white.opacity(whitePeak), location: 0.72),
-                            .init(color: .clear, location: 1.0)
-                        ]),
-                        startPoint: CGPoint(x: 0, y: baseY),
-                        endPoint: CGPoint(x: w, y: baseY - ribbon.lift)
-                    )
-                )
-            }
+            drawWindMistRibbons(in: &layer, w: w, h: h, time: time, settleLift: settleLift, isDark: isDark, boost: boost)
         }
 
         // (c + d) Combined foreground breeze layer: 9 slipstreams + 8 air motes + 4 botanical leaves
         ctx.drawLayer { layer in
             layer.addFilter(.blur(radius: 2.0))
-            let streamSteps = 32
-            for stream in Self.slipstreams {
-                let travel = w + stream.length * 1.9
-                let startX = fraction(time * stream.speed / travel + stream.offset) * travel - stream.length * 0.95
-                let endX = startX + stream.length
-                guard endX > -24, startX < w + 24 else { continue }
-
-                let baseY = stream.yNorm * h + sin(time * 0.36 + stream.phase) * 6.0 + settleLift * 0.6
-                let midX = startX + stream.length * 0.5
-                let midY = baseY - stream.lift * 0.5
-                let leftRamp = min(1.0, max(0.0, (midX + 20.0) / max(1.0, w * 0.32)))
-                let zoneSoftener = readingComposerWeight(
-                    xNorm: midX / max(1.0, w),
-                    yNorm: midY / max(1.0, h),
-                    minWeight: 0.56
-                )
-                let spatialWeight = (0.38 + 0.62 * leftRamp) * min(stream.readingSoftener, zoneSoftener)
-                let wavePhase = time * 0.58 + stream.phase
-
-                @inline(__always)
-                func streamMetrics(_ step: Int) -> (px: Double, py: Double, nx: Double, ny: Double, halfWidth: Double) {
-                    let progress = Double(step) / Double(streamSteps)
-                    let px = startX + progress * stream.length
-                    let py = baseY - progress * stream.lift
-                        + sin(progress * .pi * 1.85 + wavePhase) * stream.waveAmp
-                        + cos(progress * .pi * 3.1 - wavePhase * 0.6) * (stream.waveAmp * 0.28)
-
-                    let dx = stream.length
-                    let dy = -stream.lift
-                        + cos(progress * .pi * 1.85 + wavePhase) * (.pi * 1.85 * stream.waveAmp)
-                        - sin(progress * .pi * 3.1 - wavePhase * 0.6) * (.pi * 3.1 * stream.waveAmp * 0.28)
-                    let invLen = 1.0 / max(0.001, hypot(dx, dy))
-                    let nx = -dy * invLen
-                    let ny = dx * invLen
-                    let halfWidth = 0.5 * stream.maxWidth * pow(sin(progress * .pi), 1.22)
-                    return (px, py, nx, ny, halfWidth)
-                }
-
-                var poly = Path()
-                var innerPoly = Path()
-
-                for step in 0...streamSteps {
-                    let m = streamMetrics(step)
-                    let upperPt = CGPoint(x: m.px + m.nx * m.halfWidth, y: m.py + m.ny * m.halfWidth)
-                    if step == 0 {
-                        poly.move(to: upperPt)
-                    } else {
-                        poly.addLine(to: upperPt)
-                    }
-                    if !isDark {
-                        let innerHalf = 0.45 * m.halfWidth
-                        let innerUpperPt = CGPoint(x: m.px + m.nx * innerHalf, y: m.py + m.ny * innerHalf)
-                        if step == 0 {
-                            innerPoly.move(to: innerUpperPt)
-                        } else {
-                            innerPoly.addLine(to: innerUpperPt)
-                        }
-                    }
-                }
-                for step in stride(from: streamSteps, through: 0, by: -1) {
-                    let m = streamMetrics(step)
-                    poly.addLine(to: CGPoint(x: m.px - m.nx * m.halfWidth, y: m.py - m.ny * m.halfWidth))
-                    if !isDark {
-                        let innerHalf = 0.45 * m.halfWidth
-                        innerPoly.addLine(to: CGPoint(x: m.px - m.nx * innerHalf, y: m.py - m.ny * innerHalf))
-                    }
-                }
-                poly.closeSubpath()
-
-                let tintColor = isDark
-                    ? rgb(0.62, 0.86, 0.83, 0.15 * spatialWeight * boost)
-                    : rgb(0.20, 0.45, 0.52, 0.13 * spatialWeight * boost)
-                let coreColor = isDark
-                    ? rgb(0.88, 0.98, 0.96, 0.26 * spatialWeight * boost)
-                    : rgb(0.20, 0.45, 0.52, 0.22 * spatialWeight * boost)
-
-                let gradStart = CGPoint(x: startX, y: baseY)
-                let gradEnd = CGPoint(x: endX, y: baseY - stream.lift)
-
-                layer.fill(
-                    poly,
-                    with: .linearGradient(
-                        Gradient(stops: [
-                            .init(color: .clear, location: 0.0),
-                            .init(color: tintColor, location: 0.24),
-                            .init(color: coreColor, location: 0.54),
-                            .init(color: tintColor, location: 0.82),
-                            .init(color: .clear, location: 1.0)
-                        ]),
-                        startPoint: gradStart,
-                        endPoint: gradEnd
-                    )
-                )
-
-                if !isDark {
-                    innerPoly.closeSubpath()
-                    let innerPeak = 0.30 * spatialWeight * boost
-                    layer.fill(
-                        innerPoly,
-                        with: .linearGradient(
-                            Gradient(stops: [
-                                .init(color: .clear, location: 0.0),
-                                .init(color: Color.white.opacity(innerPeak * 0.55), location: 0.24),
-                                .init(color: Color.white.opacity(innerPeak), location: 0.54),
-                                .init(color: Color.white.opacity(innerPeak * 0.55), location: 0.82),
-                                .init(color: .clear, location: 1.0)
-                            ]),
-                            startPoint: gradStart,
-                            endPoint: gradEnd
-                        )
-                    )
-                }
-            }
-
-            for bokeh in Self.windBokehs {
-                let startX = bokeh.startXNorm * w
-                let span = (w + 42.0) - startX
-                let u = fraction(time * bokeh.speed / max(140.0, span) + bokeh.offset)
-                let x = startX + u * span
-                let y = bokeh.yNorm * h - u * 24.0 + sin(time * 0.48 + bokeh.phase) * bokeh.driftAmp
-                let edgeFade = min(1.0, min(u / 0.16, (1.0 - u) / 0.14))
-                let shimmer = (0.64 + 0.36 * sin(time * bokeh.shimmerSpeed + bokeh.phase)) * edgeFade
-                let zoneWeight = readingComposerWeight(
-                    xNorm: x / max(1.0, w),
-                    yNorm: y / max(1.0, h),
-                    minWeight: 0.50
-                )
-                let weight = shimmer * zoneWeight
-                guard weight > 0.02 else { continue }
-
-                let r = bokeh.radius
-                let center = CGPoint(x: x, y: y)
-                let rect = CGRect(x: x - r, y: y - r, width: r * 2.0, height: r * 2.0)
-                let peakAlpha = (isDark ? 0.16 : 0.22) * weight * boost
-                let midColor = isDark
-                    ? rgb(0.66, 0.86, 0.83, peakAlpha * 0.58)
-                    : rgb(0.24, 0.50, 0.56, peakAlpha * 0.62)
-
-                layer.fill(
-                    Path(ellipseIn: rect),
-                    with: .radialGradient(
-                        Gradient(stops: [
-                            .init(color: isDark ? rgb(0.86, 0.97, 0.95, peakAlpha) : rgb(0.20, 0.46, 0.53, peakAlpha), location: 0.0),
-                            .init(color: midColor, location: 0.56),
-                            .init(color: .clear, location: 1.0)
-                        ]),
-                        center: center,
-                        startRadius: 0,
-                        endRadius: r
-                    )
-                )
-            }
-
-            for leaf in Self.windLeaves {
-                let startX = leaf.startXNorm * w
-                let span = (w + 48.0) - startX
-                let u = fraction(time * leaf.speed / max(160.0, span) + leaf.offset)
-                let x = startX + u * span
-                let waveY = sin(time * leaf.flutterFreq + leaf.phase) * leaf.flutterAmp
-                    + sin(time * (leaf.flutterFreq * 1.7) + leaf.phase * 1.4) * 3.0
-                let y = leaf.yNorm * h - u * leaf.lift + waveY + settleLift * 0.5
-
-                let fadeIn = min(1.0, u / 0.16)
-                let fadeOut = min(1.0, (1.0 - u) / 0.12)
-                let zoneWeight = readingComposerWeight(
-                    xNorm: x / max(1.0, w),
-                    yNorm: y / max(1.0, h),
-                    minWeight: 0.50
-                )
-                let envelope = max(0.0, min(fadeIn, fadeOut)) * zoneWeight
-                guard envelope > 0.01 else { continue }
-
-                let heading = -0.32
-                    + sin(time * (leaf.spinSpeed * 0.52) + leaf.phase) * 0.54
-                    + cos(u * .pi * 2.0 + leaf.phase) * 0.18
-                let bank = cos(time * leaf.spinSpeed + leaf.phase)
-                let minorScale = 0.28 + 0.72 * abs(bank)
-                let bodyTransform = CGAffineTransform(translationX: x, y: y)
-                    .rotated(by: heading)
-                    .scaledBy(x: leaf.halfLength, y: leaf.halfLength * minorScale)
-
-                let unitBody = leaf.isSamara ? Self.unitSamaraBody : Self.unitLeafBody
-                let bodyPath = unitBody.applying(bodyTransform)
-                let sageAlpha = (isDark ? 0.22 : 0.27) * envelope * boost
-                let sageFill = isDark
-                    ? rgb(0.54, 0.76, 0.65, sageAlpha)
-                    : rgb(0.28, 0.52, 0.40, sageAlpha)
-
-                layer.fill(bodyPath, with: .color(sageFill))
-            }
+            drawWindSlipstreams(in: &layer, w: w, h: h, time: time, settleLift: settleLift, isDark: isDark, boost: boost)
+            drawWindBokehs(in: &layer, w: w, h: h, time: time, isDark: isDark, boost: boost)
+            drawWindLeaves(in: &layer, w: w, h: h, time: time, settleLift: settleLift, isDark: isDark, boost: boost)
         }
 
         drawGlassSurfaceVeil(in: ctx, size: size, isDark: isDark)
+    }
+
+    private func drawWindAmbientWash(in ctx: GraphicsContext, size: CGSize, w: Double, h: Double, isDark: Bool, boost: Double) {
+        // (a) Upper-right cool celadon ambient wash
+        let washPeak: Double = (isDark ? 0.060 : 0.072) * boost
+        let breezeOrigin = CGPoint(x: w * 0.84, y: h * 0.12)
+        let breezeRadius: Double = max(w, h) * 0.62
+        let centerColor: Color = isDark ? rgb(0.46, 0.74, 0.72, washPeak) : rgb(0.28, 0.56, 0.60, washPeak)
+        let midColor: Color = isDark ? rgb(0.42, 0.68, 0.68, washPeak * 0.44) : rgb(0.32, 0.60, 0.64, washPeak * 0.44)
+        let stops: [Gradient.Stop] = [
+            .init(color: centerColor, location: 0.0),
+            .init(color: midColor, location: 0.48),
+            .init(color: .clear, location: 1.0)
+        ]
+        let shading: GraphicsContext.Shading = .radialGradient(
+            Gradient(stops: stops),
+            center: breezeOrigin,
+            startRadius: 0,
+            endRadius: breezeRadius
+        )
+        ctx.fill(Path(CGRect(origin: .zero, size: size)), with: shading)
+    }
+
+    private func drawWindMistRibbons(
+        in layer: inout GraphicsContext,
+        w: Double,
+        h: Double,
+        time: Double,
+        settleLift: Double,
+        isDark: Bool,
+        boost: Double
+    ) {
+        let steps: Int = 24
+        let stepsDouble: Double = Double(steps)
+        let spanStart: Double = -48.0
+        let spanWidth: Double = w + 96.0
+
+        @inline(__always)
+        func ribbonMetrics(_ s: Int, ribbon: MistRibbon, baseY: Double) -> (x: Double, centerY: Double, halfBand: Double) {
+            let u: Double = Double(s) / stepsDouble
+            let x: Double = spanStart + u * spanWidth
+            let wave1: Double = sin(u * .pi * 2.1 - time * ribbon.speed + ribbon.phase) * ribbon.ampPrimary
+            let wave2: Double = cos(u * .pi * 3.3 - time * ribbon.speed * 1.35 + ribbon.phase * 1.7) * ribbon.ampSecondary
+            let centerY: Double = baseY - u * ribbon.lift + wave1 + wave2
+            let gust: Double = 0.80 + 0.20 * sin(u * .pi * 2.4 - time * ribbon.speed * 1.3 + ribbon.phase)
+            let halfBand: Double = 0.5 * ribbon.thickness * (0.38 + 0.62 * sin(u * .pi)) * gust
+            return (x, centerY, halfBand)
+        }
+
+        for ribbon in Self.mistRibbons {
+            let baseY: Double = ribbon.yNorm * h + settleLift
+            var bandPath = Path()
+            var corePath = Path()
+
+            for s: Int in 0...steps {
+                let m = ribbonMetrics(s, ribbon: ribbon, baseY: baseY)
+                let coreHalf: Double = m.halfBand * 0.52
+                let outerPt = CGPoint(x: m.x, y: m.centerY - m.halfBand)
+                let corePt = CGPoint(x: m.x, y: m.centerY - coreHalf * 1.12)
+                if s == 0 {
+                    bandPath.move(to: outerPt)
+                    corePath.move(to: corePt)
+                } else {
+                    bandPath.addLine(to: outerPt)
+                    corePath.addLine(to: corePt)
+                }
+            }
+            for s: Int in stride(from: steps, through: 0, by: -1) {
+                let m = ribbonMetrics(s, ribbon: ribbon, baseY: baseY)
+                let coreHalf: Double = m.halfBand * 0.52
+                bandPath.addLine(to: CGPoint(x: m.x, y: m.centerY + m.halfBand))
+                corePath.addLine(to: CGPoint(x: m.x, y: m.centerY + coreHalf * 0.88))
+            }
+            bandPath.closeSubpath()
+            corePath.closeSubpath()
+
+            let fw: Double = ribbon.focalWeight
+            let basePeak: Double = (isDark ? 0.085 : 0.105) * fw * boost
+            let baseColor: (Double) -> Color = { (alpha: Double) -> Color in
+                isDark ? rgb(0.64, 0.84, 0.82, alpha) : rgb(0.24, 0.48, 0.53, alpha)
+            }
+            let gradStart = CGPoint(x: 0, y: baseY)
+            let gradEnd = CGPoint(x: w, y: baseY - ribbon.lift)
+            let bandStops: [Gradient.Stop] = [
+                .init(color: baseColor(basePeak * 0.28), location: 0.0),
+                .init(color: baseColor(basePeak * 0.52), location: 0.28),
+                .init(color: baseColor(basePeak * 0.78), location: 0.50),
+                .init(color: baseColor(basePeak), location: 0.76),
+                .init(color: .clear, location: 1.0)
+            ]
+            let bandShading: GraphicsContext.Shading = .linearGradient(
+                Gradient(stops: bandStops),
+                startPoint: gradStart,
+                endPoint: gradEnd
+            )
+            layer.fill(bandPath, with: bandShading)
+
+            let whitePeak: Double = (isDark ? 0.048 : 0.17) * fw * boost
+            let coreStops: [Gradient.Stop] = [
+                .init(color: Color.white.opacity(whitePeak * 0.24), location: 0.0),
+                .init(color: Color.white.opacity(whitePeak * 0.48), location: 0.30),
+                .init(color: Color.white.opacity(whitePeak), location: 0.72),
+                .init(color: .clear, location: 1.0)
+            ]
+            let coreShading: GraphicsContext.Shading = .linearGradient(
+                Gradient(stops: coreStops),
+                startPoint: gradStart,
+                endPoint: gradEnd
+            )
+            layer.fill(corePath, with: coreShading)
+        }
+    }
+
+    private func drawWindSlipstreams(
+        in layer: inout GraphicsContext,
+        w: Double,
+        h: Double,
+        time: Double,
+        settleLift: Double,
+        isDark: Bool,
+        boost: Double
+    ) {
+        let streamSteps: Int = 32
+        let streamStepsDouble: Double = Double(streamSteps)
+        for stream in Self.slipstreams {
+            let travel: Double = w + stream.length * 1.9
+            let startX: Double = fraction(time * stream.speed / travel + stream.offset) * travel - stream.length * 0.95
+            let endX: Double = startX + stream.length
+            guard endX > -24, startX < w + 24 else { continue }
+
+            let baseY: Double = stream.yNorm * h + sin(time * 0.36 + stream.phase) * 6.0 + settleLift * 0.6
+            let midX: Double = startX + stream.length * 0.5
+            let midY: Double = baseY - stream.lift * 0.5
+            let leftRamp: Double = min(1.0, max(0.0, (midX + 20.0) / max(1.0, w * 0.32)))
+            let zoneSoftener: Double = readingComposerWeight(
+                xNorm: midX / max(1.0, w),
+                yNorm: midY / max(1.0, h),
+                minWeight: 0.56
+            )
+            let spatialWeight: Double = (0.38 + 0.62 * leftRamp) * min(stream.readingSoftener, zoneSoftener)
+            let wavePhase: Double = time * 0.58 + stream.phase
+
+            @inline(__always)
+            func streamMetrics(_ step: Int) -> (px: Double, py: Double, nx: Double, ny: Double, halfWidth: Double) {
+                let progress: Double = Double(step) / streamStepsDouble
+                let px: Double = startX + progress * stream.length
+                let primaryWave: Double = sin(progress * .pi * 1.85 + wavePhase) * stream.waveAmp
+                let secondaryWave: Double = cos(progress * .pi * 3.1 - wavePhase * 0.6) * (stream.waveAmp * 0.28)
+                let py: Double = baseY - progress * stream.lift + primaryWave + secondaryWave
+
+                let dx: Double = stream.length
+                let dPrimary: Double = cos(progress * .pi * 1.85 + wavePhase) * (.pi * 1.85 * stream.waveAmp)
+                let dSecondary: Double = sin(progress * .pi * 3.1 - wavePhase * 0.6) * (.pi * 3.1 * stream.waveAmp * 0.28)
+                let dy: Double = -stream.lift + dPrimary - dSecondary
+                let invLen: Double = 1.0 / max(0.001, hypot(dx, dy))
+                let nx: Double = -dy * invLen
+                let ny: Double = dx * invLen
+                let halfWidth: Double = 0.5 * stream.maxWidth * pow(sin(progress * .pi), 1.22)
+                return (px, py, nx, ny, halfWidth)
+            }
+
+            var poly = Path()
+            var innerPoly = Path()
+
+            for step: Int in 0...streamSteps {
+                let m = streamMetrics(step)
+                let upperPt = CGPoint(x: m.px + m.nx * m.halfWidth, y: m.py + m.ny * m.halfWidth)
+                if step == 0 {
+                    poly.move(to: upperPt)
+                } else {
+                    poly.addLine(to: upperPt)
+                }
+                if !isDark {
+                    let innerHalf: Double = 0.45 * m.halfWidth
+                    let innerUpperPt = CGPoint(x: m.px + m.nx * innerHalf, y: m.py + m.ny * innerHalf)
+                    if step == 0 {
+                        innerPoly.move(to: innerUpperPt)
+                    } else {
+                        innerPoly.addLine(to: innerUpperPt)
+                    }
+                }
+            }
+            for step: Int in stride(from: streamSteps, through: 0, by: -1) {
+                let m = streamMetrics(step)
+                poly.addLine(to: CGPoint(x: m.px - m.nx * m.halfWidth, y: m.py - m.ny * m.halfWidth))
+                if !isDark {
+                    let innerHalf: Double = 0.45 * m.halfWidth
+                    innerPoly.addLine(to: CGPoint(x: m.px - m.nx * innerHalf, y: m.py - m.ny * innerHalf))
+                }
+            }
+            poly.closeSubpath()
+
+            let tintColor: Color = isDark
+                ? rgb(0.62, 0.86, 0.83, 0.15 * spatialWeight * boost)
+                : rgb(0.20, 0.45, 0.52, 0.13 * spatialWeight * boost)
+            let coreColor: Color = isDark
+                ? rgb(0.88, 0.98, 0.96, 0.26 * spatialWeight * boost)
+                : rgb(0.20, 0.45, 0.52, 0.22 * spatialWeight * boost)
+
+            let gradStart = CGPoint(x: startX, y: baseY)
+            let gradEnd = CGPoint(x: endX, y: baseY - stream.lift)
+            let polyStops: [Gradient.Stop] = [
+                .init(color: .clear, location: 0.0),
+                .init(color: tintColor, location: 0.24),
+                .init(color: coreColor, location: 0.54),
+                .init(color: tintColor, location: 0.82),
+                .init(color: .clear, location: 1.0)
+            ]
+            let polyShading: GraphicsContext.Shading = .linearGradient(
+                Gradient(stops: polyStops),
+                startPoint: gradStart,
+                endPoint: gradEnd
+            )
+            layer.fill(poly, with: polyShading)
+
+            if !isDark {
+                innerPoly.closeSubpath()
+                let innerPeak: Double = 0.30 * spatialWeight * boost
+                let innerStops: [Gradient.Stop] = [
+                    .init(color: .clear, location: 0.0),
+                    .init(color: Color.white.opacity(innerPeak * 0.55), location: 0.24),
+                    .init(color: Color.white.opacity(innerPeak), location: 0.54),
+                    .init(color: Color.white.opacity(innerPeak * 0.55), location: 0.82),
+                    .init(color: .clear, location: 1.0)
+                ]
+                let innerShading: GraphicsContext.Shading = .linearGradient(
+                    Gradient(stops: innerStops),
+                    startPoint: gradStart,
+                    endPoint: gradEnd
+                )
+                layer.fill(innerPoly, with: innerShading)
+            }
+        }
+    }
+
+    private func drawWindBokehs(
+        in layer: inout GraphicsContext,
+        w: Double,
+        h: Double,
+        time: Double,
+        isDark: Bool,
+        boost: Double
+    ) {
+        for bokeh in Self.windBokehs {
+            let startX: Double = bokeh.startXNorm * w
+            let span: Double = (w + 42.0) - startX
+            let u: Double = fraction(time * bokeh.speed / max(140.0, span) + bokeh.offset)
+            let x: Double = startX + u * span
+            let y: Double = bokeh.yNorm * h - u * 24.0 + sin(time * 0.48 + bokeh.phase) * bokeh.driftAmp
+            let edgeFade: Double = min(1.0, min(u / 0.16, (1.0 - u) / 0.14))
+            let shimmer: Double = (0.64 + 0.36 * sin(time * bokeh.shimmerSpeed + bokeh.phase)) * edgeFade
+            let zoneWeight: Double = readingComposerWeight(
+                xNorm: x / max(1.0, w),
+                yNorm: y / max(1.0, h),
+                minWeight: 0.50
+            )
+            let weight: Double = shimmer * zoneWeight
+            guard weight > 0.02 else { continue }
+
+            let r: Double = bokeh.radius
+            let center = CGPoint(x: x, y: y)
+            let rect = CGRect(x: x - r, y: y - r, width: r * 2.0, height: r * 2.0)
+            let peakAlpha: Double = (isDark ? 0.16 : 0.22) * weight * boost
+            let innerColor: Color = isDark
+                ? rgb(0.86, 0.97, 0.95, peakAlpha)
+                : rgb(0.20, 0.46, 0.53, peakAlpha)
+            let midColor: Color = isDark
+                ? rgb(0.66, 0.86, 0.83, peakAlpha * 0.58)
+                : rgb(0.24, 0.50, 0.56, peakAlpha * 0.62)
+            let bokehStops: [Gradient.Stop] = [
+                .init(color: innerColor, location: 0.0),
+                .init(color: midColor, location: 0.56),
+                .init(color: .clear, location: 1.0)
+            ]
+            let bokehShading: GraphicsContext.Shading = .radialGradient(
+                Gradient(stops: bokehStops),
+                center: center,
+                startRadius: 0,
+                endRadius: r
+            )
+            layer.fill(Path(ellipseIn: rect), with: bokehShading)
+        }
+    }
+
+    private func drawWindLeaves(
+        in layer: inout GraphicsContext,
+        w: Double,
+        h: Double,
+        time: Double,
+        settleLift: Double,
+        isDark: Bool,
+        boost: Double
+    ) {
+        for leaf in Self.windLeaves {
+            let startX: Double = leaf.startXNorm * w
+            let span: Double = (w + 48.0) - startX
+            let u: Double = fraction(time * leaf.speed / max(160.0, span) + leaf.offset)
+            let x: Double = startX + u * span
+            let primaryFlutter: Double = sin(time * leaf.flutterFreq + leaf.phase) * leaf.flutterAmp
+            let secondaryFlutter: Double = sin(time * (leaf.flutterFreq * 1.7) + leaf.phase * 1.4) * 3.0
+            let waveY: Double = primaryFlutter + secondaryFlutter
+            let y: Double = leaf.yNorm * h - u * leaf.lift + waveY + settleLift * 0.5
+
+            let fadeIn: Double = min(1.0, u / 0.16)
+            let fadeOut: Double = min(1.0, (1.0 - u) / 0.12)
+            let zoneWeight: Double = readingComposerWeight(
+                xNorm: x / max(1.0, w),
+                yNorm: y / max(1.0, h),
+                minWeight: 0.50
+            )
+            let envelope: Double = max(0.0, min(fadeIn, fadeOut)) * zoneWeight
+            guard envelope > 0.01 else { continue }
+
+            let spinSin: Double = sin(time * (leaf.spinSpeed * 0.52) + leaf.phase) * 0.54
+            let driftCos: Double = cos(u * .pi * 2.0 + leaf.phase) * 0.18
+            let heading: Double = -0.32 + spinSin + driftCos
+            let bank: Double = cos(time * leaf.spinSpeed + leaf.phase)
+            let minorScale: Double = 0.28 + 0.72 * abs(bank)
+            let bodyTransform = CGAffineTransform(translationX: x, y: y)
+                .rotated(by: heading)
+                .scaledBy(x: leaf.halfLength, y: leaf.halfLength * minorScale)
+
+            let unitBody: Path = leaf.isSamara ? Self.unitSamaraBody : Self.unitLeafBody
+            let bodyPath: Path = unitBody.applying(bodyTransform)
+            let sageAlpha: Double = (isDark ? 0.22 : 0.27) * envelope * boost
+            let sageFill: Color = isDark
+                ? rgb(0.54, 0.76, 0.65, sageAlpha)
+                : rgb(0.28, 0.52, 0.40, sageAlpha)
+
+            layer.fill(bodyPath, with: .color(sageFill))
+        }
     }
 
     // MARK: - 2. .done -> Quiet Behind-Glass Sunlight

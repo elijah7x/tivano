@@ -62,6 +62,10 @@ tivano-dev create --workspace local --provider codex
 tivano-dev create --project PROJECT_UUID --workspace local --provider claude --model MODEL_ID
 tivano-dev create --project PROJECT_UUID --workspace worktree --provider codex
 
+# Branch an existing thread into a new chat at a turn boundary (default: through; --before keeps earlier turns and drafts that turn's prompt):
+tivano-dev branch THREAD_UUID --turn TURN_UUID
+tivano-dev branch THREAD_UUID --turn TURN_UUID --before
+
 tivano-dev send THREAD_UUID --text 'Investigate the failure.'
 printf '%s' 'Continue the investigation.' | tivano-dev send THREAD_UUID --stdin
 tivano-dev send THREAD_UUID --text 'Continue.' --continuation providerSession
@@ -114,6 +118,17 @@ boundaries. The external path uses the existing persistence/execution chain but
 never consumes/repopulates the UI draft or silently queues a rejected message.
 The App remains the sole runtime and Store owner.
 
+`branch` forks an eligible existing thread into a new chat at a turn boundary
+(`--turn TURN_UUID`, discoverable from each entry's `turnID` field in `history`).
+The default mode (`through`) keeps turns up to and including the target turn;
+`--before` keeps earlier turns and populates the new thread's draft with that
+turn's user text. Validation matches `send` (ordinary, unarchived thread with a
+ready workspace). The operation begins in `preparing` with the source `threadID`
+and transitions to `ready` with the new thread's `threadID` once created, or
+`failed` (`notFound`, `busy`, `conflict` for an unavailable branch point, or
+`directoryUnavailable`). `branch` is local-control only and is not exposed
+through Remote MCP.
+
 A Hydra lead accepts send/interrupt. Send is rejected as busy while any of its
 heads is working, merging or reporting. A send's operation ends with the lead's
 turn; later turns the lead takes on head reports are not tracked by that operation.
@@ -133,7 +148,8 @@ access is on.
   transcript reconstruction (not exact tool/session recovery).
 
 An operation progresses through `accepted`, `preparing`/`ready` for workspace
-creation, or `accepted`, `started`, `waiting`, `ended`/`failed` for turns. Adapters
+creation and thread branching, or `accepted`, `started`, `waiting`,
+`ended`/`failed` for turns. Adapters
 may report completion without a separate started event. `started` is the
 normalized adapter's turn event, not an assertion that useful work happened.
 `completed` is the adapter/provider's completion report, **not proof that the task

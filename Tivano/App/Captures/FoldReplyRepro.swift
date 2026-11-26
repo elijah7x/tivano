@@ -10,11 +10,29 @@ import SwiftUI
 /// Repro harness for the folded-turn blank-reply bug in a `--website-captures` process.
 ///
 ///     open -n -W "Tivano.app" --args --website-captures <folder> --fold-repro \
-///         [--fold-repro-scenario all|front|covered|miniaturized|inactive|otherThread|scrolledUp] \
+///         [--fold-repro-scenario all|front|covered|miniaturized|inactive|otherThread|scrolledUp|settings|hydraLead|hydraLeadReal] \
+///         [--fold-repro-provider claude|acp] \
+///         [--fold-repro-stream-chunks N] [--fold-repro-chunk-gap SECONDS] \
+///         [--fold-repro-tail-delay SECONDS] [--fold-repro-reasoning-seconds SECONDS] \
+///         [--fold-repro-fresh-thread] \
 ///         [--fold-repro-count N] [--fold-repro-hold SECONDS] \
 ///         [--fold-repro-inject-zero] [--fold-repro-no-heal]
 ///
-/// Uses the isolated capture library and rehearsed turns so no provider session starts.
+/// Examples:
+///     # Preset matching H8S real timing (stream-chunks 8, chunk-gap 0.4, tail-delay 10, reasoning-seconds 8, fresh-thread):
+///     open -n -W "Tivano.app" --args --website-captures /tmp/fold-hydra-real --fold-repro \
+///         --fold-repro-scenario hydraLeadReal --fold-repro-count 3
+///
+///     # Custom composable Hydra lead run (e.g. 30 s reasoning, 8 chunks, 10 s tail delay):
+///     open -n -W "Tivano.app" --args --website-captures /tmp/fold-hydra-custom --fold-repro \
+///         --fold-repro-scenario hydraLead --fold-repro-stream-chunks 8 --fold-repro-chunk-gap 0.4 \
+///         --fold-repro-tail-delay 10 --fold-repro-reasoning-seconds 30 --fold-repro-fresh-thread --fold-repro-count 3
+///
+///     # Control run of `hydraLeadReal` with Claude-style `.messageCompleted`:
+///     open -n -W "Tivano.app" --args --website-captures /tmp/fold-hydra-claude --fold-repro \
+///         --fold-repro-scenario hydraLeadReal --fold-repro-provider claude --fold-repro-count 3
+///
+/// Uses the isolated capture library and rehearsed turns so no provider session or network starts.
 @MainActor
 enum FoldReplyRepro {
     enum Scenario: String, CaseIterable, Sendable {
@@ -26,18 +44,76 @@ enum FoldReplyRepro {
         case scrolledUp
         /// Settings open over the chat (the pane hidden under it) while the turn folds.
         case settings
+        /// Hydra lead turn matching the Release 3.0.15 Antigravity ACP bug: long reasoning,
+        /// burst ~90-char paragraph + 2-head delegation block, 0 ms `.turnCompleted` (no
+        /// `.messageCompleted` under `acp`), real `spawnDelegatedHeads` / `holdSentDelegationBlock`
+        /// / sub-agent panel open without launching any provider process.
+        case hydraLead
+        /// Preset equivalent to `hydraLead` with `--fold-repro-stream-chunks 8`,
+        /// `--fold-repro-chunk-gap 0.4`, `--fold-repro-tail-delay 10`,
+        /// `--fold-repro-reasoning-seconds 8`, and `--fold-repro-fresh-thread`.
+        case hydraLeadReal
+
+        var isHydraLead: Bool {
+            self == .hydraLead || self == .hydraLeadReal
+        }
     }
 
-    /// Sized to the requested workload in `run` (about 14 s per repetition plus headroom).
+    enum ReproProvider: String, CaseIterable, Sendable {
+        case claude
+        case acp
+    }
+
+    private struct HydraLeadConfig: Encodable, Sendable {
+        let streamChunks: Int
+        let chunkGapSeconds: Double
+        let tailDelaySeconds: Double
+        let reasoningSeconds: Double
+        let freshThread: Bool
+    }
+
+    /// Sized dynamically to the requested workload in `run` (reasoning + streaming + tail delay + 10 s sampling + headroom).
     private static var budgetSeconds: TimeInterval = 600
     /// How long a hidden/covered/other-thread scenario stays away after the fold (`--fold-repro-hold`).
     private static var holdSeconds: Double = 3
     private static var injectZero = false
     private static var healDisabled = false
+    /// Optional `--fold-repro-provider` override; nil keeps legacy scenarios on `.claude` and Hydra lead scenarios on `.acp`.
+    private static var providerOverride: ReproProvider?
+    /// Composable Hydra lead CLI overrides (`nil` uses the scenario default: `hydraLead` vs `hydraLeadReal`).
+    private static var streamChunksOverride: Int?
+    private static var chunkGapOverride: Double?
+    private static var tailDelayOverride: Double?
+    private static var reasoningSecondsOverride: Double?
+    private static var freshThreadFlag = false
+    private static let defaultHydraStreamChunks = 1
+    private static let defaultHydraChunkGapSeconds = 0.15
+    private static let defaultHydraTailDelaySeconds = 0.0
+    private static let defaultHydraReasoningSeconds = 2.5
     private static let windowSize = NSSize(width: 890, height: 340)
+    /// Wide enough for `SubagentPanelLayout.sitsBesideComposer` (triggers real `ReserveSlide` column narrowing)
+    /// and tall enough that the folded header, ~90-char paragraph, and `hydra-sent` card all stay in view.
+    private static let hydraWindowSize = NSSize(width: 1040, height: 640)
+    /// Sampling instants (seconds after fold, or after restore for hidden/away scenarios),
+    /// covering immediate post-fold, `hydra-sent` hold (3.2 s), `hydra-leaving` fade (3.65 s),
+    /// and settled persistence out to 10 s.
+    private static let sampleOffsetsSeconds: [Double] = [0.3, 1.0, 2.5, 4.0, 6.0, 10.0]
+    /// Luminance delta from the crop's median background luminance required to count a pixel as text ink.
+    /// Primary text vs. background delta is ~0.60–0.85 in both light and dark themes; 0.25 rejects
+    /// wallpaper/glass shading gradients while keeping crisp and anti-aliased glyph strokes.
+    private static let inkLuminanceDeltaThreshold: Double = 0.25
+    /// Minimum ink pixel ratio for a non-blank paragraph.
+    /// A rendered ~90-char CJK or mixed markdown paragraph at 13 pt typically measures ~5%–14% ink pixels
+    /// (even a sparse trailing line exceeds ~2%), whereas an unpainted/blank view over a solid or glass
+    /// surface measures <0.05%. 0.5% (0.005) sits at ~1/10–1/20 of a normal paragraph's ink ratio,
+    /// leaving a wide margin against false positives while cleanly separating blank replies.
+    private static let blankInkRatioThreshold: Double = 0.005
+    /// Non-executable path set in the isolated capture defaults as defense-in-depth so no provider CLI can launch.
+    private static let disabledProviderBinaryPath = "/nonexistent/fold-repro-no-provider"
     private static let interimMessage = "Issue #58 是外部用户反馈，只有一张截图。我在看截图和渲染条件确认原因。"
     private static let interimPrefix = "Issue #58 是外部用户反馈"
     private static let userPrompt = "看下GitHub上的新issue。我有点忘了，在质感模式下是不是不能让用户自己换壁纸的，还是可以。"
+    private static let hydraLeadUserPrompt = "这已经是第五次遇到折叠后回复空白的问题了，先派两位子代理并行排查历史修复链路和子代理面板合成层机制，查完汇总给我。"
 
     private static var deadline = Date.now
     private static var reportState = ReportBuilder()
@@ -111,16 +187,79 @@ enum FoldReplyRepro {
         let inkRatio: Double
     }
 
+    private struct AbnormalAncestorRecord: Encodable, Sendable {
+        let depth: Int
+        let className: String
+        let isHidden: Bool
+        let alphaValue: Double
+        let layerIsHidden: Bool?
+        let layerOpacity: Double?
+        let hasLayerMask: Bool
+    }
+
+    private struct SampleRecord: Encodable, Sendable {
+        let targetOffsetSeconds: Double
+        let actualOffsetSeconds: Double
+        let elapsedSinceFoldSeconds: Double
+        let markerFound: Bool
+        let linkTextViewID: Int?
+        let textStorageLength: Int
+        let tempForegroundColorPresent: Bool?
+        let tempForegroundColorCharCount: Int?
+        let tempForegroundColorMinAlpha: Double?
+        let storageForegroundColorMinAlpha: Double?
+        let bounds: RectRecord?
+        let visibleRect: RectRecord?
+        let visibleRectInWindow: RectRecord?
+        let textContainerWidth: Double?
+        let windowOcclusionStateRaw: UInt
+        let windowOcclusionVisible: Bool
+        let isHiddenOrHasHiddenAncestor: Bool?
+        let abnormalAncestors: [AbnormalAncestorRecord]
+        let ancestorsAbnormalSummary: String
+        let hasLayer: Bool?
+        let layerClassName: String?
+        let layerContentsIsNil: Bool?
+        let layerBounds: RectRecord?
+        let layerContentsRedrawPolicyRaw: Int?
+        let measuredHeight: Double?
+        let stillCaptured: Bool
+        let stillFile: String?
+        let inkAnalysis: InkAnalysis?
+        let offscreenInkRatio: Double?
+        let screenInkRatioAfterOffscreen: Double?
+        let isBlank: Bool
+        let delegationCardState: String?
+        let hydraPanelOpen: Bool?
+    }
+
+    private struct BlankTimelineSummary: Encodable, Sendable {
+        let sampleOffsetsSeconds: [Double]
+        let blankSampleCount: Int
+        let blankDetected: Bool
+        let firstBlankAtSeconds: Double?
+        let lastBlankAtSeconds: Double?
+        let selfRecovered: Bool?
+        let recoveredAtSeconds: Double?
+    }
+
     private struct RepetitionRecord: Encodable, Sendable {
         let scenario: String
         let repetition: Int
         let threadID: String
         let marker: String
+        let provider: String
+        let sentMessageCompleted: Bool
         let turnDurationSeconds: Double
         let passed: Bool
         let failureReasons: [String]
         let preFoldOcclusionVisible: Bool?
         let scrolledUpDelta: Double?
+        let hydraConfig: HydraLeadConfig?
+        let titleRewritesCount: Int?
+        let hydraSpawnedHeadCount: Int?
+        let hydraPanelOpenAfterFold: Bool?
+        let delegationMarkedSent: Bool?
         let markerFoundCount: Int
         let markerViews: [TextViewProbe]
         let interimFoundCount: Int
@@ -131,6 +270,8 @@ enum FoldReplyRepro {
         let stillCaptured: Bool
         let stillFile: String?
         let inkAnalysis: InkAnalysis?
+        let samples: [SampleRecord]
+        let blankSummary: BlankTimelineSummary
     }
 
     private struct ScenarioSummary: Encodable, Sendable {
@@ -138,18 +279,38 @@ enum FoldReplyRepro {
         let total: Int
         let passed: Int
         let failed: Int
+        let blankRepetitions: Int
+        let totalBlankSamples: Int
+        let earliestBlankAtSeconds: Double?
+        let selfRecoveredRepetitions: Int
+        let unrecoveredBlankRepetitions: Int
     }
 
     private struct FoldReproReport: Encodable, Sendable {
         let startedAt: String
         let windowSize: SizeRecord
+        let hydraWindowSize: SizeRecord
         let scenariosRequested: [String]
+        let providerOption: String
+        let hydraStreamChunksOption: Int?
+        let hydraChunkGapOption: Double?
+        let hydraTailDelayOption: Double?
+        let hydraReasoningSecondsOption: Double?
+        let freshThreadFlag: Bool
         let repetitionsPerScenario: Int
         let budgetSeconds: Int
         let injectZero: Bool
         let healDisabled: Bool
+        let sampleOffsetsSeconds: [Double]
+        let inkLuminanceDeltaThreshold: Double
+        let blankInkRatioThreshold: Double
         let status: String
         let blockedReason: String?
+        let totalBlankRepetitions: Int
+        let totalBlankSamples: Int
+        let earliestBlankAtSeconds: Double?
+        let selfRecoveredRepetitions: Int
+        let unrecoveredBlankRepetitions: Int
         let scenarioFailCounts: [String: Int]
         let scenarios: [ScenarioSummary]
         let repetitions: [RepetitionRecord]
@@ -159,6 +320,7 @@ enum FoldReplyRepro {
     private final class ReportBuilder {
         var startedAt = ISO8601DateFormatter().string(from: .now)
         var scenariosRequested: [String] = []
+        var providerOption = "default"
         var repetitionsPerScenario = 10
         var injectZero = false
         var healDisabled = false
@@ -168,9 +330,16 @@ enum FoldReplyRepro {
         var scenarios: [ScenarioSummary] = []
         var repetitions: [RepetitionRecord] = []
 
-        func reset(scenarios: [Scenario], count: Int, injectZero: Bool = false, healDisabled: Bool = false) {
+        func reset(
+            scenarios: [Scenario],
+            count: Int,
+            providerOption: String = "default",
+            injectZero: Bool = false,
+            healDisabled: Bool = false
+        ) {
             startedAt = ISO8601DateFormatter().string(from: .now)
             scenariosRequested = scenarios.map(\.rawValue)
+            self.providerOption = providerOption
             repetitionsPerScenario = count
             self.injectZero = injectZero
             self.healDisabled = healDisabled
@@ -182,16 +351,36 @@ enum FoldReplyRepro {
         }
 
         func snapshot() -> FoldReproReport {
-            FoldReproReport(
+            let blankReps = repetitions.filter { $0.blankSummary.blankDetected }
+            let totalBlankSamples = repetitions.reduce(0) { $0 + $1.blankSummary.blankSampleCount }
+            let earliestBlank = blankReps.compactMap { $0.blankSummary.firstBlankAtSeconds }.min()
+            let selfRecovered = blankReps.filter { $0.blankSummary.selfRecovered == true }.count
+            let unrecovered = blankReps.filter { $0.blankSummary.selfRecovered == false }.count
+            return FoldReproReport(
                 startedAt: startedAt,
                 windowSize: SizeRecord(width: Double(windowSize.width), height: Double(windowSize.height)),
+                hydraWindowSize: SizeRecord(width: Double(hydraWindowSize.width), height: Double(hydraWindowSize.height)),
                 scenariosRequested: scenariosRequested,
+                providerOption: providerOption,
+                hydraStreamChunksOption: streamChunksOverride,
+                hydraChunkGapOption: chunkGapOverride,
+                hydraTailDelayOption: tailDelayOverride,
+                hydraReasoningSecondsOption: reasoningSecondsOverride,
+                freshThreadFlag: freshThreadFlag,
                 repetitionsPerScenario: repetitionsPerScenario,
                 budgetSeconds: Int(budgetSeconds),
                 injectZero: injectZero,
                 healDisabled: healDisabled,
+                sampleOffsetsSeconds: sampleOffsetsSeconds,
+                inkLuminanceDeltaThreshold: inkLuminanceDeltaThreshold,
+                blankInkRatioThreshold: blankInkRatioThreshold,
                 status: status,
                 blockedReason: blockedReason,
+                totalBlankRepetitions: blankReps.count,
+                totalBlankSamples: totalBlankSamples,
+                earliestBlankAtSeconds: earliestBlank,
+                selfRecoveredRepetitions: selfRecovered,
+                unrecoveredBlankRepetitions: unrecovered,
                 scenarioFailCounts: scenarioFailCounts,
                 scenarios: scenarios,
                 repetitions: repetitions
@@ -205,10 +394,23 @@ enum FoldReplyRepro {
         guard CaptureRun.isEnabled, let output = CaptureRun.outputDirectory else { return }
 
         let parsed = parseArguments()
+        let providerOption = parsed.provider?.rawValue ?? "default"
+        streamChunksOverride = parsed.streamChunks
+        chunkGapOverride = parsed.chunkGapSeconds
+        tailDelayOverride = parsed.tailDelaySeconds
+        reasoningSecondsOverride = parsed.reasoningSeconds
+        freshThreadFlag = parsed.freshThread
+
         guard let scenarios = parsed.scenarios, let count = parsed.count else {
             let reason = parsed.error ?? "invalid --fold-repro arguments"
             WebsiteCaptures.log("fold-repro blocked: \(reason)")
-            reportState.reset(scenarios: [], count: 0, injectZero: parsed.injectZero, healDisabled: parsed.noHeal)
+            reportState.reset(
+                scenarios: [],
+                count: 0,
+                providerOption: providerOption,
+                injectZero: parsed.injectZero,
+                healDisabled: parsed.noHeal
+            )
             reportState.status = "blocked"
             reportState.blockedReason = reason
             saveReport(to: output)
@@ -218,12 +420,22 @@ enum FoldReplyRepro {
 
         injectZero = parsed.injectZero
         healDisabled = parsed.noHeal
+        providerOverride = parsed.provider
         if healDisabled {
             LinkTextView.debugHeightHealDisabled = true
         }
 
-        budgetSeconds = max(600, TimeInterval(scenarios.count * count) * (25 + holdSeconds) + 120)
-        reportState.reset(scenarios: scenarios, count: count, injectZero: injectZero, healDisabled: healDisabled)
+        let estimatedWorkload = scenarios.reduce(0.0) { total, scenario in
+            total + estimatedSecondsPerRepetition(for: scenario) * Double(count)
+        }
+        budgetSeconds = max(600, estimatedWorkload + 120)
+        reportState.reset(
+            scenarios: scenarios,
+            count: count,
+            providerOption: providerOption,
+            injectZero: injectZero,
+            healDisabled: healDisabled
+        )
         saveReport(to: output)
 
         await model.bootstrap()
@@ -250,12 +462,22 @@ enum FoldReplyRepro {
 
         model.settings.hasSeenHydraIntro = true
         model.settings.hydraEnabled = false
+        model.settings.hydraAutoOpensPanels = true
+        model.settings.hydraAutoPopsHeads = false
+        model.settings.hydraIsolateHeads = false
+        model.settings.hydraAutoMerge = false
+        // Defense-in-depth in the isolated capture defaults: ensure neither CLI provider can spawn a real process.
+        model.settings.setBinaryPath(disabledProviderBinaryPath, for: .antigravity)
+        model.settings.setBinaryPath(disabledProviderBinaryPath, for: .claude)
 
         let scenarioNames = scenarios.map(\.rawValue).joined(separator: ",")
-        WebsiteCaptures.log("fold-repro start \(output.path) scenarios=\(scenarioNames) count=\(count) injectZero=\(injectZero) healDisabled=\(healDisabled)")
+        WebsiteCaptures.log(
+            "fold-repro start \(output.path) scenarios=\(scenarioNames) provider=\(providerOption) count=\(count) streamChunks=\(streamChunksOverride.map(String.init) ?? "default") chunkGap=\(chunkGapOverride.map { String(format: "%.2f", $0) } ?? "default") tailDelay=\(tailDelayOverride.map { String(format: "%.2f", $0) } ?? "default") reasoning=\(reasoningSecondsOverride.map { String(format: "%.2f", $0) } ?? "default") freshThread=\(freshThreadFlag) injectZero=\(injectZero) healDisabled=\(healDisabled)"
+        )
 
+        let initialWindowSize = scenarios.first?.isHydraLead == true ? hydraWindowSize : windowSize
         let stage = Stage(model: model)
-        stage.show(size: windowSize)
+        stage.show(size: initialWindowSize)
         await stage.ensureActive()
         guard let window = stage.contentWindow, NSApp.isActive, window.isKeyWindow else {
             let reason = "foreground desktop or main window unavailable"
@@ -289,6 +511,7 @@ enum FoldReplyRepro {
             WebsiteCaptures.log("fold-repro scenario=\(scenario.rawValue) begin count=\(count)")
             var scenarioPassed = 0
             var scenarioFailed = 0
+            var scenarioRecords: [RepetitionRecord] = []
             var savedFirstPass = false
 
             for rep in 1...count {
@@ -314,6 +537,7 @@ enum FoldReplyRepro {
                     output: output,
                     savedFirstPass: &savedFirstPass
                 )
+                scenarioRecords.append(record)
                 reportState.repetitions.append(record)
                 if record.passed {
                     scenarioPassed += 1
@@ -325,27 +549,80 @@ enum FoldReplyRepro {
                 saveReport(to: output)
             }
 
+            let blankReps = scenarioRecords.filter { $0.blankSummary.blankDetected }
+            let blankSampleCount = scenarioRecords.reduce(0) { $0 + $1.blankSummary.blankSampleCount }
+            let earliestBlank = blankReps.compactMap { $0.blankSummary.firstBlankAtSeconds }.min()
+            let recoveredReps = blankReps.filter { $0.blankSummary.selfRecovered == true }.count
+            let unrecoveredReps = blankReps.filter { $0.blankSummary.selfRecovered == false }.count
+
             let summary = ScenarioSummary(
                 scenario: scenario.rawValue,
                 total: count,
                 passed: scenarioPassed,
-                failed: scenarioFailed
+                failed: scenarioFailed,
+                blankRepetitions: blankReps.count,
+                totalBlankSamples: blankSampleCount,
+                earliestBlankAtSeconds: earliestBlank,
+                selfRecoveredRepetitions: recoveredReps,
+                unrecoveredBlankRepetitions: unrecoveredReps
             )
             reportState.scenarios.append(summary)
             saveReport(to: output)
 
-            let line = "fold-repro scenario=\(scenario.rawValue) total=\(count) passed=\(scenarioPassed) failed=\(scenarioFailed)"
+            let earliestText = earliestBlank.map { "\(formatOffset($0))s" } ?? "none"
+            let line = "fold-repro scenario=\(scenario.rawValue) total=\(count) passed=\(scenarioPassed) failed=\(scenarioFailed) blankReps=\(blankReps.count) blankSamples=\(blankSampleCount) earliestBlank=\(earliestText) selfRecovered=\(recoveredReps) unrecovered=\(unrecoveredReps)"
             WebsiteCaptures.log(line)
             emitLine(line)
         }
 
         reportState.status = totalFailures == 0 ? "passed" : "failed"
+        let finalSnapshot = reportState.snapshot()
         saveReport(to: output)
+        let overallEarliest = finalSnapshot.earliestBlankAtSeconds.map { "\(formatOffset($0))s" } ?? "none"
+        let overallLine = "fold-repro summary status=\(finalSnapshot.status) totalReps=\(finalSnapshot.repetitions.count) failedReps=\(totalFailures) blankReps=\(finalSnapshot.totalBlankRepetitions) blankSamples=\(finalSnapshot.totalBlankSamples) earliestBlank=\(overallEarliest) selfRecovered=\(finalSnapshot.selfRecoveredRepetitions) unrecovered=\(finalSnapshot.unrecoveredBlankRepetitions)"
+        WebsiteCaptures.log(overallLine)
+        emitLine(overallLine)
         WebsiteCaptures.log("fold-repro done totalFailures=\(totalFailures)")
         exit(totalFailures == 0 ? 0 : 1)
     }
 
     // MARK: - Single repetition
+
+    private static func effectiveProvider(for scenario: Scenario) -> ReproProvider {
+        providerOverride ?? (scenario.isHydraLead ? .acp : .claude)
+    }
+
+    private static func effectiveHydraConfig(for scenario: Scenario) -> HydraLeadConfig {
+        switch scenario {
+        case .hydraLeadReal:
+            HydraLeadConfig(
+                streamChunks: streamChunksOverride ?? 8,
+                chunkGapSeconds: chunkGapOverride ?? 0.4,
+                tailDelaySeconds: tailDelayOverride ?? 10.0,
+                reasoningSeconds: reasoningSecondsOverride ?? 8.0,
+                freshThread: true
+            )
+        default:
+            HydraLeadConfig(
+                streamChunks: streamChunksOverride ?? defaultHydraStreamChunks,
+                chunkGapSeconds: chunkGapOverride ?? defaultHydraChunkGapSeconds,
+                tailDelaySeconds: tailDelayOverride ?? defaultHydraTailDelaySeconds,
+                reasoningSeconds: reasoningSecondsOverride ?? defaultHydraReasoningSeconds,
+                freshThread: freshThreadFlag
+            )
+        }
+    }
+
+    private static func estimatedSecondsPerRepetition(for scenario: Scenario) -> Double {
+        if scenario.isHydraLead {
+            let config = effectiveHydraConfig(for: scenario)
+            let streamDuration = config.streamChunks > 1
+                ? Double(config.streamChunks - 1) * config.chunkGapSeconds
+                : 0.3
+            return config.reasoningSeconds + streamDuration + config.tailDelaySeconds + 18.0
+        }
+        return 35.0 + holdSeconds
+    }
 
     private static func runRepetition(
         scenario: Scenario,
@@ -359,21 +636,58 @@ enum FoldReplyRepro {
         output: URL,
         savedFirstPass: inout Bool
     ) async -> RepetitionRecord {
+        let isHydra = scenario.isHydraLead
+        let hydraConfig = isHydra ? effectiveHydraConfig(for: scenario) : nil
+        let targetSize = isHydra ? hydraWindowSize : windowSize
+        if abs(window.frame.size.width - targetSize.width) > 1 || abs(window.frame.size.height - targetSize.height) > 1 {
+            stage.resize(to: targetSize)
+            try? await Task.sleep(for: .milliseconds(150))
+        }
         await ensureWindowReady(window: window, stage: stage)
+
+        let reproProvider = effectiveProvider(for: scenario)
+        let sendsMessageCompleted = reproProvider == .claude
+        let threadProvider: ProviderKind = reproProvider == .acp ? .antigravity : .claude
+        let threadModel = reproProvider == .acp ? "gemini-3.8-flash" : "opus"
+
+        model.settings.hydraEnabled = isHydra
+        model.settings.hydraAutoOpensPanels = true
+        model.settings.hydraAutoPopsHeads = false
+        model.settings.hydraIsolateHeads = false
+        model.settings.hydraAutoMerge = false
 
         var thread = ChatThread(
             projectID: project.id,
-            provider: .claude,
-            model: "opus",
+            provider: threadProvider,
+            model: threadModel,
             effort: "high",
             runtimeMode: .supervised
         )
-        thread.title = "Fold repro \(scenario.rawValue) #\(repetition)"
-        thread.hasCustomTitle = true
+        let usesFreshThread = hydraConfig?.freshThread == true
+        if usesFreshThread {
+            // Brand-new turn-0 thread: starts untitled with auto-title enabled (`hasCustomTitle = false`).
+            thread.title = ChatThread.untitled
+            thread.hasCustomTitle = false
+            thread.titleRefreshTurn = nil
+        } else {
+            thread.title = "Fold repro \(scenario.rawValue) #\(repetition)"
+            thread.hasCustomTitle = true
+        }
         thread.branch = "main"
+        if isHydra {
+            thread.hydraEnabled = true
+            thread.chimeraEnabled = false
+        }
         model.insertThread(thread)
-        model.selectedThreadID = thread.id
 
+        // Open a real v2 Hydra job BEFORE creating `ThreadRuntime` so `ThreadRuntime.init`
+        // adopts `hydraJobID` and `hydraJobPacketRequest` through the production path.
+        var openJobID: UUID?
+        if isHydra {
+            openJobID = await model.beginHydraJob(for: thread.id, turnID: UUID(), request: hydraLeadUserPrompt)
+        }
+
+        model.selectedThreadID = thread.id
         let runtime = model.runtime(for: thread.id)
         await runtime.ensureLoaded()
         try? await Task.sleep(for: .milliseconds(250))
@@ -382,67 +696,225 @@ enum FoldReplyRepro {
         let prefix = "fold-\(scenario.rawValue)-\(repetition)"
         let turnStart = Date.now
 
-        WebsiteCaptures.log("fold-repro \(scenario.rawValue) rep=\(repetition) start thread=\(thread.id.uuidString) marker=\(marker)")
-
-        runtime.rehearseTurn(userPrompt)
-        runtime.rehearseTitle(userPrompt)
-        let turn = runtime.rehearsalTurnID
-        let live = { runtime.isRunning && runtime.rehearsalTurnID == turn }
-        try? await Task.sleep(for: .milliseconds(150))
-
-        // 5 command tool calls, each with a few hundred chars of output.
-        for toolIndex in 1...5 {
-            guard live() else { break }
-            let toolID = "\(prefix)-cmd-\(toolIndex)"
-            let spec = initialCommandTools[toolIndex - 1]
-            runtime.rehearse(.toolStarted(id: toolID, call: ToolCall(kind: .command, title: spec.title, detail: spec.detail)))
-            try? await Task.sleep(for: .milliseconds(640))
-            guard live() else { break }
-            runtime.rehearse(.toolUpdated(id: toolID, update: ToolUpdate(output: spec.output, status: .completed, exitCode: 0)))
-            try? await Task.sleep(for: .milliseconds(120))
+        if let hydraConfig {
+            WebsiteCaptures.log(
+                "fold-repro \(scenario.rawValue) rep=\(repetition) start thread=\(thread.id.uuidString) provider=\(reproProvider.rawValue) sentMsgCompleted=\(sendsMessageCompleted) chunks=\(hydraConfig.streamChunks) chunkGap=\(String(format: "%.2f", hydraConfig.chunkGapSeconds))s tailDelay=\(String(format: "%.2f", hydraConfig.tailDelaySeconds))s reasoning=\(String(format: "%.2f", hydraConfig.reasoningSeconds))s freshThread=\(hydraConfig.freshThread) marker=\(marker)"
+            )
+        } else {
+            WebsiteCaptures.log("fold-repro \(scenario.rawValue) rep=\(repetition) start thread=\(thread.id.uuidString) provider=\(reproProvider.rawValue) sentMsgCompleted=\(sendsMessageCompleted) marker=\(marker)")
         }
-
-        // Intermediate ~52-char assistant message streamed then completed.
-        if live() {
-            let interimID = "\(prefix)-m1"
-            await streamFixed(runtime, id: interimID, text: interimMessage, chunkSize: 6, delayMs: 25, alive: live)
-            if live() {
-                runtime.rehearse(.messageCompleted(id: interimID, text: interimMessage))
-                try? await Task.sleep(for: .milliseconds(180))
-            }
-        }
-
-        // 3 more tools including one `.read` of a PNG path.
-        for (index, spec) in followUpTools.enumerated() {
-            guard live() else { break }
-            let toolID = "\(prefix)-extra-\(index + 1)"
-            runtime.rehearse(.toolStarted(id: toolID, call: ToolCall(kind: spec.kind, title: spec.title, detail: spec.detail)))
-            try? await Task.sleep(for: .milliseconds(720))
-            guard live() else { break }
-            runtime.rehearse(.toolUpdated(id: toolID, update: ToolUpdate(output: spec.output, status: .completed, exitCode: spec.kind == .command ? 0 : nil)))
-            try? await Task.sleep(for: .milliseconds(120))
-        }
-
-        // Final ~770-char assistant message streamed in deltas of 20-40 chars every 16-30 ms.
-        let finalText = finalMarkdown(marker: marker)
-        let finalID = "\(prefix)-m2"
-        let chunks = buildChunks(for: finalText)
-        let postChunkTailMs = 100
-        var remainingMs = chunks.reduce(postChunkTailMs) { $0 + $1.delayMs }
 
         var coverWindow: NSWindow?
-        var preFoldTriggered = false
         var preFoldOcclusionVisible: Bool?
-        var scrolledUpTriggered = false
         var scrolledUpDelta: Double?
+        var titleRewritesCount: Int? = usesFreshThread ? 0 : nil
 
-        for (chunkIndex, piece) in chunks.enumerated() {
-            guard live() else { break }
+        if isHydra, let hydraConfig {
+            runtime.rehearseTurn(hydraLeadUserPrompt)
+            if usesFreshThread {
+                // Mirror `ThreadRuntime.generateTitle`: initial prompt-based title and `titleRefreshTurn = 1` on turn 0.
+                model.updateThread(thread.id) {
+                    if !$0.hasCustomTitle {
+                        $0.title = TextCleanup.singleLine(hydraLeadUserPrompt, limit: 48)
+                        $0.titleRefreshTurn = 1
+                    }
+                }
+            } else {
+                runtime.rehearseTitle(hydraLeadUserPrompt)
+            }
+            let turn = runtime.rehearsalTurnID
+            let live = { runtime.isRunning && runtime.rehearsalTurnID == turn }
+            try? await Task.sleep(for: .milliseconds(120))
 
-            // Fire the 1 s pre-turnCompleted trigger for non-front / non-scrolledUp scenarios.
-            if !preFoldTriggered, remainingMs <= 1_000 {
+            // Phase 1: configurable long reasoning (`thought-1`). ACP never sends `.reasoningCompleted`.
+            let thoughtID = "\(prefix)-thought-1"
+            if live() {
+                await streamReasoning(
+                    runtime,
+                    id: thoughtID,
+                    text: hydraLeadReasoningText,
+                    durationSeconds: hydraConfig.reasoningSeconds,
+                    alive: live
+                )
+                if live(), sendsMessageCompleted {
+                    runtime.rehearse(.reasoningCompleted(id: thoughtID, text: ""))
+                }
+            }
+
+            // Phase 2: ~90-char Chinese paragraph + valid 2-head Hydra block, streamed either as
+            // the original burst (`streamChunks == 1`) or as N spaced chunks (`streamChunks > 1`)
+            // so `StreamVeil` / `LinkTextVeil` runs live with the delegation opener in the last 1-2 chunks.
+            let paragraph = hydraLeadParagraph(marker: marker)
+            let delegationBlock = hydraLeadDelegationBlock
+            let finalText = paragraph + "\n\n" + delegationBlock
+            let finalID = "\(prefix)-message-2"
+            let chunks = buildHydraLeadChunks(
+                paragraph: paragraph,
+                delegationBlock: delegationBlock,
+                count: hydraConfig.streamChunks,
+                gapSeconds: hydraConfig.chunkGapSeconds
+            )
+            for (chunkIndex, piece) in chunks.enumerated() {
+                guard live() else { break }
+                runtime.rehearse(.messageDelta(id: finalID, text: piece.text))
+                let isLastChunk = chunkIndex == chunks.count - 1
+                if !isLastChunk {
+                    if piece.delayMs > 0 {
+                        try? await Task.sleep(for: .milliseconds(piece.delayMs))
+                    }
+                } else if sendsMessageCompleted && hydraConfig.tailDelaySeconds <= 0 && piece.delayMs > 0 {
+                    try? await Task.sleep(for: .milliseconds(piece.delayMs))
+                }
+            }
+
+            // Optional tail delay between final text arrival and `.turnCompleted` (plus pre-fold auto-title rewrite).
+            if live() {
+                if hydraConfig.tailDelaySeconds > 0 {
+                    if usesFreshThread, hydraConfig.tailDelaySeconds > 0.2 {
+                        let firstHalf = hydraConfig.tailDelaySeconds / 2.0
+                        try? await Task.sleep(for: .seconds(firstHalf))
+                        if live() {
+                            model.updateThread(thread.id) {
+                                if !$0.hasCustomTitle {
+                                    $0.title = "排查折叠空白与子代理合成层 #\(repetition)"
+                                    $0.titleRefreshTurn = 1
+                                }
+                            }
+                            titleRewritesCount = (titleRewritesCount ?? 0) + 1
+                        }
+                        try? await Task.sleep(for: .seconds(hydraConfig.tailDelaySeconds - firstHalf))
+                    } else {
+                        try? await Task.sleep(for: .seconds(hydraConfig.tailDelaySeconds))
+                        if live(), usesFreshThread {
+                            model.updateThread(thread.id) {
+                                if !$0.hasCustomTitle {
+                                    $0.title = "排查折叠空白与子代理合成层 #\(repetition)"
+                                    $0.titleRefreshTurn = 1
+                                }
+                            }
+                            titleRewritesCount = (titleRewritesCount ?? 0) + 1
+                        }
+                    }
+                } else if usesFreshThread {
+                    model.updateThread(thread.id) {
+                        if !$0.hasCustomTitle {
+                            $0.title = "排查折叠空白与子代理合成层 #\(repetition)"
+                            $0.titleRefreshTurn = 1
+                        }
+                    }
+                    titleRewritesCount = (titleRewritesCount ?? 0) + 1
+                }
+            }
+
+            if live() {
+                if sendsMessageCompleted {
+                    runtime.rehearse(.messageCompleted(id: finalID, text: finalText))
+                }
+                if injectZero {
+                    ProseRunRepresentable.debugZeroHeightMarker = marker
+                    ProseRunRepresentable.debugZeroHeightUntil = Date.now.addingTimeInterval(0.6)
+                }
+                runtime.rehearse(.turnCompleted(status: .completed, error: nil))
+            }
+        } else {
+            runtime.rehearseTurn(userPrompt)
+            runtime.rehearseTitle(userPrompt)
+            let turn = runtime.rehearsalTurnID
+            let live = { runtime.isRunning && runtime.rehearsalTurnID == turn }
+            try? await Task.sleep(for: .milliseconds(150))
+
+            // 5 command tool calls, each with a few hundred chars of output.
+            for toolIndex in 1...5 {
+                guard live() else { break }
+                let toolID = "\(prefix)-cmd-\(toolIndex)"
+                let spec = initialCommandTools[toolIndex - 1]
+                runtime.rehearse(.toolStarted(id: toolID, call: ToolCall(kind: .command, title: spec.title, detail: spec.detail)))
+                try? await Task.sleep(for: .milliseconds(640))
+                guard live() else { break }
+                runtime.rehearse(.toolUpdated(id: toolID, update: ToolUpdate(output: spec.output, status: .completed, exitCode: 0)))
+                try? await Task.sleep(for: .milliseconds(120))
+            }
+
+            // Intermediate ~52-char assistant message streamed then completed.
+            if live() {
+                let interimID = "\(prefix)-m1"
+                await streamFixed(runtime, id: interimID, text: interimMessage, chunkSize: 6, delayMs: 25, alive: live)
+                if live(), sendsMessageCompleted {
+                    runtime.rehearse(.messageCompleted(id: interimID, text: interimMessage))
+                    try? await Task.sleep(for: .milliseconds(180))
+                }
+            }
+
+            // 3 more tools including one `.read` of a PNG path.
+            for (index, spec) in followUpTools.enumerated() {
+                guard live() else { break }
+                let toolID = "\(prefix)-extra-\(index + 1)"
+                runtime.rehearse(.toolStarted(id: toolID, call: ToolCall(kind: spec.kind, title: spec.title, detail: spec.detail)))
+                try? await Task.sleep(for: .milliseconds(720))
+                guard live() else { break }
+                runtime.rehearse(.toolUpdated(id: toolID, update: ToolUpdate(output: spec.output, status: .completed, exitCode: spec.kind == .command ? 0 : nil)))
+                try? await Task.sleep(for: .milliseconds(120))
+            }
+
+            // Final ~770-char assistant message streamed in deltas of 20-40 chars every 16-30 ms.
+            let finalText = finalMarkdown(marker: marker)
+            let finalID = "\(prefix)-m2"
+            let chunks = buildChunks(for: finalText)
+            let postChunkTailMs = sendsMessageCompleted ? 100 : 0
+            var remainingMs = chunks.reduce(postChunkTailMs) { $0 + $1.delayMs }
+
+            var preFoldTriggered = false
+            var scrolledUpTriggered = false
+
+            for (chunkIndex, piece) in chunks.enumerated() {
+                guard live() else { break }
+
+                // Fire the 1 s pre-turnCompleted trigger for non-front / non-scrolledUp scenarios.
+                if !preFoldTriggered, remainingMs <= 1_000 {
+                    switch scenario {
+                    case .front, .scrolledUp, .hydraLead, .hydraLeadReal:
+                        break
+                    case .covered:
+                        preFoldTriggered = true
+                        coverWindow = orderCoverWindow(above: window)
+                    case .miniaturized:
+                        preFoldTriggered = true
+                        window.miniaturize(nil)
+                    case .inactive:
+                        preFoldTriggered = true
+                        NSApp.hide(nil)
+                    case .otherThread:
+                        preFoldTriggered = true
+                        model.selectedThreadID = otherThreadID
+                    case .settings:
+                        preFoldTriggered = true
+                        SettingsNavigation.shared.present(page: .appearance)
+                    }
+                }
+
+                runtime.rehearse(.messageDelta(id: finalID, text: piece.text))
+
+                // In scrolledUp, scroll up 60 pt (unpinning) once enough text is streaming.
+                if scenario == .scrolledUp, !scrolledUpTriggered, chunkIndex >= chunks.count / 3 {
+                    if let moved = scrollUpBy60AndUnpin(in: window) {
+                        scrolledUpDelta = moved
+                        if abs(moved) >= 1.0 || chunkIndex >= (chunks.count * 2) / 3 {
+                            scrolledUpTriggered = true
+                        }
+                    }
+                }
+
+                let isLastChunk = chunkIndex == chunks.count - 1
+                if !isLastChunk || sendsMessageCompleted {
+                    try? await Task.sleep(for: .milliseconds(piece.delayMs))
+                }
+                remainingMs -= piece.delayMs
+            }
+
+            // Safety fallback if the final message was shorter than 1 s.
+            if !preFoldTriggered {
                 switch scenario {
-                case .front, .scrolledUp:
+                case .front, .scrolledUp, .hydraLead, .hydraLeadReal:
                     break
                 case .covered:
                     preFoldTriggered = true
@@ -462,75 +934,82 @@ enum FoldReplyRepro {
                 }
             }
 
-            runtime.rehearse(.messageDelta(id: finalID, text: piece.text))
+            if scenario == .scrolledUp, !scrolledUpTriggered {
+                scrolledUpDelta = scrollUpBy60AndUnpin(in: window)
+            }
 
-            // In scrolledUp, scroll up 60 pt (unpinning) once enough text is streaming.
-            if scenario == .scrolledUp, !scrolledUpTriggered, chunkIndex >= chunks.count / 3 {
-                if let moved = scrollUpBy60AndUnpin(in: window) {
-                    scrolledUpDelta = moved
-                    if abs(moved) >= 1.0 || chunkIndex >= (chunks.count * 2) / 3 {
-                        scrolledUpTriggered = true
+            if live(), postChunkTailMs > 0 {
+                try? await Task.sleep(for: .milliseconds(postChunkTailMs))
+            }
+
+            if scenario == .covered || scenario == .miniaturized || scenario == .inactive {
+                preFoldOcclusionVisible = window.occlusionState.contains(.visible)
+            }
+
+            if live() {
+                if sendsMessageCompleted {
+                    runtime.rehearse(.messageCompleted(id: finalID, text: finalText))
+                }
+                if injectZero {
+                    ProseRunRepresentable.debugZeroHeightMarker = marker
+                    ProseRunRepresentable.debugZeroHeightUntil = Date.now.addingTimeInterval(0.6)
+                }
+                runtime.rehearse(.turnCompleted(status: .completed, error: nil))
+            }
+        }
+
+        // Yield tightly on MainActor so we catch the immediate turn right after `finalizeTurn`
+        // finishes synchronously (before `startTivanoHead`'s async git reads can reach `sendHydraBrief`).
+        let finishWait = Date.now.addingTimeInterval(5)
+        while runtime.isRunning, Date.now < finishWait {
+            await Task.yield()
+        }
+        let foldCompletedAt = Date.now
+        let turnDuration = foldCompletedAt.timeIntervalSince(turnStart)
+
+        var spawnedHeads: [ChatThread] = []
+        var hydraSpawnedHeadCount: Int?
+        var hydraPanelOpenAfterFold: Bool?
+        var delegationMarkedSent: Bool?
+
+        if isHydra {
+            spawnedHeads = model.hydraTeam(of: thread.id)
+            // Keep spawned heads in a rehearsed running state so `startTivanoHead`'s eventual
+            // `sendHydraBrief` exits on `phase != .idle` without launching any provider CLI or network.
+            for head in spawnedHeads {
+                let headRuntime = model.runtime(for: head.id)
+                headRuntime.hydraStartupPending = false
+                if !headRuntime.isRunning {
+                    headRuntime.rehearseTurn(nil)
+                }
+                model.updateHydraHead(head.id) {
+                    if $0.activity == nil {
+                        $0.activity = head.hydra?.task ?? "Investigating"
                     }
                 }
             }
-
-            try? await Task.sleep(for: .milliseconds(piece.delayMs))
-            remainingMs -= piece.delayMs
-        }
-
-        // Safety fallback if the final message was shorter than 1 s.
-        if !preFoldTriggered {
-            switch scenario {
-            case .front, .scrolledUp:
-                break
-            case .covered:
-                preFoldTriggered = true
-                coverWindow = orderCoverWindow(above: window)
-            case .miniaturized:
-                preFoldTriggered = true
-                window.miniaturize(nil)
-            case .inactive:
-                preFoldTriggered = true
-                NSApp.hide(nil)
-            case .otherThread:
-                preFoldTriggered = true
-                model.selectedThreadID = otherThreadID
-            case .settings:
-                preFoldTriggered = true
-                SettingsNavigation.shared.present(page: .appearance)
+            if usesFreshThread {
+                // Post-`.turnCompleted` auto-title rewrite on the fresh turn-0 thread.
+                model.updateThread(thread.id) {
+                    if !$0.hasCustomTitle {
+                        $0.title = "Hydra 折叠空白复现与合成排查 #\(repetition)"
+                        $0.titleRefreshTurn = 1
+                    }
+                }
+                titleRewritesCount = (titleRewritesCount ?? 0) + 1
             }
+            hydraSpawnedHeadCount = spawnedHeads.count
+            hydraPanelOpenAfterFold = !runtime.isHydraPanelHidden && spawnedHeads.contains(where: \.isInPanel)
+            let cardState = delegationCardState(in: runtime, marker: marker)
+            delegationMarkedSent = (cardState == "sent" || cardState == "leaving")
+            WebsiteCaptures.log(
+                "fold-repro \(scenario.rawValue) rep=\(repetition) post-fold heads=\(spawnedHeads.count) panelOpen=\(hydraPanelOpenAfterFold ?? false) card=\(cardState ?? "nil") titleRewrites=\(titleRewritesCount ?? 0)"
+            )
         }
-
-        if scenario == .scrolledUp, !scrolledUpTriggered {
-            scrolledUpDelta = scrollUpBy60AndUnpin(in: window)
-        }
-
-        if live() {
-            try? await Task.sleep(for: .milliseconds(postChunkTailMs))
-        }
-
-        if scenario == .covered || scenario == .miniaturized || scenario == .inactive {
-            preFoldOcclusionVisible = window.occlusionState.contains(.visible)
-        }
-
-        if live() {
-            runtime.rehearse(.messageCompleted(id: finalID, text: finalText))
-            if injectZero {
-                ProseRunRepresentable.debugZeroHeightMarker = marker
-                ProseRunRepresentable.debugZeroHeightUntil = Date.now.addingTimeInterval(0.6)
-            }
-            runtime.rehearse(.turnCompleted(status: .completed, error: nil))
-        }
-
-        let finishWait = Date.now.addingTimeInterval(5)
-        while runtime.isRunning, Date.now < finishWait {
-            try? await Task.sleep(for: .milliseconds(40))
-        }
-        let turnDuration = Date.now.timeIntervalSince(turnStart)
 
         // Hold & restore per scenario.
         switch scenario {
-        case .front:
+        case .front, .hydraLead, .hydraLeadReal:
             break
         case .covered:
             try? await Task.sleep(for: .seconds(holdSeconds))
@@ -566,15 +1045,221 @@ enum FoldReplyRepro {
             scrollToBottomProgrammatically(in: window)
         }
 
-        // Wait 1.5 s after the restore step (or after turnCompleted for `front`),
-        // or 4.5 s when injecting zero height so the heal backoff (1 s, 3 s) can run.
-        try? await Task.sleep(for: .milliseconds(injectZero ? 4_500 : 1_500))
+        // Sample composited pixels at t = 0.3, 1, 2.5, 4, 6, 10 s relative to fold completion
+        // (`turnCompleted` handled) for visible scenarios (or post-restore for away scenarios),
+        // without forcing any redraw/scroll.
+        let sampleOrigin = (scenario == .front || isHydra || scenario == .scrolledUp) ? foldCompletedAt : Date.now
+        var samples: [SampleRecord] = []
+        var latestCaptured: (image: CGImage, rect: NSRect)?
+        var savedBlankStill = false
 
-        // Inspect hierarchy before scrolling into view.
+        for (sampleIndex, offset) in sampleOffsetsSeconds.enumerated() {
+            let isLastSample = sampleIndex == sampleOffsetsSeconds.count - 1
+            let targetDate = sampleOrigin.addingTimeInterval(offset)
+            let wait = targetDate.timeIntervalSinceNow
+            if wait > 0 {
+                try? await Task.sleep(for: .seconds(wait))
+            }
+
+            let actualOffset = Date.now.timeIntervalSince(sampleOrigin)
+            let elapsedSinceFold = Date.now.timeIntervalSince(foldCompletedAt)
+            let captured = await captureStillImage(rect: stage.captureRect)
+            if let captured { latestCaptured = captured }
+
+            let found = findMarkerViews(marker: marker, in: window)
+            let markerView = found.primary
+            let primaryScroll = markerView?.enclosingScrollView ?? timelineScroll(in: window)
+
+            let linkTextViewID = markerView.map { ObjectIdentifier($0).hashValue }
+            let textStorageLength = markerView?.textStorage?.length ?? 0
+            let tempForeground = markerView.map(inspectTemporaryForegroundColor)
+            let storageForegroundMinAlpha = markerView.flatMap(inspectStorageForegroundMinAlpha)
+            let boundsRect = markerView?.bounds
+            let visibleRect = markerView?.visibleRect
+            let visibleRectInWindow = markerView.map { $0.convert($0.visibleRect, to: nil) }
+            let textContainerWidth = markerView?.textContainer.map { Double($0.containerSize.width) }
+            let occlusionState = window.occlusionState
+            let occlusionVisible = occlusionState.contains(.visible)
+            let isHiddenOrAncestor = markerView?.isHiddenOrHasHiddenAncestor
+            let abnormalAncestors = markerView.map { inspectAbnormalAncestors(of: $0, upTo: window.contentView) } ?? []
+            let ancestorsAbnormalSummary: String = if markerView == nil {
+                "missing"
+            } else if abnormalAncestors.isEmpty {
+                "none"
+            } else {
+                abnormalAncestors.map { record in
+                    let layerAlpha = record.layerOpacity.map { String(format: "%.2f", $0) } ?? "nil"
+                    let layerHidden = record.layerIsHidden.map { $0 ? "1" : "0" } ?? "nil"
+                    return "d\(record.depth):\(record.className)(h=\(record.isHidden ? 1 : 0),a=\(String(format: "%.2f", record.alphaValue)),lh=\(layerHidden),lo=\(layerAlpha),m=\(record.hasLayerMask ? 1 : 0))"
+                }.joined(separator: ";")
+            }
+            let hasLayer = markerView.map { $0.layer != nil }
+            let layerClassName = markerView?.layer.map { String(describing: type(of: $0)) }
+            let layerContentsIsNil = markerView?.layer.map { $0.contents == nil }
+            let layerBounds = markerView?.layer.map { RectRecord($0.bounds) }
+            let layerContentsRedrawPolicyRaw = markerView.map { $0.layerContentsRedrawPolicy.rawValue }
+            let measuredHeight: Double? = markerView.map {
+                $0.bounds.width > 0 ? Double($0.height(forWidth: $0.bounds.width)) : 0
+            }
+
+            var sampleInk: InkAnalysis?
+            if let captured, let markerView {
+                sampleInk = analyzeInk(
+                    markerView: markerView,
+                    scroll: primaryScroll,
+                    window: window,
+                    image: captured.image,
+                    stillScreenRect: captured.rect
+                )
+            }
+
+            let textNonEmpty = textStorageLength > 0
+            let visibleNonEmpty = visibleRect.map {
+                !$0.isNull && !$0.isEmpty && $0.width > 1 && $0.height > 1
+            } ?? false
+            let hasCroppedPixels = (sampleInk?.totalPixels ?? 0) > 0
+            let isBlank = (captured != nil)
+                && textNonEmpty
+                && visibleNonEmpty
+                && hasCroppedPixels
+                && (sampleInk?.inkRatio ?? 0) < blankInkRatioThreshold
+
+            var sampleStillFile: String?
+            if isBlank, !savedBlankStill, let captured {
+                let name = String(format: "%@-rep%02d-t%@s-blank.png", scenario.rawValue, repetition, formatOffset(offset))
+                if savePNG(captured.image, to: output.appendingPathComponent(name)) {
+                    sampleStillFile = name
+                    savedBlankStill = true
+                }
+            }
+
+            let cardState = isHydra ? delegationCardState(in: runtime, marker: marker) : nil
+            let panelOpen = isHydra
+                ? (!runtime.isHydraPanelHidden && model.hydraTeam(of: thread.id).contains(where: \.isInPanel))
+                : nil
+
+            // Offscreen control check: ONLY at the final (10 s) sample, strictly AFTER screen capture
+            // and all read-only probes above, because `cacheDisplay` invokes `draw(_:)` and may mutate state.
+            var offscreenInkRatio: Double?
+            var screenInkRatioAfterOffscreen: Double?
+            if isLastSample, let markerView, visibleNonEmpty {
+                let backgroundLuminance: CGFloat = if let ink = sampleInk, ink.totalPixels > 0 {
+                    CGFloat(ink.medianLuminance)
+                } else {
+                    resolvedBackgroundLuminance(for: markerView)
+                }
+                offscreenInkRatio = measureOffscreenInkRatio(
+                    for: markerView,
+                    opaqueBackgroundLuminance: backgroundLuminance
+                )
+                // Allow a few display frames for any `cacheDisplay`-induced layer commit before re-capturing screen.
+                try? await Task.sleep(for: .milliseconds(100))
+                if let afterCaptured = await captureStillImage(rect: stage.captureRect),
+                   let afterInk = analyzeInk(
+                       markerView: markerView,
+                       scroll: markerView.enclosingScrollView ?? primaryScroll,
+                       window: window,
+                       image: afterCaptured.image,
+                       stillScreenRect: afterCaptured.rect
+                   ) {
+                    screenInkRatioAfterOffscreen = afterInk.inkRatio
+                }
+            }
+
+            let sample = SampleRecord(
+                targetOffsetSeconds: offset,
+                actualOffsetSeconds: (actualOffset * 1000).rounded() / 1000,
+                elapsedSinceFoldSeconds: (elapsedSinceFold * 1000).rounded() / 1000,
+                markerFound: markerView != nil,
+                linkTextViewID: linkTextViewID,
+                textStorageLength: textStorageLength,
+                tempForegroundColorPresent: tempForeground?.present,
+                tempForegroundColorCharCount: tempForeground?.coveredChars,
+                tempForegroundColorMinAlpha: tempForeground?.minAlpha,
+                storageForegroundColorMinAlpha: storageForegroundMinAlpha,
+                bounds: boundsRect.map(RectRecord.init),
+                visibleRect: visibleRect.map(RectRecord.init),
+                visibleRectInWindow: visibleRectInWindow.map(RectRecord.init),
+                textContainerWidth: textContainerWidth.map { ($0 * 100).rounded() / 100 },
+                windowOcclusionStateRaw: occlusionState.rawValue,
+                windowOcclusionVisible: occlusionVisible,
+                isHiddenOrHasHiddenAncestor: isHiddenOrAncestor,
+                abnormalAncestors: abnormalAncestors,
+                ancestorsAbnormalSummary: ancestorsAbnormalSummary,
+                hasLayer: hasLayer,
+                layerClassName: layerClassName,
+                layerContentsIsNil: layerContentsIsNil,
+                layerBounds: layerBounds,
+                layerContentsRedrawPolicyRaw: layerContentsRedrawPolicyRaw,
+                measuredHeight: measuredHeight.map { ($0 * 100).rounded() / 100 },
+                stillCaptured: captured != nil,
+                stillFile: sampleStillFile,
+                inkAnalysis: sampleInk,
+                offscreenInkRatio: offscreenInkRatio,
+                screenInkRatioAfterOffscreen: screenInkRatioAfterOffscreen,
+                isBlank: isBlank,
+                delegationCardState: cardState,
+                hydraPanelOpen: panelOpen
+            )
+            samples.append(sample)
+
+            let inkPct = (sampleInk?.inkRatio ?? 0) * 100
+            let boundsDesc = boundsRect.map { String(format: "%.1fx%.1f", Double($0.width), Double($0.height)) } ?? "nil"
+            let visDesc = visibleRect.map { String(format: "%.1fx%.1f", Double($0.width), Double($0.height)) } ?? "nil"
+            let tcWDesc = textContainerWidth.map { String(format: "%.1f", $0) } ?? "nil"
+            let viewIDDesc = linkTextViewID.map(String.init) ?? "nil"
+            let tempAlphaMinDesc = tempForeground?.minAlpha.map { String(format: "%.3f", $0) } ?? "none"
+            let offscreenDesc: String = if let offscreen = offscreenInkRatio {
+                String(
+                    format: "%.2f%%(after=%@)",
+                    offscreen * 100,
+                    screenInkRatioAfterOffscreen.map { String(format: "%.2f%%", $0 * 100) } ?? "nil"
+                )
+            } else {
+                "n/a"
+            }
+            let sampleLine = String(
+                format: "fold-repro sample scenario=%@ rep=%d t=%@s(actual=%.2fs,fold=%.2fs) blank=%@ ink=%.2f%%(%d/%d) len=%d viewID=%@ tempAlphaMin=%@ offscreenInk=%@ ancestorsAbnormal=%@ bounds=%@ vis=%@ tcW=%@ occ=%@ hidden=%@ layer=%@ contentsNil=%@ card=%@ panel=%@",
+                scenario.rawValue,
+                repetition,
+                formatOffset(offset),
+                actualOffset,
+                elapsedSinceFold,
+                isBlank ? "true" : "false",
+                inkPct,
+                sampleInk?.inkPixels ?? 0,
+                sampleInk?.totalPixels ?? 0,
+                textStorageLength,
+                viewIDDesc,
+                tempAlphaMinDesc,
+                offscreenDesc,
+                ancestorsAbnormalSummary,
+                boundsDesc,
+                visDesc,
+                tcWDesc,
+                occlusionVisible ? "true" : "false",
+                isHiddenOrAncestor.map { $0 ? "true" : "false" } ?? "nil",
+                hasLayer.map { $0 ? "true" : "false" } ?? "nil",
+                layerContentsIsNil.map { $0 ? "true" : "false" } ?? "nil",
+                cardState ?? "n/a",
+                panelOpen.map { $0 ? "true" : "false" } ?? "n/a"
+            )
+            WebsiteCaptures.log(sampleLine)
+            emitLine(sampleLine)
+        }
+
+        if injectZero {
+            ProseRunRepresentable.debugZeroHeightMarker = nil
+        }
+
+        // Settled hierarchy inspection after the undisturbed 10 s pixel sampling window.
+        let finalFound = findMarkerViews(marker: marker, in: window)
+        let matchingViews = finalFound.all
+        let primaryMarkerView = finalFound.primary
         let allLinkViews = findAll(LinkTextView.self, in: window.contentView)
-        let matchingViews = allLinkViews.filter { ($0.textStorage?.string ?? $0.string).contains(marker) }
-        let primaryMarkerView = matchingViews.first
-        let interimMatchingViews = allLinkViews.filter { ($0.textStorage?.string ?? $0.string).contains(interimPrefix) }
+        let interimMatchingViews = isHydra
+            ? []
+            : allLinkViews.filter { ($0.textStorage?.string ?? $0.string).contains(interimPrefix) }
 
         let primaryScroll = primaryMarkerView?.enclosingScrollView ?? timelineScroll(in: window)
         let initialScrollProbe = primaryScroll.flatMap(measureScroll)
@@ -592,59 +1277,23 @@ enum FoldReplyRepro {
             )
         }
 
-        // Scroll marker view into view if not visible, then wait 300 ms.
-        var didScrollMarkerIntoView = false
-        var scrollProbeAfterReveal: ScrollProbe?
-        // Judged before any recovery scroll: a reply the timeline failed to show must not
-        // pass because the harness scrolled (and so redrew) it.
-        var visibleBeforeRecovery = false
-        if let markerView = primaryMarkerView {
-            let scroll = markerView.enclosingScrollView ?? primaryScroll
-            let visibleBefore = isSubstantiallyVisible(markerView, in: scroll)
-            visibleBeforeRecovery = visibleBefore
-            if !visibleBefore {
-                didScrollMarkerIntoView = true
-                _ = markerView.scrollToVisible(markerView.bounds)
-                if let scroll {
-                    scroll.reflectScrolledClipView(scroll.contentView)
-                }
-                try? await Task.sleep(for: .milliseconds(300))
+        let visibleBeforeRecovery = primaryMarkerView.map {
+            isSubstantiallyVisible($0, in: $0.enclosingScrollView ?? primaryScroll)
+        } ?? false
 
-                // If `scrollToVisible` stopped behind `contentInsets.bottom` (composer), align into unobstructed viewport.
-                if let scroll, !isSubstantiallyVisible(markerView, in: scroll), let document = scroll.documentView {
-                    let rectInDoc = markerView.convert(markerView.bounds, to: document)
-                    let clip = scroll.contentView
-                    let targetY = rectInDoc.minY - scroll.contentInsets.top
-                    let rect = NSRect(origin: NSPoint(x: clip.bounds.minX, y: targetY), size: clip.bounds.size)
-                    clip.scroll(to: clip.constrainBoundsRect(rect).origin)
-                    scroll.reflectScrolledClipView(clip)
-                    try? await Task.sleep(for: .milliseconds(300))
-                }
-                scrollProbeAfterReveal = scroll.flatMap(measureScroll)
-            }
-        }
-
-        // Capture a still of the window using the same method as other capture runs.
-        await stage.ensureActive()
-        let captured = await captureStillImage(rect: stage.captureRect)
-
-        var inkAnalysis: InkAnalysis?
-        if let captured, let markerView = primaryMarkerView {
-            inkAnalysis = analyzeInk(
-                markerView: markerView,
-                scroll: markerView.enclosingScrollView ?? primaryScroll,
-                window: window,
-                image: captured.image,
-                stillScreenRect: captured.rect
-            )
-        }
-
-        if injectZero {
-            ProseRunRepresentable.debugZeroHeightMarker = nil
-        }
+        let blankSummary = summarizeBlankTimeline(samples)
+        let representativeInk = samples.first(where: \.isBlank)?.inkAnalysis ?? samples.last?.inkAnalysis
+        let anyCaptureSucceeded = samples.contains(where: \.stillCaptured)
 
         // Evaluate pass/fail rules.
         var failureReasons: [String] = []
+        if isHydra {
+            if hydraSpawnedHeadCount != 2 || delegationMarkedSent != true || hydraPanelOpenAfterFold != true {
+                failureReasons.append(
+                    "hydra_delegation_not_triggered(heads=\(hydraSpawnedHeadCount ?? 0),sent=\(delegationMarkedSent ?? false),panel=\(hydraPanelOpenAfterFold ?? false))"
+                )
+            }
+        }
         if matchingViews.isEmpty {
             failureReasons.append("marker_view_missing")
         } else if !visibleBeforeRecovery {
@@ -661,22 +1310,34 @@ enum FoldReplyRepro {
                 failureReasons.append("ancestor_hidden_or_transparent")
             }
         }
-        if captured == nil {
+        // Every scheduled sample must yield a real capture and ink analysis; a failed
+        // capture mid-fold could otherwise hide a transient blank.
+        let requiredSamples = injectZero ? samples.filter { $0.targetOffsetSeconds >= 4.0 } : samples
+        let incompleteSamples = requiredSamples.filter { ($0.inkAnalysis?.totalPixels ?? 0) == 0 }
+        if !anyCaptureSucceeded {
             failureReasons.append("still_capture_failed")
-        } else if let ink = inkAnalysis {
-            if ink.totalPixels == 0 || ink.inkRatio < 0.005 {
-                failureReasons.append(String(format: "insufficient_ink(ratio=%.4f,pixels=%d/%d)", ink.inkRatio, ink.inkPixels, ink.totalPixels))
+        } else if !incompleteSamples.isEmpty {
+            failureReasons.append("inconclusive_samples(\(incompleteSamples.count)/\(requiredSamples.count))")
+        } else {
+            let gatingBlankSamples = injectZero
+                ? samples.filter { $0.targetOffsetSeconds >= 4.0 && $0.isBlank }
+                : samples.filter(\.isBlank)
+            if !gatingBlankSamples.isEmpty {
+                let firstStr = gatingBlankSamples.first.map { "\(formatOffset($0.targetOffsetSeconds))s" } ?? "none"
+                let recStr = blankSummary.selfRecovered.map { $0 ? "true" : "false" } ?? "false"
+                failureReasons.append("blank_pixels(count=\(gatingBlankSamples.count)/\(samples.count),first=\(firstStr),recovered=\(recStr))")
+            } else if let finalSample = samples.last, finalSample.markerFound, visibleBeforeRecovery,
+                      (finalSample.inkAnalysis?.totalPixels ?? 0) == 0 {
+                failureReasons.append("insufficient_ink(no_visible_rect)")
             }
-        } else if primaryMarkerView != nil {
-            failureReasons.append("insufficient_ink(no_visible_rect)")
         }
 
         let passed = failureReasons.isEmpty
 
-        // Save still for every failure and the first pass of each scenario.
+        // Save final still for every failure and the first pass of each scenario.
         var stillFile: String?
         let shouldSaveStill = !passed || !savedFirstPass
-        if shouldSaveStill, let captured {
+        if shouldSaveStill, let captured = latestCaptured {
             let tag = passed ? "pass" : "fail"
             let name = String(format: "%@-rep%02d-%@.png", scenario.rawValue, repetition, tag)
             if savePNG(captured.image, to: output.appendingPathComponent(name)) {
@@ -685,46 +1346,84 @@ enum FoldReplyRepro {
             }
         }
 
-        let inkPct = (inkAnalysis?.inkRatio ?? 0) * 100
+        // Clean up rehearsed heads and open job before the next repetition without relaying reports.
+        if isHydra {
+            for head in spawnedHeads {
+                model.updateHydraHead(head.id) {
+                    $0.status = .stopped
+                    $0.finishedAt = .now
+                }
+                model.updateThread(head.id) {
+                    $0.isInPanel = false
+                    $0.lastStatus = .interrupted
+                }
+                model.existingRuntime(for: head.id)?.rehearse(.turnCompleted(status: .interrupted, error: nil))
+            }
+            if let openJobID {
+                model.updateHydraJob(openJobID, of: thread.id) {
+                    $0.ending = .interrupted
+                    $0.finishedAt = .now
+                }
+            }
+        }
+
+        let inkPct = (representativeInk?.inkRatio ?? 0) * 100
         let firstProbe = markerProbes.first
-        WebsiteCaptures.log(
-            String(
-                format: "fold-repro %@ rep=%d pass=%@ injectZero=%@ healDisabled=%@ found=%d interim=%d h=%.1f/%.1f ink=%.2f%% occludedVis=%@ reasons=%@",
-                scenario.rawValue,
-                repetition,
-                passed ? "true" : "false",
-                injectZero ? "true" : "false",
-                healDisabled ? "true" : "false",
-                matchingViews.count,
-                interimMatchingViews.count,
-                firstProbe?.boundsHeight ?? -1,
-                firstProbe?.measuredHeight ?? -1,
-                inkPct,
-                preFoldOcclusionVisible.map { $0 ? "true" : "false" } ?? "nil",
-                failureReasons.isEmpty ? "none" : failureReasons.joined(separator: ",")
-            )
+        let firstBlankStr = blankSummary.firstBlankAtSeconds.map { "\(formatOffset($0))s" } ?? "none"
+        let recoveredStr = blankSummary.selfRecovered.map { $0 ? "true" : "false" } ?? "n/a"
+        let repLine = String(
+            format: "fold-repro %@ rep=%d provider=%@ sentMsgCompleted=%@ pass=%@ injectZero=%@ healDisabled=%@ found=%d interim=%d h=%.1f/%.1f ink=%.2f%% blanks=%d/%d firstBlank=%@ selfRecovered=%@ occludedVis=%@ reasons=%@",
+            scenario.rawValue,
+            repetition,
+            reproProvider.rawValue,
+            sendsMessageCompleted ? "true" : "false",
+            passed ? "true" : "false",
+            injectZero ? "true" : "false",
+            healDisabled ? "true" : "false",
+            matchingViews.count,
+            interimMatchingViews.count,
+            firstProbe?.boundsHeight ?? -1,
+            firstProbe?.measuredHeight ?? -1,
+            inkPct,
+            blankSummary.blankSampleCount,
+            samples.count,
+            firstBlankStr,
+            recoveredStr,
+            preFoldOcclusionVisible.map { $0 ? "true" : "false" } ?? "nil",
+            failureReasons.isEmpty ? "none" : failureReasons.joined(separator: ",")
         )
+        WebsiteCaptures.log(repLine)
+        emitLine(repLine)
 
         return RepetitionRecord(
             scenario: scenario.rawValue,
             repetition: repetition,
             threadID: thread.id.uuidString,
             marker: marker,
+            provider: reproProvider.rawValue,
+            sentMessageCompleted: sendsMessageCompleted,
             turnDurationSeconds: (turnDuration * 100).rounded() / 100,
             passed: passed,
             failureReasons: failureReasons,
             preFoldOcclusionVisible: preFoldOcclusionVisible,
             scrolledUpDelta: scrolledUpDelta,
+            hydraConfig: hydraConfig,
+            titleRewritesCount: titleRewritesCount,
+            hydraSpawnedHeadCount: hydraSpawnedHeadCount,
+            hydraPanelOpenAfterFold: hydraPanelOpenAfterFold,
+            delegationMarkedSent: delegationMarkedSent,
             markerFoundCount: matchingViews.count,
             markerViews: markerProbes,
             interimFoundCount: interimMatchingViews.count,
             interimViews: interimProbes,
             scrollState: initialScrollProbe,
-            didScrollMarkerIntoView: didScrollMarkerIntoView,
-            scrollStateAfterReveal: scrollProbeAfterReveal,
-            stillCaptured: captured != nil,
+            didScrollMarkerIntoView: false,
+            scrollStateAfterReveal: nil,
+            stillCaptured: anyCaptureSucceeded,
             stillFile: stillFile,
-            inkAnalysis: inkAnalysis
+            inkAnalysis: representativeInk,
+            samples: samples,
+            blankSummary: blankSummary
         )
     }
 
@@ -930,6 +1629,262 @@ enum FoldReplyRepro {
         }
     }
 
+    private static func findMarkerViews(marker: String, in window: NSWindow) -> (all: [LinkTextView], primary: LinkTextView?) {
+        let allLinkViews = findAll(LinkTextView.self, in: window.contentView)
+        let matching = allLinkViews.filter { ($0.textStorage?.string ?? $0.string).contains(marker) }
+        if let mainScroll = timelineScroll(in: window),
+           let inMain = matching.first(where: { $0.isDescendant(of: mainScroll) }) {
+            return (matching, inMain)
+        }
+        return (matching, matching.first)
+    }
+
+    private static func delegationCardState(in runtime: ThreadRuntime, marker: String) -> String? {
+        guard let entry = runtime.entries.last(where: { entry in
+            guard case .assistant(let message) = entry.item.content else { return false }
+            return message.text.contains(marker)
+        }), case .assistant(let message) = entry.item.content else { return nil }
+        if HydraPrompts.hasLeavingDelegationBlock(in: message.text) { return "leaving" }
+        if HydraPrompts.hasSentDelegationBlock(in: message.text) { return "sent" }
+        if HydraPrompts.hasDelegationBlock(in: message.text) { return "raw" }
+        return "removed"
+    }
+
+    private static func summarizeBlankTimeline(_ samples: [SampleRecord]) -> BlankTimelineSummary {
+        let blanks = samples.filter(\.isBlank)
+        guard let firstBlank = blanks.first?.targetOffsetSeconds,
+              let lastBlank = blanks.last?.targetOffsetSeconds else {
+            return BlankTimelineSummary(
+                sampleOffsetsSeconds: sampleOffsetsSeconds,
+                blankSampleCount: 0,
+                blankDetected: false,
+                firstBlankAtSeconds: nil,
+                lastBlankAtSeconds: nil,
+                selfRecovered: nil,
+                recoveredAtSeconds: nil
+            )
+        }
+        let validAfterFirst = samples.filter {
+            $0.targetOffsetSeconds > firstBlank
+                && $0.stillCaptured
+                && $0.markerFound
+                && $0.textStorageLength > 0
+                && ($0.inkAnalysis?.totalPixels ?? 0) > 0
+        }
+        let selfRecovered = validAfterFirst.last.map { !$0.isBlank } ?? false
+        let recoveredAt: Double? = selfRecovered
+            ? validAfterFirst.first(where: { $0.targetOffsetSeconds > lastBlank && !$0.isBlank })?.targetOffsetSeconds
+            : nil
+        return BlankTimelineSummary(
+            sampleOffsetsSeconds: sampleOffsetsSeconds,
+            blankSampleCount: blanks.count,
+            blankDetected: true,
+            firstBlankAtSeconds: firstBlank,
+            lastBlankAtSeconds: lastBlank,
+            selfRecovered: selfRecovered,
+            recoveredAtSeconds: recoveredAt
+        )
+    }
+
+    private static func formatOffset(_ seconds: Double) -> String {
+        seconds.rounded() == seconds ? String(format: "%.0f", seconds) : String(format: "%.1f", seconds)
+    }
+
+    private static func resolvedAlpha(of color: NSColor, appearance: NSAppearance) -> Double {
+        var alpha = 1.0
+        appearance.performAsCurrentDrawingAppearance {
+            if let rgb = color.usingColorSpace(.sRGB) ?? color.usingColorSpace(.deviceRGB) {
+                alpha = Double(rgb.alphaComponent)
+            } else {
+                alpha = Double(color.cgColor.alpha)
+            }
+        }
+        return (alpha * 10_000).rounded() / 10_000
+    }
+
+    private static func resolvedBackgroundLuminance(for view: NSView) -> CGFloat {
+        var luminance: CGFloat = 0.95
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            let color = view.window?.backgroundColor ?? NSColor.windowBackgroundColor
+            if let rgb = color.usingColorSpace(.sRGB) ?? color.usingColorSpace(.deviceRGB) {
+                luminance = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+            }
+        }
+        return luminance
+    }
+
+    private static func inspectTemporaryForegroundColor(in view: LinkTextView) -> (present: Bool, coveredChars: Int, minAlpha: Double?) {
+        guard let layoutManager = view.layoutManager,
+              let storage = view.textStorage,
+              storage.length > 0 else {
+            return (false, 0, nil)
+        }
+        let length = storage.length
+        let appearance = view.effectiveAppearance
+        var index = 0
+        var present = false
+        var coveredChars = 0
+        var minAlpha: Double?
+        while index < length {
+            var effectiveRange = NSRange(location: 0, length: 0)
+            let attrs = layoutManager.temporaryAttributes(atCharacterIndex: index, effectiveRange: &effectiveRange)
+            let stepEnd: Int
+            if effectiveRange.length > 0 && effectiveRange.location <= index {
+                stepEnd = min(length, effectiveRange.location + effectiveRange.length)
+            } else {
+                stepEnd = index + 1
+            }
+            let runLength = max(1, stepEnd - index)
+            if let color = attrs[.foregroundColor] as? NSColor {
+                present = true
+                coveredChars += runLength
+                let alpha = resolvedAlpha(of: color, appearance: appearance)
+                minAlpha = minAlpha.map { min($0, alpha) } ?? alpha
+            }
+            index = max(index + 1, stepEnd)
+        }
+        return (present, coveredChars, minAlpha)
+    }
+
+    private static func inspectStorageForegroundMinAlpha(in view: LinkTextView) -> Double? {
+        guard let storage = view.textStorage, storage.length > 0 else { return nil }
+        let fullRange = NSRange(location: 0, length: storage.length)
+        let appearance = view.effectiveAppearance
+        var minAlpha: Double?
+        storage.enumerateAttribute(.foregroundColor, in: fullRange, options: []) { value, _, _ in
+            guard let color = value as? NSColor else { return }
+            let alpha = resolvedAlpha(of: color, appearance: appearance)
+            minAlpha = minAlpha.map { min($0, alpha) } ?? alpha
+        }
+        return minAlpha
+    }
+
+    private static func inspectAbnormalAncestors(of view: NSView, upTo contentView: NSView?) -> [AbnormalAncestorRecord] {
+        var abnormal: [AbnormalAncestorRecord] = []
+        var cursor: NSView? = view
+        var depth = 0
+        while let current = cursor {
+            let isHidden = current.isHidden
+            let alpha = Double(current.alphaValue)
+            let layerIsHidden = current.layer?.isHidden
+            let layerOpacity = current.layer.map { Double($0.opacity) }
+            let hasLayerMask = current.layer?.mask != nil
+            if isHidden || alpha < 0.99 || layerIsHidden == true || (layerOpacity ?? 1.0) < 0.99 {
+                abnormal.append(AbnormalAncestorRecord(
+                    depth: depth,
+                    className: String(describing: type(of: current)),
+                    isHidden: isHidden,
+                    alphaValue: (alpha * 10_000).rounded() / 10_000,
+                    layerIsHidden: layerIsHidden,
+                    layerOpacity: layerOpacity.map { ($0 * 10_000).rounded() / 10_000 },
+                    hasLayerMask: hasLayerMask
+                ))
+            }
+            if let contentView, current === contentView { break }
+            cursor = current.superview
+            depth += 1
+        }
+        return abnormal
+    }
+
+    private static func computeInkMetrics(
+        from image: CGImage,
+        opaqueBackgroundLuminance: CGFloat? = nil
+    ) -> (totalPixels: Int, medianLuminance: Double, inkPixels: Int, inkRatio: Double)? {
+        let cropW = image.width
+        let cropH = image.height
+        guard cropW > 0, cropH > 0 else { return nil }
+
+        let bytesPerRow = cropW * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * cropH)
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        let drew: Bool = pixels.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress,
+                  let context = CGContext(
+                    data: baseAddress,
+                    width: cropW,
+                    height: cropH,
+                    bitsPerComponent: 8,
+                    bytesPerRow: bytesPerRow,
+                    space: colorSpace,
+                    bitmapInfo: bitmapInfo
+                  ) else { return false }
+            let rect = CGRect(x: 0, y: 0, width: cropW, height: cropH)
+            if let bgLum = opaqueBackgroundLuminance,
+               let bgColor = CGColor(colorSpace: colorSpace, components: [bgLum, bgLum, bgLum, 1.0]) {
+                context.setFillColor(bgColor)
+                context.fill(rect)
+            }
+            context.draw(image, in: rect)
+            return true
+        }
+        guard drew else { return nil }
+
+        let totalPixels = cropW * cropH
+        let bins = 4096
+        let maxBin = bins - 1
+        var histogram = [Int](repeating: 0, count: bins)
+
+        var offset = 0
+        while offset < pixels.count {
+            let r = Double(pixels[offset])
+            let g = Double(pixels[offset + 1])
+            let b = Double(pixels[offset + 2])
+            let lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+            let bin = min(maxBin, max(0, Int((lum * Double(maxBin)).rounded())))
+            histogram[bin] += 1
+            offset += 4
+        }
+
+        var cumulative = 0
+        let half = (totalPixels + 1) / 2
+        var medianBin = 0
+        for (bin, count) in histogram.enumerated() {
+            cumulative += count
+            if cumulative >= half {
+                medianBin = bin
+                break
+            }
+        }
+        let medianLum = Double(medianBin) / Double(maxBin)
+
+        var inkPixels = 0
+        offset = 0
+        while offset < pixels.count {
+            let r = Double(pixels[offset])
+            let g = Double(pixels[offset + 1])
+            let b = Double(pixels[offset + 2])
+            let lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+            if abs(lum - medianLum) > inkLuminanceDeltaThreshold {
+                inkPixels += 1
+            }
+            offset += 4
+        }
+
+        let ratio = totalPixels > 0 ? Double(inkPixels) / Double(totalPixels) : 0
+        return (
+            totalPixels: totalPixels,
+            medianLuminance: (medianLum * 10_000).rounded() / 10_000,
+            inkPixels: inkPixels,
+            inkRatio: (ratio * 100_000).rounded() / 100_000
+        )
+    }
+
+    private static func measureOffscreenInkRatio(
+        for view: LinkTextView,
+        opaqueBackgroundLuminance: CGFloat
+    ) -> Double? {
+        let rect = view.visibleRect
+        guard !rect.isNull, !rect.isEmpty, rect.width > 1, rect.height > 1,
+              let rep = view.bitmapImageRepForCachingDisplay(in: rect) else {
+            return nil
+        }
+        view.cacheDisplay(in: rect, to: rep)
+        guard let cgImage = rep.cgImage else { return nil }
+        return computeInkMetrics(from: cgImage, opaqueBackgroundLuminance: opaqueBackgroundLuminance)?.inkRatio
+    }
+
     private static func analyzeInk(
         markerView: LinkTextView,
         scroll: NSScrollView?,
@@ -937,22 +1892,23 @@ enum FoldReplyRepro {
         image: CGImage,
         stillScreenRect: NSRect
     ) -> InkAnalysis? {
-        var visibleWindowRect = markerView.convert(markerView.bounds, to: nil)
+        let viewVisibleRect = markerView.visibleRect
+        guard !viewVisibleRect.isNull, !viewVisibleRect.isEmpty,
+              viewVisibleRect.width > 1, viewVisibleRect.height > 1 else {
+            return InkAnalysis(
+                visibleRectInWindow: RectRecord(.zero),
+                cropPixelWidth: 0,
+                cropPixelHeight: 0,
+                totalPixels: 0,
+                medianLuminance: 0,
+                inkPixels: 0,
+                inkRatio: 0
+            )
+        }
+        var visibleWindowRect = markerView.convert(viewVisibleRect, to: nil)
         if let scroll, let document = scroll.documentView {
-            let rectInDoc = markerView.convert(markerView.bounds, to: document)
-            let clippedDoc = rectInDoc.intersection(unobstructedViewportRect(in: scroll))
-            if clippedDoc.isNull || clippedDoc.isEmpty {
-                return InkAnalysis(
-                    visibleRectInWindow: RectRecord(.zero),
-                    cropPixelWidth: 0,
-                    cropPixelHeight: 0,
-                    totalPixels: 0,
-                    medianLuminance: 0,
-                    inkPixels: 0,
-                    inkRatio: 0
-                )
-            }
-            visibleWindowRect = document.convert(clippedDoc, to: nil)
+            let unobstructedInWindow = document.convert(unobstructedViewportRect(in: scroll), to: nil)
+            visibleWindowRect = visibleWindowRect.intersection(unobstructedInWindow)
         }
         if let contentView = window.contentView {
             visibleWindowRect = visibleWindowRect.intersection(contentView.convert(contentView.bounds, to: nil))
@@ -1006,76 +1962,15 @@ enum FoldReplyRepro {
             )
         }
 
-        let bytesPerRow = cropW * 4
-        var pixels = [UInt8](repeating: 0, count: bytesPerRow * cropH)
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-        let drew: Bool = pixels.withUnsafeMutableBytes { rawBuffer in
-            guard let baseAddress = rawBuffer.baseAddress,
-                  let context = CGContext(
-                    data: baseAddress,
-                    width: cropW,
-                    height: cropH,
-                    bitsPerComponent: 8,
-                    bytesPerRow: bytesPerRow,
-                    space: colorSpace,
-                    bitmapInfo: bitmapInfo
-                  ) else { return false }
-            context.draw(cropped, in: CGRect(x: 0, y: 0, width: cropW, height: cropH))
-            return true
-        }
-        guard drew else { return nil }
-
-        let totalPixels = cropW * cropH
-        let bins = 4096
-        let maxBin = bins - 1
-        var histogram = [Int](repeating: 0, count: bins)
-
-        var offset = 0
-        while offset < pixels.count {
-            let r = Double(pixels[offset])
-            let g = Double(pixels[offset + 1])
-            let b = Double(pixels[offset + 2])
-            let lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
-            let bin = min(maxBin, max(0, Int((lum * Double(maxBin)).rounded())))
-            histogram[bin] += 1
-            offset += 4
-        }
-
-        var cumulative = 0
-        let half = (totalPixels + 1) / 2
-        var medianBin = 0
-        for (bin, count) in histogram.enumerated() {
-            cumulative += count
-            if cumulative >= half {
-                medianBin = bin
-                break
-            }
-        }
-        let medianLum = Double(medianBin) / Double(maxBin)
-
-        var inkPixels = 0
-        offset = 0
-        while offset < pixels.count {
-            let r = Double(pixels[offset])
-            let g = Double(pixels[offset + 1])
-            let b = Double(pixels[offset + 2])
-            let lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
-            if abs(lum - medianLum) > 0.25 {
-                inkPixels += 1
-            }
-            offset += 4
-        }
-
-        let ratio = totalPixels > 0 ? Double(inkPixels) / Double(totalPixels) : 0
+        guard let metrics = computeInkMetrics(from: cropped) else { return nil }
         return InkAnalysis(
             visibleRectInWindow: RectRecord(visibleWindowRect),
             cropPixelWidth: cropW,
             cropPixelHeight: cropH,
-            totalPixels: totalPixels,
-            medianLuminance: (medianLum * 10_000).rounded() / 10_000,
-            inkPixels: inkPixels,
-            inkRatio: (ratio * 100_000).rounded() / 100_000
+            totalPixels: metrics.totalPixels,
+            medianLuminance: metrics.medianLuminance,
+            inkPixels: metrics.inkPixels,
+            inkRatio: metrics.inkRatio
         )
     }
 
@@ -1213,10 +2108,101 @@ enum FoldReplyRepro {
         """
     }
 
+    private static let hydraLeadReasoningText = """
+    先对照 Release 3.0.15 在 Antigravity ACP 下出现的 Hydra lead 故障时间线梳理现场：用户发完消息之后先进入约 30 秒的长思考阶段，这期间时间线一直处在 TurnRunningBlock 状态，还没有创建最终回复段落视图。思考结束后，ACPSession 连续吐出若干个 agent_message_chunk，包含约 90 个汉字的正文段落以及尾部的 Hydra 委派代码块，且 ACP 协议不会补发独立的 messageCompleted 事件，最后一个文本增量之后 0 ms 就直接到达 turnCompleted。紧接着 ThreadRuntime.finalizeTurn 在同一个 MainActor 事务段内连续执行 endStreaming、append(.turnEnd) 触发 TurnRunningBlock 向 TurnFinishedBlock 折叠、将委派块改写为 hydra-sent、调用 spawnDelegatedHeads 打开子代理面板触发布局列宽收缩，并启动 holdSentDelegationBlock：在 t+3.2 秒以 easeOut(0.4) 动画将委派块切换为 hydra-leaving，在 t+3.65 秒禁用动画将其从正文中移除。由于高度正常但像素长期保持空白，且折叠子代理面板或重启后会立刻恢复，我需要把历史修复审计与 AppKit/SwiftUI 合成层机制分成两条只读调查线同时推进，再结合真机像素采样结果做最终收口。
+    """
+
+    private static func hydraLeadParagraph(marker: String) -> String {
+        "我已经先梳理完折叠渲染链路与子代理面板触发时机，接下来分成两条独立线并行排查：一条核对历史修复与高度测量路径，另一条追查面板切换和图层合成状态，等两位子代理回报后再统一收口方案（标记：\(marker)）。"
+    }
+
+    private static let hydraLeadDelegationBlock: String = {
+        let fence = "```"
+        return """
+        \(fence)hydra
+        [
+          {
+            "name": "Otto",
+            "task": "审计空白回复修复史与测量绘制路径",
+            "files": [],
+            "prompt": "只读排查折叠后回复空白的历史修复与 LinkTextView 测量绘制链路，汇报根因与未决点。"
+          },
+          {
+            "name": "Milo",
+            "task": "排查合成层与子代理面板布局机制",
+            "files": [],
+            "prompt": "只读分析 AppKit 与 SwiftUI 合成层在子代理面板展开和折叠时的重绘机制并汇报。"
+          }
+        ]
+        \(fence)
+        """
+    }()
+
+    private static func splitEvenly(_ text: String, into parts: Int) -> [String] {
+        guard parts > 1, text.count > 1 else { return text.isEmpty ? [] : [text] }
+        let total = text.count
+        let sliceCount = min(parts, total)
+        var result: [String] = []
+        result.reserveCapacity(sliceCount)
+        var start = text.startIndex
+        for idx in 0..<sliceCount {
+            let currentBoundary = (idx * total) / sliceCount
+            let nextBoundary = ((idx + 1) * total) / sliceCount
+            let step = idx == sliceCount - 1 ? (total - currentBoundary) : max(1, nextBoundary - currentBoundary)
+            let end = text.index(start, offsetBy: step, limitedBy: text.endIndex) ?? text.endIndex
+            if start < end {
+                result.append(String(text[start..<end]))
+            }
+            start = end
+        }
+        return result
+    }
+
+    private static func buildHydraLeadChunks(
+        paragraph: String,
+        delegationBlock: String,
+        count: Int,
+        gapSeconds: Double
+    ) -> [StreamPiece] {
+        let fullText = paragraph + "\n\n" + delegationBlock
+        if count <= 1 {
+            return buildBurstChunks(for: fullText)
+        }
+        let gapMs = max(0, Int((gapSeconds * 1000).rounded()))
+        let fullDelegation = "\n\n" + delegationBlock
+        let rawSlices: [String]
+        if count == 2 {
+            rawSlices = [paragraph, fullDelegation]
+        } else {
+            let paragraphSlices = splitEvenly(paragraph, into: count - 2)
+            let delegationSlices = splitEvenly(fullDelegation, into: 2)
+            rawSlices = paragraphSlices + delegationSlices
+        }
+        return rawSlices.filter { !$0.isEmpty }.map { StreamPiece(text: $0, delayMs: gapMs) }
+    }
+
     private static func buildChunks(for text: String) -> [StreamPiece] {
         // 20-40 chars per delta every 16-30 ms (~1.05-1.15 s total for ~770 chars).
         let sizes = [20, 23, 21, 24, 22, 25, 20, 23]
         let delays = [28, 30, 27, 29, 30, 28, 30, 29]
+        var pieces: [StreamPiece] = []
+        var index = text.startIndex
+        var step = 0
+        while index < text.endIndex {
+            let chunkSize = sizes[step % sizes.count]
+            let delayMs = delays[step % delays.count]
+            let end = text.index(index, offsetBy: chunkSize, limitedBy: text.endIndex) ?? text.endIndex
+            pieces.append(StreamPiece(text: String(text[index..<end]), delayMs: delayMs))
+            index = end
+            step += 1
+        }
+        return pieces
+    }
+
+    private static func buildBurstChunks(for text: String) -> [StreamPiece] {
+        // Fast post-thought burst (~30-42 chars every 14-18 ms, ~180-220 ms total for ~400 chars).
+        let sizes = [32, 38, 34, 42, 36, 40]
+        let delays = [15, 18, 14, 17, 16, 15]
         var pieces: [StreamPiece] = []
         var index = text.startIndex
         var step = 0
@@ -1249,18 +2235,89 @@ enum FoldReplyRepro {
         }
     }
 
+    private static func streamReasoning(
+        _ runtime: ThreadRuntime,
+        id: String,
+        text: String,
+        durationSeconds: Double,
+        alive: () -> Bool
+    ) async {
+        guard !text.isEmpty, alive() else { return }
+        if durationSeconds <= 0 {
+            runtime.rehearse(.reasoningDelta(id: id, text: text))
+            return
+        }
+        let stepSeconds = min(0.15, max(0.04, durationSeconds / 60.0))
+        let totalSteps = max(1, Int((durationSeconds / stepSeconds).rounded()))
+        let endTime = Date.now.addingTimeInterval(durationSeconds)
+        var cursor = text.startIndex
+        var emitted = 0
+        let chunkSize = 6
+        while alive() && (emitted == 0 || Date.now < endTime) {
+            if cursor >= text.endIndex {
+                runtime.rehearse(.reasoningDelta(id: id, text: "\n\n"))
+                cursor = text.startIndex
+            }
+            let next = text.index(cursor, offsetBy: chunkSize, limitedBy: text.endIndex) ?? text.endIndex
+            runtime.rehearse(.reasoningDelta(id: id, text: String(text[cursor..<next])))
+            cursor = next
+            emitted += 1
+            let remaining = endTime.timeIntervalSinceNow
+            if remaining <= 0 || emitted >= totalSteps && remaining < stepSeconds * 0.25 {
+                break
+            }
+            try? await Task.sleep(for: .seconds(min(stepSeconds, remaining)))
+        }
+    }
+
     // MARK: - CLI arguments, report & stdout
 
-    private static func parseArguments() -> (scenarios: [Scenario]?, count: Int?, injectZero: Bool, noHeal: Bool, error: String?) {
+    private struct ParsedArguments {
+        var scenarios: [Scenario]?
+        var count: Int?
+        var provider: ReproProvider?
+        var streamChunks: Int?
+        var chunkGapSeconds: Double?
+        var tailDelaySeconds: Double?
+        var reasoningSeconds: Double?
+        var freshThread: Bool
+        var injectZero: Bool
+        var noHeal: Bool
+        var error: String?
+    }
+
+    private static func parseArguments() -> ParsedArguments {
         let args = CommandLine.arguments
         var scenarios: [Scenario] = Scenario.allCases
         var count = 10
+        var provider: ReproProvider?
+        var streamChunks: Int?
+        var chunkGapSeconds: Double?
+        var tailDelaySeconds: Double?
+        var reasoningSeconds: Double?
+        let freshThread = args.contains("--fold-repro-fresh-thread")
         let injectZero = args.contains("--fold-repro-inject-zero")
         let noHeal = args.contains("--fold-repro-no-heal")
 
+        func fail(_ message: String) -> ParsedArguments {
+            ParsedArguments(
+                scenarios: nil,
+                count: nil,
+                provider: provider,
+                streamChunks: streamChunks,
+                chunkGapSeconds: chunkGapSeconds,
+                tailDelaySeconds: tailDelaySeconds,
+                reasoningSeconds: reasoningSeconds,
+                freshThread: freshThread,
+                injectZero: injectZero,
+                noHeal: noHeal,
+                error: message
+            )
+        }
+
         if let scenarioIndex = args.firstIndex(of: "--fold-repro-scenario") {
             guard args.indices.contains(scenarioIndex + 1) else {
-                return (nil, nil, injectZero, noHeal, "missing value after --fold-repro-scenario")
+                return fail("missing value after --fold-repro-scenario")
             }
             let raw = args[scenarioIndex + 1]
             if raw == "all" {
@@ -1269,13 +2326,61 @@ enum FoldReplyRepro {
                 scenarios = [one]
             } else {
                 let valid = (["all"] + Scenario.allCases.map(\.rawValue)).joined(separator: ", ")
-                return (nil, nil, injectZero, noHeal, "unknown --fold-repro-scenario '\(raw)'; expected one of: \(valid)")
+                return fail("unknown --fold-repro-scenario '\(raw)'; expected one of: \(valid)")
             }
+        }
+
+        if let providerIndex = args.firstIndex(of: "--fold-repro-provider") {
+            guard args.indices.contains(providerIndex + 1) else {
+                return fail("missing value after --fold-repro-provider")
+            }
+            let raw = args[providerIndex + 1]
+            guard let parsedProvider = ReproProvider(rawValue: raw) else {
+                let valid = ReproProvider.allCases.map(\.rawValue).joined(separator: ", ")
+                return fail("unknown --fold-repro-provider '\(raw)'; expected one of: \(valid)")
+            }
+            provider = parsedProvider
+        }
+
+        if let chunksIndex = args.firstIndex(of: "--fold-repro-stream-chunks") {
+            guard args.indices.contains(chunksIndex + 1),
+                  let parsedChunks = Int(args[chunksIndex + 1]),
+                  parsedChunks >= 1 else {
+                return fail("invalid positive integer after --fold-repro-stream-chunks")
+            }
+            streamChunks = parsedChunks
+        }
+
+        if let gapIndex = args.firstIndex(of: "--fold-repro-chunk-gap") {
+            guard args.indices.contains(gapIndex + 1),
+                  let parsedGap = Double(args[gapIndex + 1]),
+                  parsedGap >= 0 else {
+                return fail("invalid number of seconds after --fold-repro-chunk-gap")
+            }
+            chunkGapSeconds = parsedGap
+        }
+
+        if let tailIndex = args.firstIndex(of: "--fold-repro-tail-delay") {
+            guard args.indices.contains(tailIndex + 1),
+                  let parsedTail = Double(args[tailIndex + 1]),
+                  parsedTail >= 0 else {
+                return fail("invalid number of seconds after --fold-repro-tail-delay")
+            }
+            tailDelaySeconds = parsedTail
+        }
+
+        if let reasoningIndex = args.firstIndex(of: "--fold-repro-reasoning-seconds") {
+            guard args.indices.contains(reasoningIndex + 1),
+                  let parsedReasoning = Double(args[reasoningIndex + 1]),
+                  parsedReasoning >= 0 else {
+                return fail("invalid number of seconds after --fold-repro-reasoning-seconds")
+            }
+            reasoningSeconds = parsedReasoning
         }
 
         if let holdIndex = args.firstIndex(of: "--fold-repro-hold") {
             guard args.indices.contains(holdIndex + 1), let hold = Double(args[holdIndex + 1]), hold >= 0 else {
-                return (nil, nil, injectZero, noHeal, "invalid number of seconds after --fold-repro-hold")
+                return fail("invalid number of seconds after --fold-repro-hold")
             }
             holdSeconds = hold
         }
@@ -1284,12 +2389,24 @@ enum FoldReplyRepro {
             guard args.indices.contains(countIndex + 1),
                   let parsedCount = Int(args[countIndex + 1]),
                   parsedCount > 0 else {
-                return (nil, nil, injectZero, noHeal, "invalid positive integer after --fold-repro-count")
+                return fail("invalid positive integer after --fold-repro-count")
             }
             count = parsedCount
         }
 
-        return (scenarios, count, injectZero, noHeal, nil)
+        return ParsedArguments(
+            scenarios: scenarios,
+            count: count,
+            provider: provider,
+            streamChunks: streamChunks,
+            chunkGapSeconds: chunkGapSeconds,
+            tailDelaySeconds: tailDelaySeconds,
+            reasoningSeconds: reasoningSeconds,
+            freshThread: freshThread,
+            injectZero: injectZero,
+            noHeal: noHeal,
+            error: nil
+        )
     }
 
     private static func saveReport(to output: URL) {

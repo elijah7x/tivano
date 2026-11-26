@@ -327,214 +327,37 @@ struct HydraPairEditor: View {
         + HydraPair.maxHeadsRange.map { (Optional($0), String($0)) }
 
     var body: some View {
-        let registry = model.providers
-        let providers = ProviderKind.alphabetical.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.provider) }
-        let headsProviders = ProviderKind.alphabetical.filter { model.settings.isEnabled($0) && (registry.status($0).isInstalled || $0 == pair.headsProvider) }
-        let sameProvider = pair.headsProvider == pair.provider
-        let options = model.pickerModels(for: pair.provider, keeping: Set([pair.orchestratorModel, sameProvider ? pair.workerModel : nil].compactMap { $0 }))
-        let headsOptions = sameProvider ? options : model.pickerModels(for: pair.headsProvider, keeping: Set([pair.workerModel].compactMap { $0 }))
-        let catalogProviders = Self.catalogProviders(pair)
-        let leadOption = registry.model(pair.orchestratorModel, for: pair.provider)
-        let workerOption = registry.model(pair.workerModel, for: pair.headsProvider)
+        let registry: ProviderRegistry = model.providers
+        let providers: [ProviderKind] = ProviderKind.alphabetical.filter { (kind: ProviderKind) -> Bool in
+            model.settings.isEnabled(kind) && (registry.status(kind).isInstalled || kind == pair.provider)
+        }
+        let headsProviders: [ProviderKind] = ProviderKind.alphabetical.filter { (kind: ProviderKind) -> Bool in
+            model.settings.isEnabled(kind) && (registry.status(kind).isInstalled || kind == pair.headsProvider)
+        }
+        let sameProvider: Bool = pair.headsProvider == pair.provider
+        let leadKeptIDs: Set<String> = Set([pair.orchestratorModel, sameProvider ? pair.workerModel : nil].compactMap { (id: String?) -> String? in id })
+        let options: [ModelOption] = model.pickerModels(for: pair.provider, keeping: leadKeptIDs)
+        let workerKeptIDs: Set<String> = Set([pair.workerModel].compactMap { (id: String?) -> String? in id })
+        let headsOptions: [ModelOption] = sameProvider ? options : model.pickerModels(for: pair.headsProvider, keeping: workerKeptIDs)
+        let catalogProviders: [ProviderKind] = Self.catalogProviders(pair)
+        let leadOption: ModelOption? = registry.model(pair.orchestratorModel, for: pair.provider)
+        let workerOption: ModelOption? = registry.model(pair.workerModel, for: pair.headsProvider)
         // A lead that may be any model offers every effort the provider's models know.
-        let leadEfforts = SubagentEditor.efforts(of: leadOption, fallback: SubagentEditor.allEfforts(options))
+        let leadEfforts: [String] = SubagentEditor.efforts(of: leadOption, fallback: SubagentEditor.allEfforts(options))
         // Sub-agents with no model chosen inherit the chat's, and its efforts; on another
         // provider they run its default model, so its efforts are the ones on offer.
-        let workerEfforts = SubagentEditor.efforts(of: workerOption, fallback: pair.sendsHeadsElsewhere ? SubagentEditor.efforts(of: registry.defaultModel(for: pair.headsProvider), fallback: SubagentEditor.allEfforts(headsOptions)) : leadEfforts)
+        let workerFallbackEfforts: [String] = pair.sendsHeadsElsewhere
+            ? SubagentEditor.efforts(of: registry.defaultModel(for: pair.headsProvider), fallback: SubagentEditor.allEfforts(headsOptions))
+            : leadEfforts
+        let workerEfforts: [String] = SubagentEditor.efforts(of: workerOption, fallback: workerFallbackEfforts)
         VStack(alignment: .leading, spacing: 0) {
             if showsName {
-                // The name is the header: the combo's own word for itself, over what it
-                // stands for in the picker when it has none.
-                VStack(alignment: .leading, spacing: 4) {
-                    TextField("", text: Binding(
-                        get: { pair.name ?? "" },
-                        set: { text in update { $0.name = text.isEmpty ? nil : text } }
-                    ), prompt: Text(HydraPairSummary.modelsTitle(pair, registry: registry)))
-                    .textFieldStyle(.plain)
-                    .focused($isNameFocused)
-                    .focusEffectDisabled()
-                    .font(.ui(.title3, weight: .semibold))
-                    .foregroundStyle(Chrome.primaryText)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(Chrome.overlay(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    Text("Shown in the model picker and the composer")
-                        .font(.ui(.subheadline))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .padding(.horizontal, 2)
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
+                nameSection(registry: registry)
             }
-            VStack(alignment: .leading, spacing: 4) {
-                TextField("", text: Binding(
-                    get: { pair.headsNote ?? "" },
-                    set: { text in update { $0.headsNote = text.isEmpty ? nil : text } }
-                ), prompt: Text("What the sub-agents are good at"))
-                .textFieldStyle(.plain)
-                .font(.ui(.title3, weight: .semibold))
-                .foregroundStyle(Chrome.primaryText)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(Chrome.overlay(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                Text("The lead is told this, so it sends this kind of work to the sub-agents. For example: fast, for mechanical edits; or front-end.")
-                    .font(.ui(.subheadline))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .padding(.horizontal, 2)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            SubagentEditor.sectionLabel("Lead")
-            SubagentEditor.row("Provider") {
-                GlassPickerButton(
-                    options: providers.map { ($0, $0.displayName) },
-                    selection: Binding(
-                        get: { pair.provider },
-                        set: { provider in
-                            update {
-                                guard $0.provider != provider else { return }
-                                $0.provider = provider
-                                $0.orchestratorModel = nil
-                                $0.orchestratorEffort = nil
-                                $0.orchestratorDshMode = nil
-                                // Sub-agents on the old lead provider go with it; sub-agents on a
-                                // provider of their own keep their model and effort, and
-                                // when that provider is the new lead's, they are simply
-                                // on the lead's provider again.
-                                if $0.workerProvider == nil {
-                                    $0.workerModel = nil
-                                    $0.workerEffort = nil
-                                    $0.workerDshMode = nil
-                                } else if $0.workerProvider == provider {
-                                    $0.workerProvider = nil
-                                }
-                            }
-                            Task { await registry.loadCatalog(provider) }
-                        }
-                    ),
-                    asset: { $0.iconName }
-                )
-            }
-            SubagentEditor.row("Model") {
-                GlassPickerButton(
-                    options: [(String?.none, "Chat's model")] + options.map { (Optional($0.id), $0.label(among: options)) },
-                    selection: Binding(
-                        get: { pair.orchestratorModel },
-                        set: { id in
-                            update {
-                                $0.orchestratorModel = id
-                                if let effort = $0.orchestratorEffort, let option = registry.model(id, for: $0.provider), !option.efforts.contains(effort) {
-                                    $0.orchestratorEffort = nil
-                                }
-                            }
-                        }
-                    ),
-                    maxWidth: 190
-                )
-            }
-            if !leadEfforts.isEmpty {
-                SubagentEditor.row("Effort") {
-                    SubagentEditor.effortPicker(
-                        efforts: leadEfforts,
-                        inherit: "Chat's effort",
-                        selection: Binding(
-                            get: { pair.orchestratorEffort },
-                            set: { effort in update { $0.orchestratorEffort = effort } }
-                        )
-                    )
-                }
-            }
-            if pair.provider == .dsh {
-                SubagentEditor.row("Agent mode") {
-                    GlassPickerButton(
-                        options: DshAgentMode.allCases.map { ($0, $0.title) },
-                        selection: Binding(
-                            get: { pair.orchestratorDshMode ?? .standard },
-                            set: { mode in update { $0.orchestratorDshMode = mode == .standard ? nil : mode } }
-                        )
-                    )
-                }
-            }
-            SubagentEditor.sectionLabel("Sub-agents")
-            SubagentEditor.row("Provider") {
-                GlassPickerButton(
-                    options: [(ProviderKind?.none, "Same as the lead")] + headsProviders.filter { $0 != pair.provider }.map { (Optional($0), $0.displayName) },
-                    selection: Binding(
-                        get: { pair.sendsHeadsElsewhere ? pair.workerProvider : nil },
-                        set: { provider in
-                            update {
-                                let chosen = provider == $0.provider ? nil : provider
-                                guard $0.workerProvider != chosen else { return }
-                                // The sub-agents' model and effort were the old provider's.
-                                $0.workerProvider = chosen
-                                $0.workerModel = nil
-                                $0.workerEffort = nil
-                                $0.workerDshMode = nil
-                            }
-                            if let provider { Task { await registry.loadCatalog(provider) } }
-                        }
-                    ),
-                    asset: { ($0 ?? pair.provider).iconName }
-                )
-            }
-            SubagentEditor.row("Model") {
-                GlassPickerButton(
-                    options: [(String?.none, pair.sendsHeadsElsewhere ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName) : "Same as the chat")] + headsOptions.map { (Optional($0.id), $0.label(among: headsOptions)) },
-                    selection: Binding(
-                        get: { pair.workerModel },
-                        set: { id in
-                            update {
-                                $0.workerModel = id
-                                if let effort = $0.workerEffort, let option = registry.model(id, for: $0.headsProvider), !option.efforts.contains(effort) {
-                                    $0.workerEffort = nil
-                                }
-                            }
-                        }
-                    ),
-                    maxWidth: 190
-                )
-            }
-            if !workerEfforts.isEmpty {
-                SubagentEditor.row("Effort") {
-                    SubagentEditor.effortPicker(
-                        efforts: workerEfforts,
-                        inherit: "Automatic",
-                        selection: Binding(
-                            get: { pair.workerEffort },
-                            set: { effort in update { $0.workerEffort = effort } }
-                        )
-                    )
-                }
-            }
-            if pair.headsProvider == .dsh {
-                SubagentEditor.row("Agent mode") {
-                    GlassPickerButton(
-                        options: DshAgentMode.allCases.map { ($0, $0.title) },
-                        selection: Binding(
-                            get: { pair.workerDshMode ?? .standard },
-                            set: { mode in update { $0.workerDshMode = mode == .standard ? nil : mode } }
-                        )
-                    )
-                }
-            }
-            SubagentEditor.row("Sub-agents at once per chat") {
-                GlassPickerButton(
-                    options: Self.maxHeadsOptions,
-                    selection: Binding(
-                        get: { pair.maxHeads },
-                        set: { count in update { $0.maxHeads = count } }
-                    )
-                )
-            }
-            ForEach(catalogProviders, id: \.self) { provider in
-                if registry.models(for: provider).isEmpty {
-                    Text(verbatim: String(format: Chrome.localized(registry.loadingCatalogs.contains(provider) ? "Loading %@'s models…" : "No models loaded for %@ yet."), provider.displayName))
-                        .font(.ui(.subheadline))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .padding(.horizontal, 14)
-                        .padding(.top, 8)
-                }
-            }
+            headsNoteSection
+            leadSection(registry: registry, providers: providers, options: options, leadEfforts: leadEfforts)
+            subagentsSection(registry: registry, headsProviders: headsProviders, headsOptions: headsOptions, workerEfforts: workerEfforts)
+            catalogNotes(registry: registry, catalogProviders: catalogProviders)
         }
         .padding(.bottom, 14)
         .onAppear {
@@ -544,6 +367,244 @@ struct HydraPairEditor: View {
         .task(id: catalogProviders) {
             for provider in catalogProviders {
                 await registry.loadCatalog(provider)
+            }
+        }
+    }
+
+    private func nameSection(registry: ProviderRegistry) -> some View {
+        // The name is the header: the combo's own word for itself, over what it
+        // stands for in the picker when it has none.
+        let nameBinding = Binding<String>(
+            get: { pair.name ?? "" },
+            set: { (text: String) in update { $0.name = text.isEmpty ? nil : text } }
+        )
+        let promptTitle: String = HydraPairSummary.modelsTitle(pair, registry: registry)
+        return VStack(alignment: .leading, spacing: 4) {
+            TextField("", text: nameBinding, prompt: Text(promptTitle))
+                .textFieldStyle(.plain)
+                .focused($isNameFocused)
+                .focusEffectDisabled()
+                .font(.ui(.title3, weight: .semibold))
+                .foregroundStyle(Chrome.primaryText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Chrome.overlay(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            Text("Shown in the model picker and the composer")
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(.horizontal, 2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+    }
+
+    private var headsNoteSection: some View {
+        let noteBinding = Binding<String>(
+            get: { pair.headsNote ?? "" },
+            set: { (text: String) in update { $0.headsNote = text.isEmpty ? nil : text } }
+        )
+        return VStack(alignment: .leading, spacing: 4) {
+            TextField("", text: noteBinding, prompt: Text("What the sub-agents are good at"))
+                .textFieldStyle(.plain)
+                .font(.ui(.title3, weight: .semibold))
+                .foregroundStyle(Chrome.primaryText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Chrome.overlay(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            Text("The lead is told this, so it sends this kind of work to the sub-agents. For example: fast, for mechanical edits; or front-end.")
+                .font(.ui(.subheadline))
+                .foregroundStyle(Chrome.secondaryText)
+                .padding(.horizontal, 2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+    }
+
+    @ViewBuilder
+    private func leadSection(
+        registry: ProviderRegistry,
+        providers: [ProviderKind],
+        options: [ModelOption],
+        leadEfforts: [String]
+    ) -> some View {
+        let providerOptions: [(ProviderKind, String)] = providers.map { ($0, $0.displayName) }
+        let leadModelOptions: [(String?, String)] = [(String?.none, "Chat's model")]
+            + options.map { (option: ModelOption) -> (String?, String) in (Optional(option.id), option.label(among: options)) }
+        let dshModeOptions: [(DshAgentMode, String)] = DshAgentMode.allCases.map { ($0, $0.title) }
+        SubagentEditor.sectionLabel("Lead")
+        SubagentEditor.row("Provider") {
+            GlassPickerButton(
+                options: providerOptions,
+                selection: Binding<ProviderKind>(
+                    get: { pair.provider },
+                    set: { (provider: ProviderKind) in
+                        update {
+                            guard $0.provider != provider else { return }
+                            $0.provider = provider
+                            $0.orchestratorModel = nil
+                            $0.orchestratorEffort = nil
+                            $0.orchestratorDshMode = nil
+                            // Sub-agents on the old lead provider go with it; sub-agents on a
+                            // provider of their own keep their model and effort, and
+                            // when that provider is the new lead's, they are simply
+                            // on the lead's provider again.
+                            if $0.workerProvider == nil {
+                                $0.workerModel = nil
+                                $0.workerEffort = nil
+                                $0.workerDshMode = nil
+                            } else if $0.workerProvider == provider {
+                                $0.workerProvider = nil
+                            }
+                        }
+                        Task { await registry.loadCatalog(provider) }
+                    }
+                ),
+                asset: { (kind: ProviderKind) -> String? in kind.iconName }
+            )
+        }
+        SubagentEditor.row("Model") {
+            GlassPickerButton(
+                options: leadModelOptions,
+                selection: Binding<String?>(
+                    get: { pair.orchestratorModel },
+                    set: { (id: String?) in
+                        update {
+                            $0.orchestratorModel = id
+                            if let effort = $0.orchestratorEffort, let option = registry.model(id, for: $0.provider), !option.efforts.contains(effort) {
+                                $0.orchestratorEffort = nil
+                            }
+                        }
+                    }
+                ),
+                maxWidth: 190
+            )
+        }
+        if !leadEfforts.isEmpty {
+            SubagentEditor.row("Effort") {
+                SubagentEditor.effortPicker(
+                    efforts: leadEfforts,
+                    inherit: "Chat's effort",
+                    selection: Binding<String?>(
+                        get: { pair.orchestratorEffort },
+                        set: { (effort: String?) in update { $0.orchestratorEffort = effort } }
+                    )
+                )
+            }
+        }
+        if pair.provider == .dsh {
+            SubagentEditor.row("Agent mode") {
+                GlassPickerButton(
+                    options: dshModeOptions,
+                    selection: Binding<DshAgentMode>(
+                        get: { pair.orchestratorDshMode ?? .standard },
+                        set: { (mode: DshAgentMode) in update { $0.orchestratorDshMode = mode == .standard ? nil : mode } }
+                    )
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func subagentsSection(
+        registry: ProviderRegistry,
+        headsProviders: [ProviderKind],
+        headsOptions: [ModelOption],
+        workerEfforts: [String]
+    ) -> some View {
+        let otherProviders: [ProviderKind] = headsProviders.filter { (kind: ProviderKind) -> Bool in kind != pair.provider }
+        let workerProviderOptions: [(ProviderKind?, String)] = [(ProviderKind?.none, "Same as the lead")]
+            + otherProviders.map { (kind: ProviderKind) -> (ProviderKind?, String) in (Optional(kind), kind.displayName) }
+        let defaultWorkerModelLabel: String = pair.sendsHeadsElsewhere
+            ? String(format: Chrome.localized("%@'s default"), pair.headsProvider.displayName)
+            : "Same as the chat"
+        let workerModelOptions: [(String?, String)] = [(String?.none, defaultWorkerModelLabel)]
+            + headsOptions.map { (option: ModelOption) -> (String?, String) in (Optional(option.id), option.label(among: headsOptions)) }
+        let dshModeOptions: [(DshAgentMode, String)] = DshAgentMode.allCases.map { ($0, $0.title) }
+        SubagentEditor.sectionLabel("Sub-agents")
+        SubagentEditor.row("Provider") {
+            GlassPickerButton(
+                options: workerProviderOptions,
+                selection: Binding<ProviderKind?>(
+                    get: { pair.sendsHeadsElsewhere ? pair.workerProvider : nil },
+                    set: { (provider: ProviderKind?) in
+                        update {
+                            let chosen: ProviderKind? = provider == $0.provider ? nil : provider
+                            guard $0.workerProvider != chosen else { return }
+                            // The sub-agents' model and effort were the old provider's.
+                            $0.workerProvider = chosen
+                            $0.workerModel = nil
+                            $0.workerEffort = nil
+                            $0.workerDshMode = nil
+                        }
+                        if let provider { Task { await registry.loadCatalog(provider) } }
+                    }
+                ),
+                asset: { (kind: ProviderKind?) -> String? in (kind ?? pair.provider).iconName }
+            )
+        }
+        SubagentEditor.row("Model") {
+            GlassPickerButton(
+                options: workerModelOptions,
+                selection: Binding<String?>(
+                    get: { pair.workerModel },
+                    set: { (id: String?) in
+                        update {
+                            $0.workerModel = id
+                            if let effort = $0.workerEffort, let option = registry.model(id, for: $0.headsProvider), !option.efforts.contains(effort) {
+                                $0.workerEffort = nil
+                            }
+                        }
+                    }
+                ),
+                maxWidth: 190
+            )
+        }
+        if !workerEfforts.isEmpty {
+            SubagentEditor.row("Effort") {
+                SubagentEditor.effortPicker(
+                    efforts: workerEfforts,
+                    inherit: "Automatic",
+                    selection: Binding<String?>(
+                        get: { pair.workerEffort },
+                        set: { (effort: String?) in update { $0.workerEffort = effort } }
+                    )
+                )
+            }
+        }
+        if pair.headsProvider == .dsh {
+            SubagentEditor.row("Agent mode") {
+                GlassPickerButton(
+                    options: dshModeOptions,
+                    selection: Binding<DshAgentMode>(
+                        get: { pair.workerDshMode ?? .standard },
+                        set: { (mode: DshAgentMode) in update { $0.workerDshMode = mode == .standard ? nil : mode } }
+                    )
+                )
+            }
+        }
+        SubagentEditor.row("Sub-agents at once per chat") {
+            GlassPickerButton(
+                options: Self.maxHeadsOptions,
+                selection: Binding<Int?>(
+                    get: { pair.maxHeads },
+                    set: { (count: Int?) in update { $0.maxHeads = count } }
+                )
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func catalogNotes(registry: ProviderRegistry, catalogProviders: [ProviderKind]) -> some View {
+        ForEach(catalogProviders, id: \.self) { (provider: ProviderKind) in
+            if registry.models(for: provider).isEmpty {
+                let template: String = Chrome.localized(
+                    registry.loadingCatalogs.contains(provider) ? "Loading %@'s models…" : "No models loaded for %@ yet."
+                )
+                Text(verbatim: String(format: template, provider.displayName))
+                    .font(.ui(.subheadline))
+                    .foregroundStyle(Chrome.secondaryText)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
             }
         }
     }

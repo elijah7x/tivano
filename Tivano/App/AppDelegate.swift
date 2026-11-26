@@ -17,9 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         let windows = WindowManager.shared
         model = windows.model
-        AppIconManager.shared.apply(choice: windows.model.settings.appIconChoice, style: windows.model.settings.themeStyle)
         #if DEBUG
         if CaptureRun.isEnabled {
+            AppIconManager.shared.apply(choice: windows.model.settings.appIconChoice, style: windows.model.settings.themeStyle)
             Task { await WebsiteCaptures.run(model: windows.model) }
             return
         }
@@ -47,7 +47,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 windows.showSettings(page: .about)
             }
         }
+        // Defer Dock/bundle icon rendering past the first frame.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                let settings = WindowManager.shared.model.settings
+                AppIconManager.shared.apply(choice: settings.appIconChoice, style: settings.themeStyle)
+            }
+        }
         UpdateChecker.shared.startBackgroundChecks()
+        #if DEBUG
+        BlankWatch.startIfEnabled(model: windows.model)
+        #endif
     }
 
     private func syncQuickChatHotKey() {
@@ -114,7 +124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         if let model, model.isLibraryLoaded { model.saveBeforeQuit(silently: AppUpdater.shared.isSilentHandoff) }
-        TokenLedger.shared.flushLiveSpend()
         AppUpdater.shared.installStagedOnQuit()
         // The MCP servers the hub started go with the app.
         if !mcpShutdownCompleted { MCPHub.terminateAll() }

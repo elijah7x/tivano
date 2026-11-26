@@ -482,13 +482,12 @@ class OpenAICompatibleSession: ProviderSession {
     }
 
     /// One API response's usage, reported in both shapes: the context-window
-    /// `usage` event and the ledger keep what they always did, and the spend event
+    /// `usage` event keeps what it always did, and the spend event
     /// carries the selected provider and model plus the response's own components.
     /// Called once per response, including the final-report response.
     private func reportUsage(_ round: StreamRound) {
         if let usage = round.usage {
             onEvent?(.usage(usage))
-            TokenLedger.shared.record(spend: usage.usedTokens)
         }
         guard let reported = round.tokenUsage, reported.hasSpend else { return }
         onEvent?(.tokenSpend(TokenSpend(

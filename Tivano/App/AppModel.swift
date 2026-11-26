@@ -65,6 +65,13 @@ final class AppModel {
     private(set) var sidebarPlacementRevision: UInt64 = 0
     private(set) var threadCount: Int = 0
     private(set) var shelvedUnreadCount: Int = 0
+    /// Threads whose live runtime currently needs user attention (pending approval, question
+    /// or Chimera casting). Maintained incrementally via runtime observation so the sidebar
+    /// never scans every runtime on each render.
+    private(set) var attentionThreadIDs: Set<UUID> = []
+    /// Parent thread IDs that currently have at least one non-archived running Hydra head.
+    /// Maintained on thread mutations so the sidebar never subscribes to every head's cell.
+    private(set) var parentsWithRunningHeads: Set<UUID> = []
     /// Only fields used by control-list membership/search/order, not streamed status
     /// or timestamps. Cursor snapshots still use the full threadsRevision.
     private(set) var controlThreadMembershipRevision: UInt64 = 0
@@ -92,12 +99,46 @@ final class AppModel {
         let nextCount = threadStorage.count
         if threadCount != nextCount { threadCount = nextCount }
         refreshShelvedUnreadCount()
+        refreshParentsWithRunningHeads()
         if let syncStart {
             archiveProbeSyncTotal += syncStart.duration(to: .now)
             archiveProbeSyncCount += 1
         }
         sidebarPlacementRevision &+= 1
         threadsRevision &+= 1
+    }
+
+    private static func isRunningHead(_ thread: ChatThread) -> Bool {
+        !thread.isArchived && thread.isHydraHead && thread.hydra?.status == .running && thread.parentThreadID != nil
+    }
+
+    private func refreshParentsWithRunningHeads() {
+        var next = Set<UUID>()
+        for thread in threadStorage where Self.isRunningHead(thread) {
+            if let parentID = thread.parentThreadID { next.insert(parentID) }
+        }
+        if parentsWithRunningHeads != next { parentsWithRunningHeads = next }
+    }
+
+    private func setThreadAttention(_ id: UUID, needs: Bool) {
+        if needs {
+            if !attentionThreadIDs.contains(id) { attentionThreadIDs.insert(id) }
+        } else {
+            if attentionThreadIDs.contains(id) { attentionThreadIDs.remove(id) }
+        }
+    }
+
+    private func observeRuntimeAttention(_ id: UUID, runtime: ThreadRuntime) {
+        let token = ObjectIdentifier(runtime)
+        let needs = withObservationTracking {
+            runtime.needsUserAttention
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, let current = self.runtimes[id], ObjectIdentifier(current) == token else { return }
+                self.observeRuntimeAttention(id, runtime: current)
+            }
+        }
+        setThreadAttention(id, needs: needs)
     }
 
     private func refreshShelvedUnreadCount() {
@@ -236,6 +277,9 @@ final class AppModel {
         settings.onExternalControlChanged = { [weak self] in
             self?.localControl.refreshListening()
             self?.remoteMCP.refresh()
+        }
+        settings.onKeychainLoaded = { [weak self] in
+            self?.providers.startObservingDeepSeekKey()
         }
         settings.onSleepPreventionChanged = { [weak self] in
             self?.updateTaskSleepPrevention()
@@ -518,6 +562,21 @@ final class AppModel {
         }
         let load = Task.detached(priority: .userInitiated) { Storage.loadLibraryRecovering() }
         libraryLoad = load
+        // Load keepsakes concurrently so library readiness and initial thread opening do not wait on it.
+        if CaptureRun.isEnabled {
+            let keepsakeSnapshot = KeepsakeStore.load(granting: KeepsakeCatalog.grantedByThisBuild)
+            keepsakes = keepsakeSnapshot.keepsakes
+            keepsakesSeen = keepsakeSnapshot.seen
+        } else {
+            Task { [weak self] in
+                let keepsakeSnapshot = await Task.detached(priority: .utility) {
+                    KeepsakeStore.load(granting: KeepsakeCatalog.grantedByThisBuild)
+                }.value
+                guard let self else { return }
+                self.keepsakes = keepsakeSnapshot.keepsakes
+                self.keepsakesSeen = keepsakeSnapshot.seen
+            }
+        }
         var library: Library
         var didRecoverLibrary = false
         switch await load.value {
@@ -544,15 +603,11 @@ final class AppModel {
                 message: String(format: Chrome.localized("Tivano couldn't read its library (%@). The original file and chat documents are preserved. Repair the library and restart Tivano. Any new chats will be saved separately to %@ when you quit."), error.localizedDescription, recovery.path)
             )
         }
-        let keepsakeSnapshot = await Task.detached(priority: .utility) {
-            KeepsakeStore.load(granting: KeepsakeCatalog.grantedByThisBuild)
-        }.value
-        keepsakes = keepsakeSnapshot.keepsakes
-        keepsakesSeen = keepsakeSnapshot.seen
-        let originalThreads = library.threads
+        var didMutateLibraryThreads = false
         for index in library.threads.indices where library.threads[index].controlWorkspace?.phase == .preparing {
             library.threads[index].controlWorkspace?.phase = .failed
             library.threads[index].controlWorkspace?.failure = ControlFailure(code: .workspaceFailed, detail: "restart_during_preparation")
+            didMutateLibraryThreads = true
         }
         for index in library.threads.indices where !CaptureRun.isEnabled && (library.threads[index].lastStatus == .running || library.threads[index].pendingResultTurnID != nil || library.threads[index].hydra?.status == .running) {
             if library.threads[index].lastStatus == .running || library.threads[index].pendingResultTurnID != nil {
@@ -562,18 +617,24 @@ final class AppModel {
                 library.threads[index].unreadRevision = UUID()
                 library.threads[index].pendingResultTurnID = nil
                 library.threads[index].lastAttentionTurnID = nil
+                didMutateLibraryThreads = true
             }
             if library.threads[index].hydra?.status == .running {
                 library.threads[index].hydra?.status = .stopped
                 library.threads[index].hydra?.finishedAt = .now
+                didMutateLibraryThreads = true
             }
         }
         // Anything made in the moments before the library landed (a project opened from
         // the Finder, a chat from the menu) joins it rather than being written over.
         let knownProjects = Set(library.projects.map(\.id))
         let knownThreads = Set(library.threads.map(\.id))
-        projects = library.projects + projects.filter { !knownProjects.contains($0.id) }
-        threads = library.threads + threads.filter { !knownThreads.contains($0.id) }
+        let addedProjects = projects.filter { !knownProjects.contains($0.id) }
+        let addedThreads = threads.filter { !knownThreads.contains($0.id) }
+        projects = library.projects + addedProjects
+        threads = library.threads + addedThreads
+        let projectsRevisionAtLoad = projectsRevision
+        let threadsRevisionAtLoad = threadsRevision
         isLibraryLoaded = true
         localControl.refreshListening()
         remoteMCP.refresh()
@@ -582,7 +643,9 @@ final class AppModel {
         let permissionsLowered = announceLoweredPermissions()
         // A recovered index goes back out once, so the next launch reads a clean file
         // instead of recovering, alerting and quarantining the same damage again.
-        if didRecoverLibrary || permissionsLowered || threads != originalThreads || projects != library.projects { scheduleSave() }
+        let libraryChanged = didMutateLibraryThreads || !addedThreads.isEmpty || !addedProjects.isEmpty
+            || threadsRevision != threadsRevisionAtLoad || projectsRevision != projectsRevisionAtLoad
+        if didRecoverLibrary || permissionsLowered || libraryChanged { scheduleSave() }
         // Capture seeds retain their staged statuses and never start account or merge services.
         if CaptureRun.isEnabled { return }
         if restoreSelectionAfterLoad { openThreadOnLaunch() }
@@ -593,12 +656,15 @@ final class AppModel {
         // so the first click into a conversation never parses its history on the main thread.
         let recent = threads.filter { !$0.isArchived && !$0.isInPanel }.sorted { $0.updatedAt > $1.updatedAt }.prefix(12).map(\.id)
         warmDocuments(recent)
-        await settings.loadKeychainInBackground()
-        await LoginEnvironment.load()
+        async let keychainLoad: Void = settings.loadKeychainInBackground()
+        async let environmentLoad: Void = LoginEnvironment.load()
+        await keychainLoad
+        providers.startObservingDeepSeekKey()
+        await environmentLoad
         // Needs the login PATH for gh and gives every later process the account's token.
         GitHubConnection.shared.start()
         // After the login environment, so git runs with the user's PATH.
-        if !libraryWritesBlocked { sweepHydraCopies() }
+        if !libraryWritesBlocked { await sweepHydraCopies() }
         // A merge the last run did not finish (the app was quit under it) goes out now.
         if !libraryWritesBlocked {
             for lead in threads {
@@ -621,12 +687,9 @@ final class AppModel {
         // slash commands too, so the picker and the composer are complete before any turn.
         // ZCode's is a read of the app's bundled config, cheap enough to load up front.
         await withTaskGroup(of: Void.self) { group in
-            for provider in [ProviderKind.claude, .codex, .deepseek, .meta, .dsh, .zcode] where providers.status(provider).isInstalled && (provider != .dsh || settings.isEnabled(provider)) {
+            for provider in [ProviderKind.claude, .codex, .deepseek, .meta, .zai, .dsh, .zcode] where providers.status(provider).isInstalled && (provider != .dsh || settings.isEnabled(provider)) {
                 group.addTask { await self.providers.loadCatalog(provider) }
             }
-        }
-        if providers.status(.zai).isInstalled {
-            await providers.loadCatalog(.zai)
         }
         // Read-only version checks from here on. A model that needs a newer CLI still
         // updates when that reply arrives; nothing in this loop installs on a timer.
@@ -825,10 +888,10 @@ final class AppModel {
             }
         }
         let tasks = standaloneTasks
-        let attention = Set(tasks.filter { task in
-            guard let runtime = existingRuntime(for: task.id) else { return false }
-            return runtime.needsUserAttention
-        }.map(\.id))
+        let attentionIDs = attentionThreadIDs
+        let attention = attentionIDs.isEmpty
+            ? Set<UUID>()
+            : Set(tasks.lazy.map(\.id).filter { attentionIDs.contains($0) })
         let rest = tasks.filter { !attention.contains($0.id) }
         let days = Dictionary(grouping: rest.filter { !$0.isPinned }) {
             Calendar.current.startOfDay(for: $0.updatedAt)
@@ -877,6 +940,7 @@ final class AppModel {
         if let runtime = runtimes[id] { return runtime }
         let runtime = ThreadRuntime(threadID: id, app: self)
         runtimes[id] = runtime
+        observeRuntimeAttention(id, runtime: runtime)
         updateTaskSleepPrevention()
         if !runtimeCapacityScheduled {
             runtimeCapacityScheduled = true
@@ -1047,6 +1111,7 @@ final class AppModel {
         }
         runtime.cancelPersistence()
         runtimes[id] = nil
+        setThreadAttention(id, needs: false)
         updateTaskSleepPrevention()
         runtimeLastAccess[id] = nil
         idleSessionStops.removeValue(forKey: id)?.cancel()
@@ -1314,6 +1379,226 @@ final class AppModel {
         return thread
     }
 
+    /// Creates a new independent thread branched from a specific turn in `sourceID`.
+    @discardableResult
+    func branchThread(from sourceID: UUID, at point: ThreadBranchPoint) async throws -> ChatThread {
+        guard thread(sourceID) != nil else { throw ThreadBranchFailure.notFound }
+        let sourceRuntime = runtime(for: sourceID)
+        await sourceRuntime.ensureLoaded()
+        // The source can be renamed, edited or removed while its history loads.
+        guard let resolved = thread(sourceID) else { throw ThreadBranchFailure.notFound }
+        do {
+            _ = try executionDirectory(for: resolved)
+        } catch {
+            throw ThreadBranchFailure.directoryUnavailable
+        }
+        if sourceRuntime.isRunning || sourceRuntime.isReverting {
+            throw ThreadBranchFailure.busy
+        }
+        guard sourceRuntime.canBranch(at: point) else {
+            throw ThreadBranchFailure.unavailablePoint
+        }
+        let sourceDocument = sourceRuntime.snapshotForPersistence()
+        guard var slice = ThreadBranch.slice(sourceDocument, at: point) else {
+            throw ThreadBranchFailure.unavailablePoint
+        }
+
+        let project = project(resolved.projectID)
+        var thread = makeThread(in: project, carrying: resolved)
+        // The branch is the same chat from here on: its mode, permissions and Hydra
+        // settings are the source's own, never the app's defaults for a new chat.
+        thread.provider = resolved.provider
+        thread.model = resolved.model
+        thread.effort = resolved.effort
+        thread.fastMode = resolved.fastMode
+        thread.dshMode = resolved.dshMode
+        thread.runtimeMode = resolved.runtimeMode
+        thread.interactionMode = resolved.interactionMode
+        thread.hydraEnabled = resolved.hydraEnabled
+        thread.hydraEnabledIsExplicit = resolved.hydraEnabledIsExplicit
+        thread.hydraPairID = resolved.hydraPairID
+        thread.temporaryHydraPair = resolved.temporaryHydraPair
+        thread.chimeraEnabled = resolved.chimeraEnabled
+        thread.chimeraHydraSnapshot = resolved.chimeraHydraSnapshot
+        thread.worktreePath = resolved.worktreePath
+        thread.branch = resolved.branch
+        // Same folder, same verified readiness (a CLI worktree's observed setup).
+        thread.controlWorkspace = resolved.controlWorkspace
+        // A branch of a branch keeps one prefix rather than stacking them.
+        let branchPrefix = String(format: Chrome.localized("Branch: %@"), "")
+        thread.title = resolved.displayTitle.hasPrefix(branchPrefix) && !branchPrefix.isEmpty
+            ? resolved.displayTitle
+            : String(format: Chrome.localized("Branch: %@"), resolved.displayTitle)
+        thread.hasCustomTitle = true
+        thread.branchOrigin = ThreadBranchOrigin(
+            sourceID: sourceID,
+            sourceTitle: resolved.displayTitle,
+            lastCopiedTurnID: slice.lastTurn?.id
+        )
+
+        // Context the source itself was forwarded with sits before every kept turn.
+        let inherited = slice.document.continuation ?? slice.document.forwardedContinuation
+        var continuation: ThreadContinuation? = inherited
+        if let lastTurn = slice.lastTurn {
+            if resolved.provider.restoresFromTextTranscript {
+                // The copied turns rebuild the rest; the forwarded context is not among them.
+                thread.providerSessionID = nil
+                thread.providerResumeAt = nil
+                thread.providerForkPending = false
+            } else {
+                let canForkProviderSession = resolved.pendingProviderSwitch == nil
+                    && Self.turnBelongsToCurrentSession(lastTurn, in: sourceDocument, of: resolved)
+                var forkedNatively = false
+                if canForkProviderSession {
+                    switch resolved.provider {
+                    case .claude:
+                        if let sessionID = resolved.providerSessionID, !sessionID.isEmpty,
+                           // Claude Code finds the session to fork by id from any folder, so a
+                           // standalone chat's branch forks natively from its own task folder.
+                           let anchor = lastTurn.providerAnchor, !anchor.isEmpty {
+                            thread.providerSessionID = sessionID
+                            thread.providerResumeAt = anchor
+                            thread.providerForkPending = true
+                            thread.claudeAccountID = resolved.claudeAccountID
+                            thread.claudeUsesDefaultAccount = resolved.claudeUsesDefaultAccount
+                            thread.claudeIdentity = resolved.claudeIdentity
+                            forkedNatively = true
+                        }
+                    case .codex:
+                        if let providerTurnID = lastTurn.providerTurnID, !providerTurnID.isEmpty,
+                           resolved.providerSessionID?.isEmpty == false,
+                           let forkedID = try? await sourceRuntime.forkCodexSession(through: lastTurn) {
+                            thread.providerSessionID = forkedID
+                            thread.providerResumeAt = nil
+                            thread.providerForkPending = false
+                            forkedNatively = true
+                        }
+                    default:
+                        break
+                    }
+                }
+                if forkedNatively { continuation = nil }
+                if !forkedNatively {
+                    thread.providerSessionID = nil
+                    thread.providerResumeAt = nil
+                    thread.providerForkPending = false
+                    // A forwarded source's own carried context precedes everything kept, so
+                    // the branch's snapshot chains it the way a forward of a forward does.
+                    var captured = slice.document
+                    captured.continuation = captured.continuation ?? captured.forwardedContinuation
+                    continuation = ThreadContinuation.capture(
+                        sourceID: sourceID,
+                        title: resolved.title,
+                        document: captured
+                    )
+                }
+            }
+            if thread.providerSessionID == nil {
+                for index in slice.document.turns.indices {
+                    slice.document.turns[index].providerTurnID = nil
+                    slice.document.turns[index].providerAnchor = nil
+                }
+            }
+            thread.hasStartedTurn = true
+            thread.lastStatus = lastTurn.status
+        }
+
+        if let projectID = thread.projectID, self.project(projectID) == nil {
+            throw ThreadBranchFailure.directoryUnavailable
+        }
+        // A standalone chat works in a folder of its own, named by its id: the branch gets
+        // a copy (an APFS clone) of the source's, so files the history refers to are there.
+        if resolved.projectID == nil, resolved.parentThreadID == nil, resolved.hydra?.targetCheckout?.isEmpty != false {
+            let from = StoragePaths.taskWorkspace(sourceID), to = StoragePaths.taskWorkspace(thread.id)
+            await Task.detached(priority: .userInitiated) {
+                let files = FileManager.default
+                guard files.fileExists(atPath: from.path), !files.fileExists(atPath: to.path) else { return }
+                try? files.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? files.copyItem(at: from, to: to)
+            }.value
+        }
+        freshThreadIDs.insert(thread.id)
+        threads.append(thread)
+        if let project { updateProject(project.id) { $0.isExpanded = true } }
+        rememberAffiliation(thread.affiliation)
+        let newRuntime = runtime(for: thread.id)
+        guard await newRuntime.installBranch(slice, continuation: continuation),
+              let installed = self.thread(thread.id) else {
+            freshThreadIDs.remove(thread.id)
+            if let stray = self.thread(thread.id) {
+                threads.removeAll { $0.id == thread.id }
+                discardThreadState(stray)
+            }
+            throw ThreadBranchFailure.notFound
+        }
+        selectedThreadID = installed.id
+        // Written now rather than after the save debounce: the branch is reported made.
+        saveLibrary()
+        return installed
+    }
+
+    private static func turnBelongsToCurrentSession(_ lastTurn: TurnRecord, in document: ThreadDocument, of thread: ChatThread) -> Bool {
+        guard thread.pendingProviderSwitch == nil,
+              let sessionID = thread.providerSessionID, !sessionID.isEmpty,
+              let lastIndex = document.turns.firstIndex(where: { $0.id == lastTurn.id }) else {
+            return false
+        }
+        if lastTurn.tokenSpends?.contains(where: { $0.provider != thread.provider }) == true {
+            return false
+        }
+        switch thread.provider {
+        case .claude:
+            guard let anchor = lastTurn.providerAnchor, !anchor.isEmpty else { return false }
+        case .codex:
+            guard let turnID = lastTurn.providerTurnID, !turnID.isEmpty else { return false }
+        default:
+            return false
+        }
+        let laterTurns = document.turns[(lastIndex + 1)...]
+        if laterTurns.contains(where: { turn in
+            if turn.tokenSpends?.contains(where: { $0.provider != thread.provider }) == true { return true }
+            if thread.provider == .claude && turn.providerTurnID != nil { return true }
+            if thread.provider == .codex && turn.providerAnchor != nil { return true }
+            return false
+        }) {
+            return false
+        }
+        let laterTurnIDs = Set(laterTurns.map(\.id))
+        let lastItemIndex = document.items.lastIndex { $0.turnID == lastTurn.id }
+        let checkedItems: ArraySlice<TimelineItem> = lastItemIndex.map { document.items[($0 + 1)...] } ?? document.items[...]
+        for item in checkedItems {
+            guard case .notice(let notice) = item.content else { continue }
+            if let turnID = item.turnID {
+                guard laterTurnIDs.contains(turnID) else { continue }
+            } else if lastItemIndex == nil {
+                continue
+            }
+            if matchesSessionBoundaryNotice(notice.message) { return false }
+        }
+        return true
+    }
+
+    private static func matchesSessionBoundaryNotice(_ message: String) -> Bool {
+        let templates = [
+            Chrome.localized("Continued with %@"),
+            "Continued with %@",
+            Chrome.localized("%@ no longer has this conversation. It starts a new one here, without the messages above."),
+            "%@ no longer has this conversation. It starts a new one here, without the messages above."
+        ]
+        for template in templates {
+            let parts = template.components(separatedBy: "%@")
+            guard parts.count == 2 else { continue }
+            let prefix = parts[0]
+            let suffix = parts[1]
+            if (!prefix.isEmpty || !suffix.isEmpty),
+               message.hasPrefix(prefix), message.hasSuffix(suffix),
+               message.count >= prefix.count + suffix.count {
+                return true
+            }
+        }
+        return false
+    }
+
     private func applyPair(_ pair: HydraPair, to thread: inout ChatThread) {
         let lead = hydraLead(of: pair, for: thread)
         thread.model = lead.model
@@ -1429,6 +1714,18 @@ final class AppModel {
             if previous.isArchived != thread.isArchived || previous.hasUnread != thread.hasUnread {
                 refreshShelvedUnreadCount()
             }
+            let wasRunningHead = Self.isRunningHead(previous)
+            let isRunningHead = Self.isRunningHead(thread)
+            if wasRunningHead != isRunningHead, let parentID = thread.parentThreadID {
+                if isRunningHead {
+                    if !parentsWithRunningHeads.contains(parentID) {
+                        parentsWithRunningHeads.insert(parentID)
+                    }
+                } else if parentsWithRunningHeads.contains(parentID),
+                          !threadStorage.contains(where: { $0.parentThreadID == parentID && Self.isRunningHead($0) }) {
+                    parentsWithRunningHeads.remove(parentID)
+                }
+            }
             threadsRevision &+= 1
         }
         scheduleSave()
@@ -1502,23 +1799,38 @@ final class AppModel {
     func moveThread(_ id: UUID, toProject project: Project) {
         guard let thread = thread(id), self.project(project.id) != nil else { return }
         if thread.projectID == nil {
-            _ = moveThread(id, to: .project(project.id))
+            Task { _ = await moveThreadAsync(id, to: .project(project.id)) }
         } else {
             applyThreadAffiliation(id, .project(project.id))
         }
     }
 
     @discardableResult
-    func moveThread(_ id: UUID, to affiliation: ThreadAffiliation) -> Bool {
-        guard let thread = thread(id) else { return false }
-        if thread.affiliation == affiliation { return true }
+    func moveThreadAsync(
+        _ id: UUID,
+        to affiliation: ThreadAffiliation,
+        animation: Animation? = nil
+    ) async -> Bool {
+        guard let initial = thread(id) else { return false }
+        if initial.affiliation == affiliation { return true }
         guard canChangeThreadAffiliation(id) else { return false }
+        let initialAffiliation = initial.affiliation
         do {
-            guard try !Storage.hasStoredTurns(id) else { return false }
             if let projectID = affiliation.projectID, project(projectID) == nil {
                 throw ProviderError.failed(Chrome.localized("This thread's project is unavailable."))
             }
-            applyThreadAffiliation(id, affiliation)
+            guard try await !Storage.hasStoredTurnsAsync(id) else { return false }
+            guard let current = thread(id) else { return false }
+            if current.affiliation == affiliation { return true }
+            guard current.affiliation == initialAffiliation, canChangeThreadAffiliation(id) else { return false }
+            if let projectID = affiliation.projectID, project(projectID) == nil {
+                throw ProviderError.failed(Chrome.localized("This thread's project is unavailable."))
+            }
+            if let animation {
+                withAnimation(animation) { applyThreadAffiliation(id, affiliation) }
+            } else {
+                applyThreadAffiliation(id, affiliation)
+            }
             return true
         } catch {
             alert = AppAlert(title: "Could not change thread location", message: error.localizedDescription)
@@ -1538,6 +1850,7 @@ final class AppModel {
             thread.controlWorkspace = nil
             thread.providerSessionID = nil
             thread.providerResumeAt = nil
+            thread.providerForkPending = false
             if affiliation == .standalone {
                 thread.hydraPairID = nil
                 thread.temporaryHydraPair = nil
@@ -1564,12 +1877,13 @@ final class AppModel {
     }
 
     /// updateThread for several threads at once: the same bookkeeping, one structure sync.
-    private func updateEachThread(_ ids: some Collection<UUID>, _ change: (inout ChatThread) -> Void) {
+    func updateEachThread(_ ids: some Collection<UUID>, _ change: (inout ChatThread) -> Void) {
         var didChange = false
         var didChangeMembership = false
         var didChangeHierarchy = false
         var didChangePlacement = false
         var didChangeUnread = false
+        var didChangeRunningHead = false
         var updatedIDs: [UUID] = []
         var seenUpdated: Set<UUID> = []
         var visitedAny = false
@@ -1585,6 +1899,7 @@ final class AppModel {
             if Self.hierarchyChanged(previous, thread) { didChangeHierarchy = true }
             if Self.placementChanged(previous, thread) { didChangePlacement = true }
             if previous.hasUnread != thread.hasUnread || previous.isArchived != thread.isArchived { didChangeUnread = true }
+            if Self.isRunningHead(previous) != Self.isRunningHead(thread) { didChangeRunningHead = true }
             threadStorage[index] = thread
             if seenUpdated.insert(id).inserted { updatedIDs.append(id) }
         }
@@ -1600,6 +1915,7 @@ final class AppModel {
             }
             if didChangePlacement { sidebarPlacementRevision &+= 1 }
             if didChangeUnread { refreshShelvedUnreadCount() }
+            if didChangeRunningHead { refreshParentsWithRunningHeads() }
             threadsRevision &+= 1
         }
         scheduleSave()
@@ -1743,11 +2059,13 @@ final class AppModel {
     }
 
     func unarchive(_ id: UUID) {
-        updateThread(id) { $0.isArchived = false }
-        CheckoutClaims.activate(owner: id)
-        for helper in threads where helper.parentThreadID == id && helper.isArchived {
-            updateThread(helper.id) { $0.isArchived = false }
-            CheckoutClaims.activate(owner: helper.id)
+        var ids = [id]
+        for helper in threadStorage where helper.parentThreadID == id && helper.isArchived {
+            ids.append(helper.id)
+        }
+        updateEachThread(ids) { $0.isArchived = false }
+        for threadID in ids {
+            CheckoutClaims.activate(owner: threadID)
         }
         // Back in the list, an unread thread counts again.
         updateDockBadge()
@@ -1818,7 +2136,13 @@ final class AppModel {
     }
 
     private func deletionCleanup(for removed: [ChatThread], removeWorktree: UUID? = nil) -> [ThreadDeletionCleanup] {
-        removed.compactMap { thread in
+        let removedIDs = Set(removed.map(\.id))
+        let keptWorktrees = Set(threads.compactMap { surviving -> String? in
+            guard !removedIDs.contains(surviving.id),
+                  let path = surviving.worktreePath, !path.isEmpty else { return nil }
+            return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        })
+        return removed.compactMap { thread in
             guard let directory = try? executionDirectory(for: thread) else { return nil }
             let ownsCopy = thread.hydra?.hasOwnCopy == true
                 || (!thread.isHelper && thread.id == removeWorktree)
@@ -1832,6 +2156,7 @@ final class AppModel {
                           return path == url.path || path.hasPrefix(url.path + "/")
                       }),
                       thread.hydra?.targetCheckout.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL == url }) != true,
+                      !keptWorktrees.contains(url.path),
                       !threads.contains(where: { $0.id == thread.parentThreadID && $0.worktreePath == path }) else { return nil }
                 return path
             }
@@ -1876,7 +2201,7 @@ final class AppModel {
         if let selectedThreadID, ids.contains(selectedThreadID) { self.selectedThreadID = nil }
         for thread in removed { discardThreadState(thread, deletingDocument: false) }
         Storage.deleteDocuments(removed.map(\.id))
-        let backups = StoragePaths.root.appendingPathComponent("hydra-backups", isDirectory: true)
+        let backups = StoragePaths.hydraBackupsRoot
         Task.detached {
             for id in ids {
                 try? FileManager.default.removeItem(at: backups.appendingPathComponent(id.uuidString))
@@ -2029,6 +2354,7 @@ final class AppModel {
         runtimes[thread.id]?.failExternalControl(ControlFailure(code: .notFound))
         runtimes[thread.id]?.stopSession()
         runtimes[thread.id] = nil
+        setThreadAttention(thread.id, needs: false)
         updateTaskSleepPrevention()
         terminals.closeAll(for: thread.id)
         if deletingDocument { Storage.deleteDocument(thread.id) }
@@ -2415,6 +2741,7 @@ final class AppModel {
     }
 
     func threadNeedsAttention(_ id: UUID) {
+        setThreadAttention(id, needs: existingRuntime(for: id)?.needsUserAttention == true)
         guard !CaptureRun.isEnabled, let thread = thread(id) else { return }
         // Visible requests need no banner; opening them does not resolve the request.
         if NSApp?.isActive == true && isOnScreen(thread) {
@@ -2493,9 +2820,14 @@ final class AppModel {
         Task { try? await UNUserNotificationCenter.current().add(request) }
     }
 
+    @ObservationIgnored private var lastDockBadgeUnread: Int?
+
     func updateDockBadge() {
-        let unread = threads.count { $0.hasUnread && !$0.isArchived && !$0.isInPanel }
-        NSApp?.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
+        guard let dockTile = NSApp?.dockTile else { return }
+        let unread = threadStorage.count { $0.hasUnread && !$0.isArchived && !$0.isInPanel }
+        guard unread != lastDockBadgeUnread else { return }
+        lastDockBadgeUnread = unread
+        dockTile.badgeLabel = unread > 0 ? String(unread) : nil
     }
 
     // MARK: - Text generation
@@ -2871,6 +3203,7 @@ final class AppModel {
             return false
         }
         DiskWriter.shared.waitForQueuedWrites()
+        providers.flushCatalogPersistence()
         flushed = true
         return true
     }

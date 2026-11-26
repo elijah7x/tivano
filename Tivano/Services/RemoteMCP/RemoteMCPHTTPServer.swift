@@ -12,16 +12,41 @@ final class RemoteMCPHTTPServer: @unchecked Sendable {
     }
 
     private final class Startup: Sendable {
-        let semaphore = DispatchSemaphore(value: 0)
-        let result = Mutex<Result<Void, Error>?>(nil)
+        private struct WaitState {
+            var continuation: CheckedContinuation<Void, Error>?
+            var result: Result<Void, Error>?
+            var timeout: Task<Void, Never>?
+        }
 
-        func finish(_ value: Result<Void, Error>) {
-            let first = result.withLock { result in
-                guard result == nil else { return false }
-                result = value
-                return true
+        private let wait = Mutex(WaitState())
+
+        func attach(_ continuation: CheckedContinuation<Void, Error>, timeout: Task<Void, Never>) {
+            let immediate: Result<Void, Error>? = wait.withLock { state in
+                if let result = state.result { return result }
+                state.continuation = continuation
+                state.timeout = timeout
+                return nil
             }
-            if first { semaphore.signal() }
+            if let immediate {
+                timeout.cancel()
+                continuation.resume(with: immediate)
+            }
+        }
+
+        @discardableResult
+        func finish(_ value: Result<Void, Error>) -> Bool {
+            let outcome: (won: Bool, continuation: CheckedContinuation<Void, Error>?, timeout: Task<Void, Never>?) = wait.withLock { state in
+                guard state.result == nil else { return (false, nil, nil) }
+                state.result = value
+                let continuation = state.continuation
+                let timeout = state.timeout
+                state.continuation = nil
+                state.timeout = nil
+                return (true, continuation, timeout)
+            }
+            outcome.timeout?.cancel()
+            outcome.continuation?.resume(with: value)
+            return outcome.won
         }
     }
 
@@ -45,7 +70,7 @@ final class RemoteMCPHTTPServer: @unchecked Sendable {
 
     var isRunning: Bool { state.withLock { $0.running } }
 
-    func start() throws {
+    func start() async throws {
         guard port != 0, let endpointPort = NWEndpoint.Port(rawValue: port) else {
             throw NWError.posix(.EINVAL)
         }
@@ -91,10 +116,28 @@ final class RemoteMCPHTTPServer: @unchecked Sendable {
             return true
         }
         guard launched else { listener.cancel(); return }
+        defer {
+            state.withLock { state in
+                if state.startup === startup { state.startup = nil }
+            }
+        }
         // NWListener reports a successful bind through .ready, after start(queue:).
+        // Await asynchronously with a 5-second timeout instead of blocking the caller's thread.
         // https://developer.apple.com/documentation/network/nwlistener/state-swift.enum
-        startup.semaphore.wait()
-        try startup.result.withLock { try $0!.get() }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let timeout = Task.detached(priority: .utility) { [weak self, weak listener] in
+                    do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                    guard startup.finish(.failure(NWError.posix(.ETIMEDOUT))) else { return }
+                    if let listener { self?.stop(listener: listener) }
+                }
+                startup.attach(continuation, timeout: timeout)
+            }
+        } onCancel: {
+            if startup.finish(.failure(CancellationError())) {
+                self.stop(listener: listener)
+            }
+        }
     }
 
     func stop() { stop(listener: nil) }

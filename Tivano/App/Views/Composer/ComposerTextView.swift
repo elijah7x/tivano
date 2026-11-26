@@ -69,16 +69,23 @@ final class ComposerController {
             resolve: resolver
         )
         guard textView.shouldChangeText(in: viewRange, replacementString: attributedReplacement.string) else { return }
+        if attributedReplacement.string.utf16.contains(0xFFFC) {
+            textView.mentionsNeedRelabel = true
+        }
         storage.replaceCharacters(in: viewRange, with: attributedReplacement)
         textView.didChangeText()
         textView.setSelectedRange(NSRange(location: viewRange.location + attributedReplacement.length, length: 0))
         textView.stripMentionTypingAttributes()
     }
 
+    static func suggestionSize(for itemCount: Int) -> NSSize {
+        NSSize(width: 340, height: min(440, 44 + CGFloat(max(itemCount, 1)) * TypeScale.shared.ui(26)))
+    }
+
     /// Shows the slash/@ suggestions directly above the caret. A SwiftUI
     /// `.popover` anchors to the whole composer bubble, so it lands centered
     /// (or flipped to the side) instead of where the user is typing.
-    func showSuggestions(_ content: AnyView, itemCount: Int) {
+    func showSuggestions<Content: View>(size: NSSize, @ViewBuilder content: () -> Content) {
         let popover: NSPopover
         if let existing = suggestionPopover {
             popover = existing
@@ -89,25 +96,24 @@ final class ComposerController {
             suggestionPopover = popover
         }
         guard let textView = textView, textView.window != nil else { return }
-        // Fixed width matching the old menu; height fits the rows so the
-        // ScrollView inside never needs to scroll for the capped item count.
-        // The host never publishes its own size (see setFixedContent), so this
-        // is the only size the panel is ever positioned against and it stays
-        // on the caret while the list changes under typing.
-        let size = NSSize(width: 340, height: min(340, 44 + CGFloat(max(itemCount, 1)) * TypeScale.shared.ui(26)))
-        let sized = AnyView(content.frame(width: size.width, height: size.height).presentedChrome())
-        if let host = suggestionHost {
-            host.rootView = sized
-        } else {
-            let host = NSHostingController(rootView: sized)
+        // Fixed width matching the old menu; height grows with the rows up to the
+        // cap and scrolls past it. The host never publishes its own size (see
+        // setFixedContent), so this is the only size the panel is ever positioned
+        // against and it stays on the caret while the list changes under typing.
+        if suggestionHost == nil {
+            let host = NSHostingController(rootView: AnyView(content()))
             host.sizingOptions = []
             suggestionHost = host
             popover.contentViewController = host
         }
-        popover.contentSize = size
-        popover.show(relativeTo: caretRect(in: textView), of: textView, preferredEdge: .maxY)
-        // The popover must never steal typing focus.
-        textView.window?.makeFirstResponder(textView)
+        if popover.contentSize != size {
+            popover.contentSize = size
+        }
+        if !popover.isShown {
+            popover.show(relativeTo: caretRect(in: textView), of: textView, preferredEdge: .maxY)
+            // The popover must never steal typing focus.
+            textView.window?.makeFirstResponder(textView)
+        }
     }
 
     func hideSuggestions() {
@@ -150,15 +156,111 @@ final class ComposerController {
 }
 
 final class ComposerNSTextView: NSTextView {
-    var placeholder = "" {
-        didSet { needsDisplay = true }
+    private struct PlaceholderCacheKey: Equatable {
+        let placeholder: String
+        let placeholderHint: String
+        let fontName: String
+        let fontSize: CGFloat
+        let width: CGFloat
+        let appearanceName: NSAppearance.Name
     }
-    var placeholderHint = "" { didSet { needsDisplay = true } }
+
+    private struct PlaceholderCache {
+        let key: PlaceholderCacheKey
+        let attributed: NSAttributedString
+        let height: CGFloat
+    }
+
+    var placeholder = "" {
+        didSet {
+            invalidatePlaceholderCache()
+            needsDisplay = true
+        }
+    }
+    var placeholderHint = "" {
+        didSet {
+            invalidatePlaceholderCache()
+            needsDisplay = true
+        }
+    }
+    override var font: NSFont? {
+        didSet { invalidatePlaceholderCache() }
+    }
     var onAttach: (([AttachmentSource]) -> Void)?
     var onWidthChange: (() -> Void)?
     var onResign: (@MainActor () -> Void)?
     var mentionResolver: ((String) -> Bool?)?
     var mentionRoot: String?
+
+    // MARK: - Handing the cursor back
+
+    /// AppKit puts up the I-beam when the pointer enters this field. Everything around it is
+    /// SwiftUI, which sets a cursor only when its own pointer style changes; the sidebar and
+    /// the chat chrome claim the arrow all along, so nothing changes and nobody takes the
+    /// I-beam down. Leaving the field therefore restores the arrow itself, unless something
+    /// on the way out has already set another cursor (a link's hand).
+    private var exitTracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let exitTracking { removeTrackingArea(exitTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        exitTracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        if let exitTracking, event.trackingArea === exitTracking { return }
+        super.mouseEntered(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard let exitTracking, event.trackingArea === exitTracking else {
+            super.mouseExited(with: event)
+            return
+        }
+        // After this event, so a cursor the destination sets in the same pass wins, and only
+        // when the pointer did not move onto other text whose I-beam is its own.
+        DispatchQueue.main.async { [weak self] in
+            guard let window = self?.window, Self.showsIBeam,
+                  !Self.isOverText(in: window) else { return }
+            NSCursor.arrow.set()
+        }
+    }
+
+    /// Whether the view under the pointer, or one of its nearest ancestors, is text that keeps
+    /// its own I-beam: another field, a reply's text view.
+    private static func isOverText(in window: NSWindow) -> Bool {
+        guard let content = window.contentView, let superview = content.superview else { return false }
+        let point = superview.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        var view = content.hitTest(point)
+        var depth = 0
+        while let current = view, depth < 4 {
+            if current is NSTextView || current is NSTextField { return true }
+            view = current.superview
+            depth += 1
+        }
+        return false
+    }
+
+    /// Whether the cursor on screen is the I-beam, by identity or, for a copy, by its shape.
+    private static var showsIBeam: Bool {
+        if NSCursor.current === NSCursor.iBeam { return true }
+        guard let shown = NSCursor.currentSystem else { return false }
+        let iBeam = NSCursor.iBeam
+        return shown.hotSpot == iBeam.hotSpot && shown.image.size == iBeam.image.size
+    }
+
+    private var placeholderCache: PlaceholderCache?
+    private var lastMentionAttachmentCount = 0
+    private var lastMentionFontName: String?
+    private var lastMentionFontSize: CGFloat = 0
+    private var lastMentionAccent: NSColor?
+    fileprivate var mentionsNeedRelabel = false
+
+    private func invalidatePlaceholderCache() {
+        placeholderCache = nil
+    }
 
     fileprivate var activeFont: NSFont {
         font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
@@ -175,22 +277,68 @@ final class ComposerNSTextView: NSTextView {
         return FileMentionText.modelOffset(viewOffset, in: attributedString())
     }
 
+    private static func attachmentCount(in storage: NSTextStorage) -> Int {
+        var count = 0
+        for codeUnit in storage.string.utf16 where codeUnit == 0xFFFC {
+            count += 1
+        }
+        return count
+    }
+
+    fileprivate func syncMentionRelabelState(font: NSFont? = nil, accent: NSColor? = nil) {
+        guard mentionResolver != nil, let storage = textStorage else {
+            lastMentionAttachmentCount = 0
+            mentionsNeedRelabel = false
+            return
+        }
+        let currentFont = font ?? activeFont
+        lastMentionAttachmentCount = Self.attachmentCount(in: storage)
+        lastMentionFontName = currentFont.fontName
+        lastMentionFontSize = currentFont.pointSize
+        lastMentionAccent = accent ?? Chrome.accentNSColor
+        mentionsNeedRelabel = false
+    }
+
+    fileprivate func relabelMentionsIfNeeded() {
+        guard mentionResolver != nil, let storage = textStorage else { return }
+        let count = Self.attachmentCount(in: storage)
+        let currentFont = activeFont
+        let currentAccent = Chrome.accentNSColor
+        let countChanged = count != lastMentionAttachmentCount
+        let styleChanged = lastMentionFontName != currentFont.fontName
+            || lastMentionFontSize != currentFont.pointSize
+            || lastMentionAccent != currentAccent
+        let undoOrRedo = undoManager?.isUndoing == true || undoManager?.isRedoing == true
+        let needsRelabel = mentionsNeedRelabel || countChanged || styleChanged || (undoOrRedo && count > 0)
+        lastMentionAttachmentCount = count
+        mentionsNeedRelabel = false
+        guard needsRelabel else { return }
+        lastMentionFontName = currentFont.fontName
+        lastMentionFontSize = currentFont.pointSize
+        lastMentionAccent = currentAccent
+        guard count > 0 else { return }
+        FileMentionText.relabel(storage, font: currentFont, accent: currentAccent)
+    }
+
     fileprivate func setModelText(_ text: String) {
         guard let resolver = mentionResolver, let storage = textStorage else {
             string = text
+            syncMentionRelabelState()
             return
         }
         let baseFont = activeFont
+        let accent = Chrome.accentNSColor
         let attributed = FileMentionText.attributed(
             from: text,
             attributes: [.font: baseFont, .foregroundColor: NSColor.labelColor],
             font: baseFont,
-            accent: Chrome.accentNSColor,
+            accent: accent,
             resolve: resolver
         )
         storage.beginEditing()
         storage.setAttributedString(attributed)
         storage.endEditing()
+        syncMentionRelabelState(font: baseFont, accent: accent)
         stripMentionTypingAttributes()
         if string.isEmpty != placeholderShown { needsDisplay = true }
     }
@@ -218,7 +366,16 @@ final class ComposerNSTextView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = abs(newSize.width - frame.width) > 0.5
         super.setFrameSize(newSize)
-        if widthChanged { onWidthChange?() }
+        if widthChanged {
+            invalidatePlaceholderCache()
+            onWidthChange?()
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        invalidatePlaceholderCache()
+        if placeholderShown { needsDisplay = true }
     }
 
     override func resignFirstResponder() -> Bool {
@@ -313,6 +470,9 @@ final class ComposerNSTextView: NSTextView {
                 let start = joinsBefore ? 1 : 0
                 let attributed = built.attributedSubstring(from: NSRange(location: start, length: built.length - start - (joinsAfter ? 1 : 0)))
                 if shouldChangeText(in: range, replacementString: attributed.string) {
+                    if attributed.string.utf16.contains(0xFFFC) {
+                        mentionsNeedRelabel = true
+                    }
                     storage.replaceCharacters(in: range, with: attributed)
                     didChangeText()
                     setSelectedRange(NSRange(location: range.location + attributed.length, length: 0))
@@ -342,64 +502,97 @@ final class ComposerNSTextView: NSTextView {
         if string.isEmpty != placeholderShown { needsDisplay = true }
     }
 
-    private var placeholderAttributes: [NSAttributedString.Key: Any] {
+    private func placeholderAttributes(font placeholderFont: NSFont) -> [NSAttributedString.Key: Any] {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byWordWrapping
         return [
-            .font: font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14)),
+            .font: placeholderFont,
             .foregroundColor: NSColor.placeholderTextColor,
             .paragraphStyle: paragraphStyle,
         ]
     }
 
-    private var attributedPlaceholder: NSAttributedString {
-        let attributes = placeholderAttributes
-        guard !placeholderHint.isEmpty else { return NSAttributedString(string: placeholder, attributes: attributes) }
-        let placeholderFont = font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
-        let hintFont = ThemeTypeface.nsFont(size: placeholderFont.pointSize * 0.85)
-        let hint = placeholderHint as NSString
-        let hintSize = hint.size(withAttributes: [.font: hintFont])
-        let pillSize = NSSize(width: ceil(hintSize.width) + 14, height: ceil(hintSize.height) + 4)
-        let attachment = NSTextAttachment()
-        attachment.image = NSImage(size: pillSize, flipped: false) { rect in
-            NSColor.quaternaryLabelColor.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
-            hint.draw(at: NSPoint(x: 7, y: 2), withAttributes: [
-                .font: hintFont,
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ])
-            return true
-        }
-        attachment.bounds = NSRect(
-            x: 0, y: (placeholderFont.capHeight - pillSize.height) / 2,
-            width: pillSize.width, height: pillSize.height
+    private func resolvedPlaceholder(for rect: NSRect) -> PlaceholderCache {
+        let placeholderFont = activeFont
+        let key = PlaceholderCacheKey(
+            placeholder: placeholder,
+            placeholderHint: placeholderHint,
+            fontName: placeholderFont.fontName,
+            fontSize: placeholderFont.pointSize,
+            width: rect.width,
+            appearanceName: effectiveAppearance.name
         )
-        let pill = NSAttributedString(attachment: attachment)
-        func composed(_ text: String) -> NSMutableAttributedString {
-            let composed = NSMutableAttributedString(string: text + " ", attributes: attributes)
-            composed.append(pill)
-            return composed
+        if let cached = placeholderCache, cached.key == key {
+            return cached
         }
-        // Truncating the drawn text would cut the pill off with it, so a prediction too
-        // long for the box is shortened here until the pill still fits after it.
-        let rect = placeholderRect
-        func fits(_ text: NSAttributedString) -> Bool {
-            text.boundingRect(with: NSSize(width: rect.width, height: .greatestFiniteMagnitude),
-                              options: [.usesLineFragmentOrigin]).height <= rect.height + 0.5
+
+        let attributes = placeholderAttributes(font: placeholderFont)
+        let measureSize = NSSize(width: rect.width, height: .greatestFiniteMagnitude)
+        func measureHeight(_ text: NSAttributedString) -> CGFloat {
+            text.boundingRect(with: measureSize, options: [.usesLineFragmentOrigin]).height
         }
-        let full = composed(placeholder)
-        guard rect.width > 0, !fits(full) else { return full }
-        let characters = Array(placeholder)
-        var low = 0, high = characters.count
-        while low < high {
-            let mid = (low + high + 1) / 2
-            if fits(composed(String(characters[..<mid]) + "…")) { low = mid } else { high = mid - 1 }
+
+        let attributed: NSAttributedString
+        let height: CGFloat
+        if placeholderHint.isEmpty {
+            attributed = NSAttributedString(string: placeholder, attributes: attributes)
+            height = min(measureHeight(attributed), rect.height)
+        } else {
+            let hintFont = ThemeTypeface.nsFont(size: placeholderFont.pointSize * 0.85)
+            let hint = placeholderHint as NSString
+            let hintSize = hint.size(withAttributes: [.font: hintFont])
+            let pillSize = NSSize(width: ceil(hintSize.width) + 14, height: ceil(hintSize.height) + 4)
+            let attachment = NSTextAttachment()
+            attachment.image = NSImage(size: pillSize, flipped: false) { rect in
+                NSColor.quaternaryLabelColor.setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
+                hint.draw(at: NSPoint(x: 7, y: 2), withAttributes: [
+                    .font: hintFont,
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ])
+                return true
+            }
+            attachment.bounds = NSRect(
+                x: 0, y: (placeholderFont.capHeight - pillSize.height) / 2,
+                width: pillSize.width, height: pillSize.height
+            )
+            let pill = NSAttributedString(attachment: attachment)
+            func composed(_ text: String) -> NSMutableAttributedString {
+                let composed = NSMutableAttributedString(string: text + " ", attributes: attributes)
+                composed.append(pill)
+                return composed
+            }
+            // Truncating the drawn text would cut the pill off with it, so a prediction too
+            // long for the box is shortened here until the pill still fits after it.
+            let full = composed(placeholder)
+            let fullHeight = measureHeight(full)
+            if rect.width <= 0 || fullHeight <= rect.height + 0.5 {
+                attributed = full
+                height = min(fullHeight, rect.height)
+            } else {
+                let characters = Array(placeholder)
+                var low = 0, high = characters.count
+                while low < high {
+                    let mid = (low + high + 1) / 2
+                    if measureHeight(composed(String(characters[..<mid]) + "…")) <= rect.height + 0.5 {
+                        low = mid
+                    } else {
+                        high = mid - 1
+                    }
+                }
+                let truncated = composed(String(characters[..<low]).trimmingCharacters(in: .whitespaces) + "…")
+                attributed = truncated
+                height = min(measureHeight(truncated), rect.height)
+            }
         }
-        return composed(String(characters[..<low]).trimmingCharacters(in: .whitespaces) + "…")
+
+        let entry = PlaceholderCache(key: key, attributed: attributed, height: height)
+        placeholderCache = entry
+        return entry
     }
 
     private var placeholderRect: NSRect {
-        let placeholderFont = font ?? ThemeTypeface.nsFont(size: TypeScale.shared.content(14))
+        let placeholderFont = activeFont
         let padding = textContainer?.lineFragmentPadding ?? 0
         let width = min(textContainer?.size.width ?? bounds.width, bounds.width - textContainerInset.width * 2)
         return NSRect(
@@ -412,12 +605,7 @@ final class ComposerNSTextView: NSTextView {
 
     func placeholderHeight() -> CGFloat {
         guard string.isEmpty, !placeholder.isEmpty else { return 0 }
-        let rect = placeholderRect
-        let measured = attributedPlaceholder.boundingRect(
-            with: NSSize(width: rect.width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin]
-        )
-        return min(measured.height, rect.height)
+        return resolvedPlaceholder(for: placeholderRect).height
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -427,7 +615,7 @@ final class ComposerNSTextView: NSTextView {
         let rect = placeholderRect
         NSGraphicsContext.saveGraphicsState()
         rect.clip()
-        attributedPlaceholder.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        resolvedPlaceholder(for: rect).attributed.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         NSGraphicsContext.restoreGraphicsState()
     }
 
@@ -549,7 +737,9 @@ struct ComposerTextView: NSViewRepresentable {
             let selection = textView.selectedRanges
             textView.font = font
             if textView.mentionResolver != nil, let storage = textView.textStorage {
-                FileMentionText.relabel(storage, font: font, accent: Chrome.accentNSColor)
+                let accent = Chrome.accentNSColor
+                FileMentionText.relabel(storage, font: font, accent: accent)
+                textView.syncMentionRelabelState(font: font, accent: accent)
             }
             textView.setSelectedRanges(selection, affinity: textView.selectionAffinity, stillSelecting: false)
             textView.needsDisplay = true
@@ -565,7 +755,9 @@ struct ComposerTextView: NSViewRepresentable {
         if textView.insertionPointColor != caret {
             textView.insertionPointColor = caret
             if textView.mentionResolver != nil, let storage = textView.textStorage {
-                FileMentionText.relabel(storage, font: textView.activeFont, accent: caret)
+                let activeFont = textView.activeFont
+                FileMentionText.relabel(storage, font: activeFont, accent: caret)
+                textView.syncMentionRelabelState(font: activeFont, accent: caret)
                 textView.needsDisplay = true
             }
         }
@@ -607,11 +799,7 @@ struct ComposerTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             parent.text = textView.modelText
-            if textView.mentionResolver != nil,
-               let storage = textView.textStorage,
-               storage.string.utf16.contains(0xFFFC) {
-                FileMentionText.relabel(storage, font: textView.activeFont, accent: Chrome.accentNSColor)
-            }
+            textView.relabelMentionsIfNeeded()
             updateHeight()
             scheduleCursorChange()
         }

@@ -26,6 +26,14 @@ CASES = (
 )
 
 
+def constant_line(path, marker):
+    source = (ROOT / path).read_text(encoding="utf-8")
+    if source.count(marker) != 1:
+        raise SystemExit(f"expected one {marker!r} in {path}")
+    start = source.index(marker)
+    return source[start:source.index("\n", start)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifacts", type=Path, help="fresh output directory outside the checkout")
@@ -89,7 +97,8 @@ enum HydraPrompts {
             "    nonisolated static func loadLibraryRecovering(",
             "    private nonisolated static func recoverLibraryElements(")),
         "EXECUTION_PRODUCTION": declaration(model, "    func executionDirectory(for"),
-        "TASK_PATH_PRODUCTION": declaration(paths, "    nonisolated static func taskWorkspace("),
+        "TASK_PATH_PRODUCTION": constant_line(paths, "    nonisolated static let taskWorkspacesRoot:")
+            + "\n" + declaration(paths, "    nonisolated static func taskWorkspace("),
     }
     for key, value in replacements.items():
         marker = "/* " + key + " */"

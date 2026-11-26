@@ -1,59 +1,5 @@
 import Foundation
 
-private struct AntigravityModelsProbeKey: Hashable {
-    let executable: String
-    let environment: String
-
-    init(executable: URL, environment: [String: String]) {
-        self.executable = executable.resolvingSymlinksInPath().standardizedFileURL.path
-        self.environment = environment.sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }
-            .joined(separator: "\0")
-    }
-}
-
-private actor AntigravityModelsProbeCache {
-    struct Entry {
-        let key: AntigravityModelsProbeKey
-        let task: Task<ShellResult, Error>
-        var completedAt: Date?
-    }
-
-    var entry: Entry?
-
-    func reset(key: AntigravityModelsProbeKey) {
-        if entry?.key == key { entry = nil }
-    }
-
-    func models(
-        key: AntigravityModelsProbeKey,
-        force: Bool,
-        operation: @escaping @Sendable () async throws -> ShellResult
-    ) async throws -> ShellResult {
-        if force { entry = nil }
-        if let entry, entry.key == key,
-           entry.completedAt.map({ (0..<5).contains(Date.now.timeIntervalSince($0)) }) ?? true {
-            return try await entry.task.value
-        }
-        let task = Task { try await operation() }
-        entry = Entry(key: key, task: task, completedAt: nil)
-        do {
-            let result = try await task.value
-            if entry?.task == task {
-                if result.succeeded {
-                    entry?.completedAt = .now
-                } else {
-                    entry = nil
-                }
-            }
-            return result
-        } catch {
-            if entry?.task == task { entry = nil }
-            throw error
-        }
-    }
-}
-
 /// CLI helpers for Google's Antigravity CLI (`agy`): model catalog, model/effort
 /// normalization, auth status, plan limits, one-shot stream-json review parsing,
 /// transient-failure classification, and retry-log parsing.
@@ -67,10 +13,10 @@ private actor AntigravityModelsProbeCache {
 enum AntigravitySession {
     /// Reasoning efforts `agy --effort` accepts.
     static let efforts = ["low", "medium", "high", "xhigh", "max"]
-    private static let modelsProbeCache = AntigravityModelsProbeCache()
+    private static let modelsProbeCache = CLIProbeCache<ShellResult>(shouldCache: { $0.succeeded })
 
     static func beginCatalogProbeCycle(executable: URL, environment: [String: String]) async {
-        await modelsProbeCache.reset(key: AntigravityModelsProbeKey(executable: executable, environment: environment))
+        await modelsProbeCache.reset(key: CLIProbeKey(executable: executable, environment: environment))
     }
 
     // MARK: - Retry log tailing
@@ -85,11 +31,6 @@ enum AntigravitySession {
         let timestamp = formatter.string(from: Date())
         let suffix = String(UUID().uuidString.prefix(8)).lowercased()
         return logDirectory.appendingPathComponent("cli-\(timestamp)-tivano-\(suffix).log", isDirectory: false)
-    }
-
-    nonisolated static func parseRetry(_ line: String) -> (attempt: Int, labelKey: String)? {
-        guard let retry = parseRetryDetails(line) else { return nil }
-        return (retry.attempt, retry.labelKey)
     }
 
     nonisolated static func parseRetryDetails(_ line: String) -> (attempt: Int, reason: String, labelKey: String)? {
@@ -493,8 +434,8 @@ enum AntigravitySession {
     }
 
     private static func modelsResult(executable: URL, environment: [String: String], force: Bool = false) async throws -> ShellResult {
-        let key = AntigravityModelsProbeKey(executable: executable, environment: environment)
-        return try await modelsProbeCache.models(key: key, force: force) {
+        let key = CLIProbeKey(executable: executable, environment: environment)
+        return try await modelsProbeCache.value(key: key, force: force) {
             try await Shell.run(executable, ["models"], environment: environment, timeout: 30)
         }
     }

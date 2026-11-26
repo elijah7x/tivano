@@ -63,10 +63,7 @@ struct HydraProgressBar: View {
     private final class StaveCache {
         private struct Key: Hashable {
             let id: ObjectIdentifier
-            let status: ToolCall.Status?
-            /// The title streams in for a row that has already arrived, and the step's
-            /// label reads it.
-            let title: String?
+            let headline: TimelineEntry.ToolHeadline?
         }
 
         private var key: [Key] = []
@@ -100,13 +97,14 @@ struct HydraProgressBar: View {
 
         /// Whether `entries` is the list the keys were taken from, walked against them
         /// without allocating and out at the first row that differs: the same answer
-        /// `key == self.key` gave, for a fraction of the work on a hit.
+        /// `key == self.key` gave, for a fraction of the work on a hit. Reads `toolHeadline`
+        /// rather than `item` so streamed tool stdout never invalidates the bar.
         private func matches(_ entries: [TimelineEntry]) -> Bool {
             guard entries.count == key.count else { return false }
             for (index, entry) in entries.enumerated() {
                 let cached = key[index]
                 guard ObjectIdentifier(entry) == cached.id else { return false }
-                if entry.kind == .tool, case .tool(let call) = entry.item.content, call.status != cached.status || call.title != cached.title {
+                if entry.kind == .tool, entry.toolHeadline != cached.headline {
                     return false
                 }
             }
@@ -114,10 +112,7 @@ struct HydraProgressBar: View {
         }
 
         private static func key(of entry: TimelineEntry) -> Key {
-            guard entry.kind == .tool, case .tool(let call) = entry.item.content else {
-                return Key(id: ObjectIdentifier(entry), status: nil, title: nil)
-            }
-            return Key(id: ObjectIdentifier(entry), status: call.status, title: call.title)
+            Key(id: ObjectIdentifier(entry), headline: entry.kind == .tool ? entry.toolHeadline : nil)
         }
     }
 
@@ -321,11 +316,14 @@ struct HydraProgressBar: View {
     }
 
     /// One stave per tool call and per reply, in the order they happened.
+    /// Reads `unobservedItem` so cache misses during `body` do not register an Observation
+    /// dependency on `entry.item` (which would otherwise re-run on the next streamed flush).
     private static func events(in entries: [TimelineEntry]) -> [Stave] {
         entries.compactMap { entry in
+            let item = entry.unobservedItem
             switch entry.kind {
             case .tool:
-                guard case .tool(let call) = entry.item.content else { return nil }
+                guard case .tool(let call) = item.content else { return nil }
                 // A command that wrote files (a heredoc, a script over the source) is an
                 // edit, the way its row already counts it, not one more command.
                 let kind: Stave.Kind = switch call.kind {
@@ -335,13 +333,13 @@ struct HydraProgressBar: View {
                 }
                 let mcp = ToolPresentation.mcpParts(call)?.entry
                 let symbol = mcp == nil ? ToolPresentation.symbol(for: call.kind) : nil
-                return Stave(id: ObjectIdentifier(entry), kind: kind, arrivedAt: entry.item.date, step: ToolPresentation.label(for: call), mcp: mcp, symbol: symbol)
+                return Stave(id: ObjectIdentifier(entry), kind: kind, arrivedAt: item.date, step: ToolPresentation.label(for: call), mcp: mcp, symbol: symbol)
             case .assistant:
-                guard case .assistant(let message) = entry.item.content else { return nil }
+                guard case .assistant(let message) = item.content else { return nil }
                 // The first line of the reply is all the stave shows, so only the head of the
                 // text is split, not the whole reply on every streamed flush.
                 let words = TextCleanup.singleLine(String(message.text.prefix(600)), limit: 60)
-                return Stave(id: ObjectIdentifier(entry), kind: .reply, arrivedAt: entry.item.date, step: words.isEmpty ? Chrome.localized("Replied") : String(format: Chrome.localized("Replied: %@"), words), mcp: nil, symbol: "bubble.left")
+                return Stave(id: ObjectIdentifier(entry), kind: .reply, arrivedAt: item.date, step: words.isEmpty ? Chrome.localized("Replied") : String(format: Chrome.localized("Replied: %@"), words), mcp: nil, symbol: "bubble.left")
             default:
                 return nil
             }

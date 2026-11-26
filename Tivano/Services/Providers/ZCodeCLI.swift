@@ -82,6 +82,11 @@ enum ZCodeCLI {
         return plist["CFBundleShortVersionString"] as? String
     }
 
+    @concurrent
+    static func loadVersion(entry: URL) async -> String? {
+        version(entry: entry)
+    }
+
     nonisolated static func launchEnvironment(entry: URL, base: [String: String]) -> [String: String] {
         var environment = base
         environment["ELECTRON_RUN_AS_NODE"] = "1"
@@ -108,6 +113,11 @@ enum ZCodeCLI {
         return models.compactMap(\.string).enumerated().map { index, id in
             ModelOption(id: id, name: id, efforts: efforts, defaultEffort: defaultEffort, isDefault: index == 0)
         }
+    }
+
+    @concurrent
+    static func loadModels(entry: URL, region: ZaiRegion) async -> [ModelOption] {
+        models(entry: entry, region: region)
     }
 
     nonisolated static func builtinRevision(entry: URL) -> String? {

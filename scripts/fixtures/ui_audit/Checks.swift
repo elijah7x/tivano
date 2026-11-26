@@ -319,6 +319,16 @@ struct AuditFailure: Error, CustomStringConvertible {
         await oldA.value
         await newA.value
         try check(await switching.search("only") == ["only-a.txt"], "A-B-A preserves the latest directory generation")
+
+        let folders = root.appendingPathComponent("folders")
+        let sources = folders.appendingPathComponent("sources")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try Data().write(to: sources.appendingPathComponent("chapter 1.md"))
+        let folderIndex = FileIndex()
+        await folderIndex.prepare(folders.path)
+        let folderMatches = await folderIndex.search("sources")
+        try check(folderMatches.first == "sources/", "folders are candidates and an exact folder name ranks first")
+        try check(folderMatches.contains("sources/chapter 1.md"), "files under a matching folder remain candidates")
     }
 
     static func request() -> QuestionRequest {

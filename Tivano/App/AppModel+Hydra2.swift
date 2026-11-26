@@ -77,7 +77,7 @@ extension AppModel {
             existingRuntime(for: leadID)?.clearQueuedHydraHeads()
             updateHydraJob(job.id, of: leadID) { $0.ending = ending }
             if ending != .recovered,
-               hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) { return }
+               !hydraHeads(of: leadID, jobID: job.id, status: .running).isEmpty { return }
             await existingRuntime(for: leadID)?.hydraLanding?.value
             cancelTransientHydraRetries(of: leadID, jobID: job.id)
             updateHydraJob(job.id, of: leadID) {
@@ -117,7 +117,7 @@ extension AppModel {
         // their work belongs to this job, which stays open until they are back.
         guard openHydraJob(of: leadID)?.id == job.id, runtime.phase == .idle,
               !runtime.hydraHasOutstandingWork,
-              !hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) else { return }
+              hydraHeads(of: leadID, jobID: job.id, status: .running).isEmpty else { return }
         cancelTransientHydraRetries(of: leadID, jobID: job.id)
         updateHydraJob(job.id, of: leadID) {
             $0.ending = .completed
@@ -131,7 +131,7 @@ extension AppModel {
         guard let job = openHydraJob(of: leadID) else { return }
         existingRuntime(for: leadID)?.clearQueuedHydraHeads()
         updateHydraJob(job.id, of: leadID) { $0.ending = .hydraOff }
-        for head in hydraTeam(of: leadID) where head.hydra?.jobID == job.id && head.hydra?.status == .running {
+        for head in hydraHeads(of: leadID, jobID: job.id, status: .running) {
             stopHydraHead(head.id)
         }
         Task { [weak self] in
@@ -139,7 +139,7 @@ extension AppModel {
             // Interrupting a provider is asynchronous; let its final landing finish. Capped at
             // 30 seconds: a head whose status never leaves running must not keep this polling.
             for _ in 0..<300 {
-                guard self.hydraTeam(of: leadID).contains(where: { $0.hydra?.jobID == job.id && $0.hydra?.status == .running }) else { break }
+                guard !self.hydraHeads(of: leadID, jobID: job.id, status: .running).isEmpty else { break }
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
             }
@@ -151,7 +151,7 @@ extension AppModel {
     /// Releases the copies retained by finished heads of one settled job, keeping any
     /// stopped or failed head whose unlanded work still sits in its copy.
     func releaseHydraJobCopies(of leadID: UUID, jobID: UUID, includeCompleted: Bool = true) async {
-        for head in hydraTeam(of: leadID) where head.hydra?.jobID == jobID && head.hydra?.isFinished == true {
+        for head in hydraHeads(of: leadID, jobID: jobID, status: .finished) {
             guard let info = head.hydra, let copy = head.worktreePath, let base = info.baseTree else { continue }
             if includeCompleted && info.status == .completed {
                 releaseHydraCopy(of: head.id)
@@ -171,10 +171,8 @@ extension AppModel {
     /// Returns nil when it went, else the reason it did not, for the lead.
     func continueHydraHead(named name: String, of leadID: UUID, delegation: HydraDelegation, packet: HydraHandoffPacket) -> String? {
         guard let job = openHydraJob(of: leadID),
-              let head = hydraTeam(of: leadID).first(where: { head in
-                  guard let info = head.hydra else { return false }
-                  return info.kind == .tivano && info.jobID == job.id
-                      && info.persona.name.caseInsensitiveCompare(name.trimmed) == .orderedSame
+              let head = hydraHeads(of: leadID, jobID: job.id, kind: .tivano).first(where: {
+                  $0.hydra?.persona.name.caseInsensitiveCompare(name.trimmed) == .orderedSame
               }),
               let info = head.hydra else {
             return "no such head in this job"
@@ -189,27 +187,21 @@ extension AppModel {
             return "its copy was already released"
         }
         let checkout = info.targetCheckout ?? (try? executionDirectory(for: head))
+        let protected = HydraProtectedPaths()
         // A head routed before Tivano's own folders were all refused may still sit in one.
-        if let target = info.targetCheckout {
-            let home = HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
-            let taskWorkspaces = HydraPaths.canonical(StoragePaths.root.appendingPathComponent("task-workspaces", isDirectory: true).path)
-            if HydraPaths.canonical(target) != home,
-               Self.hydraPathTouchesProtectedRoot(target, roots: Self.hydraProtectedRoots(), taskWorkspaces: taskWorkspaces) {
-                return String(format: Chrome.localized("its folder %@ is one Tivano keeps its own data in"), target)
-            }
+        if let target = info.targetCheckout,
+           protected.isProtected(target, allowingHome: true) {
+            return String(format: Chrome.localized("its folder %@ is one Tivano keeps its own data in"), target)
         }
         // The lead may list paths the head was never sent with, including folders Tivano
         // writes itself; those never reach a head.
         if let base = info.filesBase ?? checkout {
-            let home = HydraPaths.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
-            let protectedRoots = Self.hydraProtectedRoots()
-            let taskWorkspaces = HydraPaths.canonical(StoragePaths.root.appendingPathComponent("task-workspaces", isDirectory: true).path)
             for file in delegation.files {
                 guard Self.hydraOwnedPathIsSafe(file, base: base) else {
                     return String(format: Chrome.localized("its files list %@, which is outside %@"), file, base)
                 }
-                let path = HydraPaths.canonical(URL(fileURLWithPath: base).appendingPathComponent(file).path)
-                if path == home || Self.hydraPathTouchesProtectedRoot(path, roots: protectedRoots, taskWorkspaces: taskWorkspaces) {
+                let path = URL(fileURLWithPath: base).appendingPathComponent(file).path
+                if protected.isProtected(path, allowingHome: false) {
                     return String(format: Chrome.localized("its files list %@, which is a folder Tivano keeps its own data in"), file)
                 }
             }

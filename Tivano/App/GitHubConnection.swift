@@ -27,15 +27,18 @@ final class GitHubConnection {
             phase = .disconnected
             return
         }
+        guard phase == .checking, signInTask == nil else { return }
         let generation = connectionGeneration
-        if let storedToken = GitHubCredentials.storedToken() {
-            source = .tivano
-            LoginEnvironment.setOverlay(GitHubCredentials.environment(token: storedToken))
-            if let data = UserDefaults.standard.data(forKey: "GitHubUser") {
-                user = try? JSONDecoder().decode(GitHubUser.self, from: data)
-            }
-            phase = .connected
-            signInTask = Task {
+        signInTask = Task {
+            let storedToken = await GitHubCredentials.readStoredToken()
+            guard !Task.isCancelled, connectionGeneration == generation else { return }
+            if let storedToken {
+                source = .tivano
+                LoginEnvironment.setOverlay(GitHubCredentials.environment(token: storedToken))
+                if let data = UserDefaults.standard.data(forKey: "GitHubUser") {
+                    user = try? JSONDecoder().decode(GitHubUser.self, from: data)
+                }
+                phase = .connected
                 do {
                     let account = try await GitHubAPI.user(token: storedToken)
                     guard !Task.isCancelled, connectionGeneration == generation else { return }
@@ -46,9 +49,7 @@ final class GitHubConnection {
                 } catch {
                     // Offline validation leaves the cached account usable.
                 }
-            }
-        } else if !UserDefaults.standard.bool(forKey: "GitHubCLIDeclined") {
-            signInTask = Task {
+            } else if !UserDefaults.standard.bool(forKey: "GitHubCLIDeclined") {
                 if let cliToken = await GitHubCredentials.cliToken(),
                    let account = try? await GitHubAPI.user(token: cliToken) {
                     guard !Task.isCancelled, connectionGeneration == generation else { return }
@@ -58,9 +59,9 @@ final class GitHubConnection {
                     guard !Task.isCancelled, connectionGeneration == generation else { return }
                     phase = .disconnected
                 }
+            } else {
+                phase = .disconnected
             }
-        } else {
-            phase = .disconnected
         }
     }
 

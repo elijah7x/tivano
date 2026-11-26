@@ -43,6 +43,7 @@ final class TokenUsageModel {
 
     @ObservationIgnored private var loadedCache = false
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
 
     var isFetching: Bool {
@@ -59,23 +60,45 @@ final class TokenUsageModel {
     }
 
     func onAppear() {
-        loadCacheIfNeeded()
-        if snapshot == nil, !isFetching, case .installed = status {
-            refresh()
+        loadTask?.cancel()
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            await self.performLoadCacheIfNeeded()
+            guard !Task.isCancelled else { return }
+            self.loadTask = nil
+            if self.snapshot == nil, !self.isFetching, case .installed = self.status {
+                self.refresh()
+            }
         }
     }
 
     /// Detects the source and loads the saved snapshot once, without fetching.
     func loadCacheIfNeeded() {
-        status = TokenTakenSource.detect()
+        loadTask?.cancel()
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            await self.performLoadCacheIfNeeded()
+            guard !Task.isCancelled else { return }
+            self.loadTask = nil
+        }
+    }
+
+    private func performLoadCacheIfNeeded() async {
+        let detected = await TokenTakenSource.detect()
+        guard !Task.isCancelled else { return }
+        status = detected
         // The feature requires Token Taken: hide saved usage while it is absent; the cache file stays for a reinstall.
         guard case .installed = status else {
             clearForMissingSource()
             return
         }
         if !loadedCache {
+            let requestGeneration = generation
+            let saved = await TokenUsageCache.load()
+            guard !Task.isCancelled else { return }
+            guard !loadedCache else { return }
             loadedCache = true
-            if let saved = TokenUsageCache.load() {
+            if let saved, snapshot == nil, generation == requestGeneration {
                 scope = saved.scope
                 replaceSnapshot(saved)
                 isSaved = true
@@ -87,6 +110,8 @@ final class TokenUsageModel {
     /// cache file stays for a reinstall.
     private func clearForMissingSource() {
         generation += 1
+        loadTask?.cancel()
+        loadTask = nil
         fetchTask?.cancel()
         fetchTask = nil
         phase = .idle
@@ -102,38 +127,61 @@ final class TokenUsageModel {
     }
 
     func refresh() {
+        loadTask?.cancel()
+        loadTask = nil
         generation += 1
         let request = generation
         fetchTask?.cancel()
-        status = TokenTakenSource.detect()
-        guard case .installed = status else {
-            clearForMissingSource()
-            return
-        }
         let requestedScope = scope
         let timeZone = TimeZone.current
         phase = .fetching
         fetchTask = Task { [weak self] in
+            let detected = await TokenTakenSource.detect()
+            let canProceed: Bool
+            if let self, self.generation == request, !Task.isCancelled {
+                self.status = detected
+                if case .installed = self.status {
+                    canProceed = true
+                } else {
+                    self.clearForMissingSource()
+                    canProceed = false
+                }
+            } else {
+                canProceed = false
+            }
+            guard canProceed else { return }
             do {
                 let result = try await TokenTakenSource.fetch(
                     lastDays: 365, timeZone: timeZone, scope: requestedScope
                 )
                 // A scope change during the fetch keeps the result; the snapshot records its own scope.
-                guard let self, self.generation == request, !Task.isCancelled else { return }
-                self.replaceSnapshot(result)
-                do {
-                    try TokenUsageCache.save(result)
-                    self.isSaved = true
-                } catch {
-                    self.isSaved = false
+                let shouldSave: Bool
+                if let self, self.generation == request, !Task.isCancelled {
+                    self.replaceSnapshot(result)
+                    self.loadedCache = true
+                    shouldSave = true
+                } else {
+                    shouldSave = false
                 }
+                guard shouldSave else { return }
+                let saved: Bool
+                do {
+                    try await TokenUsageCache.save(result)
+                    saved = true
+                } catch {
+                    saved = false
+                }
+                guard let self, self.generation == request, !Task.isCancelled else { return }
+                self.isSaved = saved
                 self.refreshToken += 1
                 self.phase = .idle
                 self.fetchTask = nil
             } catch {
-                guard let self, self.generation == request else { return }
+                guard self?.generation == request else { return }
                 // Removed while the export ran: show the missing source, not the old charts.
-                self.status = TokenTakenSource.detect()
+                let currentStatus = await TokenTakenSource.detect()
+                guard let self, self.generation == request else { return }
+                self.status = currentStatus
                 guard case .installed = self.status else {
                     self.clearForMissingSource()
                     return

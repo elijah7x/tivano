@@ -155,6 +155,9 @@ def check_provider_registry(source, relative):
     auth_body = function_body(source, 'static func auth(', relative, failures)
     if auth_body is not None:
         grok_auth = switch_branch(auth_body, 'case .grok:', 'auth', relative, failures)
+        # The branch may hand the file read to an off-main helper; check that helper's body.
+        if grok_auth is not None and 'grokAuth(' in grok_auth:
+            grok_auth = function_body(source, 'static func grokAuth(', relative, failures)
         if grok_auth is not None:
             for token in ('.grok/auth.json', 'XAI_API_KEY', 'ProcessInfo.processInfo.environment', '.signedOut'):
                 if token not in grok_auth:

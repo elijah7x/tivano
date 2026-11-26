@@ -7,38 +7,49 @@ struct ProviderSwitchTab: View {
     let threadID: UUID
 
     var body: some View {
-        if let thread = model.thread(threadID), let origin = thread.pendingProviderSwitch {
-            let back = String(format: Chrome.localized("Back to %@"), model.modelLabel(provider: origin.provider, model: origin.model))
+        if let thread: ChatThread = model.thread(threadID),
+           let origin: ProviderSwitchOrigin = thread.pendingProviderSwitch {
+            let modelName: String = model.modelLabel(provider: origin.provider, model: origin.model)
+            let back: String = String(format: Chrome.localized("Back to %@"), modelName)
+            let bottomPadding: CGFloat = 6 + ThreadChangesTab.overlap
             row(back: back)
-            .padding(.leading, 12)
-            .padding(.trailing, 8)
-            .padding(.top, 6)
-            .padding(.bottom, 6 + ThreadChangesTab.overlap)
-            .modifier(ProviderSwitchTabSurface())
-            .pointerStyle(.default)
-            .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 12)
+                .padding(.trailing, 8)
+                .padding(.top, 6)
+                .padding(.bottom, bottomPadding)
+                .modifier(ProviderSwitchTabSurface())
+                .pointerStyle(.default)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func row(back: String) -> some View {
-        HStack(spacing: 7) {
-            Text(verbatim: Chrome.localized("Context may be incomplete after switching providers"))
+        let notice: String = Chrome.localized("Context may be incomplete after switching providers")
+        let isRunning: Bool = model.existingRuntime(for: threadID)?.isRunning ?? false
+        let labelFont: Font = Font.ui(.callout, weight: .medium).monospacedDigit()
+        return HStack(spacing: 7) {
+            Text(verbatim: notice)
                 .foregroundStyle(Chrome.primaryText.opacity(0.9))
-            Button(Chrome.localized("Undo")) { model.undoProviderSwitch(threadID) }
-                .buttonStyle(.bordered)
-                // Once sent, the new session is starting; undoing then would race it.
-                .disabled(model.existingRuntime(for: threadID)?.isRunning ?? false)
-                .help(Text(verbatim: back))
-                .accessibilityLabel(Text(verbatim: back))
-                .controlSize(.small)
-                .focusable(false)
-                .pointerStyle(.default)
-                .padding(.leading, 4)
+            undoButton(back: back, isDisabled: isRunning)
         }
-        .font(.ui(.callout, weight: .medium).monospacedDigit())
+        .font(labelFont)
         .lineLimit(1)
         .fixedSize()
         .accessibilityElement(children: .contain)
+    }
+
+    private func undoButton(back: String, isDisabled: Bool) -> some View {
+        let title: String = Chrome.localized("Undo")
+        return Button(title) { model.undoProviderSwitch(threadID) }
+            .buttonStyle(.bordered)
+            // Once sent, the new session is starting; undoing then would race it.
+            .disabled(isDisabled)
+            .help(Text(verbatim: back))
+            .accessibilityLabel(Text(verbatim: back))
+            .controlSize(.small)
+            .focusable(false)
+            .pointerStyle(.default)
+            .padding(.leading, 4)
     }
 }
 

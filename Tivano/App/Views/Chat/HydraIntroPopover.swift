@@ -8,70 +8,94 @@ struct HydraIntroPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .center, spacing: 12) {
-                HStack(spacing: -6) {
-                    ForEach(0..<5, id: \.self) { i in
-                        HydraGlyph(persona: HydraRoster.persona(at: i), size: 30)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Meet sub-agents")
-                        .font(.ui(.title2, weight: .semibold))
-                    Text(verbatim: Chrome.localized("Sub-agents are on. This chat leads the work, delegating independent pieces to parallel sub-agents instead of doing everything itself."))
-                        .font(.ui(.body))
-                        .foregroundStyle(Chrome.secondaryText)
-                }
-            }
-            VStack(alignment: .leading, spacing: 12) {
-                hydraIntroStep(
-                    glyph: AnyView(HydraMarkImage().foregroundStyle(Chrome.primaryText).frame(width: 18, height: 18)),
-                    title: "You ask, the chat leads",
-                    line: "Ask as you always do. The lead keeps tightly coupled work and decides which independent pieces to brief to sub-agents."
-                )
-                hydraIntroStep(
-                    glyph: AnyView(HStack(spacing: -8) {
-                        HydraGlyph(persona: HydraRoster.persona(at: 0), size: 24)
-                        HydraGlyph(persona: HydraRoster.persona(at: 1), size: 24)
-                    }),
-                    title: "Sub-agents go out in parallel",
-                    line: "Each sub-agent gets one brief and a panel of its own beside the chat. Hank, Walter, Ada and the rest work at the same time."
-                )
-                hydraIntroStep(
-                    glyph: AnyView(Image(systemName: "checkmark.circle").font(.ui(size: 20)).foregroundStyle(Chrome.success)),
-                    title: "Reports come back, the lead finishes",
-                    line: "The lead checks their work, fixes what needs fixing and answers you. Their changes land as one merge."
-                )
-            }
+            headerSection
+            stepsSection
             Divider().opacity(0.5)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Combos")
-                    .font(.ui(.body, weight: .semibold))
-                Text("A combo says which model leads and which model, or which provider, runs the sub-agents: Opus leading Sonnet, or Claude leading Gemini sub-agents. Without one, the sub-agents run on this chat's model at a working effort. Combos live in the model picker and in Settings › Sub-agents & Combos.")
-                    .font(.ui(.callout))
-                    .foregroundStyle(Chrome.secondaryText)
-            }
-            HStack(alignment: .center, spacing: 6) {
-                Image(systemName: "slider.horizontal.3")
-                Text("Open the model picker in a chat to switch sub-agents off or on per chat.")
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .font(.ui(.callout))
-            .foregroundStyle(Chrome.secondaryText)
-            HStack(spacing: 8) {
-                Spacer()
-                Button("Set up in Settings") {
-                    dismiss()
-                    WindowManager.shared.showSettings(page: .hydra)
-                }
-                .chromeGlassButtonStyle()
-                Button("Got it") { dismiss() }
-                    .chromeGlassButtonStyle(prominent: true)
-                    .keyboardShortcut(.defaultAction)
-            }
+            combosSection
+            hintSection
+            actionsSection
         }
         .padding(20)
         .frame(width: 420)
+    }
+
+    private var headerSection: some View {
+        HStack(alignment: .center, spacing: 12) {
+            HStack(spacing: -6) {
+                ForEach(0..<5, id: \.self) { (i: Int) in
+                    HydraGlyph(persona: HydraRoster.persona(at: i), size: 30)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Meet sub-agents")
+                    .font(.ui(.title2, weight: .semibold))
+                Text(verbatim: Chrome.localized("Sub-agents are on. This chat leads the work, delegating independent pieces to parallel sub-agents instead of doing everything itself."))
+                    .font(.ui(.body))
+                    .foregroundStyle(Chrome.secondaryText)
+            }
+        }
+    }
+
+    private var stepsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            hydraIntroStep(
+                glyph: AnyView(HydraMarkImage().foregroundStyle(Chrome.primaryText).frame(width: 18, height: 18)),
+                title: "You ask, the chat leads",
+                line: "Ask as you always do. The lead keeps tightly coupled work and decides which independent pieces to brief to sub-agents."
+            )
+            hydraIntroStep(
+                glyph: AnyView(HStack(spacing: -8) {
+                    HydraGlyph(persona: HydraRoster.persona(at: 0), size: 24)
+                    HydraGlyph(persona: HydraRoster.persona(at: 1), size: 24)
+                }),
+                title: "Sub-agents go out in parallel",
+                line: "Each sub-agent gets one brief and a panel of its own beside the chat. Hank, Walter, Ada and the rest work at the same time."
+            )
+            hydraIntroStep(
+                glyph: AnyView(Image(systemName: "checkmark.circle").font(.ui(size: 20)).foregroundStyle(Chrome.success)),
+                title: "Reports come back, the lead finishes",
+                line: "The lead checks their work, fixes what needs fixing and answers you. Their changes land as one merge."
+            )
+        }
+    }
+
+    private var combosSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Combos")
+                .font(.ui(.body, weight: .semibold))
+            Text("A combo says which model leads and which model, or which provider, runs the sub-agents: Opus leading Sonnet, or Claude leading Gemini sub-agents. Without one, the sub-agents run on this chat's model at a working effort. Combos live in the model picker and in Settings › Sub-agents & Combos.")
+                .font(.ui(.callout))
+                .foregroundStyle(Chrome.secondaryText)
+        }
+    }
+
+    private var hintSection: some View {
+        HStack(alignment: .center, spacing: 6) {
+            Image(systemName: "slider.horizontal.3")
+            Text("Open the model picker in a chat to switch sub-agents off or on per chat.")
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.ui(.callout))
+        .foregroundStyle(Chrome.secondaryText)
+    }
+
+    private var actionsSection: some View {
+        HStack(spacing: 8) {
+            Spacer()
+            Button("Set up in Settings") {
+                openHydraSettings()
+            }
+            .chromeGlassButtonStyle()
+            Button("Got it") { dismiss() }
+                .chromeGlassButtonStyle(prominent: true)
+                .keyboardShortcut(.defaultAction)
+        }
+    }
+
+    private func openHydraSettings() {
+        dismiss()
+        WindowManager.shared.showSettings(page: SettingsPage.hydra)
     }
 }
 

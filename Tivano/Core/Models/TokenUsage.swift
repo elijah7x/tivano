@@ -47,7 +47,7 @@ extension TokenUsageSnapshot {
     /// Zero-filled only because the snapshot covers a confirmed complete range.
     func days() -> [TokenUsageDay] {
         guard let zone = TimeZone(identifier: timeZone) else { return [] }
-        return TokenUsageDayFormatterCache.shared.withFormatter(for: zone) { calendar, formatter in
+        return DayFormatterCache.shared.withFormatter(for: zone) { calendar, formatter in
             guard let first = formatter.date(from: from),
                   let last = formatter.date(from: to),
                   formatter.string(from: first) == from,
@@ -73,33 +73,6 @@ extension TokenUsageSnapshot {
 
     func rows(from: String, through: String) -> [TokenUsageRow] {
         rows.filter { $0.day >= from && $0.day <= through }
-    }
-}
-
-private final class TokenUsageDayFormatterCache: @unchecked Sendable {
-    static let shared = TokenUsageDayFormatterCache()
-    private let lock = NSLock()
-    private var entries: [TimeZone: (calendar: Calendar, formatter: DateFormatter)] = [:]
-
-    func withFormatter<R>(for zone: TimeZone, _ body: (Calendar, DateFormatter) -> R) -> R {
-        lock.lock()
-        defer { lock.unlock() }
-        let entry: (calendar: Calendar, formatter: DateFormatter)
-        if let existing = entries[zone] {
-            entry = existing
-        } else {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = zone
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.calendar = calendar
-            formatter.timeZone = zone
-            formatter.dateFormat = "yyyy-MM-dd"
-            formatter.isLenient = false
-            entry = (calendar, formatter)
-            entries[zone] = entry
-        }
-        return body(entry.calendar, entry.formatter)
     }
 }
 

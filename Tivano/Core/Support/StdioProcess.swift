@@ -243,19 +243,70 @@ final class StdioProcess: @unchecked Sendable {
     /// Only observed identities remain attributable after reparenting. An unseen
     /// process that has already detached cannot safely be recovered from a PID scan.
     final class DescendantTracker: @unchecked Sendable {
+        /// Shared serial queue and single 1 Hz timer for every live tracker in the process,
+        /// avoiding one DispatchQueue + DispatchSourceTimer per running child process.
+        private final class Scheduler: @unchecked Sendable {
+            static let shared = Scheduler()
+
+            private struct Entry {
+                weak var tracker: DescendantTracker?
+            }
+
+            let queue = DispatchQueue(label: "tivano.process.descendants", qos: .utility)
+            private var entries: [ObjectIdentifier: Entry] = [:]
+            private var timer: DispatchSourceTimer?
+
+            func register(_ tracker: DescendantTracker) {
+                entries[ObjectIdentifier(tracker)] = Entry(tracker: tracker)
+                guard timer == nil else { return }
+                let source = DispatchSource.makeTimerSource(queue: queue)
+                source.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
+                source.setEventHandler { [self] in
+                    tick()
+                }
+                timer = source
+                source.resume()
+            }
+
+            func unregister(_ id: ObjectIdentifier) {
+                entries.removeValue(forKey: id)
+                if entries.isEmpty {
+                    timer?.cancel()
+                    timer = nil
+                }
+            }
+
+            private func tick() {
+                var stale: [ObjectIdentifier] = []
+                for (id, entry) in entries {
+                    guard let tracker = entry.tracker else {
+                        stale.append(id)
+                        continue
+                    }
+                    tracker.observeIfActive()
+                }
+                for id in stale {
+                    entries.removeValue(forKey: id)
+                }
+                if entries.isEmpty {
+                    timer?.cancel()
+                    timer = nil
+                }
+            }
+        }
+
         private static let limit = 256
-        private let queue = DispatchQueue(label: "tivano.process.descendants", qos: .utility)
-        private var timer: DispatchSourceTimer?
+        private static var queue: DispatchQueue { Scheduler.shared.queue }
         private var members: [pid_t: ProcessIdentity] = [:]
         private var terminating = false
-        private var settled = false
+        private let settled = Mutex(false)
 
-        /// Whether the TERM/KILL sweep has run to its end; read off the tracker's queue.
-        var hasSettled: Bool { queue.sync { settled } }
+        /// Whether the TERM/KILL sweep has run to its end.
+        var hasSettled: Bool { settled.withLock { $0 } }
 
         func start(_ pid: pid_t) {
             guard let root = StdioProcess.identity(pid) else { return }
-            queue.async { [self] in
+            Self.queue.async { [self] in
                 members[root.pid] = root
                 observe()
                 // Exit/cancellation can enqueue termination before start's work.
@@ -263,15 +314,13 @@ final class StdioProcess: @unchecked Sendable {
                     StdioProcess.signal(postorder(), SIGTERM)
                     return
                 }
-                let timer = DispatchSource.makeTimerSource(queue: queue)
-                timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
-                timer.setEventHandler { [weak self] in
-                    guard let self, !self.terminating else { return }
-                    self.observe()
-                }
-                self.timer = timer
-                timer.resume()
+                Scheduler.shared.register(self)
             }
+        }
+
+        private func observeIfActive() {
+            guard !terminating else { return }
+            observe()
         }
 
         private func observe() {
@@ -298,23 +347,25 @@ final class StdioProcess: @unchecked Sendable {
         }
 
         func terminate() {
-            queue.async { [self] in
+            Self.queue.async { [self] in
                 guard !terminating else { return }
                 terminating = true
-                timer?.cancel()
-                timer = nil
+                Scheduler.shared.unregister(ObjectIdentifier(self))
                 observe()
                 StdioProcess.signal(postorder(), SIGTERM)
-                queue.asyncAfter(deadline: .now() + 3) { [self] in
+                Self.queue.asyncAfter(deadline: .now() + 3) { [self] in
                     observe()
                     StdioProcess.signal(postorder(), SIGKILL)
                     members.removeAll()
-                    settled = true
+                    settled.withLock { $0 = true }
                 }
             }
         }
 
-        deinit { timer?.cancel() }
+        deinit {
+            let id = ObjectIdentifier(self)
+            Self.queue.async { Scheduler.shared.unregister(id) }
+        }
     }
 
     func terminate() {

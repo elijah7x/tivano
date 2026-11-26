@@ -201,6 +201,7 @@ struct ComposerView: View {
 
     @State private var controller = ComposerController()
     @State private var suggestions = SuggestionState()
+    @State private var suggestionMenuBox = SuggestionMenuBox()
     /// Escape closed the list; the next caret move may open it again.
     @State private var dismissedSuggestions = false
     @State private var historyIndex: Int?
@@ -268,7 +269,7 @@ struct ComposerView: View {
         .geometryGroup()
         .onChange(of: suggestions) { _, new in
             if new.isVisible {
-                controller.showSuggestions(AnyView(suggestionMenu()), itemCount: new.items.count)
+                presentSuggestions(new)
             } else {
                 controller.hideSuggestions()
             }
@@ -292,7 +293,7 @@ struct ComposerView: View {
         }
         .onChange(of: model.providers.commandErrors[commandKey]) { _, _ in
             if controller.hasFocus, suggestions.isVisible {
-                controller.showSuggestions(AnyView(suggestionMenu()), itemCount: suggestions.items.count)
+                presentSuggestions(suggestions)
             }
         }
         .onChange(of: suggestions.isVisible) { _, visible in
@@ -347,28 +348,17 @@ struct ComposerView: View {
         }
     }
 
-    /// The slash/@ list hosted in a caret-anchored NSPopover (see ComposerController).
-    @ViewBuilder
-    private func suggestionMenu() -> some View {
-        ScrollViewReader { proxy in
-            PopoverMenu {
-                PopoverSectionHeader(suggestions.kind == .command ? "Commands · Recently used first" : "Files")
-                if suggestions.kind == .command, let error = model.providers.commandErrors[commandKey] {
-                    PopoverNote(error)
-                    PopoverItem("Retry loading commands", symbol: "arrow.clockwise") { Task { await loadCommands(force: true) } }
-                }
-                ForEach(suggestions.items.indices, id: \.self) { index in
-                    let item = suggestions.items[index]
-                    SuggestionPopoverRow(
-                        item: item,
-                        isSelected: index == suggestions.selected,
-                        select: { suggestions.selected = index },
-                        pick: { pick(item) }
-                    )
-                    .id(index)
-                }
-            }
-            .onChange(of: suggestions.selected) { _, selected in proxy.scrollTo(selected) }
+    /// Updates the caret-anchored suggestions popover without replacing its hosting controller's root view.
+    private func presentSuggestions(_ state: SuggestionState) {
+        let size = ComposerController.suggestionSize(for: state.items.count)
+        suggestionMenuBox.suggestions = state
+        suggestionMenuBox.commandError = state.kind == .command ? model.providers.commandErrors[commandKey] : nil
+        suggestionMenuBox.size = size
+        suggestionMenuBox.onSelect = { index in suggestions.selected = index }
+        suggestionMenuBox.onPick = { item in pick(item) }
+        suggestionMenuBox.onRetryCommands = { Task { await loadCommands(force: true) } }
+        controller.showSuggestions(size: size) {
+            SuggestionMenuView(box: suggestionMenuBox)
         }
     }
 
@@ -578,12 +568,16 @@ struct ComposerView: View {
                 if suggestions.isVisible { suggestions = SuggestionState() }
                 return
             }
-            let paths = await fileIndex.search(String(word.dropFirst()))
+            let paths = await fileIndex.search(String(word.dropFirst()), limit: 20)
             // The caret moved on while the index was searched: the newer keystroke's refresh
             // is under way, and this answer is for a word that is gone.
             guard !Task.isCancelled else { return }
             items = paths.map { path in
-                Suggestion(value: "@\(path) ", title: (path as NSString).lastPathComponent, detail: path, symbol: "doc")
+                if path.hasSuffix("/") {
+                    let bare = String(path.dropLast())
+                    return Suggestion(value: "@\(bare) ", title: (bare as NSString).lastPathComponent, detail: path, symbol: "folder")
+                }
+                return Suggestion(value: "@\(path) ", title: (path as NSString).lastPathComponent, detail: path, symbol: "doc")
             }
         } else if word.hasPrefix("/"), start == 0 {
             kind = .command
@@ -870,7 +864,7 @@ private struct PermissionMenu: View {
         .help(Text(verbatim: "\(Chrome.localized(runtimeMode.title)) · \(Chrome.localized(runtimeMode.summary))"))
         .accessibilityLabel(Text("Permissions"))
         .accessibilityValue(Text(verbatim: Chrome.localized(runtimeMode.title)))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .anchoredPopover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu {
                 PopoverSectionHeader("Permissions")
                 ForEach(RuntimeMode.allCases.filter { thread.provider.supports($0) }) { mode in
@@ -1259,6 +1253,50 @@ struct Suggestion: Identifiable, Equatable {
     var id: String { value }
 }
 
+@MainActor
+@Observable
+private final class SuggestionMenuBox {
+    var suggestions = SuggestionState()
+    var commandError: String?
+    var size = NSSize(width: 340, height: 70)
+    @ObservationIgnored var onSelect: (Int) -> Void = { _ in }
+    @ObservationIgnored var onPick: (Suggestion) -> Void = { _ in }
+    @ObservationIgnored var onRetryCommands: () -> Void = {}
+}
+
+/// The slash/@ list hosted in a caret-anchored NSPopover (see ComposerController).
+private struct SuggestionMenuView: View {
+    let box: SuggestionMenuBox
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            PopoverMenu {
+                PopoverSectionHeader(box.suggestions.kind == .command ? "Commands · Recently used first" : "Files")
+                if box.suggestions.kind == .command, let error = box.commandError {
+                    PopoverNote(error)
+                    PopoverItem("Retry loading commands", symbol: "arrow.clockwise") { box.onRetryCommands() }
+                }
+                ForEach(Array(box.suggestions.items.enumerated()), id: \.element.id) { index, item in
+                    SuggestionPopoverRow(
+                        item: item,
+                        isSelected: index == box.suggestions.selected,
+                        select: { box.onSelect(index) },
+                        pick: { box.onPick(item) }
+                    )
+                    .id(item.id)
+                }
+            }
+            .onChange(of: box.suggestions.selected) { _, selected in
+                if box.suggestions.items.indices.contains(selected) {
+                    proxy.scrollTo(box.suggestions.items[selected].id)
+                }
+            }
+        }
+        .frame(width: box.size.width, height: box.size.height)
+        .presentedChrome()
+    }
+}
+
 private struct SuggestionPopoverRow: View {
     let item: Suggestion
     let isSelected: Bool
@@ -1377,7 +1415,28 @@ final class FileIndex {
 
     @concurrent
     private nonisolated static func build(_ directory: String) async -> [Entry] {
-        await list(directory).map { path in
+        let files = await list(directory)
+        var directories: Set<String> = []
+        for file in files {
+            var slice = file[...]
+            while let slash = slice.lastIndex(of: "/") {
+                slice = slice[..<slash]
+                if slice.isEmpty { break }
+                if !directories.insert(String(slice)).inserted { break }
+            }
+        }
+        let dirEntries = directories.sorted().map { dir in
+            let path = dir + "/"
+            let lowercased = path.lowercased()
+            return Entry(
+                path: path,
+                lowercased: lowercased,
+                name: (dir.lowercased() as NSString).lastPathComponent,
+                lengthPenalty: min(path.count, 99),
+                isASCII: lowercased.utf8.allSatisfy { $0 < 128 }
+            )
+        }
+        let fileEntries = files.map { path in
             let lowercased = path.lowercased()
             return Entry(
                 path: path,
@@ -1387,19 +1446,26 @@ final class FileIndex {
                 isASCII: lowercased.utf8.allSatisfy { $0 < 128 }
             )
         }
+        return dirEntries + fileEntries
     }
 
     /// The best matches for a query. Scored off the main actor: the index holds up to
     /// 60,000 paths and every keystroke after an `@` scored each of them, which held the
     /// main thread for as long as that took in a large project. The caller drops the answer
     /// when the caret has moved on (the task is cancelled), so the scan stops early too.
-    func search(_ query: String, limit: Int = 8) async -> [String] {
+    func search(_ query: String, limit: Int = 20) async -> [String] {
         guard let directory else { return [] }
         let generation = generation
         await prepare(directory)
         guard !Task.isCancelled, self.generation == generation, self.directory == directory else { return [] }
         let needle = query.lowercased()
-        guard !needle.isEmpty else { return entries.prefix(limit).map(\.path) }
+        guard !needle.isEmpty else {
+            // A bare `@` lists some top-level folders and then files, so a project with many
+            // folders still shows files (folders come first in the index).
+            let folders = entries.lazy.filter { $0.path.hasSuffix("/") && !$0.path.dropLast().contains("/") }.prefix(limit / 2).map(\.path)
+            let files = entries.lazy.filter { !$0.path.hasSuffix("/") }.prefix(limit - folders.count).map(\.path)
+            return Array(folders) + Array(files)
+        }
         let matches = await Self.search(needle, in: entries, limit: limit)
         guard !Task.isCancelled, self.generation == generation, self.directory == directory else { return [] }
         return matches

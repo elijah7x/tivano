@@ -31,6 +31,7 @@ def main():
     try:
         rollback = block(code, 'func rollback(from targetID: String)')
         thread_params = block(code, 'private var threadParameters')
+        branch_fork = block(code, 'func fork(thread originalID: String, through lastTurnID: String)')
     except ValueError as error:
         print(f'FAIL: CodexSession.swift: {error}', file=sys.stderr)
         return 1
@@ -49,11 +50,21 @@ def main():
             'CodexSession.swift: threadParameters must send developerInstructions on every thread '
             '(voice, Hydra and ordinary) so a resumed thread drops stale instructions'
         )
+    # The server that forks a thread holds it as its writer, so a branch fork made on the
+    # source chat's live connection could not be resumed by the branch's own session
+    # ("already has an active writer"); it must run in a server of its own that has exited.
+    for marker in ('Self.connect(', '"thread/fork"', 'closeAndWait('):
+        if marker not in branch_fork:
+            failures.append(f'CodexSession.swift: fork(thread:through:) is missing {marker!r}')
+    if 'self.connection' in branch_fork or re.search(r'\bguard let connection\b', branch_fork):
+        failures.append('CodexSession.swift: fork(thread:through:) must not fork on the live session connection')
+    if '"thread/archive", ["threadId": .string(originalID)]' in branch_fork:
+        failures.append('CodexSession.swift: fork(thread:through:) must never archive the source thread')
     if failures:
         for failure in failures:
             print(f'FAIL: {failure}', file=sys.stderr)
         return 1
-    print('PASS: Codex rewind uses thread/revert with a fork fallback; every thread sends developer instructions.')
+    print('PASS: Codex rewind uses thread/revert with a fork fallback; every thread sends developer instructions; branch forks run in their own app-server.')
     return 0
 
 

@@ -9,13 +9,13 @@ struct ShelfPopover<ProjectContent: View, ThreadContent: View>: View {
 
     @State private var contentHeight: CGFloat = Chrome.rowHeight
 
-    private var projects: [Project] { model.projects.filter(\.isShelved) }
-    private func threads(in project: Project) -> [ChatThread] {
-        let all = model.threads(in: project)
-        return all.filter(\.isPinned) + all.filter { !$0.isPinned }
+    private func orderedThreads(_ threads: [ChatThread]) -> [ChatThread] {
+        threads.filter(\.isPinned) + threads.filter { !$0.isPinned }
     }
 
     var body: some View {
+        let projects = model.projects.filter(\.isShelved)
+        let lastProjectID = projects.last?.id
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -27,16 +27,17 @@ struct ShelfPopover<ProjectContent: View, ThreadContent: View>: View {
                             .frame(height: Chrome.rowHeight)
                     }
                     ForEach(projects) { project in
+                        let projectThreads = model.threads(in: project)
                         VStack(alignment: .leading, spacing: 1) {
-                            projectRow(project, model.threads(in: project).count)
+                            projectRow(project, projectThreads.count)
                             if project.isExpanded {
-                                ForEach(threads(in: project)) { thread in
+                                ForEach(orderedThreads(projectThreads)) { thread in
                                     threadRow(thread)
                                         .id(thread.id)
                                 }
                             }
                         }
-                        .padding(.bottom, project.id == projects.last?.id ? 0 : Chrome.groupGap)
+                        .padding(.bottom, project.id == lastProjectID ? 0 : Chrome.groupGap)
                     }
                 }
                 .padding(Chrome.listInset)

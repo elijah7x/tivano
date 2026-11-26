@@ -101,10 +101,10 @@
 **案例：**
 - 正则字面量放进 `static let`：`hasSentDelegationBlock` 每次约省 13 ms，因为正则字面量每次调用都会重新解析。
 - 用 `memmem` 做字节查找：MentionScanner 正文构建 52 ms → 2.5 ms。
-- `LinkTextView` 按 4 个宽度缓存高度，文本不变时不再重新测量（#51）。
+- `LinkTextView` 按 4 个宽度缓存高度，文本不变时命中直接返回不碰容器（#51；3.0.19-dev 改由显示栈测有限宽、每视图 `TextHeightMeasurer` 测无限宽）。
 - 模型选择器保留裁剪后的列表；`PreparedProseRun`；Dock 图标渲染缓存；Markdown `blockCache` 复用流式解析结果，结束时不再重新解析。
 
-**坑：** 失效条件比命中率重要。工具图片路径缓存改成 2 秒 TTL 加负缓存后反而更慢，还把新生成的图片藏了起来，已撤回。缓存命中时不能有副作用：11-14 一版缓存在命中时改了文本容器宽度，排好的布局因此丢失，lead 当场改掉。缓存要有上限，并接入 `MemoryPressure`。
+**坑：** 失效条件比命中率重要。工具图片路径缓存改成 2 秒 TTL 加负缓存后反而更慢，还把新生成的图片藏了起来，已撤回。缓存命中时不能有副作用：11-14 一版缓存在命中时改了文本容器宽度，排好的布局因此丢失，lead 当场改掉。缓存要有上限，并接入 `MemoryPressure`。另外，TextKit 复用显示栈时有两处隐蔽开销：`NSTextContainer` 开启 `widthTracksTextView = true` 会让 AppKit 在每次改宽时同步排完整段文字（屏外视图也一样，微基准 340 次改宽 2634 ms，改为在 `setFrameSize` 手动设容器宽仅 0.8 ms）；在显示栈测量时改容器宽会触发 `NSTextView` 以相同尺寸回调 `setFrameSize`，若此处无条件把容器拉回 `bounds.width` 会撤销测量并引发排队重排暴涨（20430 次核对 1021 次不一致、累计 343 s），只在真实宽度变化时对齐即可（`text-display-structure.md`）。核对或自愈里不要对文字变化和外框变化整段 `needsDisplay`：流式回复每块都会长高，整段重画让每块多约 0.34 ms（11-24）。
 
 ### E. 移出主线程
 
@@ -198,14 +198,11 @@
 
 - **整库 JSON 编码**：忙碌时约每 4 秒序列化整个库，开销随 Hydra 任务数增长，从未在真实库上测过（`audit-2026-10-28-core-data.md`）。
 - **`snapshotForSave`** 仍会遍历全部条目来构建 head 和脏轮列表，只有位置分配做了缓存；`writeThreadSynchronously` 仍在主线程的若干路径上调用（`AppModel.swift`、`ThreadRuntime.swift`）。
-- **`MCPStore.save`** 在主线程编码整个集合。
-- **被遮盖的聊天**：`keepAnchor` 的 24×25 ms 定位任务在隐藏时不取消（`settings-and-interaction-audit.md` #1）。
-- **侧栏**：`needsAttention` 和 `DetailView` 的运行集合都是 O(N) 扫描；`MinuteClock` 在侧栏隐藏时也照跑。
+- **侧栏**：`DetailView` 的运行集合仍是 O(N) 扫描（attention 集合与 `MinuteClock` 已在 11-25 处理）。
 - **设置页构建**：切页冷启动 30–130 ms，Providers 页最重。General 页剖析结论是：外观不变的前提下最多再省 10–20 ms（系统开关约 2 ms/个）。
 - **文件图标和附件预览**的同步小读盘（`FileIcons.icon`、`AttachmentPreview`）。
 - **Markdown 预热优先级**：先取前 96 条再过滤已缓存的，较新的可见消息可能错过预热。
 - **`WindowChrome.fitTitlebar`** 可能自我重入，只是理论候选，从未证实。
-- **`StdioProcess`** 每个活进程每秒扫一次子孙进程。
 - **每次 shell 命令后对整个仓库做 git 扫描**：11-15 瘦身审计列为三大运行时机会之一，之后有没有处理，未查到记录。
 
 ### 从没系统做过的方向
@@ -309,6 +306,8 @@ slow 和 gui 检查在构建主机上跑（`docs/operations/build-host-ci.md`）
 | 11-17 | preview.28 | 归档、切换、侧栏 | 归档先标记并移走行，选中邻居推迟一帧且不进 `panelSlide` 动画；本体与 helper 一次批量更新（一次 `synchronizeThreads`） | 合成 1669 线程库：按键到行开始消失前主线程占用 184–728 → 48–60 ms；邻居切换单独计 64–200 ms；`archive()` ~15 → ~12 ms | `private-artifacts/archive-latency-261117` |
 | 11-17 | preview.29 | Hydra、流式、Git、侧栏、Provider | Hydra 恢复跳过已结算 lead；SSE/MCP 成块读取；`blobs` 改用 `cat-file -Z`；只改 `updatedAt` 等字段不再全量同步；CLI `--version` 与模型列表探测共享 | Hydra 扫描加载 62 → 2 份、33 → 9 ms；SSE 端到端快 3–4 倍；60k 文件仓库 93 → 21 ms；1500 会话库单次更新 p95 36 → 34 ms（剩余开销在侧栏重排） | `private-artifacts/perf-overnight-20261117/thor-r2` |
 | 11-17 | preview.43 | 归档、切换、隐藏列 | 预建列在满员时先腾出最旧的已访问列（原先插到队首又从队首裁掉，刚建好就丢）；归档线程的列释放名额；预建等历史加载完再建；`chatColumnIsShown` 环境值改为每列一个 `ChatColumnVisibility` 对象，大视图 body 不再读显隐；去掉隐藏列的 `.disabled`；从未显示过的预建列在后台稳定首次布局不再标记“显示时整栈重测” | 本机隔离实例、200 会话合成库、⇧⌘⌫ 每轮 12 次交替 A/B：选中邻居后主线程阻塞 182–234 → 49 ms，之后 1 s 忙碌约 300 → 103 ms，命中预建列 2/12 → 12/12；按键到行开始消失 ~18 → ~14 ms。消融：只关环境值翻转 195 → 42 ms，`.disabled` 或 `WindowLiveResize` 单独关几乎无变化 | [archive-switch-hidden-columns.md](archive-switch-hidden-columns.md)；`private-artifacts/archive-latency-thor-1117` |
+| 11-24 | 3.0.19-dev | 流式、文字显示 | `LinkTextView` frame 主权收归 SwiftUI（关 `isVerticallyResizable` / `widthTracksTextView` / `backgroundLayoutEnabled`），容器宽只在 `setContainerWidth` 一处写入；有限宽在显示栈测并在绘制/命中/真实改宽/核对前还原，无限宽走每视图 `TextHeightMeasurer`；删定时自愈改为事件驱动 `reconcileDisplay`（最多 2 次复核）加 Release `TextDisplayAudit` | `-O` 独立线束 A/B（基线 `6a696b4f5`）：拖动改宽 −0.1%，核对不一致 0/20430；流式追加 −1.0%；整栈重测 −3.5%；FoldReplyRepro 9 场景与 27 轮 0 高度注入全恢复 | [text-display-structure.md](text-display-structure.md)；`private-artifacts/blank-hunt/bench/text_display_bench.py` |
+| 11-25 | `tivano/4062f22c`（基于 3.0.22-dev） | 全局：死代码、启动、流式、主线程 IO、编译 | 删 TokenLedger；启动同步活后移；流式原地追加；Pi/Omp 合并；Git/MCP/账户 IO 移出主线程；时间线、侧栏增量缓存；拆类型检查热点 | Thor `--subagent-panel-loop` A/B：大块流式 CPU −10%，其余 −2~−6%；干净编译慢约 6%（未达成）；冷启动未测 | [audit-2026-11-25-sweep.md](audit-2026-11-25-sweep.md)；`private-artifacts/perf-audit-ab-261125T132145` |
 
 ## 10. 维护
 

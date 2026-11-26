@@ -5,7 +5,7 @@ import SwiftUI
 enum Chrome {
     /// Catalog keys stay plain strings; unknown keys and user data are displayed unchanged.
     static func localized(_ key: String) -> String {
-        Bundle.main.localizedString(forKey: key, value: key, table: "Localizable")
+        AppText.localized(key)
     }
 
     /// A term set inside a sentence: lowercased only while it is still English, so a
@@ -259,9 +259,6 @@ private struct FloatingGlassSurface<S: InsettableShape>: ViewModifier {
     func body(content: Content) -> some View {
         let isDark = colorScheme == .dark
         let useSolid = reduceTransparency || solid != nil
-        let edge = shape
-            .strokeBorder(rim ?? solid?.hairline ?? Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1)
-            .mask(alignment: .top) { Rectangle().padding(.bottom, hiddenRimBottom) }
         // Keep content on one unconditional path so Creation switches preserve wrapped subtree identity.
         // An opaque base behind glass becomes its sample and hides the timeline.
         // Pinned active: switching back to the app otherwise whitens the glass while it
@@ -276,8 +273,18 @@ private struct FloatingGlassSurface<S: InsettableShape>: ViewModifier {
             .clipShape(SwitchableClip(shape: shape, isOn: useSolid))
             .chromeGlassEffect(useSolid ? .identity : glass(isDark: isDark), in: shape)
             .materialActiveAppearance(useSolid ? .automatic : .active)
-            .overlay { edge }
+            .overlay { rimEdge(isDark: isDark) }
             .pointerStyle(.default)
+    }
+
+    @ViewBuilder
+    private func rimEdge(isDark: Bool) -> some View {
+        let stroke = shape.strokeBorder(rim ?? solid?.hairline ?? Chrome.floatingGlassRim(isDark: isDark), lineWidth: 1)
+        if hiddenRimBottom > 0 {
+            stroke.mask(alignment: .top) { Rectangle().padding(.bottom, hiddenRimBottom) }
+        } else {
+            stroke
+        }
     }
 
     private func glass(isDark: Bool) -> ChromeGlass {
@@ -766,7 +773,7 @@ struct ChromeMenuButton<Content: View>: View {
         .buttonStyle(.plain)
         .help(Text(verbatim: Chrome.localized(help)))
         .accessibilityLabel(Text(verbatim: Chrome.localized(help)))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .anchoredPopover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu { content }
         }
         .preference(key: ChromePresentationPreference.self, value: isPresented)
@@ -854,7 +861,7 @@ struct ChromeTextMenu<Content: View>: View {
         .chromeGlassCapsule()
         .modifier(ChromeHoverForeground(isActive: isPresented))
         .help(Text(verbatim: Chrome.localized(help)))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .anchoredPopover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu { content }
         }
         .preference(key: ChromePresentationPreference.self, value: isPresented)
@@ -1269,9 +1276,7 @@ struct GlassPickerButton<Value: Hashable>: View {
         .buttonStyle(.plain)
         .fixedSize(horizontal: maxWidth == nil, vertical: true)
         .chromeGlassCapsule()
-        .frame(maxWidth: maxWidth, alignment: .trailing)
-        .modifier(ChromeHoverForeground(isActive: isPresented))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .anchoredPopover(isPresented: $isPresented, arrowEdge: .bottom) {
             PopoverMenu {
                 ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                     PopoverItem(option.title, symbol: symbol(option.value), asset: asset(option.value), isChecked: option.value == selection) {
@@ -1280,6 +1285,8 @@ struct GlassPickerButton<Value: Hashable>: View {
                 }
             }
         }
+        .frame(maxWidth: maxWidth, alignment: .trailing)
+        .modifier(ChromeHoverForeground(isActive: isPresented))
         .background { NoWindowDragArea() }
     }
 }

@@ -40,7 +40,8 @@ final class VoiceController {
     /// The voice styles Codex offers, refreshed by each call.
     private(set) var voices: [String] = VoiceCatalog.defaultVoices
     /// The Mac the call's audio runs on, shown beside the call timer.
-    let hostName = (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "This Mac"
+    /// Deferred until first voice UI read to avoid synchronous SCDynamicStore IPC at launch.
+    @ObservationIgnored lazy var hostName: String = (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "This Mac"
 
     @ObservationIgnored private weak var app: AppModel?
     @ObservationIgnored private var epoch = 0

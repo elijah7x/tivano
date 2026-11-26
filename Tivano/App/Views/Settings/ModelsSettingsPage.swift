@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -15,9 +16,7 @@ struct ModelsSettingsPage: View {
     @State private var highlightedPin: ModelPin?
     @State private var scrollTargetPin: ModelPin?
     @State private var highlightTask: Task<Void, Never>?
-    @State private var activeDrag: ModelPageDragPayload?
-    @State private var hoveredRailTarget: RailDropTarget?
-    @State private var hoveredModelCard: ModelPin?
+    @State private var dragState = ModelsPageDragState()
     @State private var catalogueSelection: ProviderKind? = nil
 
     private static let railWidth: CGFloat = 200
@@ -90,8 +89,7 @@ struct ModelsSettingsPage: View {
                                 isSearching: !searchQuery.isEmpty,
                                 highlightedPin: highlightedPin,
                                 renameRequest: $renameRequest,
-                                activeDrag: $activeDrag,
-                                hoveredModelCard: $hoveredModelCard,
+                                dragState: dragState,
                                 onSelectGroup: { target in selectGroup(target, isSearching: !searchQuery.isEmpty) },
                                 onJumpToModel: { pin, sectionID in jumpToModel(pin, in: sectionID, isSearching: !searchQuery.isEmpty) }
                             )
@@ -189,8 +187,8 @@ struct ModelsSettingsPage: View {
         }
         .onChange(of: searchQuery) { _, _ in
             searchSelectionOverride = nil
-            hoveredRailTarget = nil
-            hoveredModelCard = nil
+            dragState.hoveredRailTarget = nil
+            dragState.hoveredModelCard = nil
         }
         .onChange(of: items) { _, _ in
             let current = allBlocks
@@ -317,7 +315,8 @@ struct ModelsSettingsPage: View {
                     count: ungroupedPins.count,
                     pins: ungroupedPins,
                     isSelected: activeSelection == .ungrouped,
-                    isDropTarget: hoveredRailTarget == .ungrouped,
+                    dropTarget: .ungrouped,
+                    dragState: dragState,
                     isDimmed: isSearching && ungroupedPins.isEmpty,
                     action: { selectGroup(.ungrouped, isSearching: isSearching) }
                 )
@@ -327,8 +326,7 @@ struct ModelsSettingsPage: View {
                         target: .ungrouped,
                         groupOrder: groupIDs,
                         isSearching: isSearching,
-                        activeDrag: $activeDrag,
-                        hoveredTarget: $hoveredRailTarget,
+                        dragState: dragState,
                         settings: settings
                     )
                 )
@@ -344,19 +342,19 @@ struct ModelsSettingsPage: View {
                     count: displayPins.count,
                     pins: displayPins,
                     isSelected: activeSelection == .group(block.id),
-                    isDropTarget: hoveredRailTarget == .group(block.id),
+                    dropTarget: .group(block.id),
+                    dragState: dragState,
                     isDimmed: isSearching && matchedPins.isEmpty,
                     action: { selectGroup(.group(block.id), isSearching: isSearching) }
                 )
-                .modifier(GroupRailCardDragModifier(enabled: !isSearching, sectionID: block.id, activeDrag: $activeDrag))
+                .modifier(GroupRailCardDragModifier(enabled: !isSearching, sectionID: block.id, dragState: dragState))
                 .onDrop(
                     of: [UTType.plainText],
                     delegate: RailCardDropDelegate(
                         target: .group(block.id),
                         groupOrder: groupIDs,
                         isSearching: isSearching,
-                        activeDrag: $activeDrag,
-                        hoveredTarget: $hoveredRailTarget,
+                        dragState: dragState,
                         settings: settings
                     )
                 )
@@ -459,15 +457,25 @@ private enum RailDropTarget: Equatable {
     }
 }
 
+/// Shared drag/drop hover state read only by individual rail cards, detail cards and avatar chips,
+/// so hovering across drop targets never invalidates `ModelsSettingsPage.body` or `modelBlocks`.
+@MainActor
+@Observable
+private final class ModelsPageDragState {
+    @ObservationIgnored var activeDrag: ModelPageDragPayload?
+    var hoveredRailTarget: RailDropTarget?
+    var hoveredModelCard: ModelPin?
+}
+
 private struct GroupRailCardDragModifier: ViewModifier {
     let enabled: Bool
     let sectionID: UUID
-    @Binding var activeDrag: ModelPageDragPayload?
+    let dragState: ModelsPageDragState
 
     func body(content: Content) -> some View {
         if enabled {
             content.onDrag {
-                activeDrag = .group(sectionID)
+                dragState.activeDrag = .group(sectionID)
                 return NSItemProvider(object: "tivano-group:\(sectionID.uuidString)" as NSString)
             }
         } else {
@@ -481,12 +489,11 @@ private struct RailCardDropDelegate: DropDelegate {
     let target: RailDropTarget
     let groupOrder: [UUID]
     let isSearching: Bool
-    @Binding var activeDrag: ModelPageDragPayload?
-    @Binding var hoveredTarget: RailDropTarget?
+    let dragState: ModelsPageDragState
     let settings: AppSettings
 
     func validateDrop(info: DropInfo) -> Bool {
-        switch activeDrag {
+        switch dragState.activeDrag {
         case .model(_, let fromSection):
             return fromSection != target.sectionID
         case .group(let draggedID):
@@ -499,15 +506,15 @@ private struct RailCardDropDelegate: DropDelegate {
 
     func dropEntered(info: DropInfo) {
         guard validateDrop(info: info) else { return }
-        if hoveredTarget != target {
-            hoveredTarget = target
+        if dragState.hoveredRailTarget != target {
+            dragState.hoveredRailTarget = target
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         }
     }
 
     func dropExited(info: DropInfo) {
-        if hoveredTarget == target {
-            hoveredTarget = nil
+        if dragState.hoveredRailTarget == target {
+            dragState.hoveredRailTarget = nil
         }
     }
 
@@ -517,11 +524,11 @@ private struct RailCardDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         defer {
-            hoveredTarget = nil
-            activeDrag = nil
+            dragState.hoveredRailTarget = nil
+            dragState.activeDrag = nil
         }
         guard validateDrop(info: info) else { return false }
-        switch activeDrag {
+        switch dragState.activeDrag {
         case .model(let pin, _):
             withAnimation(Chrome.panelSlide) {
                 settings.moveModel(pin, toSection: target.sectionID)
@@ -551,27 +558,26 @@ private struct ModelCardReorderDropDelegate: DropDelegate {
     let sectionID: UUID?
     let groupPins: [ModelPin]
     let isSearching: Bool
-    @Binding var activeDrag: ModelPageDragPayload?
-    @Binding var hoveredPin: ModelPin?
+    let dragState: ModelsPageDragState
     let settings: AppSettings
 
     func validateDrop(info: DropInfo) -> Bool {
         guard !isSearching,
-              case .model(let draggedPin, let fromSection) = activeDrag else { return false }
+              case .model(let draggedPin, let fromSection) = dragState.activeDrag else { return false }
         return fromSection == sectionID && draggedPin != targetPin
     }
 
     func dropEntered(info: DropInfo) {
         guard validateDrop(info: info) else { return }
-        if hoveredPin != targetPin {
-            hoveredPin = targetPin
+        if dragState.hoveredModelCard != targetPin {
+            dragState.hoveredModelCard = targetPin
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         }
     }
 
     func dropExited(info: DropInfo) {
-        if hoveredPin == targetPin {
-            hoveredPin = nil
+        if dragState.hoveredModelCard == targetPin {
+            dragState.hoveredModelCard = nil
         }
     }
 
@@ -581,11 +587,11 @@ private struct ModelCardReorderDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         defer {
-            hoveredPin = nil
-            activeDrag = nil
+            dragState.hoveredModelCard = nil
+            dragState.activeDrag = nil
         }
         guard validateDrop(info: info),
-              case .model(let draggedPin, _) = activeDrag,
+              case .model(let draggedPin, _) = dragState.activeDrag,
               let fromIndex = groupPins.firstIndex(of: draggedPin),
               let toIndex = groupPins.firstIndex(of: targetPin),
               fromIndex != toIndex else { return false }
@@ -600,12 +606,12 @@ private struct AvatarModelChipDragModifier: ViewModifier {
     let enabled: Bool
     let pin: ModelPin
     let sectionID: UUID?
-    @Binding var activeDrag: ModelPageDragPayload?
+    let dragState: ModelsPageDragState
 
     func body(content: Content) -> some View {
         if enabled {
             content.onDrag {
-                activeDrag = .model(pin, fromSection: sectionID)
+                dragState.activeDrag = .model(pin, fromSection: sectionID)
                 return NSItemProvider(object: "tivano-pin:\(pin.id)" as NSString)
             }
         } else {
@@ -620,27 +626,26 @@ private struct AvatarChipDropDelegate: DropDelegate {
     let sectionID: UUID?
     let groupPins: [ModelPin]
     let isSearching: Bool
-    @Binding var activeDrag: ModelPageDragPayload?
-    @Binding var hoveredPin: ModelPin?
+    let dragState: ModelsPageDragState
     let settings: AppSettings
 
     func validateDrop(info: DropInfo) -> Bool {
         guard !isSearching,
-              case .model(let draggedPin, _) = activeDrag else { return false }
+              case .model(let draggedPin, _) = dragState.activeDrag else { return false }
         return draggedPin != targetPin
     }
 
     func dropEntered(info: DropInfo) {
         guard validateDrop(info: info) else { return }
-        if hoveredPin != targetPin {
-            hoveredPin = targetPin
+        if dragState.hoveredModelCard != targetPin {
+            dragState.hoveredModelCard = targetPin
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         }
     }
 
     func dropExited(info: DropInfo) {
-        if hoveredPin == targetPin {
-            hoveredPin = nil
+        if dragState.hoveredModelCard == targetPin {
+            dragState.hoveredModelCard = nil
         }
     }
 
@@ -650,11 +655,11 @@ private struct AvatarChipDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         defer {
-            hoveredPin = nil
-            activeDrag = nil
+            dragState.hoveredModelCard = nil
+            dragState.activeDrag = nil
         }
         guard validateDrop(info: info),
-              case .model(let draggedPin, let fromSection) = activeDrag else { return false }
+              case .model(let draggedPin, let fromSection) = dragState.activeDrag else { return false }
         if fromSection == sectionID {
             guard let fromIndex = groupPins.firstIndex(of: draggedPin),
                   let toIndex = groupPins.firstIndex(of: targetPin),
@@ -675,12 +680,12 @@ private struct AvatarChipDropDelegate: DropDelegate {
 private struct AvatarGroupDropDelegate: DropDelegate {
     let sectionID: UUID?
     let isSearching: Bool
-    @Binding var activeDrag: ModelPageDragPayload?
+    let dragState: ModelsPageDragState
     let settings: AppSettings
 
     func validateDrop(info: DropInfo) -> Bool {
         guard !isSearching,
-              case .model(_, let fromSection) = activeDrag else { return false }
+              case .model(_, let fromSection) = dragState.activeDrag else { return false }
         return fromSection != sectionID
     }
 
@@ -689,9 +694,9 @@ private struct AvatarGroupDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        defer { activeDrag = nil }
+        defer { dragState.activeDrag = nil }
         guard validateDrop(info: info),
-              case .model(let draggedPin, _) = activeDrag else { return false }
+              case .model(let draggedPin, _) = dragState.activeDrag else { return false }
         withAnimation(Chrome.panelSlide) {
             settings.moveModel(draggedPin, toSection: sectionID)
         }
@@ -710,11 +715,17 @@ private struct GroupRailCard: View {
     let count: Int
     let pins: [ModelPin]
     let isSelected: Bool
-    var isDropTarget = false
+    var dropTarget: RailDropTarget? = nil
+    var dragState: ModelsPageDragState? = nil
     var isDimmed = false
     let action: () -> Void
 
     @State private var isHovering = false
+
+    private var isDropTarget: Bool {
+        guard let dropTarget, let dragState else { return false }
+        return dragState.hoveredRailTarget == dropTarget
+    }
 
     private var distinctProviders: [ProviderKind] {
         var seen: Set<ProviderKind> = []
@@ -844,8 +855,7 @@ private struct ModelGroupDetailCard: View {
     let isSearching: Bool
     let highlightedPin: ModelPin?
     @Binding var renameRequest: GroupRenameRequest?
-    @Binding var activeDrag: ModelPageDragPayload?
-    @Binding var hoveredModelCard: ModelPin?
+    let dragState: ModelsPageDragState
     let onSelectGroup: (GroupSelection) -> Void
     let onJumpToModel: (ModelPin, UUID?) -> Void
 
@@ -1047,8 +1057,7 @@ private struct ModelGroupDetailCard: View {
                     blocks: blocks,
                     allSections: allSections,
                     isSearching: isSearching,
-                    activeDrag: $activeDrag,
-                    hoveredPin: $hoveredModelCard,
+                    dragState: dragState,
                     onSelectGroup: onSelectGroup,
                     onJumpToModel: onJumpToModel
                 )
@@ -1080,11 +1089,11 @@ private struct ModelGroupDetailCard: View {
                             sectionID: currentSectionID,
                             sections: allSections,
                             isHighlighted: highlightedPin == pin,
-                            isDropTarget: hoveredModelCard == pin
+                            dragState: dragState
                         )
                         .id("model-card/\(pin.id)")
                         .onDrag {
-                            activeDrag = .model(pin, fromSection: currentSectionID)
+                            dragState.activeDrag = .model(pin, fromSection: currentSectionID)
                             return NSItemProvider(object: "tivano-pin:\(pin.id)" as NSString)
                         }
                         .onDrop(
@@ -1094,8 +1103,7 @@ private struct ModelGroupDetailCard: View {
                                 sectionID: currentSectionID,
                                 groupPins: pins,
                                 isSearching: isSearching,
-                                activeDrag: $activeDrag,
-                                hoveredPin: $hoveredModelCard,
+                                dragState: dragState,
                                 settings: settings
                             )
                         )
@@ -1180,10 +1188,14 @@ private struct ModelDetailCard: View {
     let sectionID: UUID?
     let sections: [ModelSection]
     var isHighlighted = false
-    var isDropTarget = false
+    let dragState: ModelsPageDragState
 
     @State private var isHovering = false
     @State private var isHoveringRemove = false
+
+    private var isDropTarget: Bool {
+        dragState.hoveredModelCard == pin
+    }
 
     private var fill: Color {
         if isDropTarget { return Chrome.accent.opacity(0.18) }
@@ -1345,8 +1357,7 @@ private struct AllModelsAvatarWall: View {
     let blocks: (ungrouped: [ModelPin], groups: [ModelGroupBlock])
     let allSections: [ModelSection]
     let isSearching: Bool
-    @Binding var activeDrag: ModelPageDragPayload?
-    @Binding var hoveredPin: ModelPin?
+    let dragState: ModelsPageDragState
     let onSelectGroup: (GroupSelection) -> Void
     let onJumpToModel: (ModelPin, UUID?) -> Void
 
@@ -1395,7 +1406,7 @@ private struct AllModelsAvatarWall: View {
                                 pin: pin,
                                 sectionID: group.sectionID,
                                 sections: allSections,
-                                isDropTarget: hoveredPin == pin
+                                dragState: dragState
                             ) {
                                 onJumpToModel(pin, group.sectionID)
                             }
@@ -1403,7 +1414,7 @@ private struct AllModelsAvatarWall: View {
                                 enabled: !isSearching,
                                 pin: pin,
                                 sectionID: group.sectionID,
-                                activeDrag: $activeDrag
+                                dragState: dragState
                             ))
                             .onDrop(
                                 of: [UTType.plainText],
@@ -1412,8 +1423,7 @@ private struct AllModelsAvatarWall: View {
                                     sectionID: group.sectionID,
                                     groupPins: group.pins,
                                     isSearching: isSearching,
-                                    activeDrag: $activeDrag,
-                                    hoveredPin: $hoveredPin,
+                                    dragState: dragState,
                                     settings: settings
                                 )
                             )
@@ -1426,7 +1436,7 @@ private struct AllModelsAvatarWall: View {
                     delegate: AvatarGroupDropDelegate(
                         sectionID: group.sectionID,
                         isSearching: isSearching,
-                        activeDrag: $activeDrag,
+                        dragState: dragState,
                         settings: settings
                     )
                 )
@@ -1472,10 +1482,14 @@ private struct AvatarModelChip: View {
     let pin: ModelPin
     let sectionID: UUID?
     let sections: [ModelSection]
-    var isDropTarget: Bool = false
+    let dragState: ModelsPageDragState
     let action: () -> Void
 
     @State private var isHovering = false
+
+    private var isDropTarget: Bool {
+        dragState.hoveredModelCard == pin
+    }
 
     var body: some View {
         let settings = model.settings

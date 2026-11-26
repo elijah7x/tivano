@@ -73,6 +73,8 @@ final class ACPSession: ProviderSession {
     private var process: StdioProcess?
     private var connection: JSONRPCConnection?
     private var eventTask: Task<Void, Never>?
+    private var eventQueue: [(@MainActor () async -> Void)?] = []
+    private var eventQueueHead = 0
     private var antigravityLogURL: URL?
     private var antigravityLogTailer: AntigravityLogTailer?
     private var antigravityEmittedRetryAttempts: Set<Int> = []
@@ -155,6 +157,10 @@ final class ACPSession: ProviderSession {
 
     isolated deinit {
         antigravityLogTailer?.shutDown()
+        eventQueue.removeAll()
+        eventQueueHead = 0
+        eventTask?.cancel()
+        eventTask = nil
     }
 
     var isRunning: Bool {
@@ -1521,10 +1527,29 @@ final class ACPSession: ProviderSession {
     }
 
     private func enqueueEvent(_ operation: @escaping @MainActor () async -> Void) {
-        let previous = eventTask
-        eventTask = Task {
-            await previous?.value
-            await operation()
+        eventQueue.append(operation)
+        guard eventTask == nil else { return }
+        eventTask = Task { [weak self] in
+            await self?.drainEvents()
+        }
+    }
+
+    private func drainEvents() async {
+        defer {
+            eventTask = nil
+        }
+        while eventQueueHead < eventQueue.count {
+            let operation = eventQueue[eventQueueHead]
+            eventQueue[eventQueueHead] = nil
+            eventQueueHead += 1
+            if eventQueueHead == eventQueue.count {
+                eventQueue.removeAll(keepingCapacity: eventQueue.capacity <= 256)
+                eventQueueHead = 0
+            } else if eventQueueHead >= 64, eventQueueHead * 2 >= eventQueue.count {
+                eventQueue.removeFirst(eventQueueHead)
+                eventQueueHead = 0
+            }
+            await operation?()
         }
     }
 
@@ -1762,7 +1787,6 @@ final class ACPSession: ProviderSession {
                 ? (reportedTotal ?? 0)
                 : ((usage["inputTokens"]?.int ?? 0) + (usage["outputTokens"]?.int ?? 0))
             if total > 0 {
-                TokenLedger.shared.record(spend: total)
                 onEvent?(.tokenSpend(TokenSpend(
                     provider: .antigravity,
                     totalTokens: total,
@@ -1916,10 +1940,27 @@ final class ACPSession: ProviderSession {
     /// TodoWrite (`content`) and Codex-style steps (`step`). Unknown statuses stay
     /// pending so a new provider state never drops an item.
     static func parseTodoItems(_ value: JSONValue?) -> [TodoStep] {
-        (value?.array ?? []).compactMap { item -> TodoStep? in
-            guard let text = item.string ?? item["content"]?.string ?? item["text"]?.string ?? item["step"]?.string ?? item["title"]?.string ?? item["task"]?.string ?? item["description"]?.string,
-                  !text.trimmed.isEmpty else { return nil }
-            let status: TodoStep.Status = switch item["status"]?.string?.lowercased() {
+        let items: [JSONValue] = value?.array ?? []
+        return items.compactMap { (item: JSONValue) -> TodoStep? in
+            let text: String?
+            if let direct: String = item.string {
+                text = direct
+            } else if let content: String = item["content"]?.string {
+                text = content
+            } else if let plainText: String = item["text"]?.string {
+                text = plainText
+            } else if let step: String = item["step"]?.string {
+                text = step
+            } else if let title: String = item["title"]?.string {
+                text = title
+            } else if let task: String = item["task"]?.string {
+                text = task
+            } else {
+                text = item["description"]?.string
+            }
+            guard let text, !text.trimmed.isEmpty else { return nil }
+            let rawStatus: String? = item["status"]?.string?.lowercased()
+            let status: TodoStep.Status = switch rawStatus {
             case "completed", "complete", "done": .done
             case "in_progress", "inprogress", "in-progress", "active": .active
             default: .pending
@@ -2209,6 +2250,7 @@ extension SessionConfiguration {
             environment: environment,
             resumeID: nil,
             resumeAt: nil,
+            forkSession: false,
             model: nil,
             effort: nil,
             runtimeMode: runtimeMode,

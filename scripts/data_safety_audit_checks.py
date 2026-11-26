@@ -399,6 +399,7 @@ def build_source():
     names_end = usage_text.index("\n    ]", names_start) + len("\n    ]")
     storage += "\n" + usage_text[names_start:names_end] + "\n" + decl(usage, "    nonisolated static func removeBuildFiles(")
     models = whole("Tivano/Core/Support/Coding.swift")
+    models += "\n" + whole("Tivano/Core/Support/ISO8601.swift")
     models += "\n" + whole("Tivano/Services/Git/RevertPreview.swift")
     models += "\n" + "\n".join(decl(TIMELINE, marker) for marker in (
         "struct ContextUsage:", "struct ThreadTurnReference:", "struct ThreadDocument:"))

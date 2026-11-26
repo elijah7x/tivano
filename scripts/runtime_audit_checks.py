@@ -331,7 +331,8 @@ swift += methods("ACPSession.swift", "    func send(", "    private func continu
                  "    func interrupt(", "    func stop()", "    private func finishPrompt(")
 swift += "\n}\n"
 
-shared_fields = r'''
+swift += r'''
+@MainActor class PiRPCSession: ProviderSession {
     var onEvent: ((ProviderEvent) -> Void)?
     var process: StdioProcess? = StdioProcess()
     var started = true
@@ -354,17 +355,34 @@ shared_fields = r'''
     var readTask: Task<Void, Never>?
     var pendingResponses = PendingReplies()
     var requestGate: Gate?
+    var busyTurnError: String { "fixture is still on the last turn." }
     func request(_ fields: [String: JSONValue]) async -> JSONValue {
         if let requestGate { return await requestGate.wait() }
         return ["success": true]
     }
     func writeGate(finalReport: Bool) throws {}
+    func validateBeforeBusyCheck(_ input: TurnInput) throws {}
+    func validateModesForTurn(_ input: TurnInput) throws {}
+    func prepareTurn(_ input: TurnInput, preparation: UUID, process: StdioProcess) async throws -> Bool { true }
+    func makePromptFields(for input: TurnInput, turnNumber: Int) -> (fields: [String: JSONValue], promptID: String?) {
+        (["type": .string("prompt"), "message": .string(input.text)], nil)
+    }
+    func willStartTurn(input: TurnInput, promptID: String?) {}
+    func clearRequests() {}
+    func removeLaunchFiles() {}
     func reopen() { process = StdioProcess(); stopped = false; started = true; requestGate = nil }
 '''
-for name in ("PiSession", "OmpSession"):
-    swift += f"\n@MainActor final class {name}: ProviderSession {{\n" + shared_fields
-    if name == "OmpSession":
-        swift += r'''
+swift += methods("PiRPCSession.swift", "    var isRunning: Bool", "    func send(",
+                 "    @concurrent\n    private static func encodePrompt(",
+                 "    func continuePreparation(", "    func interrupt(", "    func stop()")
+swift += "\n}\n"
+
+swift += "\n@MainActor final class PiSession: PiRPCSession {\n"
+swift += methods("PiSession.swift", "    override func prepareTurn(")
+swift += "\n}\n"
+
+swift += r'''
+@MainActor final class OmpSession: PiRPCSession {
     var defaultModel: String? = "fixture/default"
     var activeModel: String?
     var promptID: String?
@@ -376,14 +394,14 @@ for name in ("PiSession", "OmpSession"):
     var hiddenCalls: Set<String> = []
     static let finalReportPrompt = "fixture final report"
     func validateSelection(model: String?, effort: String?) throws {}
-    func clearRequests() {}
-    func removeLaunchFiles() {}
 '''
-        swift += methods(name + ".swift", "    private func selectModel(")
-    swift += methods(name + ".swift", "    var isRunning: Bool", "    func send(",
-                     "    @concurrent\n    private static func encodePrompt(",
-                     "    private func continuePreparation(", "    func interrupt(", "    func stop()")
-    swift += "\n}\n"
+swift += methods("OmpSession.swift", "    private func selectModel(",
+                 "    override func validateBeforeBusyCheck(",
+                 "    override func validateModesForTurn(",
+                 "    override func prepareTurn(",
+                 "    override func makePromptFields(",
+                 "    override func willStartTurn(")
+swift += "\n}\n"
 
 swift += r'''
 @MainActor final class ClaudeSession: ProviderSession {

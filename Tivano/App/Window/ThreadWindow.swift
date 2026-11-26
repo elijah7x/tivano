@@ -8,17 +8,55 @@ final class ThreadWindow: DCDisplayCycleGuardedWindow {
     /// title, which holds the main thread for a tenth of a second on every switch.
     var selectThreadNumber: ((Int) -> Void)? {
         didSet {
-            guard digitMonitor == nil else { return }
-            digitMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, event.window === self, attachedSheet == nil,
-                      event.modifierFlags.intersection(KeyChord.allowedModifiers) == .command,
-                      let number = Self.digitKeyCodes[event.keyCode], let selectThreadNumber else { return event }
-                selectThreadNumber(number)
-                return nil
+            if selectThreadNumber != nil {
+                installDigitMonitorIfNeeded()
+            } else {
+                removeDigitMonitor()
             }
         }
     }
     private var digitMonitor: Any?
+
+    deinit {
+        MainActor.assumeIsolated { removeDigitMonitor() }
+    }
+
+    override func close() {
+        removeDigitMonitor()
+        super.close()
+    }
+
+    override func orderFront(_ sender: Any?) {
+        installDigitMonitorIfNeeded()
+        super.orderFront(sender)
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        installDigitMonitorIfNeeded()
+        super.makeKeyAndOrderFront(sender)
+    }
+
+    override func becomeKey() {
+        super.becomeKey()
+        installDigitMonitorIfNeeded()
+    }
+
+    private func installDigitMonitorIfNeeded() {
+        guard digitMonitor == nil, selectThreadNumber != nil else { return }
+        digitMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.window === self, attachedSheet == nil,
+                  event.modifierFlags.intersection(KeyChord.allowedModifiers) == .command,
+                  let number = Self.digitKeyCodes[event.keyCode], let selectThreadNumber else { return event }
+            selectThreadNumber(number)
+            return nil
+        }
+    }
+
+    private func removeDigitMonitor() {
+        guard let monitor = digitMonitor else { return }
+        NSEvent.removeMonitor(monitor)
+        digitMonitor = nil
+    }
 
     /// The number row, by key code, for ⌘1 to ⌘9.
     private static let digitKeyCodes: [UInt16: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9]

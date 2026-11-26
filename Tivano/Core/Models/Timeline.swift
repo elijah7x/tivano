@@ -201,7 +201,28 @@ struct ToolCall: Codable, Hashable, Sendable {
 
     private mutating func trimOutput() {
         guard output.utf8.count > Self.outputLimit else { return }
-        output = "…" + String(output.suffix(Self.outputLimit / 2))
+        let half = Self.outputLimit / 2
+        // Pure ASCII without CR guarantees 1 UTF-8 byte == 1 Character (no CRLF or multi-byte
+        // grapheme clusters), so slicing by UTF-8 offset avoids walking 30k grapheme clusters.
+        let isPureASCIITail = output.utf8.withContiguousStorageIfAvailable { buffer -> Bool in
+            let start = buffer.count - half
+            guard start > 0 else { return false }
+            for index in (start - 1)..<buffer.count {
+                let byte = buffer[index]
+                if byte >= 128 || byte == 13 { return false }
+            }
+            return true
+        } ?? false
+        if isPureASCIITail {
+            let start = output.utf8.index(output.utf8.endIndex, offsetBy: -half)
+            var trimmed = String()
+            trimmed.reserveCapacity(3 + half)
+            trimmed.append("…")
+            trimmed.append(contentsOf: output[start...])
+            output = trimmed
+            return
+        }
+        output = "…" + String(output.suffix(half))
     }
 }
 

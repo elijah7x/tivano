@@ -9,6 +9,7 @@ struct StorageFindChatSection: View {
 
     @State private var debouncedQuery: String
     @State private var pendingDeletion: ArchivePendingDeletion?
+    @State private var listModel = ArchiveListModel()
 
     init(filter: Binding<ArchiveFilter>, onShowAll: @escaping () -> Void) {
         self._filter = filter
@@ -17,10 +18,10 @@ struct StorageFindChatSection: View {
     }
 
     var body: some View {
-        let archived = model.archivedThreads
+        let archived = listModel.archived(for: model)
         let queryFilter = ArchiveFilter(query: debouncedQuery)
         let hasQuery = !queryFilter.trimmedQuery.isEmpty
-        let result = selection(from: archived, queryFilter: queryFilter, hasQuery: hasQuery)
+        let result = listModel.quickSelection(for: model, queryFilter: queryFilter, hasQuery: hasQuery)
 
         ChromeSection(title: "Find a chat") {
             if archived.isEmpty {
@@ -30,10 +31,7 @@ struct StorageFindChatSection: View {
                 if result.shown.isEmpty {
                     ArchiveEmptyMatchesView()
                 } else {
-                    let projectsByID = Dictionary(
-                        model.projects.map { ($0.id, $0.name) },
-                        uniquingKeysWith: { first, _ in first }
-                    )
+                    let projectsByID = listModel.projectsByID(for: model)
                     ChromeCard {
                         ForEach(result.shown) { thread in
                             if thread.id != result.shown.first?.id { ChromeRowDivider() }
@@ -75,18 +73,6 @@ struct StorageFindChatSection: View {
         .archiveDebouncedQuery(filter.query, into: $debouncedQuery)
         .archiveDeletionConfirmation(pendingDeletion: $pendingDeletion)
     }
-
-    private func selection(
-        from archived: [ChatThread],
-        queryFilter: ArchiveFilter,
-        hasQuery: Bool
-    ) -> (shown: [ChatThread], totalCount: Int) {
-        if hasQuery {
-            let matches = archived.filter { queryFilter.matchesSearch($0) }
-            return (Array(matches.prefix(8)), matches.count)
-        }
-        return (Array(archived.prefix(5)), archived.count)
-    }
 }
 
 // MARK: - Full archive page
@@ -107,11 +93,11 @@ struct ArchivedChatsPage: View {
     }
 
     var body: some View {
-        let data = listModel.data(archived: model.archivedThreads, projects: model.projects)
+        let data = listModel.data(for: model)
         let optionScopes = data.options.map(\.value)
         let effectiveProject = (filter.project == .all || optionScopes.contains(filter.project)) ? filter.project : .all
         let effectiveFilter = ArchiveFilter(query: debouncedQuery, chatType: filter.chatType, project: effectiveProject)
-        let (groups, shownIDs) = filtered(data, by: effectiveFilter)
+        let (groups, shownIDs) = listModel.filtered(data, by: effectiveFilter)
 
         VStack(alignment: .leading, spacing: Chrome.sectionSpacing) {
             ChromeTextButton(symbol: "chevron.left", title: "Storage", help: "Storage", action: onBack)
@@ -178,24 +164,6 @@ struct ArchivedChatsPage: View {
             }
         }
     }
-
-    private func filtered(_ data: ArchiveSnapshot, by filter: ArchiveFilter) -> (groups: [ArchiveProjectGroup], shownIDs: Set<UUID>) {
-        guard filter.isActive else { return (data.groups, data.allIDs) }
-        var shownIDs = Set<UUID>()
-        let groups = data.groups.compactMap { group -> ArchiveProjectGroup? in
-            if filter.project != .all, group.id != filter.project { return nil }
-            let matching = group.rows.filter { row in
-                let thread = row.thread
-                let matchesType = filter.chatType == .all
-                    || (filter.chatType == .heads ? thread.isHydraHead : !thread.isHydraHead)
-                return matchesType && filter.matchesSearch(thread)
-            }
-            guard !matching.isEmpty else { return nil }
-            for row in matching { shownIDs.insert(row.id) }
-            return ArchiveProjectGroup(id: group.id, title: group.title, rows: matching)
-        }
-        return (groups, shownIDs)
-    }
 }
 
 // MARK: - List model & formatting
@@ -214,6 +182,7 @@ private struct ArchiveProjectGroup: Identifiable {
 }
 
 private struct ArchiveSnapshot {
+    let revision: UInt64
     let isEmpty: Bool
     let options: [(value: ArchiveFilter.ProjectScope, title: String)]
     let groups: [ArchiveProjectGroup]
@@ -222,28 +191,112 @@ private struct ArchiveSnapshot {
 
 @MainActor
 private final class ArchiveListModel {
-    private var lastArchived: [ChatThread]?
-    private var lastProjects: [Project]?
-    private var cached: ArchiveSnapshot?
+    private struct QuickSelectionKey: Equatable {
+        let threadsRevision: UInt64
+        let trimmedQuery: String
+    }
 
-    func data(archived: [ChatThread], projects allProjects: [Project]) -> ArchiveSnapshot {
-        if let cached, lastArchived == archived, lastProjects == allProjects {
-            return cached
+    private struct FilteredKey: Equatable {
+        let dataRevision: UInt64
+        let filter: ArchiveFilter
+    }
+
+    private weak var source: AppModel?
+    private var archivedRevision: UInt64?
+    private var cachedArchived: [ChatThread] = []
+    private var projectsByIDRevision: UInt64?
+    private var cachedProjectsByID: [UUID: String] = [:]
+    private var quickSelectionKey: QuickSelectionKey?
+    private var cachedQuickSelection: (shown: [ChatThread], totalCount: Int) = ([], 0)
+    private var snapshotRevisions: (threads: UInt64, projects: UInt64)?
+    private var snapshotRevision: UInt64 = 0
+    private var cachedSnapshot: ArchiveSnapshot?
+    private var filteredKey: FilteredKey?
+    private var cachedFiltered: (groups: [ArchiveProjectGroup], shownIDs: Set<UUID>) = ([], [])
+
+    private func ensureSource(_ model: AppModel) {
+        guard source !== model else { return }
+        source = model
+        archivedRevision = nil
+        cachedArchived = []
+        projectsByIDRevision = nil
+        cachedProjectsByID = [:]
+        quickSelectionKey = nil
+        cachedQuickSelection = ([], 0)
+        snapshotRevisions = nil
+        cachedSnapshot = nil
+        filteredKey = nil
+        cachedFiltered = ([], [])
+    }
+
+    func archived(for model: AppModel) -> [ChatThread] {
+        ensureSource(model)
+        let rev = model.threadsRevision
+        if archivedRevision == rev { return cachedArchived }
+        let result = model.archivedThreads
+        archivedRevision = rev
+        cachedArchived = result
+        return result
+    }
+
+    func projectsByID(for model: AppModel) -> [UUID: String] {
+        ensureSource(model)
+        let rev = model.projectsRevision
+        if projectsByIDRevision == rev { return cachedProjectsByID }
+        let result = Dictionary(
+            model.projects.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        projectsByIDRevision = rev
+        cachedProjectsByID = result
+        return result
+    }
+
+    func quickSelection(
+        for model: AppModel,
+        queryFilter: ArchiveFilter,
+        hasQuery: Bool
+    ) -> (shown: [ChatThread], totalCount: Int) {
+        let archivedThreads = archived(for: model)
+        let key = QuickSelectionKey(threadsRevision: model.threadsRevision, trimmedQuery: queryFilter.trimmedQuery)
+        if quickSelectionKey == key { return cachedQuickSelection }
+        let result: (shown: [ChatThread], totalCount: Int)
+        if hasQuery {
+            let matches = archivedThreads.filter { queryFilter.matchesSearch($0) }
+            result = (Array(matches.prefix(8)), matches.count)
+        } else {
+            result = (Array(archivedThreads.prefix(5)), archivedThreads.count)
         }
+        quickSelectionKey = key
+        cachedQuickSelection = result
+        return result
+    }
+
+    func data(for model: AppModel) -> ArchiveSnapshot {
+        ensureSource(model)
+        let threadsRev = model.threadsRevision
+        let projectsRev = model.projectsRevision
+        if let cachedSnapshot, snapshotRevisions?.threads == threadsRev, snapshotRevisions?.projects == projectsRev {
+            return cachedSnapshot
+        }
+        let archivedThreads = archived(for: model)
+        let allProjects = model.projects
+        snapshotRevision &+= 1
         let result: ArchiveSnapshot
-        if archived.isEmpty {
+        if archivedThreads.isEmpty {
             result = ArchiveSnapshot(
+                revision: snapshotRevision,
                 isEmpty: true,
                 options: [(.all, "All projects"), (.none, "No project")],
                 groups: [],
                 allIDs: []
             )
         } else {
-            let projects = ArchiveFilter.projects(in: archived, from: allProjects)
+            let projects = ArchiveFilter.projects(in: archivedThreads, from: allProjects)
             let known = Set(projects.map(\.id))
             let options: [(value: ArchiveFilter.ProjectScope, title: String)] = [(.all, "All projects")]
                 + projects.map { (.project($0.id), $0.name) } + [(.none, "No project")]
-            let rows = archived.map { thread in
+            let rows = archivedThreads.map { thread in
                 ArchiveChatItem(
                     thread: thread,
                     title: ArchiveFormatting.title(for: thread),
@@ -256,15 +309,43 @@ private final class ArchiveListModel {
                 return ArchiveProjectGroup(id: option.value, title: option.title, rows: rows)
             }
             result = ArchiveSnapshot(
+                revision: snapshotRevision,
                 isEmpty: false,
                 options: options,
                 groups: groups,
-                allIDs: Set(archived.map(\.id))
+                allIDs: Set(archivedThreads.map(\.id))
             )
         }
-        lastArchived = archived
-        lastProjects = allProjects
-        cached = result
+        snapshotRevisions = (threadsRev, projectsRev)
+        cachedSnapshot = result
+        return result
+    }
+
+    func filtered(_ data: ArchiveSnapshot, by filter: ArchiveFilter) -> (groups: [ArchiveProjectGroup], shownIDs: Set<UUID>) {
+        let normalized = ArchiveFilter(query: filter.trimmedQuery, chatType: filter.chatType, project: filter.project)
+        let key = FilteredKey(dataRevision: data.revision, filter: normalized)
+        if filteredKey == key { return cachedFiltered }
+        let result: (groups: [ArchiveProjectGroup], shownIDs: Set<UUID>)
+        if !normalized.isActive {
+            result = (data.groups, data.allIDs)
+        } else {
+            var shownIDs = Set<UUID>()
+            let groups = data.groups.compactMap { group -> ArchiveProjectGroup? in
+                if normalized.project != .all, group.id != normalized.project { return nil }
+                let matching = group.rows.filter { row in
+                    let thread = row.thread
+                    let matchesType = normalized.chatType == .all
+                        || (normalized.chatType == .heads ? thread.isHydraHead : !thread.isHydraHead)
+                    return matchesType && normalized.matchesSearch(thread)
+                }
+                guard !matching.isEmpty else { return nil }
+                for row in matching { shownIDs.insert(row.id) }
+                return ArchiveProjectGroup(id: group.id, title: group.title, rows: matching)
+            }
+            result = (groups, shownIDs)
+        }
+        filteredKey = key
+        cachedFiltered = result
         return result
     }
 }

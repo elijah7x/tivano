@@ -159,17 +159,13 @@ struct ProseRunRepresentable: NSViewRepresentable {
         if let marker = Self.debugZeroHeightMarker,
            Date.now < Self.debugZeroHeightUntil,
            nsView.textStorage?.string.contains(marker) == true {
-            if let width = proposal.width, width > 0, width.isFinite { nsView.noteReportedHeight(0, forWidth: width) }
             return CGSize(width: proposal.width ?? 0, height: 0)
         }
         #endif
         guard let width = proposal.width else { return nil }
         guard width > 0 else { return .zero }
         guard width.isFinite else { return CGSize(width: width, height: nsView.cachedHeightHint) }
-        let height = nsView.height(forWidth: width)
-        // The text view checks this against its text later (see `LinkTextView` height heal).
-        nsView.noteReportedHeight(height, forWidth: width)
-        return CGSize(width: width, height: height)
+        return CGSize(width: width, height: nsView.height(forWidth: width))
     }
 
     static func dismantleNSView(_ view: LinkTextView, coordinator: LinkParagraphView.Coordinator) {
@@ -329,7 +325,11 @@ struct ProseRunRepresentable: NSViewRepresentable {
                     .foregroundColor: markerColor,
                 ])
                 if !item.text.isEmpty {
-                    line.append(LinkParagraphView.mutableAttributed(source: item.text, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, mentions: mentions, targets: targets, paragraphStyle: nil))
+                    let body = LinkParagraphView.mutableAttributed(source: item.text, pointSize: pointSize, codePointSize: codePointSize, dimmed: dimmed, mentions: mentions, targets: targets, paragraphStyle: nil)
+                    // Continuation lines must stay in the item's paragraph: a "\n" would start a
+                    // new one whose first line falls back to the marker's hanging indent.
+                    body.mutableString.replaceOccurrences(of: "\n", with: "\u{2028}", options: [], range: NSRange(location: 0, length: body.length))
+                    line.append(body)
                 }
                 let style = NSMutableParagraphStyle()
                 style.firstLineHeadIndent = firstIndent
@@ -388,9 +388,80 @@ struct StreamingProseRunView: View, Equatable {
     @Environment(\.markdownLinkBase) private var markdownLinkBase
     @Environment(\.openURL) private var openURL
     @State private var linkView = WeakView()
+    @State private var linkAssetCache = CompletedLinkAssetCache()
     @State private var showsHand = false
     @State private var hoveredHeadID: UUID?
     @State private var faviconRevision = 0
+
+    /// Caches hosts and video IDs for completed prefix paragraphs so streaming flushes
+    /// only scan the actively growing tail paragraph.
+    @MainActor
+    private final class CompletedLinkAssetCache {
+        private var assetGeneration = -1
+        private var completedSources: [String] = []
+        private var hosts: [String] = []
+        private var seenHosts: Set<String> = []
+        private var videos: [String] = []
+        private var seenVideos: Set<String> = []
+        private var completedKey = ""
+
+        func plan(for paragraphs: [String], streamingLast: Bool) -> (key: String, needsFetch: Bool) {
+            guard let last = paragraphs.last else { return ("", false) }
+            if paragraphs.count == 1 {
+                return RichLink.linkAssetPlan(for: last, streaming: streamingLast)
+            }
+            let completed = paragraphs.dropLast()
+            let generation = RichLink.assetGeneration
+            if assetGeneration != generation || !completed.starts(with: completedSources) {
+                assetGeneration = generation
+                completedSources.removeAll(keepingCapacity: true)
+                hosts.removeAll(keepingCapacity: true)
+                seenHosts.removeAll(keepingCapacity: true)
+                videos.removeAll(keepingCapacity: true)
+                seenVideos.removeAll(keepingCapacity: true)
+                completedKey = ""
+            }
+            if completedSources.count < completed.count {
+                for index in completedSources.count..<completed.count {
+                    let (pHosts, pVideos) = RichLink.linkAssets(for: completed[index], streaming: false)
+                    for host in pHosts where seenHosts.insert(host).inserted {
+                        hosts.append(host)
+                    }
+                    for video in pVideos where seenVideos.insert(video).inserted {
+                        videos.append(video)
+                    }
+                }
+                completedSources = Array(completed)
+                completedKey = (hosts.isEmpty && videos.isEmpty)
+                    ? ""
+                    : hosts.joined(separator: ",") + "|" + videos.joined(separator: ",")
+            }
+            let (tailHosts, tailVideos) = RichLink.linkAssets(for: last, streaming: streamingLast)
+            let hasNewTailHost = tailHosts.contains { !seenHosts.contains($0) }
+            let hasNewTailVideo = tailVideos.contains { !seenVideos.contains($0) }
+            if !hasNewTailHost && !hasNewTailVideo {
+                guard !(hosts.isEmpty && videos.isEmpty) else { return ("", false) }
+                let needsFetch = hosts.contains(where: { FaviconCache.needsFetch(host: $0) })
+                    || videos.contains(where: { LinkTitles.needsFetch(videoID: $0) })
+                return (completedKey, needsFetch)
+            }
+            var allHosts = hosts
+            if hasNewTailHost {
+                for host in tailHosts where !seenHosts.contains(host) {
+                    allHosts.append(host)
+                }
+            }
+            var allVideos = videos
+            if hasNewTailVideo {
+                for video in tailVideos where !seenVideos.contains(video) {
+                    allVideos.append(video)
+                }
+            }
+            let needsFetch = allHosts.contains(where: { FaviconCache.needsFetch(host: $0) })
+                || allVideos.contains(where: { LinkTitles.needsFetch(videoID: $0) })
+            return (allHosts.joined(separator: ",") + "|" + allVideos.joined(separator: ","), needsFetch)
+        }
+    }
 
     nonisolated static func == (lhs: StreamingProseRunView, rhs: StreamingProseRunView) -> Bool {
         if lhs.settled, rhs.settled, !lhs.isStreamingTail, !rhs.isStreamingTail, lhs.generation == rhs.generation { return true }
@@ -401,7 +472,7 @@ struct StreamingProseRunView: View, Equatable {
         let resolvedSize = pointSize == 0 ? TypeScale.shared.content(13) : pointSize
         let scaled = (resolvedSize * 2).rounded() / 2
         let codeSize = TypeScale.shared.code(max(9, scaled - CGFloat(TypeScale.shared.content - TypeScale.stockContent) - 1))
-        let linkKey = RichLink.linkAssetPlan(forEach: paragraphs, streamingLast: isStreamingTail)
+        let linkKey = linkAssetCache.plan(for: paragraphs, streamingLast: isStreamingTail)
         let linkBox = linkView
         let targets = hydraMentionTargets
         StreamingProseRunRepresentable(
@@ -467,8 +538,20 @@ struct StreamingProseRunRepresentable: NSViewRepresentable {
         view.passesProseThrough = !selectable
         let veiled = context.environment.markdownVeiled
         let scope = context.environment.veilRenderScope
-        let mentionNames = mentions.map(\.name)
-        let headLinks = targets.mapValues(\.url)
+        let mentionNames: [String]
+        if mentions == coordinator.lastRawMentions {
+            mentionNames = coordinator.lastMentions
+        } else {
+            mentionNames = mentions.map(\.name)
+            coordinator.lastRawMentions = mentions
+        }
+        let headLinks: [String: URL]
+        if targets == coordinator.lastRawTargets {
+            headLinks = coordinator.lastHeads
+        } else {
+            headLinks = targets.mapValues(\.url)
+            coordinator.lastRawTargets = targets
+        }
         var rendered = false
         if coordinator.lastParagraphs.count != paragraphs.count
             || coordinator.lastParagraphs.last != paragraphs.last
@@ -605,6 +688,8 @@ struct StreamingProseRunRepresentable: NSViewRepresentable {
         var lastVeiled = false
         var lastMentions: [String] = []
         var lastHeads: [String: URL] = [:]
+        var lastRawMentions: [HydraPersona] = []
+        var lastRawTargets: [String: HydraMentionTarget] = [:]
         var linkBase: String?
 
         private var stylePointSize: CGFloat = 0

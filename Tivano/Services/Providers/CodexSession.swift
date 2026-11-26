@@ -35,6 +35,8 @@ final class CodexSession: ProviderSession {
     private let configuration: SessionConfiguration
     private var connection: JSONRPCConnection?
     private var eventTask: Task<Void, Never>?
+    private var eventQueue: [(@MainActor () async -> Void)?] = []
+    private var eventQueueHead = 0
     private var threadID: String?
     private var turnID: String?
     private var completionFallback: Task<Void, Never>?
@@ -67,6 +69,13 @@ final class CodexSession: ProviderSession {
         self.configuration = configuration
         historyArchived = configuration.codexHistoryArchived
         historyDirectory = configuration.codexHistoryDirectory ?? configuration.workingDirectory.path
+    }
+
+    isolated deinit {
+        eventQueue.removeAll()
+        eventQueueHead = 0
+        eventTask?.cancel()
+        eventTask = nil
     }
 
     var isRunning: Bool {
@@ -265,6 +274,55 @@ final class CodexSession: ProviderSession {
         }
         turnID = nil
         return threadID
+    }
+
+    /// Forks `originalID` through `lastTurnID` into a new Codex thread for a branched chat,
+    /// leaving the original as it is. The fork runs in an app-server of its own that exits
+    /// before this returns: the server that forks a thread holds it as its writer, so a fork
+    /// made in the source chat's server could not be resumed by the branch's own session.
+    func fork(thread originalID: String, through lastTurnID: String) async throws -> String {
+        guard let executable = configuration.executable else { throw ProviderError.notInstalled(configuration.provider) }
+        let connection = try await Self.connect(
+            executable: executable,
+            directory: configuration.workingDirectory,
+            environment: configuration.environment,
+            configure: { _ in }
+        )
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(60))
+            if !Task.isCancelled { connection.close() }
+        }
+        defer { watchdog.cancel() }
+        var params = threadParameters
+        params["threadId"] = .string(originalID)
+        params["lastTurnId"] = .string(lastTurnID)
+        params["excludeTurns"] = true
+        let id: String
+        do {
+            let result = try await Self.deadlineRequest(connection, "thread/fork", .object(params))
+            guard let forked = result["thread"]?["id"]?.string, forked != originalID else {
+                throw ProviderError.failed(AppText.localized("Codex did not create a branched conversation."))
+            }
+            id = forked
+            do {
+                let page = try await Self.deadlineRequest(connection, "thread/turns/list", [
+                    "threadId": .string(id), "limit": 1, "sortDirection": "desc", "itemsView": "notLoaded",
+                ])
+                guard let turns = page["data"]?.array,
+                      turns.first?["id"]?.string == lastTurnID else {
+                    throw ProviderError.failed(AppText.localized("Codex did not confirm the branched conversation history."))
+                }
+            } catch {
+                _ = try? await Self.deadlineRequest(connection, "thread/archive", ["threadId": .string(id)])
+                throw error
+            }
+        } catch {
+            await connection.closeAndWait(timeout: 5)
+            throw error
+        }
+        // The branch resumes this thread in its own server; this one must be gone first.
+        await connection.closeAndWait(timeout: 5)
+        return id
     }
 
     private static let ordinaryThreadInstructions = "Tivano's helper agents (heads) are off for this conversation. Disregard any earlier instructions about delegating work with a hydra block; do the work and answer directly."
@@ -749,10 +807,29 @@ final class CodexSession: ProviderSession {
     // MARK: - Notifications
 
     private func enqueueEvent(_ operation: @escaping @MainActor () async -> Void) {
-        let previous = eventTask
-        eventTask = Task {
-            await previous?.value
-            await operation()
+        eventQueue.append(operation)
+        guard eventTask == nil else { return }
+        eventTask = Task { [weak self] in
+            await self?.drainEvents()
+        }
+    }
+
+    private func drainEvents() async {
+        defer {
+            eventTask = nil
+        }
+        while eventQueueHead < eventQueue.count {
+            let operation = eventQueue[eventQueueHead]
+            eventQueue[eventQueueHead] = nil
+            eventQueueHead += 1
+            if eventQueueHead == eventQueue.count {
+                eventQueue.removeAll(keepingCapacity: eventQueue.capacity <= 256)
+                eventQueueHead = 0
+            } else if eventQueueHead >= 64, eventQueueHead * 2 >= eventQueue.count {
+                eventQueue.removeFirst(eventQueueHead)
+                eventQueueHead = 0
+            }
+            await operation?()
         }
     }
 
@@ -851,9 +928,9 @@ final class CodexSession: ProviderSession {
                 // than from zero.
                 if let total = usage["total"]?["totalTokens"]?.int, total > 0 {
                     let spend = spendTracker.spend(total: total, before: max(0, total - used))
-                    recordCodexSpend(spend, rolloutID: threadID, model: activeModel)
+                    recordCodexSpend(spend, model: activeModel)
                 } else {
-                    recordCodexSpend(used, rolloutID: threadID, model: activeModel)
+                    recordCodexSpend(used, model: activeModel)
                 }
             case .head(let head):
                 // A head's spend is the account's spend too; its total lives on its own thread.
@@ -863,9 +940,9 @@ final class CodexSession: ProviderSession {
                     var tracker = headSpend[head] ?? TokenSpendTracker()
                     let spend = tracker.spend(total: total, before: max(0, total - used))
                     headSpend[head] = tracker
-                    recordCodexSpend(spend, rolloutID: head, model: headModel, agentID: head)
+                    recordCodexSpend(spend, model: headModel, agentID: head)
                 } else {
-                    recordCodexSpend(used, rolloutID: head, model: headModel, agentID: head)
+                    recordCodexSpend(used, model: headModel, agentID: head)
                 }
                 onEvent?(.agentProgress(agentID: head, summary: nil, lastTool: nil, tokens: total > 0 ? total : used, toolCalls: nil))
             }
@@ -954,17 +1031,9 @@ final class CodexSession: ProviderSession {
         }
     }
 
-    /// Records spend observed on one Codex thread and emits it with the
-    /// identity behind it. Codex is read back from disk as well as watched
-    /// live, so the ledger is told which rollout it came from: the thread (or
-    /// head) id, which is the session id its rollout file is named for, and the
-    /// history scan leaves that much of the file's growth out. Without an id
-    /// only the runtime event is emitted; history owns the daily total.
-    private func recordCodexSpend(_ spend: Int, rolloutID: String?, model: String?, agentID: String? = nil) {
+    /// Emits spend observed on one Codex thread.
+    private func recordCodexSpend(_ spend: Int, model: String?, agentID: String? = nil) {
         guard spend > 0 else { return }
-        if let rolloutID, !rolloutID.isEmpty {
-            TokenLedger.shared.record(codexSpend: spend, rolloutID: rolloutID)
-        }
         onEvent?(.tokenSpend(TokenSpend(provider: .codex, totalTokens: spend, model: model, agentID: agentID)))
     }
 

@@ -318,7 +318,7 @@ enum RuntimeMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .supervised: "hand.raised"
         case .autoAcceptEdits: "pencil.line"
         case .auto: "wand.and.sparkles"
-        case .fullAccess: "checkmark.shield"
+        case .fullAccess: "exclamationmark.shield"
         }
     }
 }

@@ -23,7 +23,7 @@ extension AppModel {
         await runtime.ensureLoaded()
         guard runtime.phase == .idle, !runtime.isReverting else { return .pending }
         guard runtime.hydraReviewRunning == nil else { return .pending }
-        let jobHeads = hydraTeam(of: leadID).filter { $0.hydra?.jobID == jobID }
+        let jobHeads = hydraHeads(of: leadID, jobID: jobID)
         if !(await Git(checkoutPath).isRepository()) {
             var hasGitTarget = false
             for head in jobHeads {

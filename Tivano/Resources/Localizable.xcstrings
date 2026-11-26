@@ -4796,6 +4796,41 @@
         }
       }
     },
+    "%d folded helpers, %d running" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d assistants repliés, %d en cours"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折りたたまれたヘルパー %d 件、%d 件が実行中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "접힌 도우미 %d개, %d개 실행 중"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 个已折叠的助手，%d 个在运行"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 個已收合的助手，%d 個在執行"
+          }
+        }
+      }
+    },
     "%d folded sub-agents" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4827,6 +4862,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%d 個已摺疊的子代理"
+          }
+        }
+      }
+    },
+    "%d folded sub-agents, %d running" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d sous-agents repliés, %d en cours"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 個の折りたたまれたサブエージェント、%d 個が実行中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "접힌 하위 에이전트 %d개, %d개 실행 중"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 个已折叠的子代理，%d 个在运行"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 個已摺疊的子代理，%d 個在執行"
           }
         }
       }
@@ -4897,6 +4967,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%d 個助手"
+          }
+        }
+      }
+    },
+    "%d helpers · %d running" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d assistants · %d en cours"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 個のヘルパー · %d 個が実行中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "도우미 %d개 · %d개 실행 중"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 个助手 · %d 个在运行"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 個助手 · %d 個在執行"
           }
         }
       }
@@ -5212,6 +5317,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%d 個子代理"
+          }
+        }
+      }
+    },
+    "%d sub-agents · %d running" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d sous-agents · %d en cours"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 個のサブエージェント · %d 個が実行中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "하위 에이전트 %d개 · %d개 실행 중"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 个子代理 · %d 个在运行"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d 個子代理 · %d 個在執行"
           }
         }
       }
@@ -10587,41 +10727,6 @@
         }
       }
     },
-    "Add a model and describe what it is good at." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ajoutez un modèle et décrivez ses points forts."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "モデルを追加して、得意な用途を記述します。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "모델을 추가하고 어떤 작업에 적합한지 설명하세요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添加模型并描述它擅长什么。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新增模型並說明它擅長的任務。"
-          }
-        }
-      }
-    },
     "Add a model to %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11038,41 +11143,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新增金鑰"
-          }
-        }
-      }
-    },
-    "Add model strength" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ajouter un point fort"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "モデルの得意分野を追加"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "모델 강점 추가"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添加模型特长"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新增模型專長"
           }
         }
       }
@@ -16012,41 +16082,6 @@
         }
       }
     },
-    "Auto-hide top controls" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Masquer automatiquement les contrôles supérieurs"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "上部コントロールを自動で隠す"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "상단 컨트롤 자동 숨기기"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自动隐藏顶部功能区"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自動隱藏頂部控制項"
-          }
-        }
-      }
-    },
     "Auto-merge left %d files outside every project." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -17552,6 +17587,17 @@
         }
       }
     },
+    "Branch from here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从这里分叉"
+          }
+        }
+      }
+    },
     "Branch name" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -17651,6 +17697,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "分支名稱僅能包含英文字母、數字與 - _ . /。"
+          }
+        }
+      }
+    },
+    "Branch: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分叉：%@"
+          }
+        }
+      }
+    },
+    "Branched from %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分叉自 %@"
           }
         }
       }
@@ -18456,6 +18524,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "CLI 更新"
+          }
+        }
+      }
+    },
+    "Codex did not confirm the branched conversation history." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 未确认分叉对话的历史记录。"
+          }
+        }
+      }
+    },
+    "Codex did not create a branched conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 未能创建分叉对话。"
+          }
+        }
+      }
+    },
+    "Could not branch chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法分叉对话"
           }
         }
       }
@@ -21115,6 +21216,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇檔案…"
+          }
+        }
+      }
+    },
+    "The chat's folder is unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此对话的文件夹不可用。"
+          }
+        }
+      }
+    },
+    "This message can no longer be branched from." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法再从这条消息分叉。"
+          }
+        }
+      }
+    },
+    "Wait for the current reply to finish before branching." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请等待当前回复完成后再分叉。"
           }
         }
       }
@@ -33854,76 +33988,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "閒置 worktree 中的相依套件與建置輸出"
-          }
-        }
-      }
-    },
-    "Describe what each model is good at. Adaptive sub-agents use this to match roles with models and fill in the assignment card for you." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Décrivez les points forts de chaque modèle. Les sous-agents adaptatifs s’en servent pour associer les rôles aux modèles et préremplir la fiche d’attribution."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "各モデルの得意分野を記述してください。アダプティブサブエージェントはこれをもとに役割とモデルをマッチングし、割り当てカードを自動入力します。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "각 모델이 잘하는 작업을 설명하세요. 적응형 하위 에이전트가 이를 바탕으로 역할에 맞는 모델을 연결하고 할당 카드를 미리 채워 줍니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "写下每个模型擅长什么。自适应子代理会据此为各角色匹配模型，并替你预填模型分配卡。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "說明每個模型擅長的領域。自適應子代理會據此為各角色配對模型，並替你預先填寫指派卡。"
-          }
-        }
-      }
-    },
-    "Describe what this model is good at" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Décrivez les points forts de ce modèle"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "このモデルの得意分野を入力"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이 모델의 강점을 설명하세요"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "描述模型特长"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "描述此模型的專長"
           }
         }
       }
@@ -51888,41 +51952,6 @@
         }
       }
     },
-    "Model strengths" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Points forts des modèles"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "モデルの得意分野"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "모델 강점"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "模型特长"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "模型專長"
-          }
-        }
-      }
-    },
     "Models" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -54684,41 +54713,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有符合的供應商"
-          }
-        }
-      }
-    },
-    "No model strengths yet" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aucun point fort de modèle"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "モデルの得意分野がまだありません"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "아직 모델 강점이 없습니다"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暂无模型特长"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "尚無模型專長"
           }
         }
       }
@@ -66434,41 +66428,6 @@
         }
       }
     },
-    "Remove this model strength" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Supprimer ce point fort"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "このモデルの得意分野を削除"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이 모델 강점 제거"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移除此模型特长"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移除此模型專長"
-          }
-        }
-      }
-    },
     "Remove this pair" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -75156,41 +75115,6 @@
         }
       }
     },
-    "Show the upper-right controls only while the pointer is over their area" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Afficher les commandes en haut à droite uniquement lorsque le pointeur survole leur zone"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ポインタが右上エリア上にあるときのみ右上のコントロールを表示します"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "포인터가 오른쪽 상단 영역 위에 있을 때만 해당 제어기 표시"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仅在光标移入右上角功能区时显示其中的控件"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "僅在指標移至右上角控制區時顯示其控制項"
-          }
-        }
-      }
-    },
     "Show these steps" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -83450,41 +83374,6 @@
         }
       }
     },
-    "The attach button offers recent downloads first" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le bouton Joindre propose d’abord les téléchargements récents"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添付ボタンに最近のダウンロードを優先表示"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "첨부 버튼에서 최근 다운로드 파일 우선 표시"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "点击附件按钮时优先显示最近下载的文件"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "按下附件按鈕時優先顯示最近下載的檔案"
-          }
-        }
-      }
-    },
     "The binary changed before the update ran, so Tivano did not update it." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -85161,41 +85050,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "主代理只接收回報。"
-          }
-        }
-      }
-    },
-    "The lead proposes roles as it works and matches each to a model by what it is good at. You confirm before anything runs." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "L’agent principal propose des rôles au fil du travail et associe chacun au modèle le plus adapté. Vous confirmez avant toute exécution."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "リードが作業を進めながら役割を提案し、得意分野に応じて各モデルを割り当てます。実行前に確認が行われます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "리드가 작업 도중 역할을 제안하고 강점에 따라 각 모델을 배정합니다. 실행하기 전에 확인을 거칩니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "主代理在工作中提出角色分工，并按模型特长为每个角色匹配模型；你确认后才会开始运行。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "主代理會在執行過程中提出角色分工，並依各模型專長配對模型；經你確認後才會開始執行。"
           }
         }
       }

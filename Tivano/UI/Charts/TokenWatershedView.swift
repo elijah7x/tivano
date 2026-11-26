@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 
 enum TokenWatershedPalette {
@@ -52,6 +53,18 @@ struct TokenWatershedData: Equatable {
     }
 }
 
+@MainActor
+@Observable
+private final class TokenWatershedHoverState {
+    var hovered: TokenWatershedSelection?
+
+    func update(_ value: TokenWatershedSelection?) {
+        if hovered != value {
+            hovered = value
+        }
+    }
+}
+
 struct TokenWatershedView: View {
     private let data: TokenWatershedData
     private var aggregate: TokenWatershedAggregate { data.aggregate }
@@ -67,7 +80,7 @@ struct TokenWatershedView: View {
     @State private var palette: [String: Color] = [:]
     @State private var revision: Double = 0
     @State private var morphStarted: Date?
-    @State private var hovered: TokenWatershedSelection?
+    @State private var hoverState = TokenWatershedHoverState()
     @FocusState private var focused: TokenWatershedSelection?
     @State private var expanded = false
     @State private var visible = false
@@ -93,8 +106,9 @@ struct TokenWatershedView: View {
         var slot: CGFloat
     }
 
-    private var running: Bool { isAnimating && visible && !reduceMotion && scenePhase == .active }
-    private var active: TokenWatershedSelection? { selection ?? hovered ?? focused }
+    private var running: Bool {
+        isAnimating && visible && !reduceMotion && scenePhase == .active
+    }
 
     var body: some View {
         let slot = max(24, TypeScale.shared.ui(24))
@@ -107,10 +121,10 @@ struct TokenWatershedView: View {
                     TokenWatershedMorph(
                         from: previous, to: target, phase: revision, endPhase: revision,
                         palette: palette.isEmpty ? data.palette : palette,
-                        active: active, focused: $focused, selection: selection,
+                        hoverState: hoverState, focused: $focused, selection: selection,
                         running: running, arrivalStarted: arrivalStarted,
                         flowStarted: flowStarted, flowElapsed: flowElapsed,
-                        onHover: { hovered = $0 }, onPin: pin
+                        onPin: pin
                     )
                     .frame(width: width, height: height)
                     .onChange(of: request, initial: true) { _, value in update(value) }
@@ -123,13 +137,13 @@ struct TokenWatershedView: View {
             .onKeyPress(.rightArrow) { moveFocus(column: 1, row: 0); return .handled }
             .onKeyPress(.upArrow) { moveFocus(column: 0, row: -1); return .handled }
             .onKeyPress(.downArrow) { moveFocus(column: 0, row: 1); return .handled }
-            .onKeyPress(.escape) { selection = nil; hovered = nil; return .handled }
+            .onKeyPress(.escape) { selection = nil; hoverState.update(nil); return .handled }
 
             HStack(alignment: .firstTextBaseline, spacing: Chrome.groupGap) {
                 if metric == .tokens { Text("Width = tokens") } else { Text("Width = priced USD") }
                 Spacer(minLength: Chrome.trayGap)
                 if expanded && !aggregate.foldedModels(metric: metric).isEmpty {
-                    Button("Fold small models") { expanded = false; selection = nil; hovered = nil }
+                    Button("Fold small models") { expanded = false; selection = nil; hoverState.update(nil) }
                         .buttonStyle(.plain)
                         .foregroundStyle(Chrome.accent)
                 }
@@ -148,7 +162,7 @@ struct TokenWatershedView: View {
                 Text("No priced cost in this range")
                     .font(.ui(.caption)).foregroundStyle(Chrome.secondaryText)
             }
-            inspector
+            TokenWatershedInspector(target: target, selection: selection, focused: focused, hoverState: hoverState)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: data.summaryText))
@@ -175,7 +189,65 @@ struct TokenWatershedView: View {
         }
     }
 
-    @ViewBuilder private var inspector: some View {
+    private func update(_ request: Request) {
+        palette.merge(data.palette) { _, new in new }
+        let next = TokenWatershedLayout(aggregate: request.aggregate, metric: request.metric,
+                                       width: request.width, expanded: request.expanded, slot: request.slot)
+        hoverState.update(nil)
+        if let focused, !next.nodes.contains(where: { $0.id == focused }) { self.focused = nil }
+        if let selection, !next.nodes.contains(where: { $0.id == next.resolved(selection) }) { self.selection = nil }
+        if target.size == .zero || reduceMotion || scenePhase != .active {
+            previous = next
+            target = next
+            morphStarted = nil
+            return
+        }
+        let progress = morphStarted.map { min(1, Date().timeIntervalSince($0) / 0.6) } ?? 1
+        previous = previous.interpolated(to: target, fraction: progress)
+        target = next
+        morphStarted = Date()
+        // Animatable interpolation is independent of the arrival/flow clock.
+        // Continue from the presentation phase when a range drag interrupts a morph.
+        withAnimation(.linear(duration: 0.6)) { revision += progress }
+    }
+
+    private func pin(_ item: TokenWatershedSelection?) {
+        guard let item else { selection = nil; hoverState.update(nil); focused = nil; return }
+        if item == .model(TokenWatershedLayout.otherModels), !target.folded.isEmpty {
+            expanded = true
+            selection = nil
+            hoverState.update(nil)
+            return
+        }
+        selection = selection == item ? nil : item
+        focused = item
+    }
+
+    private func moveFocus(column: Int, row: Int) {
+        guard let current = target.nodes.first(where: { $0.id == focused }) ?? target.nodes.first else { return }
+        if column != 0 {
+            let destination = min(2, max(0, current.column + column))
+            focused = target.nodes.filter { $0.column == destination }
+                .min { abs($0.labelY - current.labelY) < abs($1.labelY - current.labelY) }?.id
+        } else {
+            let list = target.nodes.filter { $0.column == current.column }
+            guard !list.isEmpty else { return }
+            let index = list.firstIndex { $0.id == current.id } ?? 0
+            focused = list[(index + row + list.count) % list.count].id
+        }
+        hoverState.update(nil)
+    }
+}
+
+private struct TokenWatershedInspector: View {
+    let target: TokenWatershedLayout
+    let selection: TokenWatershedSelection?
+    let focused: TokenWatershedSelection?
+    let hoverState: TokenWatershedHoverState
+
+    private var active: TokenWatershedSelection? { selection ?? hoverState.hovered ?? focused }
+
+    var body: some View {
         // A dedicated region below the plot keeps every highlighted curve unobscured.
         let resolved = target.resolved(active)
         let node = target.nodes.first { $0.id == resolved }
@@ -229,55 +301,6 @@ struct TokenWatershedView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    private func update(_ request: Request) {
-        palette.merge(data.palette) { _, new in new }
-        let next = TokenWatershedLayout(aggregate: request.aggregate, metric: request.metric,
-                                       width: request.width, expanded: request.expanded, slot: request.slot)
-        hovered = nil
-        if let focused, !next.nodes.contains(where: { $0.id == focused }) { self.focused = nil }
-        if let selection, !next.nodes.contains(where: { $0.id == next.resolved(selection) }) { self.selection = nil }
-        if target.size == .zero || reduceMotion || scenePhase != .active {
-            previous = next
-            target = next
-            morphStarted = nil
-            return
-        }
-        let progress = morphStarted.map { min(1, Date().timeIntervalSince($0) / 0.6) } ?? 1
-        previous = previous.interpolated(to: target, fraction: progress)
-        target = next
-        morphStarted = Date()
-        // Animatable interpolation is independent of the arrival/flow clock.
-        // Continue from the presentation phase when a range drag interrupts a morph.
-        withAnimation(.linear(duration: 0.6)) { revision += progress }
-    }
-
-    private func pin(_ item: TokenWatershedSelection?) {
-        guard let item else { selection = nil; hovered = nil; focused = nil; return }
-        if item == .model(TokenWatershedLayout.otherModels), !target.folded.isEmpty {
-            expanded = true
-            selection = nil
-            hovered = nil
-            return
-        }
-        selection = selection == item ? nil : item
-        focused = item
-    }
-
-    private func moveFocus(column: Int, row: Int) {
-        guard let current = target.nodes.first(where: { $0.id == focused }) ?? target.nodes.first else { return }
-        if column != 0 {
-            let destination = min(2, max(0, current.column + column))
-            focused = target.nodes.filter { $0.column == destination }
-                .min { abs($0.labelY - current.labelY) < abs($1.labelY - current.labelY) }?.id
-        } else {
-            let list = target.nodes.filter { $0.column == current.column }
-            guard !list.isEmpty else { return }
-            let index = list.firstIndex { $0.id == current.id } ?? 0
-            focused = list[(index + row + list.count) % list.count].id
-        }
-        hovered = nil
-    }
 }
 
 private struct TokenWatershedMorph: View, Animatable {
@@ -286,14 +309,13 @@ private struct TokenWatershedMorph: View, Animatable {
     var phase: Double
     let endPhase: Double
     let palette: [String: Color]
-    let active: TokenWatershedSelection?
+    let hoverState: TokenWatershedHoverState
     var focused: FocusState<TokenWatershedSelection?>.Binding
     let selection: TokenWatershedSelection?
     let running: Bool
     let arrivalStarted: Date?
     let flowStarted: Date?
     let flowElapsed: TimeInterval
-    let onHover: (TokenWatershedSelection?) -> Void
     let onPin: (TokenWatershedSelection?) -> Void
 
     // SwiftUI supplies presentation values here, including during interrupted animations.
@@ -305,39 +327,37 @@ private struct TokenWatershedMorph: View, Animatable {
 
     var body: some View {
         let layout = from.interpolated(to: to, fraction: phase - endPhase + 1)
-        TokenWatershedScene(layout: layout, palette: palette, active: active, focused: focused, selection: selection,
+        TokenWatershedScene(layout: layout, palette: palette, hoverState: hoverState, focused: focused, selection: selection,
                             running: running, arrivalStarted: arrivalStarted, flowStarted: flowStarted,
-                            flowElapsed: flowElapsed, onHover: onHover, onPin: onPin)
+                            flowElapsed: flowElapsed, onPin: onPin)
     }
 }
 
 private struct TokenWatershedScene: View {
     let layout: TokenWatershedLayout
     let palette: [String: Color]
-    let active: TokenWatershedSelection?
+    let hoverState: TokenWatershedHoverState
     var focused: FocusState<TokenWatershedSelection?>.Binding
     let selection: TokenWatershedSelection?
     let running: Bool
     let arrivalStarted: Date?
     let flowStarted: Date?
     let flowElapsed: TimeInterval
-    let onHover: (TokenWatershedSelection?) -> Void
     let onPin: (TokenWatershedSelection?) -> Void
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Group {
-                if running {
-                    // Like ThinkingOrb, cap the cadence at 30 fps; the static branch has no schedule.
-                    // https://developer.apple.com/documentation/swiftui/timelineschedule/animation(minimuminterval:paused:)
-                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
-                        canvas(date: timeline.date)
-                    }
-                } else {
-                    canvas(date: nil)
-                }
-            }
+            TokenWatershedCanvas(
+                layout: layout,
+                palette: palette,
+                hoverState: hoverState,
+                focused: focused.wrappedValue,
+                selection: selection,
+                running: running,
+                arrivalStarted: arrivalStarted,
+                flowStarted: flowStarted,
+                flowElapsed: flowElapsed
+            )
             .contentShape(Rectangle())
             .onTapGesture(coordinateSpace: .local) { point in onPin(layout.hit(at: point)) }
             .accessibilityHidden(true)
@@ -346,7 +366,14 @@ private struct TokenWatershedScene: View {
             columnTitle("Shared models", x: layout.size.width * 420 / 900 + 9, alignment: .leading)
             columnTitle("Token types", x: layout.size.width * 741 / 900 + 9, alignment: .leading)
             ForEach(layout.nodes) { node in
-                label(node)
+                TokenWatershedNodeLabel(
+                    node: node,
+                    layout: layout,
+                    hoverState: hoverState,
+                    focused: focused,
+                    selection: selection,
+                    onPin: onPin
+                )
             }
             if layout.total.tokens == 0 {
                 Text("No token usage in this range")
@@ -357,8 +384,8 @@ private struct TokenWatershedScene: View {
         }
         .onContinuousHover { phase in
             switch phase {
-            case .active(let point): onHover(layout.hit(at: point))
-            case .ended: onHover(nil)
+            case .active(let point): hoverState.update(layout.hit(at: point))
+            case .ended: hoverState.update(nil)
             }
         }
     }
@@ -371,38 +398,74 @@ private struct TokenWatershedScene: View {
             .accessibilityHidden(true)
             .allowsHitTesting(false)
     }
+}
 
-    private func label(_ node: TokenWatershedLayout.Node) -> some View {
-        let rect = layout.labelRect(for: node)
-        let value = layout.metric == .cost
-            ? TokenWatershedFormat.money(node.amounts.cost) : TokenWatershedFormat.compact(node.amounts.tokens)
-        let share = TokenWatershedFormat.share(node.amounts.value(layout.metric), of: layout.total.value(layout.metric), exact: false)
-        let title = TokenWatershedFormat.title(node) + (node.isFolded ? " +" : "")
-        let detail = node.unpriced
-            ? "  " + String(format: Chrome.localized("%@ · Unpriced"), TokenWatershedFormat.compact(node.amounts.tokens))
-            : "  " + value + " · " + share
-        let relevant = layout.isRelevant(node, to: active)
-        return Button { onPin(node.id) } label: {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 0) {
-                    Text(verbatim: title).foregroundStyle(Chrome.primaryText)
-                    Text(verbatim: detail).foregroundStyle(Chrome.secondaryText).monospacedDigit()
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                Text(verbatim: title).foregroundStyle(Chrome.primaryText).lineLimit(1)
-            }
-            .font(.ui(.caption))
-            .padding(.horizontal, Chrome.capsuleHorizontalPadding / 2)
-            .padding(.vertical, Chrome.capsuleVerticalPadding)
-            .background(Chrome.glassTint, in: Capsule())
-            .overlay {
-                if focused.wrappedValue == node.id {
-                    Capsule().strokeBorder(Chrome.accent, lineWidth: 1)
-                }
-            }
-            .opacity(node.opacity * (relevant ? 1 : 0.22))
-            .frame(width: rect.width, height: rect.height, alignment: node.column == 0 ? .trailing : .leading)
-            .contentShape(Rectangle())
+private struct TokenWatershedNodeLabel: View {
+    let node: TokenWatershedLayout.Node
+    let layout: TokenWatershedLayout
+    let hoverState: TokenWatershedHoverState
+    var focused: FocusState<TokenWatershedSelection?>.Binding
+    let selection: TokenWatershedSelection?
+    let onPin: (TokenWatershedSelection?) -> Void
+
+    private var active: TokenWatershedSelection? { selection ?? hoverState.hovered ?? focused.wrappedValue }
+
+    // A statement-level `if` inside `body` would be read as a view builder branch.
+    private static func detail(for node: TokenWatershedLayout.Node, value: String, share: String) -> String {
+        guard node.unpriced else { return "  \(value) · \(share)" }
+        let formattedUnpriced: String = String(
+            format: Chrome.localized("%@ · Unpriced"),
+            TokenWatershedFormat.compact(node.amounts.tokens)
+        )
+        return "  \(formattedUnpriced)"
+    }
+
+    var body: some View {
+        let rect: CGRect = layout.labelRect(for: node)
+        let value: String = layout.metric == .cost
+            ? TokenWatershedFormat.money(node.amounts.cost)
+            : TokenWatershedFormat.compact(node.amounts.tokens)
+        let share: String = TokenWatershedFormat.share(
+            node.amounts.value(layout.metric),
+            of: layout.total.value(layout.metric),
+            exact: false
+        )
+        let baseTitle: String = TokenWatershedFormat.title(node)
+        let title: String = node.isFolded ? "\(baseTitle) +" : baseTitle
+        let detail: String = Self.detail(for: node, value: value, share: share)
+        let relevant: Bool = layout.isRelevant(node, to: active)
+        let horizontalPadding: CGFloat = Chrome.capsuleHorizontalPadding / 2
+        let isFocused: Bool = focused.wrappedValue == node.id
+        let labelOpacity: Double = node.opacity * (relevant ? 1.0 : 0.22)
+        let labelAlignment: Alignment = node.column == 0 ? .trailing : .leading
+        let canHitTest: Bool = node.opacity > 0.65
+        let exactTokens: String = TokenWatershedFormat.exact(node.amounts.tokens)
+        let tokenShare: String = TokenWatershedFormat.share(Double(node.amounts.tokens), of: Double(layout.total.tokens))
+        let pricedCost: String = node.amounts.pricedTokens > 0
+            ? TokenWatershedFormat.money(node.amounts.cost, exact: true)
+            : Chrome.localized("Unpriced")
+        let reasoningTokens: String = TokenWatershedFormat.exact(node.amounts.reasoning)
+        let accessibilityValueFormat: String = Chrome.localized("%@ tokens, %@ of range, %@ priced cost, %@ reasoning tokens")
+        let accessibilityValueText: String = String(
+            format: accessibilityValueFormat,
+            exactTokens,
+            tokenShare,
+            pricedCost,
+            reasoningTokens
+        )
+        let accessibilityTraits: AccessibilityTraits = selection == node.id ? .isSelected : []
+        let accessibilityHintText: Text = node.isFolded ? Text("Expand small models") : Text("Pin this path")
+
+        Button { onPin(node.id) } label: {
+            labelContent(
+                title: title,
+                detail: detail,
+                horizontalPadding: horizontalPadding,
+                isFocused: isFocused,
+                labelOpacity: labelOpacity,
+                rect: rect,
+                alignment: labelAlignment
+            )
         }
         .buttonStyle(.plain)
         .focusable()
@@ -410,15 +473,69 @@ private struct TokenWatershedScene: View {
         .focusEffectDisabled()
         .onKeyPress(.return) { onPin(node.id); return .handled }
         .position(x: rect.midX, y: rect.midY)
-        .allowsHitTesting(node.opacity > 0.65)
-        .accessibilityLabel(Text(verbatim: TokenWatershedFormat.title(node)))
-        .accessibilityValue(Text(verbatim: String(format: Chrome.localized("%@ tokens, %@ of range, %@ priced cost, %@ reasoning tokens"),
-            TokenWatershedFormat.exact(node.amounts.tokens),
-            TokenWatershedFormat.share(Double(node.amounts.tokens), of: Double(layout.total.tokens)),
-            node.amounts.pricedTokens > 0 ? TokenWatershedFormat.money(node.amounts.cost, exact: true) : Chrome.localized("Unpriced"),
-            TokenWatershedFormat.exact(node.amounts.reasoning))))
-        .accessibilityAddTraits(selection == node.id ? [.isSelected] : [])
-        .accessibilityHint(node.isFolded ? Text("Expand small models") : Text("Pin this path"))
+        .allowsHitTesting(canHitTest)
+        .accessibilityLabel(Text(verbatim: baseTitle))
+        .accessibilityValue(Text(verbatim: accessibilityValueText))
+        .accessibilityAddTraits(accessibilityTraits)
+        .accessibilityHint(accessibilityHintText)
+    }
+
+    private func labelContent(
+        title: String,
+        detail: String,
+        horizontalPadding: CGFloat,
+        isFocused: Bool,
+        labelOpacity: Double,
+        rect: CGRect,
+        alignment: Alignment
+    ) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 0) {
+                Text(verbatim: title).foregroundStyle(Chrome.primaryText)
+                Text(verbatim: detail).foregroundStyle(Chrome.secondaryText).monospacedDigit()
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            Text(verbatim: title).foregroundStyle(Chrome.primaryText).lineLimit(1)
+        }
+        .font(.ui(.caption))
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, Chrome.capsuleVerticalPadding)
+        .background(Chrome.glassTint, in: Capsule())
+        .overlay {
+            if isFocused {
+                Capsule().strokeBorder(Chrome.accent, lineWidth: 1)
+            }
+        }
+        .opacity(labelOpacity)
+        .frame(width: rect.width, height: rect.height, alignment: alignment)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct TokenWatershedCanvas: View {
+    let layout: TokenWatershedLayout
+    let palette: [String: Color]
+    let hoverState: TokenWatershedHoverState
+    let focused: TokenWatershedSelection?
+    let selection: TokenWatershedSelection?
+    let running: Bool
+    let arrivalStarted: Date?
+    let flowStarted: Date?
+    let flowElapsed: TimeInterval
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var active: TokenWatershedSelection? { selection ?? hoverState.hovered ?? focused }
+
+    var body: some View {
+        if running {
+            // Like ThinkingOrb, cap the cadence at 30 fps; the static branch has no schedule.
+            // https://developer.apple.com/documentation/swiftui/timelineschedule/animation(minimuminterval:paused:)
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: ScrollActivity.shared.isScrolling)) { timeline in
+                canvas(date: timeline.date)
+            }
+        } else {
+            canvas(date: nil)
+        }
     }
 
     private func canvas(date: Date?) -> some View {

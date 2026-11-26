@@ -65,7 +65,57 @@ def main():
         cli = (ROOT / "TivanoCLI/main.swift").read_text()
         assert cli.endswith("exit(CLI.run())\n")
         generated = output / "main.swift"
-        generated.write_text(cli.removesuffix("exit(CLI.run())\n") + (ROOT / "scripts/fixtures/local_control/CLIParserChecks.swift").read_text())
+        branch_parser_checks = textwrap.dedent("""
+            extension CLI {
+                static func branchParserChecks() throws {
+                    let ticket = ControlTicket(instance: UUID())
+                    let thread = UUID()
+                    let turn = UUID()
+                    func check(_ condition: @autoclosure () -> Bool, _ label: String) throws {
+                        guard condition() else { throw ControlFailure(code: .internalError, detail: label) }
+                        print("PASS \\(label)")
+                    }
+                    func parse(_ values: [String]) throws -> ControlCommand {
+                        var args = try Arguments(values)
+                        let result = try command(&args, ticket: ticket)
+                        try args.finished()
+                        return result
+                    }
+                    func rejects(_ values: [String], _ label: String) throws {
+                        do { _ = try parse(values) } catch let failure as ControlFailure {
+                            guard [.invalidRequest, .bounds].contains(failure.code) else { throw failure }
+                            print("PASS \\(label)")
+                            return
+                        }
+                        throw ControlFailure(code: .internalError, detail: label)
+                    }
+                    try check(LocalControl.methods.contains("branch"), "LocalControl advertises branch method")
+                    guard case .branch(let throughCmd) = try parse(["branch", thread.uuidString, "--turn", turn.uuidString]) else {
+                        throw ControlFailure(code: .internalError, detail: "branch default through")
+                    }
+                    try check(throughCmd.ticket == ticket && throughCmd.threadID == thread && throughCmd.turnID == turn && throughCmd.mode == .through, "branch defaults to through mode")
+                    try check(ControlCommand.branch(throughCmd).ticket == ticket, "branch command exposes write ticket")
+                    let encoded = try LocalControl.encoder().encode(ControlCommand.branch(throughCmd))
+                    let decoded = try LocalControl.decoder().decode(ControlCommand.self, from: encoded)
+                    guard case .branch(let roundTripped) = decoded else { throw ControlFailure(code: .internalError, detail: "branch codable") }
+                    try check(roundTripped.ticket == ticket && roundTripped.threadID == thread && roundTripped.turnID == turn && roundTripped.mode == .through, "branch command Codable round-trips")
+                    guard case .branch(let beforeAfter) = try parse(["branch", thread.uuidString, "--turn", turn.uuidString, "--before"]) else {
+                        throw ControlFailure(code: .internalError, detail: "branch --before")
+                    }
+                    try check(beforeAfter.mode == .before && beforeAfter.threadID == thread && beforeAfter.turnID == turn, "branch accepts --before after --turn")
+                    guard case .branch(let beforeFirst) = try parse(["branch", thread.uuidString, "--before", "--turn", turn.uuidString]) else {
+                        throw ControlFailure(code: .internalError, detail: "branch --before first")
+                    }
+                    try check(beforeFirst.mode == .before && beforeFirst.threadID == thread && beforeFirst.turnID == turn, "branch accepts --before before --turn")
+                    try rejects(["branch", thread.uuidString], "branch requires --turn")
+                    try rejects(["branch", thread.uuidString, "--turn", "not-a-uuid"], "branch validates --turn UUID")
+                    try rejects(["branch", thread.uuidString, "--turn", turn.uuidString, "--before", "--before"], "branch rejects duplicate --before")
+                    try rejects(["info", "--before"], "--before is rejected outside branch")
+                }
+            }
+            try CLI.branchParserChecks()
+        """)
+        generated.write_text(cli.removesuffix("exit(CLI.run())\n") + (ROOT / "scripts/fixtures/local_control/CLIParserChecks.swift").read_text() + branch_parser_checks)
         # Validate the exact multiline English help key and every catalog object's key
         # uniqueness without rewriting or extracting strings into the source checkout.
         def unique(pairs):

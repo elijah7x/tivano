@@ -14,7 +14,7 @@ final class WhatsNew {
         static let legacyUpdateCheckerRelease = "updateChecker_release"
     }
 
-    struct Entry {
+    struct Entry: Sendable {
         let versionText: String
         let version: AppVersion
         let body: String
@@ -25,6 +25,7 @@ final class WhatsNew {
     private(set) var oldestIncludedVersion: String?
     private(set) var bulletsByCategory: [ReleaseNoteCategory: [String]] = [:]
     private(set) var seenVersion: String?
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
 
     var hasContent: Bool {
         versionCount > 0 && ReleaseNoteCategory.allCases.contains { !bullets(for: $0).isEmpty }
@@ -36,7 +37,7 @@ final class WhatsNew {
 
     private init() {
         displayVersion = AppInfo.releaseVersion
-        reload()
+        seenVersion = UserDefaults.standard.string(forKey: Keys.seenVersion)
     }
 
     func bullets(for category: ReleaseNoteCategory) -> [String] {
@@ -80,43 +81,50 @@ final class WhatsNew {
         let defaults = UserDefaults.standard
         seenVersion = defaults.string(forKey: Keys.seenVersion)
 
-        guard let current = AppVersion(displayVersion),
-              let url = Bundle.main.url(forResource: "CHANGELOG", withExtension: "md"),
-              let markdown = try? String(contentsOf: url, encoding: .utf8) else {
-            clearEntries()
-            return
-        }
+        let displayVersion = self.displayVersion
+        let previousRaw = defaults.string(forKey: Keys.previousVersion)
+        loadTask?.cancel()
+        // Read and scan CHANGELOG.md off the main thread so launch does not block on file I/O.
+        loadTask = Task { [weak self] in
+            let matched: [Entry] = await Task.detached(priority: .utility) {
+                guard let current = AppVersion(displayVersion),
+                      let url = Bundle.main.url(forResource: "CHANGELOG", withExtension: "md"),
+                      let markdown = try? String(contentsOf: url, encoding: .utf8) else {
+                    return []
+                }
+                let previous = previousRaw.flatMap(AppVersion.init)
+                return Self.matchingEntries(
+                    from: Self.parseChangelog(markdown),
+                    current: current,
+                    previous: previous
+                )
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            guard !matched.isEmpty else {
+                self.clearEntries()
+                return
+            }
 
-        let previous = defaults.string(forKey: Keys.previousVersion).flatMap(AppVersion.init)
-        let matched = Self.matchingEntries(
-            from: Self.parseChangelog(markdown),
-            current: current,
-            previous: previous
-        )
-        guard !matched.isEmpty else {
-            clearEntries()
-            return
-        }
-
-        let language = Bundle.main.preferredLocalizations.first ?? "en"
-        var merged: [ReleaseNoteCategory: [String]] = [:]
-        var seenBullets: [ReleaseNoteCategory: Set<String>] = [:]
-        for entry in matched {
-            let notes = UpdateReleaseNotesDigest.selectedNotes(entry.body, language: language)
-            let digest = UpdateReleaseNotesDigest.parse(notes)
-            for category in ReleaseNoteCategory.allCases {
-                guard let section = digest.section(for: category) else { continue }
-                for bullet in section.bullets {
-                    if seenBullets[category, default: []].insert(bullet.lowercased()).inserted {
-                        merged[category, default: []].append(bullet)
+            let language = Bundle.main.preferredLocalizations.first ?? "en"
+            var merged: [ReleaseNoteCategory: [String]] = [:]
+            var seenBullets: [ReleaseNoteCategory: Set<String>] = [:]
+            for entry in matched {
+                let notes = UpdateReleaseNotesDigest.selectedNotes(entry.body, language: language)
+                let digest = UpdateReleaseNotesDigest.parse(notes)
+                for category in ReleaseNoteCategory.allCases {
+                    guard let section = digest.section(for: category) else { continue }
+                    for bullet in section.bullets {
+                        if seenBullets[category, default: []].insert(bullet.lowercased()).inserted {
+                            merged[category, default: []].append(bullet)
+                        }
                     }
                 }
             }
-        }
 
-        versionCount = matched.count
-        oldestIncludedVersion = matched.last?.versionText
-        bulletsByCategory = merged
+            self.versionCount = matched.count
+            self.oldestIncludedVersion = matched.last?.versionText
+            self.bulletsByCategory = merged
+        }
     }
 
     private func clearEntries() {
@@ -126,7 +134,7 @@ final class WhatsNew {
     }
 
     /// Parses `## [version] - date` sections from CHANGELOG.md, skipping `[Unreleased]`.
-    private static func parseChangelog(_ markdown: String) -> [Entry] {
+    private nonisolated static func parseChangelog(_ markdown: String) -> [Entry] {
         var entries: [Entry] = []
         var currentHeader: (versionText: String, version: AppVersion)?
         var bodyLines: [String] = []
@@ -159,7 +167,7 @@ final class WhatsNew {
         return entries
     }
 
-    private static func matchingEntries(from entries: [Entry], current: AppVersion, previous: AppVersion?) -> [Entry] {
+    private nonisolated static func matchingEntries(from entries: [Entry], current: AppVersion, previous: AppVersion?) -> [Entry] {
         let includePrereleases = current.isPrerelease
         let eligible = entries
             .filter { entry in

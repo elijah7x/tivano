@@ -8,9 +8,9 @@ import SwiftUI
 /// passes that evaluation asks for from ending the app on macOS 26 and later.
 @MainActor
 final class WindowManager {
-    static let shared = WindowManager()
+    static let shared: WindowManager = WindowManager()
 
-    let model = AppModel()
+    let model: AppModel = AppModel()
 
     private var mainWindow: NSWindow?
     private weak var responderBeforeSettings: NSView?
@@ -165,6 +165,7 @@ final class WindowLiveResize {
     /// by the visible chat view, whose ownership follows ThreadColumns' selection.
     private(set) var isPaneResizing = false
     @ObservationIgnored private var paneOwner: UUID?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
     /// The window or a pane is being dragged to a new size right now.
     var isReshaping: Bool { isActive || isPaneResizing }
 
@@ -184,16 +185,22 @@ final class WindowLiveResize {
         setPaneOwner(nil)
     }
 
-    /// The window keeps this alive for as long as it exists, so the observations are
-    /// never taken down: a window is not made twice.
     init(window: NSWindow? = nil) {
         guard let window else { return }
         let center = NotificationCenter.default
-        center.addObserver(forName: NSWindow.willStartLiveResizeNotification, object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isActive = true }
-        }
-        center.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isActive = false }
+        observers = [
+            center.addObserver(forName: NSWindow.willStartLiveResizeNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.isActive = true }
+            },
+            center.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.isActive = false }
+            },
+        ]
+    }
+
+    isolated deinit {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 }
@@ -227,6 +234,16 @@ struct HostedEnvironment: ViewModifier {
     let liveResize: WindowLiveResize
     var isLayoutActive = true
     @State private var inactiveResize = WindowLiveResize()
+    @State private var popoverHost: PopoverHostEnvironment?
+
+    init(model: AppModel, liveResize: WindowLiveResize, isLayoutActive: Bool = true) {
+        self.model = model
+        self.liveResize = liveResize
+        self.isLayoutActive = isLayoutActive
+        _popoverHost = State(initialValue: PopoverHostEnvironment {
+            AnyView($0.modifier(HostedEnvironment(model: model, liveResize: liveResize)))
+        })
+    }
 
     func body(content: Content) -> some View {
         content
@@ -236,6 +253,7 @@ struct HostedEnvironment: ViewModifier {
             .buttonBorderShape(.capsule)
             .modifier(ThemeTint(theme: model.settings.theme))
             .environment(\.solidSurfaces, model.settings.solidSurfaces)
+            .environment(\.popoverHostEnvironment, popoverHost)
     }
 }
 

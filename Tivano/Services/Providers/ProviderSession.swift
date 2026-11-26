@@ -27,6 +27,7 @@ struct SessionConfiguration: Sendable {
     var environment: [String: String]
     var resumeID: String?
     var resumeAt: String?
+    var forkSession: Bool = false
     var model: String?
     var effort: String?
     var fastMode = false

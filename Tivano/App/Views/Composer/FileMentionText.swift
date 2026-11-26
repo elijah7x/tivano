@@ -35,6 +35,14 @@ final class FileMentionCell: NSTextAttachmentCell {
     private static let strokeAlpha: CGFloat = 0.22
     private static let symbolScale: CGFloat = 0.85
 
+    private struct DrawCacheKey: Equatable {
+        let label: FileMentionLabel
+        let fontName: String
+        let fontSize: CGFloat
+        let accent: NSColor
+        let appearanceName: NSAppearance.Name
+    }
+
     private let path: String
     private let isDirectory: Bool
     private var label: FileMentionLabel
@@ -42,6 +50,9 @@ final class FileMentionCell: NSTextAttachmentCell {
     private var accent: NSColor
     private var iconSize: NSSize = .zero
     private var textWidth: CGFloat = 0
+    private var cachedDrawKey: DrawCacheKey?
+    private var cachedSymbol: NSImage?
+    private var cachedAttributedLabel: NSAttributedString?
     private weak var lastControlView: NSView?
     private nonisolated let metrics = LockedCellMetrics()
 
@@ -64,9 +75,16 @@ final class FileMentionCell: NSTextAttachmentCell {
         self.label = label
         self.chipFont = font
         self.accent = accent
+        invalidateDrawCache()
         recalculateMetrics()
         controlView?.needsDisplay = true
         lastControlView?.needsDisplay = true
+    }
+
+    private func invalidateDrawCache() {
+        cachedDrawKey = nil
+        cachedSymbol = nil
+        cachedAttributedLabel = nil
     }
 
     nonisolated override func cellSize() -> NSSize {
@@ -177,11 +195,25 @@ final class FileMentionCell: NSTextAttachmentCell {
         accent.withAlphaComponent(Self.strokeAlpha).setStroke()
         strokePath.stroke()
 
-        let symbolPointSize = chipFont.pointSize * Self.symbolScale
-        let symbolConfig = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .regular)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [accent]))
-        if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-            .withSymbolConfiguration(symbolConfig) {
+        let appearanceName = controlView?.effectiveAppearance.name ?? NSAppearance.currentDrawing().name
+        let drawKey = DrawCacheKey(
+            label: label,
+            fontName: chipFont.fontName,
+            fontSize: chipFont.pointSize,
+            accent: accent,
+            appearanceName: appearanceName
+        )
+        if cachedDrawKey != drawKey {
+            let symbolPointSize = chipFont.pointSize * Self.symbolScale
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [accent]))
+            cachedSymbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+                .withSymbolConfiguration(symbolConfig)
+            cachedAttributedLabel = makeAttributedLabel()
+            cachedDrawKey = drawKey
+        }
+
+        if let symbol = cachedSymbol {
             let iconRect = NSRect(
                 x: cellFrame.minX + Self.leadingPadding,
                 y: cellFrame.midY - iconSize.height / 2,
@@ -203,12 +235,13 @@ final class FileMentionCell: NSTextAttachmentCell {
         let baselineY = isFlipped
             ? cellFrame.maxY + chipFont.descender - 1
             : cellFrame.minY - chipFont.descender + 1
-        let attributed = makeAttributedLabel()
-        attributed.draw(
-            with: NSRect(x: textX, y: baselineY, width: textWidth + 2, height: 0),
-            options: [],
-            context: nil
-        )
+        if let attributed = cachedAttributedLabel {
+            attributed.draw(
+                with: NSRect(x: textX, y: baselineY, width: textWidth + 2, height: 0),
+                options: [],
+                context: nil
+            )
+        }
     }
 }
 

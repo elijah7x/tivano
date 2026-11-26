@@ -53,6 +53,10 @@ final class ProviderAccounts {
         processes[id, default: 0] += 1
         return true
     }
+    static func beginProcessAsync(_ id: UUID) async -> Bool {
+        _ = await ProviderAccountStore.loadAsync()
+        return beginProcess(id)
+    }
     static func endProcess(_ id: UUID) { processes[id] = max(0, processes[id, default: 0] - 1) }
     func isBusy(_ account: ProviderAccount) -> Bool {
         Self.exclusive.contains(account.id) || Self.readers[account.id, default: 0] > 0
@@ -134,30 +138,32 @@ final class ProviderAccounts {
     }
 
     func use(_ account: ProviderAccount) {
-        guard let stored = self.account(id: account.id) else { return }
+        guard let stored: ProviderAccount = self.account(id: account.id) else { return }
+        let targetRegistry: ProviderRegistry? = registry
         if stored.provider == .claude {
             guard !CaptureRun.isEnabled, !stored.requiresClaudeActivation, !stored.requiresClaudeCleanup else { return }
-            var next = book
+            var next: ProviderAccountBook = book
             next.active[stored.provider.rawValue] = stored.id
             do { try commit(next) }
             catch { states[stored.id, default: State()].problem = Self.safeClaudeError(error); return }
             selectionRevision = UUID()
-            registry?.invalidateClaudeAccountViews()
-            registry?.resetPlanLimits(.claude)
+            targetRegistry?.invalidateClaudeAccountViews()
+            targetRegistry?.resetPlanLimits(.claude)
             Task { [weak self] in _ = await self?.refreshClaudeAccount(stored.id) }
             return
         }
         selectionRevision = UUID()
         book.active[account.provider.rawValue] = account.id
         save()
-        registry?.resetPlanLimits(account.provider)
+        targetRegistry?.resetPlanLimits(account.provider)
         Task { [weak self] in
             guard let self else { return }
             await refreshAccount(account, force: true)
             guard activeAccount(for: account.provider)?.id == account.id else { return }
-            registry?.refreshPlanLimits(account.provider, force: true)
-            await registry?.refresh(account.provider)
-            await registry?.loadCatalog(account.provider, force: true)
+            let liveRegistry: ProviderRegistry? = registry
+            liveRegistry?.refreshPlanLimits(account.provider, force: true)
+            await liveRegistry?.refresh(account.provider)
+            await liveRegistry?.loadCatalog(account.provider, force: true)
         }
     }
 
@@ -535,10 +541,10 @@ final class ProviderAccounts {
                 return other.accountID == identity.accountID && other.organizationID == identity.organizationID
             }
             guard !duplicate else { throw ClaudeCredentialError.duplicateAccount }
+            let organizationName = await ProviderAccountStore.readClaudeIdentity(home: home, isDefault: false)?["organizationName"]?.string
             guard let index = book.accounts.firstIndex(where: { $0.id == account.id }) else {
                 throw ClaudeAccountValidationError.authentication
             }
-            let organizationName = ProviderAccountStore.claudeIdentity(home: home, isDefault: false)?["organizationName"]?.string
             var next = book
             var updated = next.accounts[index]
             updated.claudeIdentity = identity

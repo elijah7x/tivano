@@ -46,18 +46,31 @@ struct HydraPanel: View {
     /// The pointer is over the name on the strip, which opens the head's chat.
     @State private var isNameHovering = false
 
+    private var wantedHead: ChatThread? {
+        if isPoppedOut {
+            return heads.first
+        }
+        if let picked = heads.first(where: { (head: ChatThread) -> Bool in head.id == runtime.hydraSelectedHeadID }) {
+            return picked
+        }
+        if let running = heads.last(where: { (head: ChatThread) -> Bool in head.hydra?.status == .running }) {
+            return running
+        }
+        return heads.last
+    }
+
+    private var heldHead: ChatThread? {
+        guard let hold else { return nil }
+        return heads.first { (head: ChatThread) -> Bool in head.id == hold.id }
+    }
+
     var body: some View {
         // The head on stage: the one picked, else the newest still working, else the newest.
         // A popped-out panel holds one head, and that one is on stage. A head that has just
         // finished on stage keeps it while its wave plays, whatever else is at work.
-        let wanted = isPoppedOut
-            ? heads.first
-            : heads.first { $0.id == runtime.hydraSelectedHeadID }
-                ?? heads.last { $0.hydra?.status == .running }
-                ?? heads.last
-        let held = hold.flatMap { hold in heads.first { $0.id == hold.id } }
-        let selected = held ?? wanted
+        let selected: ChatThread? = heldHead ?? wantedHead
         let shape = RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+        let stageMark = StageMark(id: selected?.id, status: selected?.hydra?.status)
         ZStack {
             if let selected {
                 HydraHeadTranscript(
@@ -71,24 +84,13 @@ struct HydraPanel: View {
             }
         }
         .overlay {
-            // Done: one wave of the head's colour flows through the whole panel.
-            if let hold, let head = heads.first(where: { $0.id == hold.id }) {
-                DotFieldSweep(tint: NSColor((head.hydra?.persona ?? HydraRoster.persona(at: 0)).color))
-                    .clipShape(shape)
-                    .transition(.opacity)
-                    .id(hold)
-            }
+            finishSweepOverlay(shape: shape)
         }
-        .onChange(of: StageMark(id: selected?.id, status: selected?.hydra?.status)) { old, new in
-            // The head on stage just finished: it holds the stage for its wave.
-            guard let id = new.id, old.id == id, old.status == .running, new.status != .running else { return }
-            // Faded in as it is faded out below, so the wave never pops onto the stage.
-            withAnimation(Chrome.panelSlide) { hold = StageHold(id: id, startedAt: .now) }
+        .onChange(of: stageMark) { (old: StageMark, new: StageMark) in
+            handleStageChange(old: old, new: new)
         }
         .task(id: hold) {
-            guard hold != nil else { return }
-            guard (try? await Task.sleep(for: .seconds(Self.finishHold))) != nil else { return }
-            withAnimation(Chrome.panelSlide) { hold = nil }
+            await clearHoldAfterDelay()
         }
         .overlay(alignment: .top) {
             strip(selected: selected)
@@ -105,21 +107,7 @@ struct HydraPanel: View {
         // swaps settle after, never during.
         .animation(nil, value: liveResize.isActive)
         .background {
-            // The helper panel's recipe: one glass surface, a scrim for the text over
-            // whatever the panel floats above, and the theme's tint.
-            let isDark = colorScheme == .dark
-            if let solid {
-                shape
-                    .fill(solid.elevated)
-                    .overlay { shape.strokeBorder(solid.hairline, lineWidth: 1) }
-            } else {
-                shape
-                    .fill(.clear)
-                    .chromeGlassEffect(.regular, in: shape)
-                    .overlay {
-                        shape.fill(Chrome.glassTint.opacity(isDark ? 0.22 : 0.16))
-                    }
-            }
+            glassBackground(shape: shape)
         }
         // Glass supplies the edge (as in `WindowBackdrop`): a hairline on top of it
         // read as a second ring around the panel whenever its window was key.
@@ -128,16 +116,66 @@ struct HydraPanel: View {
         // shape, so its shadow is drawn once and kept. A shadow on the whole panel was
         // blurred again with every token the transcript streamed under it.
         .background {
-            let isDark = colorScheme == .dark
-            shape
-                .fill((isDark ? Color.black : Color.white).opacity(isDark ? 0.3 : 0.34))
-                // A solid theme lifts the panel with a soft shadow rather than the glass's deep one.
-                .shadow(
-                    color: solid != nil ? .black.opacity(0.1) : .black.opacity(isDark ? 1 : 0.65),
-                    radius: solid != nil ? 18 : 28,
-                    y: solid != nil ? 6 : 10
-                )
+            shadowScrim(shape: shape)
         }
+    }
+
+    @ViewBuilder
+    private func finishSweepOverlay(shape: RoundedRectangle) -> some View {
+        // Done: one wave of the head's colour flows through the whole panel.
+        if let hold, let head = heads.first(where: { (candidate: ChatThread) -> Bool in candidate.id == hold.id }) {
+            let persona: HydraPersona = head.hydra?.persona ?? HydraRoster.persona(at: 0)
+            DotFieldSweep(tint: NSColor(persona.color))
+                .clipShape(shape)
+                .transition(.opacity)
+                .id(hold)
+        }
+    }
+
+    @ViewBuilder
+    private func glassBackground(shape: RoundedRectangle) -> some View {
+        // The helper panel's recipe: one glass surface, a scrim for the text over
+        // whatever the panel floats above, and the theme's tint.
+        let isDark: Bool = colorScheme == .dark
+        if let solid {
+            shape
+                .fill(solid.elevated)
+                .overlay { shape.strokeBorder(solid.hairline, lineWidth: 1) }
+        } else {
+            let tintOpacity: Double = isDark ? 0.22 : 0.16
+            shape
+                .fill(.clear)
+                .chromeGlassEffect(.regular, in: shape)
+                .overlay {
+                    shape.fill(Chrome.glassTint.opacity(tintOpacity))
+                }
+        }
+    }
+
+    private func shadowScrim(shape: RoundedRectangle) -> some View {
+        let isDark: Bool = colorScheme == .dark
+        let baseColor: Color = isDark ? Color.black : Color.white
+        let scrimOpacity: Double = isDark ? 0.3 : 0.34
+        let shadowColor: Color = solid != nil ? Color.black.opacity(0.1) : Color.black.opacity(isDark ? 1.0 : 0.65)
+        let shadowRadius: CGFloat = solid != nil ? 18 : 28
+        let shadowY: CGFloat = solid != nil ? 6 : 10
+        return shape
+            .fill(baseColor.opacity(scrimOpacity))
+            // A solid theme lifts the panel with a soft shadow rather than the glass's deep one.
+            .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
+    }
+
+    private func handleStageChange(old: StageMark, new: StageMark) {
+        // The head on stage just finished: it holds the stage for its wave.
+        guard let id = new.id, old.id == id, old.status == .running, new.status != .running else { return }
+        // Faded in as it is faded out below, so the wave never pops onto the stage.
+        withAnimation(Chrome.panelSlide) { hold = StageHold(id: id, startedAt: .now) }
+    }
+
+    private func clearHoldAfterDelay() async {
+        guard hold != nil else { return }
+        guard (try? await Task.sleep(for: .seconds(Self.finishHold))) != nil else { return }
+        withAnimation(Chrome.panelSlide) { hold = nil }
     }
 
     /// The handle across the top: the count and the head on stage at the left, the pop-out
@@ -502,74 +540,94 @@ private struct HydraHeadTranscript: View {
     @State private var settledHeadID: UUID?
     @State private var settleTask: Task<Void, Never>?
 
+    private func resolvedDirectory() -> String? {
+        guard let path = try? model.executionDirectory(for: head), !path.isEmpty else { return nil }
+        return path
+    }
+
     var body: some View {
-        let runtime = model.runtime(for: head.id)
-        let project = model.project(head.projectID)
-        let directory = (try? model.executionDirectory(for: head)).flatMap { $0.isEmpty ? nil : $0 }
+        let runtime: ThreadRuntime = model.runtime(for: head.id)
+        let project: Project? = model.project(head.projectID)
+        let directory: String? = resolvedDirectory()
         Group {
-            if model.settings.hydraShowsHeadDetails {
-                ThreadTimeline(
-                    runtime: runtime,
-                    scrollChrome: scrollChrome,
-                    scrollState: scrollState,
-                    projectName: project?.name ?? (head.affiliation == .standalone ? Chrome.localized("Task") : nil),
-                    workingDirectory: directory,
-                    supportsRewind: false,
-                    columnHeight: height,
-                    // A panel's transcript needs no rail, and the rail's hover tracking
-                    // and geometry reader are per-frame work under the pointer.
-                    showsMinimap: false
-                )
-                .equatable()
-                .id(head.id)
-                .environment(\.chatColumnInitialFrame, settledHeadID != head.id)
-                .environment(\.chatColumnInitialPaneHeight, height)
-            } else {
-                // The task and the progress bar stand in for the steps, which the
-                // sidebar shows; the chat box below still steers the head.
-                // Nothing on the stage answers the pointer, and it is most of the panel:
-                // it moves the panel, as the strip does. The full transcript scrolls and
-                // selects text instead, so it keeps the pointer.
-                HydraHeadProgress(head: head, runtime: runtime)
-                    .id(head.id)
-                    .overlay {
-                        PanelDragHandle(onDrag: onDrag, onDragEnd: onDragEnd)
-                            .padding(.top, HydraPanel.stripHeight)
-                    }
-            }
+            stageContent(runtime: runtime, project: project, directory: directory)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if head.hydra?.kind == .tivano {
-                // A child Tivano runs itself can be steered and answered like any chat.
-                ComposerArea(runtime: runtime, workingDirectory: directory, compactModelChip: true, takesFocusOnAppear: false, showsChanges: false)
-                    .overlay(alignment: .top) {
-                        JumpToLatestButton(scrollState: scrollState)
-                    }
-            } else if let stored = head.hydra {
-                ThreadDirectoryError(threadID: head.id)
-                HydraHeadFooter(info: HydraLiveInfo.shown(stored, runtime))
-                    .overlay(alignment: .top) {
-                        JumpToLatestButton(scrollState: scrollState)
-                    }
-            }
+            footerInset(runtime: runtime, directory: directory)
         }
         .chromeEdgeFade(scrollChrome)
-        .onChange(of: head.id, initial: true) { oldID, newID in
-            if oldID != nil, oldID != newID {
-                scrollChrome.update(travel: 0)
-                scrollState.reset()
-            }
-            settleTask?.cancel()
-            guard settledHeadID != newID else { return }
-            settleTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(90))
-                guard !Task.isCancelled else { return }
-                settledHeadID = newID
-            }
+        .onChange(of: head.id, initial: true) { (oldID: UUID, newID: UUID) in
+            handleHeadChange(oldID: oldID, newID: newID)
         }
         .onDisappear {
             settleTask?.cancel()
             settleTask = nil
+        }
+    }
+
+    @ViewBuilder
+    private func stageContent(runtime: ThreadRuntime, project: Project?, directory: String?) -> some View {
+        if model.settings.hydraShowsHeadDetails {
+            let resolvedProjectName: String? = project?.name ?? (head.affiliation == .standalone ? Chrome.localized("Task") : nil)
+            ThreadTimeline(
+                runtime: runtime,
+                scrollChrome: scrollChrome,
+                scrollState: scrollState,
+                projectName: resolvedProjectName,
+                workingDirectory: directory,
+                supportsRewind: false,
+                columnHeight: height,
+                // A panel's transcript needs no rail, and the rail's hover tracking
+                // and geometry reader are per-frame work under the pointer.
+                showsMinimap: false
+            )
+            .equatable()
+            .id(head.id)
+            .environment(\.chatColumnInitialFrame, settledHeadID != head.id)
+            .environment(\.chatColumnInitialPaneHeight, height)
+        } else {
+            // The task and the progress bar stand in for the steps, which the
+            // sidebar shows; the chat box below still steers the head.
+            // Nothing on the stage answers the pointer, and it is most of the panel:
+            // it moves the panel, as the strip does. The full transcript scrolls and
+            // selects text instead, so it keeps the pointer.
+            HydraHeadProgress(head: head, runtime: runtime)
+                .id(head.id)
+                .overlay {
+                    PanelDragHandle(onDrag: onDrag, onDragEnd: onDragEnd)
+                        .padding(.top, HydraPanel.stripHeight)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func footerInset(runtime: ThreadRuntime, directory: String?) -> some View {
+        if head.hydra?.kind == .tivano {
+            // A child Tivano runs itself can be steered and answered like any chat.
+            ComposerArea(runtime: runtime, workingDirectory: directory, compactModelChip: true, takesFocusOnAppear: false, showsChanges: false)
+                .overlay(alignment: .top) {
+                    JumpToLatestButton(scrollState: scrollState)
+                }
+        } else if let stored = head.hydra {
+            ThreadDirectoryError(threadID: head.id)
+            HydraHeadFooter(info: HydraLiveInfo.shown(stored, runtime))
+                .overlay(alignment: .top) {
+                    JumpToLatestButton(scrollState: scrollState)
+                }
+        }
+    }
+
+    private func handleHeadChange(oldID: UUID?, newID: UUID) {
+        if oldID != nil, oldID != newID {
+            scrollChrome.update(travel: 0)
+            scrollState.reset()
+        }
+        settleTask?.cancel()
+        guard settledHeadID != newID else { return }
+        settleTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(90))
+            guard !Task.isCancelled else { return }
+            settledHeadID = newID
         }
     }
 }
@@ -693,8 +751,7 @@ enum HydraStatusText {
         guard let finished = info.finishedAt else { return "" }
         let seconds = Int(finished.timeIntervalSince(info.startedAt))
         guard seconds > 0 else { return "" }
-        let duration = Duration.seconds(seconds)
-            .formatted(.units(allowed: [.seconds, .minutes], width: .narrow, maximumUnitCount: 2, fractionalPart: .hide(rounded: .down)))
+        let duration = AppFormatting.duration(seconds: seconds, allowed: [.seconds, .minutes])
         return " " + String(format: Chrome.localized("in %@"), duration)
     }
 }

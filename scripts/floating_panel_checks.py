@@ -213,7 +213,8 @@ def check_close_folds_without_stopping(sources):
     require_absent(close, 'interrupt(', label)
     require(close, 'updateThread(id) { $0.isInPanel = false }', label)
     require_absent(sources[SUBAGENT_PANEL], 'ClosePanelPopover', label)
-    require(sources[TIMELINE], 'HelpersWorkingRow.shows(runtime: runtime, model: model) ? [.helpersWorking] : []', label)
+    require(sources[TIMELINE], 'let showsHelpersWorking = HelpersWorkingRow.shows(runtime: runtime, model: model)', label)
+    require(sources[TIMELINE], 'if showsHelpersWorking {\n            full.append(.helpersWorking)', label)
     require(sources[TIMELINE_ROWS], 'return helper.isHydraHead ? runtime.isHydraPanelHidden : !helper.isInPanel', label)
 
 
