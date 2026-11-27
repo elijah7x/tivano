@@ -325,6 +325,12 @@ enum RuntimePhase: Equatable {
     case running
 }
 
+enum UtilityChestTab: String, CaseIterable, Identifiable, Sendable {
+    case outputs, changes, terminal
+
+    var id: String { rawValue }
+}
+
 /// Owns a thread's live state: its timeline, its provider session and its pending requests.
 @MainActor
 @Observable
@@ -439,7 +445,93 @@ final class ThreadRuntime {
     @ObservationIgnored var terminalWantsFocus = false
     /// True while the terminal's divider is held: the pane's height follows the pointer, and the chat's panels follow it with no spring until it is let go.
     var isTerminalResizing = false
-    var isDiffVisible = false
+    var isChestOpen = false {
+        didSet {
+            if isChestOpen, !oldValue, chestTab == .terminal {
+                terminalWantsFocus = true
+            }
+        }
+    }
+    var chestTab: UtilityChestTab = .outputs {
+        didSet {
+            if isChestOpen, chestTab == .terminal, oldValue != .terminal {
+                terminalWantsFocus = true
+            }
+        }
+    }
+    var isChestPinned = false
+    var commitDraftMessage = ""
+    var commitPushesAfter = false
+    @ObservationIgnored private var prefersDockedTerminal = false
+    @ObservationIgnored var insertMentionHandler: ((String) -> Void)?
+
+    var isDiffVisible: Bool {
+        get { isChestOpen && chestTab == .changes }
+        set {
+            if newValue {
+                chestTab = .changes
+                isChestOpen = true
+            } else if chestTab == .changes {
+                isChestOpen = false
+            }
+        }
+    }
+
+    func toggleToolbox() {
+        if !isChestOpen, chestTab == .changes {
+            clearDiffFocus()
+            if diffSelection != nil { diffSelection = nil }
+        }
+        isChestOpen.toggle()
+    }
+
+    func openGeneralChanges() {
+        clearDiffFocus()
+        if diffSelection != nil { diffSelection = nil }
+        chestTab = .changes
+        if !isChestOpen { isChestOpen = true }
+    }
+
+    func toggleTerminal() {
+        if isTerminalVisible {
+            isTerminalVisible = false
+        } else if isChestOpen, chestTab == .terminal {
+            isChestOpen = false
+        } else if isChestOpen {
+            chestTab = .terminal
+            terminalWantsFocus = true
+        } else if prefersDockedTerminal {
+            isTerminalVisible = true
+        } else {
+            chestTab = .terminal
+            isChestOpen = true
+            terminalWantsFocus = true
+        }
+    }
+
+    func insertFileMention(_ relativePath: String) {
+        if let insertMentionHandler {
+            insertMentionHandler(relativePath)
+            return
+        }
+        let needsSpace = !draft.text.isEmpty && !draft.text.last!.isWhitespace
+        draft.text += (needsSpace ? " " : "") + "@\(relativePath) "
+    }
+
+    func dockTerminalToBottom() {
+        prefersDockedTerminal = true
+        isChestOpen = false
+        isTerminalVisible = true
+        terminalWantsFocus = true
+    }
+
+    func moveTerminalToChest() {
+        prefersDockedTerminal = false
+        isTerminalVisible = false
+        chestTab = .terminal
+        isChestOpen = true
+        terminalWantsFocus = true
+    }
     /// Which corner of the chat pane the helper panel this thread spawned sits in.
     var subagentPanelDock: PanelDockCorner = .bottomTrailing
     /// The same for the Hydra panel.
@@ -660,6 +752,7 @@ final class ThreadRuntime {
     func toggleDiff() {
         clearDiffFocus()
         if !isDiffVisible {
+            if diffSelection != nil { diffSelection = nil }
             if let capsule = changesCapsuleAnchor?.value, capsule.window != nil {
                 diffAnchor = WeakView(capsule)
                 diffAnchorEdge = .minY

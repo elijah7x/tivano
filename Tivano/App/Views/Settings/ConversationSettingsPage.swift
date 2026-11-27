@@ -66,10 +66,6 @@ struct ConversationSettingsPage: View {
                 .disabled(textGenOff)
                 .opacity(textGenOff ? 0.5 : 1)
                 ChromeRowDivider()
-                ChromeRow(title: "Collapse top controls", detail: "Keep the upper-right controls and file changes behind a … button") {
-                    SettingsSwitch(isOn: $settings.collapseTopControls)
-                }
-                ChromeRowDivider()
                 ChromeRow(
                     title: "Prevent sleep while tasks are running",
                     detail: "While tasks run, your Mac won't doze off. Keep Mac awake lets the screen turn off on its own; Keep Mac and screen awake leaves it lit too, which helps when an agent needs to see a front end. Manual sleep and closing the lid still work."

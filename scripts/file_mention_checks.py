@@ -439,6 +439,80 @@ enum FileMentionChecks {
             )
         }
 
+        // 8. parentDirectory and suggestionPlacement
+        do {
+            check(
+                FileMentions.parentDirectory(for: "README.md") == ""
+                    && FileMentions.parentDirectory(for: "scripts/") == ""
+                    && FileMentions.parentDirectory(for: "scripts/archive/fetch.py") == "scripts/archive"
+                    && FileMentions.parentDirectory(for: "scripts/archive/") == "scripts",
+                "parentDirectory: root/top-level empty, nested file and folder return parent"
+            )
+
+            let ample = FileMentions.suggestionPlacement(
+                desiredHeight: 320,
+                containerWidth: 700,
+                spaceAbove: 500,
+                spaceBelow: 400
+            )
+            check(
+                ample == FileMentionSuggestionPlacement(size: CGSize(width: 450, height: 320), opensAbove: true),
+                "suggestionPlacement: ample space opens above at 450pt"
+            )
+
+            let narrow = FileMentions.suggestionPlacement(
+                desiredHeight: 240,
+                containerWidth: 360.8,
+                spaceAbove: 500,
+                spaceBelow: 400
+            )
+            let veryNarrow = FileMentions.suggestionPlacement(
+                desiredHeight: 240,
+                containerWidth: 240,
+                spaceAbove: 500,
+                spaceBelow: 400
+            )
+            check(
+                narrow == FileMentionSuggestionPlacement(size: CGSize(width: 360, height: 240), opensAbove: true)
+                    && veryNarrow == FileMentionSuggestionPlacement(size: CGSize(width: 300, height: 240), opensAbove: true),
+                "suggestionPlacement: narrow container clamps width between 300 and preferredWidth"
+            )
+
+            let moderateTop = FileMentions.suggestionPlacement(
+                desiredHeight: 320,
+                containerWidth: 600,
+                spaceAbove: 200.9,
+                spaceBelow: 500
+            )
+            check(
+                moderateTop == FileMentionSuggestionPlacement(size: CGSize(width: 450, height: 200), opensAbove: true),
+                "suggestionPlacement: moderate top space clamps height while keeping opensAbove true"
+            )
+
+            let tinyTop = FileMentions.suggestionPlacement(
+                desiredHeight: 320,
+                containerWidth: 600,
+                spaceAbove: 100,
+                spaceBelow: 400
+            )
+            let tinyTopClampedBelow = FileMentions.suggestionPlacement(
+                desiredHeight: 320,
+                containerWidth: 600,
+                spaceAbove: 100,
+                spaceBelow: 220.7
+            )
+            let unmeasured = FileMentions.suggestionPlacement(
+                desiredHeight: 300,
+                containerWidth: 600
+            )
+            check(
+                tinyTop == FileMentionSuggestionPlacement(size: CGSize(width: 450, height: 320), opensAbove: false)
+                    && tinyTopClampedBelow == FileMentionSuggestionPlacement(size: CGSize(width: 450, height: 220), opensAbove: false)
+                    && unmeasured == FileMentionSuggestionPlacement(size: CGSize(width: 450, height: 300), opensAbove: true),
+                "suggestionPlacement: tiny top space flips below and nil clearances open above"
+            )
+        }
+
         print("\(count) file mention checks passed.")
     }
 }

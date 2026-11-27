@@ -16,9 +16,6 @@ struct ComposerArea: View {
     /// floating panel's box never does, since a head's changes land through the lead.
     var showsChanges = true
 
-    /// The changes popover presented from the tab. Driven by
-    /// `runtime.isDiffVisible`, so every opener (tab, Review, ⌘D) shares it.
-    @State private var diffPopover = DiffPopoverCoordinator()
     @State private var repositoryDirectory: String?
     @MainActor private static var repositoryStatusCache = RecentCache<String, Bool>(limit: 32)
 
@@ -50,25 +47,12 @@ struct ComposerArea: View {
             }
             .floatingGlassContainer()
             .background {
-                AttachmentAnchorCapture { diffPopover.setFallbackAnchor($0) }
-            }
-            .background {
                 // Remount on reveal to refresh the latest revision once.
                 if canShowChanges {
                     ColumnShownChangeStatsRefresh(visibility: columnVisibility, runtime: runtime)
                 }
             }
-            .onAppear { diffPopover.sync(isVisible: canShowChanges && runtime.isDiffVisible, runtime: runtime) }
-            // The box moved to another thread; the coordinator closes the popover it had and never opens one on arrival.
-            .onChange(of: runtime.threadID) { diffPopover.sync(isVisible: canShowChanges && runtime.isDiffVisible, runtime: runtime) }
-            .onChange(of: runtime.isDiffVisible) { _, visible in
-                diffPopover.sync(isVisible: canShowChanges && visible, runtime: runtime)
-            }
-            .onChange(of: runtime.diffOpenRequest) {
-                if canShowChanges { diffPopover.reopen(runtime: runtime) }
-            }
             .task(id: workingDirectory) {
-                diffPopover.close()
                 guard showsChanges, let workingDirectory else {
                     if repositoryDirectory != nil { repositoryDirectory = nil }
                     return
@@ -85,10 +69,6 @@ struct ComposerArea: View {
                 let resolved = isRepository ? workingDirectory : nil
                 if repositoryDirectory != resolved { repositoryDirectory = resolved }
             }
-            .onDisappear { diffPopover.close() }
-            .modifier(ColumnVisibilityReaction(visibility: columnVisibility) { shown in
-                if !shown { diffPopover.close() }
-            })
         }
     }
 }
@@ -274,8 +254,13 @@ struct ComposerView: View {
                 controller.hideSuggestions()
             }
         }
-        .onDisappear { controller.tearDownSuggestions() }
+        .onAppear { wireInsertMentionHandler() }
+        .onDisappear {
+            controller.tearDownSuggestions()
+            runtime.insertMentionHandler = nil
+        }
         .onChange(of: runtime.threadID) { _, _ in
+            wireInsertMentionHandler()
             controller.hideSuggestions()
             controller.suggestionRefresh?.cancel()
             if suggestions.isVisible { suggestions = SuggestionState() }
@@ -337,6 +322,17 @@ struct ComposerView: View {
         }
     }
 
+    private func wireInsertMentionHandler() {
+        let runtime = self.runtime
+        let controller = self.controller
+        runtime.insertMentionHandler = { [weak runtime] path in
+            guard let runtime else { return }
+            let needsSpace = !runtime.draft.text.isEmpty && !runtime.draft.text.last!.isWhitespace
+            runtime.draft.text += (needsSpace ? " " : "") + "@\(path) "
+            controller.focus()
+        }
+    }
+
     private func blur() {
         // Clicking a row focuses the popover; only dismiss when
         // focus truly left both the text and the suggestions.
@@ -348,16 +344,18 @@ struct ComposerView: View {
         }
     }
 
-    /// Updates the caret-anchored suggestions popover without replacing its hosting controller's root view.
+    /// Updates the token-anchored suggestions popover without replacing its hosting controller's root view.
     private func presentSuggestions(_ state: SuggestionState) {
-        let size = ComposerController.suggestionSize(for: state.items.count)
         suggestionMenuBox.suggestions = state
         suggestionMenuBox.commandError = state.kind == .command ? model.providers.commandErrors[commandKey] : nil
-        suggestionMenuBox.size = size
         suggestionMenuBox.onSelect = { index in suggestions.selected = index }
         suggestionMenuBox.onPick = { item in pick(item) }
         suggestionMenuBox.onRetryCommands = { Task { await loadCommands(force: true) } }
-        controller.showSuggestions(size: size) {
+        controller.showSuggestions(
+            itemCount: state.items.count,
+            tokenModelOffset: state.range.location,
+            onSize: { suggestionMenuBox.size = $0 }
+        ) {
             SuggestionMenuView(box: suggestionMenuBox)
         }
     }
@@ -445,8 +443,8 @@ struct ComposerView: View {
                 runtime.takeBackRunningTurn()
             } else if runtime.isTerminalVisible {
                 runtime.isTerminalVisible = false
-            } else if runtime.isDiffVisible {
-                runtime.toggleDiff()
+            } else if runtime.isChestOpen {
+                runtime.isChestOpen = false
             } else if showsPrediction {
                 runtime.promptPrediction = nil
             } else {
@@ -573,11 +571,26 @@ struct ComposerView: View {
             // is under way, and this answer is for a word that is gone.
             guard !Task.isCancelled else { return }
             items = paths.map { path in
+                let parent = FileMentions.parentDirectory(for: path)
                 if path.hasSuffix("/") {
                     let bare = String(path.dropLast())
-                    return Suggestion(value: "@\(bare) ", title: (bare as NSString).lastPathComponent, detail: path, symbol: "folder")
+                    return Suggestion(
+                        value: "@\(bare) ",
+                        title: (bare as NSString).lastPathComponent,
+                        detail: parent,
+                        symbol: "folder",
+                        detailTruncation: .middle,
+                        tooltip: path
+                    )
                 }
-                return Suggestion(value: "@\(path) ", title: (path as NSString).lastPathComponent, detail: path, symbol: "doc")
+                return Suggestion(
+                    value: "@\(path) ",
+                    title: (path as NSString).lastPathComponent,
+                    detail: parent,
+                    symbol: "doc",
+                    detailTruncation: .middle,
+                    tooltip: path
+                )
             }
         } else if word.hasPrefix("/"), start == 0 {
             kind = .command
@@ -1248,6 +1261,8 @@ struct Suggestion: Identifiable, Equatable {
     var title: String
     var detail: String
     var symbol: String
+    var detailTruncation: Text.TruncationMode = .tail
+    var tooltip: String? = nil
     var command: SlashCommand? = nil
 
     var id: String { value }
@@ -1258,19 +1273,19 @@ struct Suggestion: Identifiable, Equatable {
 private final class SuggestionMenuBox {
     var suggestions = SuggestionState()
     var commandError: String?
-    var size = NSSize(width: 340, height: 70)
+    var size = NSSize(width: 450, height: 70)
     @ObservationIgnored var onSelect: (Int) -> Void = { _ in }
     @ObservationIgnored var onPick: (Suggestion) -> Void = { _ in }
     @ObservationIgnored var onRetryCommands: () -> Void = {}
 }
 
-/// The slash/@ list hosted in a caret-anchored NSPopover (see ComposerController).
+/// The slash/@ list hosted in a token-anchored NSPopover (see ComposerController).
 private struct SuggestionMenuView: View {
     let box: SuggestionMenuBox
 
     var body: some View {
         ScrollViewReader { proxy in
-            PopoverMenu {
+            PopoverMenu(maxWidth: box.size.width) {
                 PopoverSectionHeader(box.suggestions.kind == .command ? "Commands · Recently used first" : "Files")
                 if box.suggestions.kind == .command, let error = box.commandError {
                     PopoverNote(error)
@@ -1311,15 +1326,26 @@ private struct SuggestionPopoverRow: View {
                 Image(systemName: item.symbol)
                     .font(.ui(.callout))
                     .frame(width: 16)
-                Text(verbatim: item.title)
-                    .font(.ui(.body))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 16)
-                Text(verbatim: item.detail)
-                    .font(.ui(.callout))
-                    .foregroundStyle(Chrome.secondaryText)
-                    .lineLimit(1)
+                if item.detail.isEmpty {
+                    Text(verbatim: item.title)
+                        .font(.ui(.body))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                } else {
+                    SuggestionRowTextLayout(spacing: 12) {
+                        Text(verbatim: item.title)
+                            .font(.ui(.body))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(verbatim: item.detail)
+                            .font(.ui(.callout))
+                            .foregroundStyle(Chrome.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(item.detailTruncation)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
             }
             .foregroundStyle(Chrome.primaryText)
             .padding(.horizontal, 8)
@@ -1332,9 +1358,72 @@ private struct SuggestionPopoverRow: View {
         }
         .buttonStyle(.plain)
         .focusable(false)
+        .suggestionTooltip(item.tooltip)
         .onHover { hovering in
             withAnimation(Chrome.hover) { isHovering = hovering }
             if hovering { select() }
+        }
+    }
+}
+
+private struct SuggestionRowTextLayout: Layout {
+    var spacing: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else {
+            return subviews.first?.sizeThatFits(proposal) ?? .zero
+        }
+        let titleIdeal = subviews[0].sizeThatFits(.unspecified)
+        let detailIdeal = subviews[1].sizeThatFits(.unspecified)
+        let height = max(titleIdeal.height, detailIdeal.height)
+        let width: CGFloat
+        if let proposed = proposal.width, proposed.isFinite {
+            width = max(0, proposed)
+        } else {
+            width = titleIdeal.width + spacing + detailIdeal.width
+        }
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else {
+            subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: proposal)
+            return
+        }
+        let titleIdeal = subviews[0].sizeThatFits(.unspecified).width
+        let detailIdeal = subviews[1].sizeThatFits(.unspecified).width
+        let width = max(0, bounds.width)
+        let titleWidth: CGFloat
+        let detailWidth: CGFloat
+        if titleIdeal + detailIdeal + spacing <= width {
+            titleWidth = titleIdeal
+            detailWidth = detailIdeal
+        } else {
+            let available = max(0, width - spacing)
+            let minDetail = min(detailIdeal, floor(available * 0.36))
+            titleWidth = min(titleIdeal, max(0, available - minDetail))
+            detailWidth = max(0, available - titleWidth)
+        }
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY),
+            anchor: .leading,
+            proposal: ProposedViewSize(width: titleWidth, height: bounds.height)
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.maxX, y: bounds.midY),
+            anchor: .trailing,
+            proposal: ProposedViewSize(width: detailWidth, height: bounds.height)
+        )
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func suggestionTooltip(_ tooltip: String?) -> some View {
+        if let tooltip, !tooltip.isEmpty {
+            self.help(Text(verbatim: tooltip))
+        } else {
+            self
         }
     }
 }
