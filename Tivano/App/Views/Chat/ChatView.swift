@@ -233,6 +233,27 @@ struct ChatView: View {
                 }
                 .modifier(SettledAnimation(visibility: columnVisibility, reveal: reveal, threadSwitching: threadSwitching, animation: Chrome.panelSlide, value: scene.autoPopped.map(\.id)))
             }
+            .overlay(alignment: .topTrailing) {
+                ZStack(alignment: .topTrailing) {
+                    if runtime.isChestOpen && !runtime.isChestPinned {
+                        Color.clear
+                            .contentShape(.rect)
+                            .onTapGesture {
+                                withAnimation(Chrome.panelSlide) {
+                                    runtime.isChestOpen = false
+                                }
+                            }
+                            .padding(.top, Chrome.chromeTopPadding + Chrome.capsuleHeight + 6)
+                    }
+                    if runtime.isChestOpen {
+                        UtilityChestPanel(runtime: runtime, directory: directory, git: git, paneSize: currentPaneSize)
+                            .padding(.top, Chrome.chromeTopPadding + Chrome.capsuleHeight + 8)
+                            .padding(.trailing, Chrome.chromeHorizontalPadding)
+                            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .topTrailing)))
+                    }
+                }
+                .modifier(SettledAnimation(visibility: columnVisibility, reveal: reveal, threadSwitching: threadSwitching, animation: Chrome.panelSlide, value: runtime.isChestOpen))
+            }
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { paneSize = $0 }
             // Free-floating panels are kept inside the pane while it shrinks, with no
             // animation; when the resize ends they land docked exactly (see below).
@@ -305,6 +326,9 @@ struct ChatView: View {
         // (`columnHeight`, `paneSize`, `composerAreaHeight`) are the pane's, not the
         // thread's, and stay.
         .onChange(of: runtime.threadID) {
+            if runtime.isChestOpen && !runtime.isChestPinned {
+                runtime.isChestOpen = false
+            }
             sceneThreadID = runtime.threadID
             hydraLingerTask?.cancel()
             if hydraLingers { hydraLingers = false }
@@ -317,8 +341,13 @@ struct ChatView: View {
             if !autoDrags.isEmpty { autoDrags = [:] }
             panelResize.reset()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            if runtime.isChestOpen && !runtime.isChestPinned {
+                runtime.isChestOpen = false
+            }
+        }
         .onAppear { sceneThreadID = runtime.threadID }
-        .modifier(ColumnSettleReaction(visibility: columnVisibility, reveal: reveal))
+        .modifier(ColumnSettleReaction(visibility: columnVisibility, reveal: reveal, runtime: runtime))
     }
 
     // MARK: - Floating panels
@@ -740,12 +769,16 @@ extension ChatView {
     private struct ColumnSettleReaction: ViewModifier {
         let visibility: ChatColumnVisibility
         let reveal: ColumnRevealState
+        let runtime: ThreadRuntime
 
         func body(content: Content) -> some View {
             content.onChange(of: visibility.isShown, initial: true) { _, shown in
                 reveal.settleTask?.cancel()
                 guard shown else {
                     reveal.hasSettled = false
+                    if runtime.isChestOpen && !runtime.isChestPinned {
+                        runtime.isChestOpen = false
+                    }
                     return
                 }
                 reveal.settleTask = Task { @MainActor in
@@ -1164,9 +1197,6 @@ private struct ChatChromeRow: View {
         .pointerStyle(.default)
         .animation(Chrome.panelSlide, value: sidebarVisible)
         .animation(.softAppear, value: showsSidebarControls)
-        .onChange(of: model.settings.collapseTopControls) {
-            model.isTopControlsExpanded = false
-        }
     }
 
     @ViewBuilder
@@ -1193,20 +1223,10 @@ private struct ChatChromeRow: View {
     }
 
     private var topControls: some View {
-        let collapses = model.settings.collapseTopControls
-        return HStack(spacing: 8) {
-            if !collapses || model.isTopControlsExpanded {
-                expandedTopControls
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-            if collapses {
-                ChromeCapsule {
-                    ChromeIconButton(symbol: "ellipsis", isActive: model.isTopControlsExpanded, help: "More controls") {
-                        withAnimation(.snappy(duration: 0.2)) {
-                            model.isTopControlsExpanded.toggle()
-                        }
-                    }
-                }
+        HStack(spacing: 8) {
+            agentControls
+            if let directory, git.directory == directory, git.isRepository {
+                BranchMenu(runtime: runtime, directory: directory, git: git)
             }
             ChromeCapsule {
                 ChromeIconButton(symbol: "gearshape", help: "Settings") {
@@ -1219,17 +1239,13 @@ private struct ChatChromeRow: View {
                     }
                 }
             }
-        }
-    }
-
-    private var expandedTopControls: some View {
-        HStack(spacing: 8) {
-            agentControls
-            if let directory, git.directory == directory, git.isRepository {
-                BranchMenu(runtime: runtime, directory: directory, git: git)
+            ChromeCapsule {
+                ChromeIconButton(symbol: "square.grid.2x2", isActive: runtime.isChestOpen, help: "Toolbox") {
+                    withAnimation(Chrome.panelSlide) {
+                        runtime.toggleToolbox()
+                    }
+                }
             }
-            utilityControls
-            changesCapsule
         }
     }
 
@@ -1261,32 +1277,6 @@ private struct ChatChromeRow: View {
         }
     }
 
-    @ViewBuilder
-    private var utilityControls: some View {
-        ChromeCapsule {
-            if let directory, git.directory == directory, git.isRepository {
-                GitActionsMenu(runtime: runtime, directory: directory, git: git)
-                ChromeDivider()
-            }
-            ChromeIconButton(symbol: "terminal", isActive: runtime.isTerminalVisible, help: Chrome.localized("Terminal") + ShortcutStore.hint(for: .toggleTerminal)) {
-                runtime.isTerminalVisible.toggle()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var changesCapsule: some View {
-        if directory != nil, git.directory != directory || git.isRepository, let stats = runtime.changeStats {
-            ThreadChangesCapsule(runtime: runtime, stats: stats, isActive: runtime.isDiffVisible) {
-                if !runtime.isDiffVisible, runtime.diffSelection != nil {
-                    runtime.diffSelection = nil
-                }
-                runtime.toggleDiff()
-            }
-            .transition(.softAppear)
-        }
-    }
-
     private func titleInset(sidebarVisible: Bool) -> CGFloat {
         var leading = Chrome.chromeHorizontalPadding
         if !sidebarVisible {
@@ -1294,54 +1284,6 @@ private struct ChatChromeRow: View {
             leading += 2 * (Chrome.capsuleHeight + 10)
         }
         return max(0, titleLeading - leading)
-    }
-}
-
-private struct ThreadChangesCapsule: View {
-    let runtime: ThreadRuntime
-    let stats: FileChangeSummary
-    let isActive: Bool
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        ChromeCapsule {
-            Button(action: action) {
-                HStack(spacing: 5) {
-                    Text(verbatim: "+\(stats.additions)")
-                        .foregroundStyle(Chrome.success)
-                    Text(verbatim: "\u{2212}\(stats.deletions)")
-                        .foregroundStyle(Chrome.danger)
-                }
-                .font(.ui(.callout, weight: .medium).monospacedDigit())
-                .lineLimit(1)
-                .opacity(isHovering || isActive ? 1 : 0.92)
-                .padding(.horizontal, Chrome.capsuleHorizontalPadding - Chrome.iconCapsuleInnerPadding)
-                .frame(height: Chrome.capsuleContentHeight)
-                .background {
-                    if isActive || isHovering {
-                        Capsule(style: .continuous)
-                            .fill(Chrome.overlay(isActive ? 0.12 : 0.06))
-                            .padding(1)
-                    }
-                }
-                .contentShape(Capsule(style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .fixedSize()
-            // The changes popover hangs below the numbers it opens from.
-            .background {
-                AttachmentAnchorCapture { [weak runtime] in runtime?.changesCapsuleAnchor = WeakView($0) }
-            }
-            .onHover { hovering in
-                guard isHovering != hovering else { return }
-                withAnimation(Chrome.hover) { isHovering = hovering }
-            }
-            .help(Text(verbatim: String(format: Chrome.localized("Show this thread's changes%@"), ShortcutStore.hint(for: .toggleChanges))))
-            .accessibilityLabel(Text(verbatim: String(format: Chrome.localized("%d files changed, %d lines added, %d lines removed"), stats.files.count, stats.additions, stats.deletions)))
-        }
     }
 }
 
@@ -1508,7 +1450,7 @@ private struct BranchMenu: View {
 
     var body: some View {
         ChromeTextMenu(
-            symbol: "arrow.triangle.branch",
+            symbol: runtime.thread?.worktreePath != nil ? "square.stack.3d.up" : "arrow.triangle.branch",
             title: git.activity ?? git.status?.branch ?? "Detached",
             help: "Branch"
         ) {
@@ -1570,6 +1512,11 @@ private struct BranchMenu: View {
             PopoverItem("Rename branch…", symbol: "pencil", isEnabled: !runtime.isHydraMerging) {
                 branchName = branch
                 isRenamingBranch = true
+            }
+        }
+        if let worktreePath = runtime.thread?.worktreePath {
+            PopoverItem("Show worktree in Finder", symbol: "folder") {
+                Workspace.revealInFinder(worktreePath)
             }
         }
         if model.project(runtime.thread?.projectID) != nil, runtime.thread?.worktreePath == nil, runtime.turns.isEmpty {
@@ -1638,193 +1585,6 @@ private struct BranchMenu: View {
                 model.alert = AppAlert(title: "Could not create branch", message: error.localizedDescription)
             }
             await git.refresh(directory)
-        }
-    }
-}
-
-private struct GitActionsMenu: View {
-    @Environment(AppModel.self) private var model
-    let runtime: ThreadRuntime
-    let directory: String
-    let git: GitStatusModel
-
-    @State private var isCommitting = false
-
-    var body: some View {
-        let changed = git.status?.changedFiles ?? 0
-        ChromeMenuButton(symbol: "arrow.triangle.pull", help: changed == 0 ? "Commit, push and open pull requests" : String(format: Chrome.localized("%d changed files"), changed)) {
-            PopoverNote(changed == 1 ? "1 changed file" : String(format: Chrome.localized("%d changed files"), changed))
-            PopoverDivider()
-            PopoverItem("Commit…", symbol: "checkmark.circle", isEnabled: changed > 0) { isCommitting = true }
-            PopoverItem("Push", symbol: "arrow.up.circle", isEnabled: git.status?.branch != nil) { push() }
-            PopoverItem("Create pull request", symbol: "arrow.triangle.pull", isEnabled: git.status?.branch != nil) { openPullRequest() }
-            if let url = git.remoteURL {
-                PopoverDivider()
-                PopoverItem("Open repository", symbol: "safari") { NSWorkspace.shared.open(url) }
-            }
-        }
-        .sheet(isPresented: $isCommitting) {
-            CommitSheet(runtime: runtime, directory: directory, git: git)
-                .presentedChrome()
-        }
-        .transformPreference(ChromePresentationPreference.self) { $0 = $0 || isCommitting }
-    }
-
-    private func push() {
-        Task {
-            let repository = Git(directory)
-            if let error = await git.perform("Pushing", { try await repository.push() }) {
-                model.alert = AppAlert(title: "Push failed", message: error.localizedDescription)
-            }
-            await git.refresh(directory)
-        }
-    }
-
-    private func openPullRequest() {
-        Task {
-            let repository = Git(directory)
-            var url: URL?
-            let error = await git.perform("Opening pull request") {
-                try await repository.push()
-                let subject = (try? await repository.output(["log", "-1", "--pretty=%s"]))?
-                    .trimmed ?? ""
-                let body = (try? await repository.output(["log", "-1", "--pretty=%b"]))?
-                    .trimmed ?? ""
-                url = try await repository.createPullRequest(
-                    title: subject.isEmpty ? "Update" : subject,
-                    body: body.isEmpty ? "Opened from Tivano." : body
-                )
-            }
-            if let error {
-                model.alert = AppAlert(title: "Could not open a pull request", message: error.localizedDescription)
-            } else if let url {
-                NSWorkspace.shared.open(url)
-            }
-            await git.refresh(directory)
-        }
-    }
-}
-
-private struct CommitSheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let runtime: ThreadRuntime
-    let directory: String
-    let git: GitStatusModel
-
-    @State private var message = ""
-    @State private var summary = ""
-    @State private var isGenerating = false
-    @State private var isCommitting = false
-    @State private var pushesAfterCommit = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Commit changes")
-                .font(.ui(.title2, weight: .semibold))
-            if !summary.isEmpty {
-                ScrollView {
-                    Text(summary)
-                        .font(.ui(.subheadline, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 110)
-                .padding(10)
-                .background(Chrome.overlay(0.05), in: .rect(cornerRadius: 12, style: .continuous))
-            }
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $message)
-                    .font(.ui(.body))
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                if message.isEmpty {
-                    Text(verbatim: isGenerating ? Chrome.localized("Writing a message…") : Chrome.localized("Commit message"))
-                        .foregroundStyle(Chrome.secondaryText)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 8)
-                        .allowsHitTesting(false)
-                }
-            }
-            .frame(minHeight: 130)
-            .background(Chrome.overlay(0.05), in: .rect(cornerRadius: 12, style: .continuous))
-            HStack(spacing: 12) {
-                // Nothing writes the message with text generation off or its provider signed
-                // out, so the button says where to turn it on instead of doing nothing.
-                let canGenerate = model.textEngine(preferring: runtime.thread?.provider) != nil
-                Button {
-                    Task { await generate() }
-                } label: {
-                    Label {
-                        Text("Write for me")
-                    } icon: {
-                        if isGenerating {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "sparkles")
-                        }
-                    }
-                }
-                .chromeGlassButtonStyle()
-                .disabled(isGenerating || !canGenerate)
-                .help(Text(verbatim: canGenerate ? Chrome.localized("Write a commit message from these changes") : Chrome.localized("Turn on text generation in Settings › Model selection")))
-                Toggle("Push after committing", isOn: $pushesAfterCommit)
-                    .toggleStyle(.checkbox)
-                    .disabled(git.status?.branch == nil)
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .chromeGlassButtonStyle()
-                Button("Commit") { Task { await commit() } }
-                    .chromeGlassButtonStyle(prominent: true)
-                    .disabled(message.trimmed.isEmpty || isCommitting)
-            }
-            .pointerStyle(.default)
-        }
-        .padding(20)
-        .frame(width: 560)
-        .task {
-            let changes = await Git(directory).workingChanges()
-            summary = changes.summary
-            if message.isEmpty { await generate(changes: changes) }
-        }
-    }
-
-    private func generate(changes: (summary: String, patch: String)? = nil) async {
-        guard let engine = model.textEngine(preferring: runtime.thread?.provider) else { return }
-        isGenerating = true
-        defer { isGenerating = false }
-        let resolved: (summary: String, patch: String)
-        if let changes {
-            resolved = changes
-        } else {
-            resolved = await Git(directory).workingChanges()
-        }
-        if let text = await TextGeneration.commitMessage(
-            summary: resolved.summary,
-            patch: resolved.patch,
-            instructions: "",
-            engine: engine,
-            directory: URL(fileURLWithPath: directory)
-        ) {
-            message = text
-        }
-    }
-
-    private func commit() async {
-        isCommitting = true
-        defer { isCommitting = false }
-        let repository = Git(directory)
-        let text = message.trimmed
-        let pushes = pushesAfterCommit && git.status?.branch != nil
-        let error = await git.perform("Committing") {
-            try await repository.commitAll(message: text)
-            if pushes { try await repository.push() }
-        }
-        await git.refresh(directory)
-        if let error {
-            model.alert = AppAlert(title: "Commit failed", message: error.localizedDescription)
-        } else {
-            dismiss()
         }
     }
 }

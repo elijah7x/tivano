@@ -209,7 +209,7 @@ struct CommandPalette: View {
            let threadID = model.selectedThreadID {
             let runtime = model.runtime(for: threadID)
             actions.append(Item(id: "terminal", title: Chrome.localized("Toggle terminal"), symbol: "terminal", shortcut: ShortcutStore.label(for: .toggleTerminal)) {
-                runtime.isTerminalVisible.toggle()
+                runtime.toggleTerminal()
             })
             if let directory = repositoryContext.directory, changesDirectory == directory {
                 actions.append(Item(id: "changes", title: Chrome.localized("Toggle changes"), symbol: "plusminus", shortcut: ShortcutStore.label(for: .toggleChanges)) {

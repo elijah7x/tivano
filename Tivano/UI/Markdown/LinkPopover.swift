@@ -74,31 +74,45 @@ private struct LinkPopoverContent: View {
     @State private var favicon: NSImage?
 
     var body: some View {
+        let target = MarkdownLinkTarget.resolve(url, base: linkBase)
         VStack(alignment: .leading, spacing: 0) {
-            if let request {
-                PopoverItem(
-                    request.title,
-                    text: Text("\(Text("Merge").fontWeight(.semibold)) \(Text(verbatim: request.label))"),
-                    symbol: favicon == nil ? "arrow.triangle.merge" : nil,
-                    image: favicon
-                ) {
-                    merge(request)
+            if case .file(let fileURL) = target {
+                PopoverItem("Open", symbol: "arrow.up.forward.app") {
+                    NSWorkspace.shared.open(fileURL)
                 }
-                PopoverDivider()
-            }
-            PopoverItem("Open Link", symbol: "safari") {
-                MarkdownLinkOpener.open(url, base: linkBase)
-            }
-            PopoverItem("Copy link", symbol: "link") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                PopoverItem("Show in Finder", symbol: "folder") {
+                    Workspace.revealInFinder(fileURL.path)
+                }
+                PopoverItem("Copy Path", symbol: "doc.on.doc") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(fileURL.path, forType: .string)
+                }
+            } else {
+                if let request {
+                    PopoverItem(
+                        request.title,
+                        text: Text("\(Text("Merge").fontWeight(.semibold)) \(Text(verbatim: request.label))"),
+                        symbol: favicon == nil ? "arrow.triangle.merge" : nil,
+                        image: favicon
+                    ) {
+                        merge(request)
+                    }
+                    PopoverDivider()
+                }
+                PopoverItem("Open Link", symbol: "safari") {
+                    MarkdownLinkOpener.open(url, base: linkBase)
+                }
+                PopoverItem("Copy link", symbol: "link") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                }
             }
         }
         .padding(6)
         .frame(width: 220, alignment: .leading)
         .task {
             // The paragraph usually has the icon already; a link whose host has none yet gets it here.
-            guard request != nil, let host = url.host?.lowercased() else { return }
+            guard case .web = target, request != nil, let host = url.host?.lowercased() else { return }
             if let cached = FaviconCache.cached(host: host) {
                 favicon = cached
             } else {

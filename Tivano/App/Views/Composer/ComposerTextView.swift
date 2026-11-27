@@ -22,6 +22,7 @@ final class ComposerController {
     fileprivate weak var textView: ComposerNSTextView?
     private var suggestionPopover: NSPopover?
     private var suggestionHost: NSHostingController<AnyView>?
+    private var suggestionOpensAbove = true
     /// The slash/@ refresh in flight for the latest keystroke; the next keystroke cancels it.
     /// The search for the caret's word, for the suggestions popover. One at a time: the
     /// next keystroke cancels it, and so does losing focus (see the composer's `onBlur`),
@@ -78,14 +79,16 @@ final class ComposerController {
         textView.stripMentionTypingAttributes()
     }
 
-    static func suggestionSize(for itemCount: Int) -> NSSize {
-        NSSize(width: 340, height: min(440, 44 + CGFloat(max(itemCount, 1)) * TypeScale.shared.ui(26)))
-    }
-
-    /// Shows the slash/@ suggestions directly above the caret. A SwiftUI
-    /// `.popover` anchors to the whole composer bubble, so it lands centered
-    /// (or flipped to the side) instead of where the user is typing.
-    func showSuggestions<Content: View>(size: NSSize, @ViewBuilder content: () -> Content) {
+    /// Shows the slash/@ suggestions directly above the active token (or below if
+    /// screen clearance above is too small). A SwiftUI `.popover` anchors to the
+    /// whole composer bubble, so it lands centered (or flipped to the side) instead
+    /// of where the user is typing.
+    func showSuggestions<Content: View>(
+        itemCount: Int,
+        tokenModelOffset: Int,
+        onSize: (NSSize) -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
         let popover: NSPopover
         if let existing = suggestionPopover {
             popover = existing
@@ -95,11 +98,46 @@ final class ComposerController {
             popover.animates = true
             suggestionPopover = popover
         }
-        guard let textView = textView, textView.window != nil else { return }
-        // Fixed width matching the old menu; height grows with the rows up to the
-        // cap and scrolls past it. The host never publishes its own size (see
-        // setFixedContent), so this is the only size the panel is ever positioned
-        // against and it stays on the caret while the list changes under typing.
+        guard let textView = textView, let window = textView.window else { return }
+
+        let desiredHeight = min(440, 44 + CGFloat(max(itemCount, 1)) * TypeScale.shared.ui(26))
+        let anchorRect = suggestionAnchorRect(atModelOffset: tokenModelOffset, in: textView)
+        let spaceAbove: CGFloat?
+        let spaceBelow: CGFloat?
+        if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
+            let screenAnchor = window.convertToScreen(textView.convert(anchorRect, to: nil))
+            spaceAbove = visibleFrame.maxY - screenAnchor.maxY - 12
+            spaceBelow = screenAnchor.minY - visibleFrame.minY - 12
+        } else {
+            spaceAbove = nil
+            spaceBelow = nil
+        }
+
+        let placement = FileMentions.suggestionPlacement(
+            desiredHeight: desiredHeight,
+            containerWidth: textView.bounds.width,
+            spaceAbove: spaceAbove,
+            spaceBelow: spaceBelow
+        )
+        let opensAbove: Bool
+        var size = NSSize(width: placement.size.width, height: placement.size.height)
+        if popover.isShown {
+            opensAbove = suggestionOpensAbove
+            if let lockedSpace = opensAbove ? spaceAbove : spaceBelow {
+                size.height = min(desiredHeight, max(70, floor(lockedSpace)))
+            } else {
+                size.height = desiredHeight
+            }
+        } else {
+            opensAbove = placement.opensAbove
+            suggestionOpensAbove = opensAbove
+        }
+
+        onSize(size)
+        // Height grows with the rows up to the cap and scrolls past it. The host never
+        // publishes its own size (see setFixedContent), so this is the only size the
+        // panel is ever positioned against and it stays anchored while typing narrows
+        // the list.
         if suggestionHost == nil {
             let host = NSHostingController(rootView: AnyView(content()))
             host.sizingOptions = []
@@ -107,17 +145,24 @@ final class ComposerController {
             popover.contentViewController = host
         }
         if popover.contentSize != size {
+            let wasAnimated = popover.animates
+            popover.animates = false
             popover.contentSize = size
+            popover.animates = wasAnimated
         }
         if !popover.isShown {
-            popover.show(relativeTo: caretRect(in: textView), of: textView, preferredEdge: .maxY)
+            let edge: NSRectEdge = opensAbove
+                ? (textView.isFlipped ? .minY : .maxY)
+                : (textView.isFlipped ? .maxY : .minY)
+            popover.show(relativeTo: anchorRect, of: textView, preferredEdge: edge)
             // The popover must never steal typing focus.
-            textView.window?.makeFirstResponder(textView)
+            window.makeFirstResponder(textView)
         }
     }
 
     func hideSuggestions() {
         suggestionPopover?.performClose(nil)
+        suggestionOpensAbove = true
     }
 
     func tearDownSuggestions() {
@@ -127,6 +172,7 @@ final class ComposerController {
         suggestionPopover?.contentViewController = nil
         suggestionHost = nil
         suggestionPopover = nil
+        suggestionOpensAbove = true
     }
 
     /// True when the current click landed inside the suggestions popover,
@@ -135,6 +181,32 @@ final class ComposerController {
         guard let popover = suggestionPopover, popover.isShown,
               let window = suggestionHost?.view.window else { return false }
         return window.frame.contains(NSEvent.mouseLocation)
+    }
+
+    private func suggestionAnchorRect(atModelOffset tokenModelOffset: Int, in textView: NSTextView) -> NSRect {
+        let attributed = textView.attributedString()
+        let viewOffset = FileMentionText.viewOffset(tokenModelOffset, in: attributed)
+        let clamped = max(0, min(viewOffset, attributed.length))
+        let range = NSRange(location: clamped, length: clamped < attributed.length ? 1 : 0)
+        let screenRect = textView.firstRect(forCharacterRange: range, actualRange: nil)
+        if let window = textView.window, screenRect.width >= 0, screenRect.height > 0 {
+            let windowRect = window.convertFromScreen(screenRect)
+            let tokenRect = textView.convert(windowRect, from: nil)
+            let visible = textView.visibleRect
+            let width = max(1, tokenRect.width)
+            let height = max(18, tokenRect.height)
+            let x: CGFloat
+            let y: CGFloat
+            if visible.width > 0, visible.height > 0 {
+                x = min(max(tokenRect.minX, visible.minX), max(visible.minX, visible.maxX - width))
+                y = min(max(tokenRect.minY, visible.minY), max(visible.minY, visible.maxY - height))
+            } else {
+                x = tokenRect.minX
+                y = tokenRect.minY
+            }
+            return NSRect(x: x, y: y, width: width, height: height)
+        }
+        return caretRect(in: textView)
     }
 
     private func caretRect(in textView: NSTextView) -> NSRect {

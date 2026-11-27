@@ -95,6 +95,7 @@ struct PopoverScroll<Content: View>: View {
 
 /// The native popover every chrome and composer button opens, in place of a pull-down menu.
 struct PopoverMenu<Content: View>: View {
+    var maxWidth: CGFloat = 360
     var maxHeight: CGFloat = 460
     /// Forces the popover open at this height. Needed because a ScrollView inside
     /// a popover otherwise collapses to a few rows and maxHeight never engages.
@@ -125,7 +126,7 @@ struct PopoverMenu<Content: View>: View {
             content
         }
         .padding(6)
-        .frame(minWidth: 210, maxWidth: 360, alignment: .leading)
+        .frame(minWidth: 210, maxWidth: maxWidth, alignment: .leading)
     }
 }
 

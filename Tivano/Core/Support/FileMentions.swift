@@ -1,8 +1,14 @@
+import CoreGraphics
 import Foundation
 
 struct FileMentionLabel: Equatable, Sendable {
     var name: String
     var detail: String? = nil
+}
+
+struct FileMentionSuggestionPlacement: Equatable, Sendable {
+    var size: CGSize
+    var opensAbove: Bool
 }
 
 enum FileMentions {
@@ -136,6 +142,37 @@ enum FileMentions {
         }
 
         return result
+    }
+
+    static func parentDirectory(for path: String) -> String {
+        splitComponents(path).parents.joined(separator: "/")
+    }
+
+    static func suggestionPlacement(
+        desiredHeight: CGFloat,
+        preferredWidth: CGFloat = 450,
+        containerWidth: CGFloat,
+        spaceAbove: CGFloat? = nil,
+        spaceBelow: CGFloat? = nil,
+        minAboveHeight: CGFloat = 148
+    ) -> FileMentionSuggestionPlacement {
+        let width = containerWidth > 0 ? min(preferredWidth, max(300, floor(containerWidth))) : preferredWidth
+        guard let spaceAbove, let spaceBelow else {
+            return FileMentionSuggestionPlacement(
+                size: CGSize(width: width, height: desiredHeight),
+                opensAbove: true
+            )
+        }
+        if spaceAbove >= minAboveHeight || spaceAbove >= spaceBelow {
+            return FileMentionSuggestionPlacement(
+                size: CGSize(width: width, height: min(desiredHeight, max(70, floor(spaceAbove)))),
+                opensAbove: true
+            )
+        }
+        return FileMentionSuggestionPlacement(
+            size: CGSize(width: width, height: min(desiredHeight, max(70, floor(spaceBelow)))),
+            opensAbove: false
+        )
     }
 
     private static func splitComponents(_ path: String) -> (name: String, parents: [String]) {

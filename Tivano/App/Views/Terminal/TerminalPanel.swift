@@ -5,6 +5,12 @@ struct TerminalPanel: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     let runtime: ThreadRuntime
+    var embeddedInChest: Bool = false
+
+    init(runtime: ThreadRuntime, embeddedInChest: Bool = false) {
+        self.runtime = runtime
+        self.embeddedInChest = embeddedInChest
+    }
 
     @State private var directoryError: String?
     @State private var preparedLocation: Location?
@@ -36,11 +42,19 @@ struct TerminalPanel: View {
         let sessions: [TerminalSession] = isPrepared ? terminals.sessions(for: runtime.threadID) : []
         let selected: TerminalSession? = isPrepared ? terminals.selected(for: runtime.threadID) : nil
         let panelHeight: CGFloat = CGFloat(dragHeight ?? model.settings.terminalHeight)
-        VStack(spacing: 0) {
+        let content = VStack(spacing: 0) {
             headerBar(terminals: terminals, sessions: sessions, selected: selected)
 
             if let selected {
-                TerminalHost(session: selected, runtime: runtime, isDark: colorScheme == .dark) { runtime.isTerminalVisible = false }
+                TerminalHost(session: selected, runtime: runtime, isDark: colorScheme == .dark) {
+                    if embeddedInChest {
+                        guard !runtime.isChestPinned else { return false }
+                        runtime.isChestOpen = false
+                        return true
+                    }
+                    runtime.isTerminalVisible = false
+                    return true
+                }
                     .id(selected.id)
                     .padding(.leading, 12)
                     .padding(.trailing, 6)
@@ -49,16 +63,38 @@ struct TerminalPanel: View {
                 emptyState
             }
         }
-        .frame(height: panelHeight)
-        // The drag lives on a strip of its own at the very top edge, overlaid on the empty
-        // band above the tabs: the whole tab row used to resize, so a sideways drag across
-        // the tabs moved the drawer instead of scrolling them.
-        .overlay(alignment: .top) {
-            resizeHandleOverlay
+
+        Group {
+            if embeddedInChest {
+                let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(shape.fill(panelFillColor))
+                    .clipShape(shape)
+            } else {
+                content
+                    .frame(height: panelHeight)
+                    // The drag lives on a strip of its own at the very top edge, overlaid on the empty
+                    // band above the tabs: the whole tab row used to resize, so a sideways drag across
+                    // the tabs moved the drawer instead of scrolling them.
+                    .overlay(alignment: .top) {
+                        resizeHandleOverlay
+                    }
+                    // Rounded top corners, so the panel reads as a sheet rising into the conversation.
+                    .background(panelBackground)
+            }
         }
-        // Rounded top corners, so the panel reads as a sheet rising into the conversation.
-        .background(panelBackground)
         .task(id: location) { openTerminal(onlyIfNeeded: true) }
+        .onChange(of: runtime.isChestOpen) { _, open in
+            if embeddedInChest, open, runtime.chestTab == .terminal {
+                openTerminal(onlyIfNeeded: true)
+            }
+        }
+        .onChange(of: runtime.chestTab) { _, tab in
+            if embeddedInChest, runtime.isChestOpen, tab == .terminal {
+                openTerminal(onlyIfNeeded: true)
+            }
+        }
     }
 
     private func headerBar(
@@ -92,15 +128,37 @@ struct TerminalPanel: View {
             .help(Text(verbatim: Chrome.localized("New terminal")))
             .accessibilityLabel(Text("New terminal"))
             Spacer(minLength: 0)
-            Button {
-                runtime.isTerminalVisible = false
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(Chrome.iconFont)
+            if embeddedInChest {
+                Button {
+                    runtime.dockTerminalToBottom()
+                } label: {
+                    Image(systemName: "arrow.down.to.line")
+                        .font(Chrome.iconFont)
+                }
+                .buttonStyle(.chip)
+                .help(Text(verbatim: Chrome.localized("Dock terminal to bottom")))
+                .accessibilityLabel(Text("Dock terminal to bottom"))
+            } else {
+                Button {
+                    runtime.moveTerminalToChest()
+                } label: {
+                    Image(systemName: "arrow.up.to.line")
+                        .font(Chrome.iconFont)
+                }
+                .buttonStyle(.chip)
+                .help(Text(verbatim: Chrome.localized("Move terminal to toolbox")))
+                .accessibilityLabel(Text("Move terminal to toolbox"))
+
+                Button {
+                    runtime.isTerminalVisible = false
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(Chrome.iconFont)
+                }
+                .buttonStyle(.chip)
+                .help(Text(verbatim: hideHelp))
+                .accessibilityLabel(Text("Hide terminal"))
             }
-            .buttonStyle(.chip)
-            .help(Text(verbatim: hideHelp))
-            .accessibilityLabel(Text("Hide terminal"))
         }
         .padding(.horizontal, 10)
         .frame(height: 38)
@@ -149,14 +207,17 @@ struct TerminalPanel: View {
         .frame(height: 8)
     }
 
+    private var panelFillColor: Color {
+        colorScheme == .dark ? Color(white: 0.08) : Color(white: 0.985)
+    }
+
     private var panelBackground: some View {
-        let fillColor: Color = colorScheme == .dark ? Color(white: 0.08) : Color(white: 0.985)
-        return UnevenRoundedRectangle(
+        UnevenRoundedRectangle(
             topLeadingRadius: Chrome.sheetCornerRadius,
             topTrailingRadius: Chrome.sheetCornerRadius,
             style: .continuous
         )
-        .fill(fillColor)
+        .fill(panelFillColor)
     }
 
     private func openTerminal(onlyIfNeeded: Bool = false, restarting session: TerminalSession? = nil) {
@@ -181,6 +242,13 @@ struct TerminalPanel: View {
             }
             directoryError = nil
             preparedLocation = location
+            if embeddedInChest, runtime.isChestOpen, runtime.chestTab == .terminal,
+               runtime.terminalWantsFocus,
+               let active = terminals.selected(for: thread.id),
+               let window = active.view.window {
+                runtime.terminalWantsFocus = false
+                window.makeFirstResponder(active.view)
+            }
         } catch {
             preparedLocation = nil
             directoryError = error.localizedDescription
@@ -271,14 +339,17 @@ struct TerminalHost: NSViewRepresentable {
     let session: TerminalSession
     let runtime: ThreadRuntime
     let isDark: Bool
-    /// Escape in the terminal with the shell at its prompt: the panel closes the way ⌘J
-    /// closes it. A program in the foreground (vim, claude, less) gets its Escape as ever.
-    let onEscapeAtPrompt: () -> Void
+    /// Escape in the terminal with the shell at its prompt: closes the host panel and
+    /// returns true when handled. A program in the foreground (vim, claude, less) gets
+    /// its Escape as ever.
+    let onEscapeAtPrompt: @MainActor () -> Bool
 
+    @MainActor
     final class Coordinator {
         var keyMonitor: Any?
+        var onEscapeAtPrompt: @MainActor () -> Bool = { false }
 
-        deinit {
+        isolated deinit {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         }
     }
@@ -289,19 +360,28 @@ struct TerminalHost: NSViewRepresentable {
         let container = TerminalHostContainer()
         attach(to: container)
         let view = session.view
-        let onEscapeAtPrompt = onEscapeAtPrompt
-        context.coordinator.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak view] event in
-            guard let view, event.keyCode == 53, // Escape
+        let runtime = runtime
+        container.onWindowAttach = { [weak view, weak runtime] in
+            guard let view, let runtime, runtime.terminalWantsFocus else { return }
+            Task { @MainActor in
+                guard runtime.terminalWantsFocus, let window = view.window else { return }
+                runtime.terminalWantsFocus = false
+                window.makeFirstResponder(view)
+            }
+        }
+        context.coordinator.onEscapeAtPrompt = onEscapeAtPrompt
+        context.coordinator.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak view, weak coordinator = context.coordinator] event in
+            guard let view, let coordinator, event.keyCode == 53, // Escape
                   event.modifierFlags.intersection(KeyChord.allowedModifiers).isEmpty,
                   event.window?.firstResponder === view,
                   TerminalSession.foregroundJobIsTheShell(view.process.shellPid) else { return event }
-            onEscapeAtPrompt()
-            return nil
+            return coordinator.onEscapeAtPrompt() ? nil : event
         }
         return container
     }
 
     func updateNSView(_ container: NSView, context: Context) {
+        context.coordinator.onEscapeAtPrompt = onEscapeAtPrompt
         session.applyAppearance(isDark: isDark)
         if session.view.superview !== container { attach(to: container) }
         (container as? TerminalHostContainer)?.hostedView = session.view
@@ -336,6 +416,8 @@ struct TerminalHost: NSViewRepresentable {
 final class TerminalHostContainer: NSView {
     /// The terminal view being held. Set on attach; nil only before the first one.
     weak var hostedView: NSView?
+    /// Invoked when the container attaches to a window so pending focus requests land cleanly.
+    var onWindowAttach: (@MainActor () -> Void)?
     /// A coalesced frame sync after the last beat, cancelled by the next one.
     private var pendingSync: DispatchWorkItem?
     /// Resize observers for this container's window, re-registered on window moves.
@@ -363,6 +445,7 @@ final class TerminalHostContainer: NSView {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.finishResize() }
         })
+        onWindowAttach?()
     }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {

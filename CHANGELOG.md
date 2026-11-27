@@ -8,6 +8,36 @@ New entries use `### English` and `### 简体中文` sections, each with the exi
 
 ## [Unreleased]
 
+## [3.0.26] - 2026-11-27
+
+### English
+
+### New features
+
+- A new Toolbox button to the right of Settings opens a fixed-size floating panel over the chat without shifting messages, bringing together outputs created in the chat (documents, webpages, images and videos, opened in their default apps, with Show in Finder and @ reference), changes with inline Git commit, push and pull request actions, and a terminal that runs in the toolbox or docks to the bottom of the chat. The branch and worktree menu now stays visible in the chat header.
+- Local file paths in replies—both bare paths and inline code spans across images, videos, webpages, documents and code—now highlight as clickable links that open in their default app, with Open, Show in Finder and Copy Path on right-click.
+
+### Bug fixes
+
+- Typing @ in the message box keeps the suggestion list above the @ instead of jumping below as matches narrow, fits the available space near the top of the screen, and shows only the parent folder with middle truncation in a wider list so similarly named files stay distinguishable.
+- In Auto-accept edits mode (including external calls via the Tivano agent CLI), ACP agents can now read and search files without being blocked or silently rejected, while shell commands and web access still require approval.
+
+### 简体中文
+
+### 新功能
+
+- 「设置」右侧新增「百宝箱」按钮，点击后在对话上方打开一个固定尺寸的悬浮面板，不挤压消息排版。面板整合了对话中生成的产出物（文档、网页、图片和视频，点击以默认应用打开，支持「在 Finder 中显示」和 @ 引用）、改动（内置 Git 提交、推送和 Pull Request 操作），以及可在百宝箱内运行或停靠到对话底部的终端。分支与 worktree 菜单现在常驻在对话顶部栏中。
+- 回复中的本地文件路径——无论是纯文本路径还是行内代码中的路径，涵盖图片、视频、网页、文档和代码文件——现在都会高亮为可点击链接，点击用默认应用打开，右键支持「打开」、「在 Finder 中显示」和「复制路径」。
+
+### 问题修复
+
+- 在输入框中输入 @ 时，候选列表会保持在 @ 上方，不再随着匹配收窄跳到下方；靠近屏幕顶部时会自动适应剩余空间；列表也更宽，仅显示上级目录并采用中间省略，让名称相近的文件更容易区分。
+- 在「自动接受编辑」模式下（含外部通过 Tivano CLI 桥接调用），ACP Agent 读取与本地搜索文件不再被拦截或静默拒绝，命令行执行与联网操作仍保持审批限制。
+
+### Thanks
+
+- No outside contributors.
+
 ## [3.0.24] - 2026-11-26
 
 ### English

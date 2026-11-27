@@ -1750,7 +1750,7 @@ final class ACPSession: ProviderSession {
         if configuration.deniesShell, kind == .command { return nil }
         let automatic = switch runtimeMode {
         case .fullAccess: true
-        case .autoAcceptEdits: kind == .edit
+        case .autoAcceptEdits: kind == .edit || kind == .read || kind == .search
         default: false
         }
         guard automatic else { return nil }
@@ -2180,8 +2180,8 @@ final class ACPSession: ProviderSession {
         case "bash", "run_code": .command
         case "read", "read_image": .read
         case "write", "edit": .edit
-        case "glob", "grep", "web_search": .search
-        case "web_fetch": .web
+        case "glob", "grep": .search
+        case "web_fetch", "web_search": .web
         default: .other
         }
     }

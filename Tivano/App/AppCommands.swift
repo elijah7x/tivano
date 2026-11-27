@@ -51,7 +51,7 @@ struct AppCommands: Commands {
                 .disabled(chatIsCovered)
             Button("Command palette") { model.isCommandPalettePresented.toggle() }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .commandPalette))
-            Button("Toggle terminal") { runtime?.isTerminalVisible.toggle() }
+            Button("Toggle terminal") { runtime?.toggleTerminal() }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .toggleTerminal))
                 .disabled(chatIsCovered || model.selectedThreadID == nil)
             Button("Toggle changes") { runtime?.toggleDiff() }

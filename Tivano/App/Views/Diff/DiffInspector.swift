@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DiffInspector: View {
     let runtime: ThreadRuntime
+    var embeddedInChest: Bool = false
 
     @State private var files: [DiffFile] = []
     @State private var summary = FileChangeSummary(files: [])
@@ -15,6 +16,11 @@ struct DiffInspector: View {
     /// scroll is driven by a counter that always changes, never by the target alone.
     @State private var scrollRequest = 0
 
+    init(runtime: ThreadRuntime, embeddedInChest: Bool = false) {
+        self.runtime = runtime
+        self.embeddedInChest = embeddedInChest
+    }
+
     private var loadKey: String {
         "\(runtime.diffRevision)-\(runtime.diffSelection?.uuidString ?? "all")-\(runtime.diffFocusRevision)"
     }
@@ -25,9 +31,9 @@ struct DiffInspector: View {
             ChromeGlassEffectContainer(spacing: 2) {
                 topControls
             }
-            .padding(.horizontal, Chrome.chromeHorizontalPadding)
-            .padding(.top, Chrome.chromeTopPadding)
-            .padding(.bottom, 10)
+            .padding(.horizontal, embeddedInChest ? 12 : Chrome.chromeHorizontalPadding)
+            .padding(.top, embeddedInChest ? 8 : Chrome.chromeTopPadding)
+            .padding(.bottom, embeddedInChest ? 6 : 10)
 
             if files.isEmpty {
                 Group {
@@ -116,9 +122,11 @@ struct DiffInspector: View {
                     PopoverItem("Expand all", symbol: "arrow.down.right.and.arrow.up.left") { collapsed.removeAll() }
                     PopoverItem("Collapse all", symbol: "arrow.up.left.and.arrow.down.right") { collapsed = Set(files.map(\.id)) }
                 }
-                ChromeDivider()
-                ChromeIconButton(symbol: "xmark", help: Chrome.localized("Hide changes") + ShortcutStore.hint(for: .toggleChanges)) {
-                    runtime.isDiffVisible = false
+                if !embeddedInChest {
+                    ChromeDivider()
+                    ChromeIconButton(symbol: "xmark", help: Chrome.localized("Hide changes") + ShortcutStore.hint(for: .toggleChanges)) {
+                        runtime.isDiffVisible = false
+                    }
                 }
             }
         }

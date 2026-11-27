@@ -1153,6 +1153,7 @@ enum RichLink {
     }
 
     static func isBareDisplay(_ display: String, url: URL) -> Bool {
+        if url.isFileURL || url.host == nil { return false }
         var d = display.trimmed
         if d.hasPrefix("<"), d.hasSuffix(">"), d.count >= 2 {
             d = String(d.dropFirst().dropLast())
@@ -1283,7 +1284,8 @@ enum RichLink {
             interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible
         )
-        return autolinkedBareDomains((try? AttributedString(markdown: source, options: options)) ?? AttributedString(source))
+        let parsed = (try? AttributedString(markdown: source, options: options)) ?? AttributedString(source)
+        return autolinkedBareDomains(MarkdownLinkTarget.autolinkedLocalPaths(parsed))
     }
 }
 
